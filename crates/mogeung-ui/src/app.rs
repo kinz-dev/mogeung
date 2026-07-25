@@ -20,6 +20,28 @@ enum Tab {
     Debt,
 }
 
+/// Which pane the keyboard is driving.
+///
+/// Navigation actions are pane-agnostic — `Next` means "next thing in whatever
+/// has focus" — so one set of bindings works everywhere instead of three sets
+/// you have to remember the context for.
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum Pane {
+    Queue,
+    Files,
+    Diff,
+}
+
+impl Pane {
+    fn label(self) -> &'static str {
+        match self {
+            Pane::Queue => "queue",
+            Pane::Files => "files",
+            Pane::Diff => "diff",
+        }
+    }
+}
+
 /// How a diff is laid out. `R-D6`.
 #[derive(PartialEq, Clone, Copy)]
 enum DiffView {
@@ -99,6 +121,21 @@ pub struct App {
     /// already taken by another application.
     hotkey: Option<crate::hotkey::Hotkey>,
 
+    /// Which pane the keyboard drives, and the editable bindings.
+    pane: Pane,
+    keymap: crate::keymap::Keymap,
+    show_keymap: bool,
+    /// Action currently waiting for a keypress to rebind it.
+    capturing: Option<crate::keymap::Action>,
+    keymap_io: String,
+
+    /// Update the diff as the file selection moves, rather than only on
+    /// Activate. On by default — the whole point of a file list is seeing what
+    /// is in them.
+    preview_on_select: bool,
+    /// Highlighted file, which is the opened file when previewing is on.
+    file_cursor: Option<String>,
+
     errors: Vec<String>,
 }
 
@@ -114,6 +151,7 @@ impl App {
             h.start_waker(cc.egui_ctx.clone());
         }
         let net = Net::connect(url, cc.egui_ctx.clone());
+        let (keymap, keymap_warning) = crate::keymap::Keymap::load();
         App {
             net,
             hotkey,
@@ -147,9 +185,16 @@ impl App {
             show_launch: false,
             health: Health::default(),
             show_health: false,
+            pane: Pane::Queue,
+            keymap,
+            show_keymap: false,
+            capturing: None,
+            keymap_io: String::new(),
+            preview_on_select: true,
+            file_cursor: None,
             // Surfaced in the window, not only on stderr: the terminal that
             // launched this is exactly what you are trying to stop looking at.
-            errors: hotkey_error.into_iter().collect(),
+            errors: hotkey_error.into_iter().chain(keymap_warning).collect(),
         }
     }
 
@@ -253,6 +298,7 @@ impl eframe::App for App {
         self.health_window(ui);
         self.prompt_window(ui);
         self.ambient_window(ui);
+        self.keymap_window(ui);
     }
 }
 
@@ -351,6 +397,16 @@ impl App {
                         self.net.send(ClientMsg::Rescan);
                     }
                     if ui
+                        .button(dim("⌨"))
+                        .on_hover_text(format!(
+                            "keyboard settings ({})",
+                            self.keymap.describe(crate::keymap::Action::OpenKeymap)
+                        ))
+                        .clicked()
+                    {
+                        self.show_keymap = true;
+                    }
+                    if ui
                         .selectable_label(self.ambient, "Ambient")
                         .on_hover_text("big-text board for a second monitor")
                         .clicked()
@@ -436,15 +492,119 @@ impl App {
         self.select(vis[next].session_id.clone());
     }
 
-    /// Keyboard triage. `R-B1`, `R-B3`, `R-B5`, `R-B8`.
+    /// Files in the current diff, after the same filters the list applies.
+    ///
+    /// One definition shared by rendering and the keyboard, so `Next` never
+    /// lands on a row that is not on screen.
+    fn visible_files(&self) -> Vec<String> {
+        let Some(id) = &self.selected else {
+            return Vec::new();
+        };
+        let Some(change) = self.changes.get(id) else {
+            return Vec::new();
+        };
+        change
+            .files
+            .iter()
+            .filter(|f| !(self.hide_noise && f.risk() == RiskLevel::Noise))
+            .filter(|f| !(self.hide_reviewed && f.fully_reviewed()))
+            .map(|f| f.path.clone())
+            .collect()
+    }
+
+    /// Move within the focused pane.
+    fn move_by(&mut self, delta: i32) {
+        match self.pane {
+            Pane::Queue => self.move_selection(delta),
+            Pane::Files | Pane::Diff => self.move_file(delta),
+        }
+    }
+
+    fn move_file(&mut self, delta: i32) {
+        let files = self.visible_files();
+        if files.is_empty() {
+            return;
+        }
+        let cur = self
+            .file_cursor
+            .as_ref()
+            .or(self.selected_file.as_ref())
+            .and_then(|p| files.iter().position(|f| f == p));
+        let next = match cur {
+            Some(i) => (i as i32 + delta).clamp(0, files.len() as i32 - 1) as usize,
+            None if delta > 0 => 0,
+            None => files.len() - 1,
+        };
+        self.file_cursor = Some(files[next].clone());
+        // Previewing is what makes arrowing through a diff useful; with it off
+        // the cursor moves and the pane waits for Activate.
+        if self.preview_on_select {
+            self.selected_file = self.file_cursor.clone();
+            self.blast = None;
+        }
+    }
+
+    fn open_cursor_file(&mut self) {
+        if let Some(p) = self.file_cursor.clone() {
+            self.selected_file = Some(p);
+            self.blast = None;
+        }
+    }
+
+    /// Turn keystrokes into actions, then act. `R-B1`.
+    ///
+    /// Bindings are data (`keymap.rs`) rather than a match arm per key, which
+    /// is what makes rebinding, pane-aware navigation and export possible at
+    /// all.
     ///
     /// Suppressed whenever a text field has focus, or typing "job" into the
     /// filter box would move the selection three times and mark something read.
     fn handle_keys(&mut self, ui: &mut egui::Ui) {
+        // Rebinding grabs the very next chord, so it is read before anything
+        // is dispatched — otherwise pressing `J` to bind it would also move the
+        // selection.
+        if let Some(action) = self.capturing {
+            let captured = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => Some(crate::keymap::Binding::new(*modifiers, *key)),
+                    _ => None,
+                })
+            });
+            if let Some(b) = captured {
+                // Escape cancels rather than becoming the new binding, or you
+                // could never back out of a mis-click.
+                if b.0 != "Escape" {
+                    if let Some(other) = self.keymap.conflict(&b, action) {
+                        self.errors
+                            .push(format!("{b} was bound to \"{}\" — reassigned", other.label()));
+                        let remaining: Vec<_> = self
+                            .keymap
+                            .bindings_for(other)
+                            .iter()
+                            .filter(|x| **x != b)
+                            .cloned()
+                            .collect();
+                        self.keymap.set(other, remaining);
+                    }
+                    self.keymap.set(action, vec![b]);
+                    if let Err(e) = self.keymap.save() {
+                        self.errors.push(format!("could not save keymap: {e}"));
+                    }
+                }
+                self.capturing = None;
+            }
+            return;
+        }
+
         if ui.memory(|m| m.focused().is_some()) {
             return;
         }
-        let keys: Vec<egui::Key> = ui.input(|i| {
+        let pressed: Vec<(egui::Modifiers, egui::Key)> = ui.input(|i| {
             i.events
                 .iter()
                 .filter_map(|e| match e {
@@ -453,52 +613,186 @@ impl App {
                         pressed: true,
                         modifiers,
                         ..
-                    } if !modifiers.command && !modifiers.ctrl => Some(*key),
+                    } => Some((*modifiers, *key)),
                     _ => None,
                 })
                 .collect()
         });
 
-        for key in keys {
-            match key {
-                egui::Key::J | egui::Key::ArrowDown => self.move_selection(1),
-                egui::Key::K | egui::Key::ArrowUp => self.move_selection(-1),
-                egui::Key::N => self.move_selection(1),
-                egui::Key::G => {
+        for (mods, key) in pressed {
+            let Some(action) = self.keymap.action_for(mods, key) else {
+                continue;
+            };
+            self.run(action, ui);
+        }
+    }
+
+    fn run(&mut self, action: crate::keymap::Action, ui: &mut egui::Ui) {
+        use crate::keymap::Action as A;
+        match action {
+            A::FocusQueue => self.pane = Pane::Queue,
+            A::FocusFiles => {
+                self.pane = Pane::Files;
+                self.tab = Tab::Changes;
+                if self.file_cursor.is_none() {
+                    self.file_cursor = self.selected_file.clone();
+                }
+            }
+            A::FocusDiff => {
+                self.pane = Pane::Diff;
+                self.tab = Tab::Changes;
+            }
+            A::Next => self.move_by(1),
+            A::Prev => self.move_by(-1),
+            A::First => match self.pane {
+                Pane::Queue => {
                     if let Some(top) = self.visible_queue().first() {
                         self.select(top.session_id.clone());
                     }
                 }
-                egui::Key::O | egui::Key::Enter => self.focus_selected_terminal(),
-                egui::Key::R => {
-                    if let Some(id) = self.selected.clone() {
-                        self.net.send(ClientMsg::ReviewAll { session_id: id });
+                _ => {
+                    if let Some(first) = self.visible_files().first().cloned() {
+                        self.file_cursor = Some(first.clone());
+                        self.selected_file = Some(first);
                     }
                 }
-                egui::Key::S => {
-                    if let Some(id) = self.selected.clone() {
-                        let snoozed = self
-                            .sessions
-                            .get(&id)
-                            .map(|s| s.is_snoozed(Utc::now()))
-                            .unwrap_or(false);
-                        self.net.send(ClientMsg::Snooze {
-                            session_id: id,
-                            minutes: if snoozed { 0 } else { 30 },
-                        });
-                    }
+            },
+            A::Activate => match self.pane {
+                Pane::Queue => self.focus_selected_terminal(),
+                _ => self.open_cursor_file(),
+            },
+            A::JumpToTerminal => self.focus_selected_terminal(),
+            A::MarkAllRead => {
+                if let Some(id) = self.selected.clone() {
+                    self.net.send(ClientMsg::ReviewAll { session_id: id });
                 }
-                egui::Key::Slash => {
-                    // Focus the filter box, vim-style.
-                    ui.memory_mut(|m| m.request_focus(egui::Id::new("queue-filter")));
+            }
+            A::Snooze => {
+                if let Some(id) = self.selected.clone() {
+                    let snoozed = self
+                        .sessions
+                        .get(&id)
+                        .map(|s| s.is_snoozed(Utc::now()))
+                        .unwrap_or(false);
+                    self.net.send(ClientMsg::Snooze {
+                        session_id: id,
+                        minutes: if snoozed { 0 } else { 30 },
+                    });
                 }
-                egui::Key::Escape => {
-                    self.filter.clear();
-                    self.ambient = false;
+            }
+            A::FilterFocus => {
+                self.pane = Pane::Queue;
+                ui.memory_mut(|m| m.request_focus(egui::Id::new("queue-filter")));
+            }
+            A::ClearFilter => {
+                self.filter.clear();
+                self.ambient = false;
+                self.show_keymap = false;
+                self.capturing = None;
+            }
+            A::ToggleRead => self.toggle_first_unread(),
+            A::NextUnread => self.jump_to_next_unread(),
+            A::FlagHunk => self.flag_first_unread(),
+            A::ToggleAmbient => self.ambient = !self.ambient,
+            A::ToggleHealth => {
+                self.show_health = !self.show_health;
+                if self.show_health {
+                    self.net.send(ClientMsg::FetchHealth);
                 }
-                _ => {}
+            }
+            A::OpenKeymap => self.show_keymap = !self.show_keymap,
+            A::Rescan => self.net.send(ClientMsg::Rescan),
+        }
+    }
+
+    /// The first unread hunk of the open file, toggled read.
+    fn toggle_first_unread(&mut self) {
+        let (Some(id), Some(path)) = (self.selected.clone(), self.selected_file.clone()) else {
+            return;
+        };
+        let Some(change) = self.changes.get(&id) else {
+            return;
+        };
+        let Some(file) = change.files.iter().find(|f| f.path == path) else {
+            return;
+        };
+        if let Some(h) = file.hunks.iter().find(|h| !h.reviewed) {
+            self.net.send(ClientMsg::SetHunkReviewed {
+                session_id: id,
+                anchor: h.anchor.clone(),
+                reviewed: true,
+            });
+        }
+    }
+
+    /// Move to the next file that still has something unread.
+    fn jump_to_next_unread(&mut self) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        let Some(change) = self.changes.get(&id).cloned() else {
+            return;
+        };
+        let files = self.visible_files();
+        let start = self
+            .file_cursor
+            .as_ref()
+            .or(self.selected_file.as_ref())
+            .and_then(|p| files.iter().position(|f| f == p))
+            .unwrap_or(0);
+        // Wrap around, so the last file is not a dead end.
+        for step in 1..=files.len() {
+            let i = (start + step) % files.len();
+            let path = &files[i];
+            let unread = change
+                .files
+                .iter()
+                .find(|f| &f.path == path)
+                .map(|f| f.hunks.iter().any(|h| !h.reviewed))
+                .unwrap_or(false);
+            if unread {
+                self.file_cursor = Some(path.clone());
+                self.selected_file = Some(path.clone());
+                self.pane = Pane::Files;
+                return;
             }
         }
+    }
+
+    fn flag_first_unread(&mut self) {
+        let (Some(id), Some(path)) = (self.selected.clone(), self.selected_file.clone()) else {
+            return;
+        };
+        let Some(change) = self.changes.get(&id) else {
+            return;
+        };
+        let Some(file) = change.files.iter().find(|f| f.path == path) else {
+            return;
+        };
+        let Some(h) = file.hunks.iter().find(|h| !h.reviewed) else {
+            return;
+        };
+        if self
+            .flagged
+            .iter()
+            .any(|f| f.session_id == id && f.path == path && f.header == h.header)
+        {
+            return;
+        }
+        self.flagged.push(FlaggedHunk {
+            session_id: id,
+            path,
+            header: h.header.clone(),
+            note: String::new(),
+            body: h
+                .lines
+                .iter()
+                .filter(|l| l.starts_with('+') || l.starts_with('-'))
+                .take(40)
+                .cloned()
+                .collect(),
+        });
+        self.show_prompt = true;
     }
 
     fn focus_selected_terminal(&mut self) {
@@ -523,7 +817,14 @@ impl App {
             .show(root, |ui| {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("ATTENTION").size(11.0).color(DIM).strong());
+                    let focused = self.pane == Pane::Queue;
+                    ui.label(
+                        RichText::new("ATTENTION")
+                            .size(11.0)
+                            .color(if focused { BLUE } else { DIM })
+                            .strong(),
+                    )
+                    .on_hover_text("Alt+1");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.checkbox(&mut self.show_quiet, "quiet");
                         ui.checkbox(&mut self.group_by_repo, "group");
@@ -999,6 +1300,19 @@ impl App {
         }
 
         egui::Panel::left("files").default_size(300.0).show(ui, |ui| {
+            let focused = self.pane == Pane::Files || self.pane == Pane::Diff;
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("FILES")
+                        .size(11.0)
+                        .color(if focused { BLUE } else { DIM })
+                        .strong(),
+                )
+                .on_hover_text("Alt+2");
+                if focused {
+                    ui.label(dim("j/k move"));
+                }
+            });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -1014,7 +1328,12 @@ impl App {
                         if self.hide_reviewed && f.fully_reviewed() {
                             continue;
                         }
-                        let selected = self.selected_file.as_deref() == Some(f.path.as_str());
+                        // With previewing off the cursor and the open file
+                        // differ, and both need to be visible or arrowing
+                        // through the list looks broken.
+                        let open = self.selected_file.as_deref() == Some(f.path.as_str());
+                        let at_cursor = self.file_cursor.as_deref() == Some(f.path.as_str());
+                        let selected = open || (!self.preview_on_select && at_cursor);
                         let unread = f.hunks.len() - f.reviewed_hunks();
 
                         let resp = ui
@@ -1995,6 +2314,187 @@ impl App {
 
         if !open {
             self.ambient = false;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard settings
+// ---------------------------------------------------------------------------
+
+impl App {
+    fn keymap_window(&mut self, root: &mut egui::Ui) {
+        if !self.show_keymap {
+            return;
+        }
+        use crate::keymap::{Action, Keymap};
+        let ctx = root.ctx().clone();
+        let mut open = true;
+
+        let mut to_capture: Option<Action> = None;
+        let mut to_reset: Option<Action> = None;
+        let mut reset_all = false;
+        let mut do_import = false;
+        let mut do_export = false;
+        let mut save_now = false;
+
+        egui::Window::new("Keyboard")
+            .open(&mut open)
+            .default_width(620.0)
+            .collapsible(false)
+            .show(&ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Focused pane:").size(12.5));
+                    for p in [Pane::Queue, Pane::Files, Pane::Diff] {
+                        ui.selectable_value(&mut self.pane, p, p.label());
+                    }
+                });
+                ui.label(dim(
+                    "Navigation acts on the focused pane, so one set of keys works \
+                     everywhere instead of three you have to remember.",
+                ));
+                ui.add_space(6.0);
+                ui.checkbox(&mut self.preview_on_select, "show a file as soon as it is selected")
+                    .on_hover_text(
+                        "off: moving the cursor only highlights, and the diff changes on Activate",
+                    );
+
+                ui.add_space(8.0);
+                if self.capturing.is_some() {
+                    ui.label(
+                        RichText::new("Press the key combination…  (Escape cancels)")
+                            .color(AMBER)
+                            .strong(),
+                    );
+                } else {
+                    ui.label(dim("Click a shortcut to rebind it."));
+                }
+                ui.separator();
+
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut group = "";
+                        for action in Action::ALL {
+                            if action.group() != group {
+                                group = action.group();
+                                ui.add_space(6.0);
+                                ui.label(RichText::new(group).strong().size(12.0));
+                            }
+                            ui.horizontal(|ui| {
+                                let capturing = self.capturing == Some(*action);
+                                let label = if capturing {
+                                    "press…".to_string()
+                                } else {
+                                    self.keymap.describe(*action)
+                                };
+                                let btn = ui.add_sized(
+                                    [130.0, 20.0],
+                                    egui::Button::new(
+                                        RichText::new(label)
+                                            .monospace()
+                                            .size(11.5)
+                                            .color(if capturing { AMBER } else { Color32::from_gray(0xDC) }),
+                                    ),
+                                );
+                                if btn.clicked() {
+                                    to_capture = Some(*action);
+                                }
+                                ui.label(RichText::new(action.label()).size(12.0));
+
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let differs = self.keymap.bindings_for(*action)
+                                            != Keymap::default().bindings_for(*action);
+                                        if differs && ui.small_button("reset").clicked() {
+                                            to_reset = Some(*action);
+                                        }
+                                    },
+                                );
+                            });
+                        }
+                    });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Reset all").clicked() {
+                        reset_all = true;
+                    }
+                    if ui.button("Export").on_hover_text("copy the whole map as JSON").clicked() {
+                        do_export = true;
+                    }
+                    if ui
+                        .button("Import")
+                        .on_hover_text("replace the map with the JSON below")
+                        .clicked()
+                    {
+                        do_import = true;
+                    }
+                    if ui.button("Save").clicked() {
+                        save_now = true;
+                    }
+                    ui.label(dim(Keymap::path().to_string_lossy().to_string()));
+                });
+
+                ui.add_space(4.0);
+                ui.label(dim("import / export"));
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.keymap_io)
+                        .desired_rows(5)
+                        .code_editor()
+                        .hint_text("paste a keymap here, then press Import")
+                        .desired_width(f32::INFINITY),
+                );
+            });
+
+        if let Some(a) = to_capture {
+            self.capturing = Some(a);
+        }
+        if let Some(a) = to_reset {
+            self.keymap.reset(a);
+            save_now = true;
+        }
+        if reset_all {
+            self.keymap = Keymap::default();
+            save_now = true;
+        }
+        if do_export {
+            match self.keymap.to_json() {
+                Ok(j) => {
+                    self.keymap_io = j.clone();
+                    ctx.copy_text(j);
+                }
+                Err(e) => self.errors.push(e),
+            }
+        }
+        if do_import {
+            match Keymap::from_json(&self.keymap_io) {
+                Ok(km) => {
+                    // A binding naming a key egui does not know loads fine,
+                    // lists fine, and then does nothing — indistinguishable
+                    // from a broken action unless we say so.
+                    for (action, b) in km.invalid() {
+                        self.errors.push(format!(
+                            "{b} is not a key mogeung recognises — \"{}\" will not respond to it",
+                            action.label()
+                        ));
+                    }
+                    self.keymap = km;
+                    save_now = true;
+                }
+                Err(e) => self.errors.push(format!("could not import keymap: {e}")),
+            }
+        }
+        if save_now {
+            if let Err(e) = self.keymap.save() {
+                self.errors.push(format!("could not save keymap: {e}"));
+            }
+        }
+        if !open {
+            self.show_keymap = false;
+            self.capturing = None;
         }
     }
 }

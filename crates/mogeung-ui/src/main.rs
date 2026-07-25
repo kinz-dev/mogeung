@@ -7,6 +7,7 @@
 mod app;
 mod diff;
 mod hotkey;
+mod keymap;
 mod net;
 mod ui;
 

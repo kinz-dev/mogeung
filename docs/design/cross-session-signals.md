@@ -161,6 +161,32 @@ itself (`Cmd+Space`, `Cmd+Tab`) *succeeds* and then never fires, because the
 system consumes the key first. Verified live — `Cmd+Space` registers happily.
 `--help` says so; there is nothing to check at runtime.
 
+### Bindings as data (`R-B11`, `R-B12`)
+
+Rebinding, pane-aware navigation and import/export all needed the same thing
+first: actions had to stop being a `match` arm per key and become data. They now
+live in `keymap.rs` as an `Action` enum plus a map to text bindings, and the
+event loop resolves a chord to an action and dispatches.
+
+Navigation actions are **pane-agnostic** — `Next` means "next thing in whatever
+has focus" — so one binding does the obvious thing in three panes instead of
+needing three bindings and a rule for which applies.
+
+Stored at `~/.mogeung/keymap.json`, **client-side**. Not a breach of "every UI
+is a client with no local authority" ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)):
+a keymap is not daemon state, and a second client would rightly have its own.
+
+The file holds the full effective map so an export is self-contained, and
+loading merges it over the defaults so an action added later appears with its
+default binding rather than silently unbound.
+
+**Binding parsing rejects anything it does not fully understand.** The first
+version ignored unrecognised tokens, so `Ctl+J` — the obvious hand-edit typo —
+parsed as a bare `J`: it fired on the wrong key, and validation called it fine.
+That is the worst failure available to a keymap, because "this shortcut does
+nothing" is indistinguishable from "this action is broken". Caught by a test
+written to check the validator, which then failed on the validator itself.
+
 ### Why not an in-app terminal
 
 Asked and answered: embedding a *running* session is impossible, because its
