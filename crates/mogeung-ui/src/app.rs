@@ -25,6 +25,40 @@ enum Tab {
 /// Navigation actions are pane-agnostic — `Next` means "next thing in whatever
 /// has focus" — so one set of bindings works everywhere instead of three sets
 /// you have to remember the context for.
+/// A scroll asked for by the keyboard, applied on the next frame inside
+/// whichever scroll area is on screen.
+///
+/// egui's `ScrollArea` has **no** keyboard handling of its own — it responds to
+/// the wheel and to dragging, and nothing else. Page Up and Page Down therefore
+/// did nothing at all until this existed.
+#[derive(Clone, Copy, PartialEq)]
+enum ScrollRequest {
+    /// Fractions of the visible height. Negative is towards the top.
+    Pages(f32),
+    Top,
+    Bottom,
+}
+
+impl ScrollRequest {
+    /// Convert to the delta egui wants, given the visible height.
+    ///
+    /// The sign is inverted: `ScrollArea` does `offset -= delta`, so a
+    /// *negative* delta moves **down** the content. Offsets are clamped to the
+    /// content, which is what makes the huge values for top and bottom safe.
+    fn delta(self, viewport_height: f32) -> egui::Vec2 {
+        const HUGE: f32 = 1.0e6;
+        // Keep a sliver of the previous screen, so a page turn has an anchor
+        // rather than jumping to text with no context.
+        let page = (viewport_height * 0.85).max(40.0);
+        let y = match self {
+            ScrollRequest::Pages(n) => -n * page,
+            ScrollRequest::Top => HUGE,
+            ScrollRequest::Bottom => -HUGE,
+        };
+        egui::vec2(0.0, y)
+    }
+}
+
 /// Transcript events drawn before "show earlier" is needed.
 ///
 /// Markdown is parsed on every frame it is visible, so an unbounded transcript
@@ -120,6 +154,8 @@ pub struct App {
     md_cache: egui_commonmark::CommonMarkCache,
     /// How many transcript events to draw. Raised by "show earlier".
     transcript_limit: usize,
+    /// Keyboard scroll to apply to the content pane this frame.
+    scroll: Option<ScrollRequest>,
 
     /// Where the daemon came from, and how to describe it.
     daemon_mode: crate::daemon::Mode,
@@ -184,6 +220,7 @@ impl App {
             show_health: false,
             md_cache: egui_commonmark::CommonMarkCache::default(),
             transcript_limit: TRANSCRIPT_PAGE,
+            scroll: None,
             daemon_mode,
             daemon_addr,
             pane: Pane::Queue,
@@ -307,6 +344,10 @@ impl eframe::App for App {
         // Written once per frame at most: preferences change on a click, and
         // saving inside the widget would touch the disk every time a checkbox
         // is merely *drawn*.
+        // Consumed by whichever scroll area drew this frame; dropped if none
+        // did, so a stale request cannot fire later in a different tab.
+        self.scroll = None;
+
         if self.prefs_dirty {
             self.prefs_dirty = false;
             if let Err(e) = self.prefs.save() {
@@ -736,6 +777,10 @@ impl App {
     fn run(&mut self, action: crate::keymap::Action, ui: &mut egui::Ui) {
         use crate::keymap::Action as A;
         match action {
+            A::PageDown => self.scroll = Some(ScrollRequest::Pages(1.0)),
+            A::PageUp => self.scroll = Some(ScrollRequest::Pages(-1.0)),
+            A::ScrollTop => self.scroll = Some(ScrollRequest::Top),
+            A::ScrollBottom => self.scroll = Some(ScrollRequest::Bottom),
             A::TabChanges => self.set_tab(Tab::Changes),
             A::TabTranscript => self.set_tab(Tab::Transcript),
             A::TabInfo => self.set_tab(Tab::Info),
@@ -1521,6 +1566,7 @@ impl App {
 
     fn transcript_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
         let events = self.events.get(&s.id).cloned().unwrap_or_default();
+        let scroll = self.scroll;
 
         ui.horizontal(|ui| {
             if ui
@@ -1553,6 +1599,9 @@ impl App {
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
+                if let Some(req) = scroll {
+                    ui.scroll_with_delta(req.delta(ui.clip_rect().height()));
+                }
                 if events.is_empty() {
                     ui.label(dim("no events yet"));
                 }
@@ -1704,9 +1753,13 @@ impl App {
             .files
             .iter()
             .find(|f| Some(f.path.as_str()) == self.selected_file.as_deref());
+        let scroll = self.scroll;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if let Some(req) = scroll {
+                    ui.scroll_with_delta(req.delta(ui.clip_rect().height()));
+                }
                 let Some(file) = file else {
                     ui.label(dim("select a file"));
                     return;
@@ -3037,6 +3090,49 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{next_tab, short_path, Tab};
+
+    use super::ScrollRequest;
+
+    /// The sign is the whole trick and it is inverted: `ScrollArea` applies
+    /// `offset -= delta`, so moving *down* the content needs a *negative* y.
+    /// Getting this backwards scrolls the wrong way, which reads as "the key
+    /// does nothing" when you are already at the top.
+    #[test]
+    fn paging_down_produces_a_negative_delta() {
+        assert!(ScrollRequest::Pages(1.0).delta(800.0).y < 0.0, "page down must go down");
+        assert!(ScrollRequest::Pages(-1.0).delta(800.0).y > 0.0, "page up must go up");
+        assert!(ScrollRequest::Bottom.delta(800.0).y < 0.0);
+        assert!(ScrollRequest::Top.delta(800.0).y > 0.0);
+    }
+
+    #[test]
+    fn a_page_keeps_some_of_the_previous_screen() {
+        // A full-height jump leaves you with no anchor; overlap is what makes
+        // paging readable rather than teleporting.
+        let d = ScrollRequest::Pages(1.0).delta(1000.0).y.abs();
+        assert!(d < 1000.0, "a page should not be the whole viewport");
+        assert!(d > 700.0, "but it should still be most of it");
+    }
+
+    #[test]
+    fn a_tiny_pane_still_scrolls() {
+        // Guard against a zero-height or unmeasured viewport turning the key
+        // into a no-op.
+        for h in [0.0, 1.0, 20.0] {
+            assert!(
+                ScrollRequest::Pages(1.0).delta(h).y.abs() >= 40.0,
+                "height {h} produced a useless step"
+            );
+        }
+    }
+
+    #[test]
+    fn top_and_bottom_overshoot_on_purpose() {
+        // egui clamps offset to the content, so overshooting is how you land
+        // exactly at an end without knowing the content height.
+        assert!(ScrollRequest::Top.delta(800.0).y.abs() > 1.0e5);
+        assert!(ScrollRequest::Bottom.delta(800.0).y.abs() > 1.0e5);
+    }
 
     #[test]
     fn cycling_tabs_wraps_at_both_ends() {

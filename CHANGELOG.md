@@ -12,6 +12,11 @@ Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
 Collision warning when two live sessions edit one file. Loop detection for an
 agent repeating itself. Jump to the session's Terminal tab.
 
+**Fixed.** Page Up and Page Down did nothing in the transcript and the diff.
+egui's `ScrollArea` has no keyboard handling at all — it responds to the wheel
+and to dragging, and nothing else — so the keys are now handled explicitly, with
+`Home`/`End` for the ends. Rebindable like everything else.
+
 **Added — tab shortcuts.** `c`/`t`/`i`/`d` switch to Changes, Transcript, Info
 and Debt; `Ctrl+Tab` cycles. Rebindable like everything else, and each tab shows
 its key on hover.

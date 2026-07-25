@@ -43,6 +43,11 @@ pub enum Action {
     TabDebt,
     NextTab,
     PrevTab,
+    // -- scrolling the content pane
+    PageDown,
+    PageUp,
+    ScrollTop,
+    ScrollBottom,
     // -- navigation, relative to the focused pane
     Next,
     Prev,
@@ -78,6 +83,10 @@ impl Action {
         Action::TabDebt,
         Action::NextTab,
         Action::PrevTab,
+        Action::PageDown,
+        Action::PageUp,
+        Action::ScrollTop,
+        Action::ScrollBottom,
         Action::Next,
         Action::Prev,
         Action::First,
@@ -107,6 +116,10 @@ impl Action {
             | Action::TabDebt
             | Action::NextTab
             | Action::PrevTab => "Tabs",
+            Action::PageDown
+            | Action::PageUp
+            | Action::ScrollTop
+            | Action::ScrollBottom => "Scrolling",
             Action::Next | Action::Prev | Action::First | Action::Activate => "Navigation",
             Action::JumpToTerminal
             | Action::MarkAllRead
@@ -134,6 +147,10 @@ impl Action {
             Action::TabDebt => "Show the Debt tab",
             Action::NextTab => "Next tab",
             Action::PrevTab => "Previous tab",
+            Action::PageDown => "Scroll the transcript or diff down a page",
+            Action::PageUp => "Scroll the transcript or diff up a page",
+            Action::ScrollTop => "Jump to the top",
+            Action::ScrollBottom => "Jump to the bottom",
             Action::Next => "Next item in the focused pane",
             Action::Prev => "Previous item in the focused pane",
             Action::First => "First item in the focused pane",
@@ -266,6 +283,11 @@ impl Default for Keymap {
         set(Action::TabDebt, &["D"]);
         set(Action::NextTab, &["Ctrl+Tab"]);
         set(Action::PrevTab, &["Ctrl+Shift+Tab"]);
+
+        set(Action::PageDown, &["PageDown"]);
+        set(Action::PageUp, &["PageUp"]);
+        set(Action::ScrollTop, &["Home"]);
+        set(Action::ScrollBottom, &["End"]);
 
         set(Action::Next, &["J", "Down"]);
         set(Action::Prev, &["K", "Up"]);
