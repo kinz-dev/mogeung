@@ -1,0 +1,27 @@
+[package]
+name = "mogeungd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mogeung-core.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "fs", "signal"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
