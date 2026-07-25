@@ -53,3 +53,24 @@ re-derived from the OS on the first scan after startup.
 `Change` is recomputed from git on demand and cached in memory only — never
 persisted. Only the `reviewed` anchors need to survive a restart, and they are
 what make checkpointing durable.
+
+
+## Fields added after v0.2
+
+Every one carries `#[serde(default)]`. The store keeps whole sessions as JSON
+blobs, so a row written by an older build must still load rather than being
+dropped as unreadable — and `load_sessions` only warns on a bad row, which means
+a missing default would silently lose sessions rather than fail loudly.
+
+| Field | For |
+|---|---|
+| `open_tools: Vec<OpenTool>` | Permission-prompt detection (`R-B4`) |
+| `snoozed_until: Option<DateTime>` | Snooze (`R-B5`) |
+| `collisions: Vec<Collision>` | Cross-session file overlap (`R-B3`) |
+| `loop_signal: Option<String>` | Thrashing advisory (`R-B7`) |
+| `recent_touches: Vec<Touch>` | Timestamped edits, capped at 200, feeding collisions |
+| `recent_tools: Vec<String>` | Last 12 `tool:target` keys, feeding loop detection |
+
+`recent_touches` exists because `touched_files` is cumulative: "we both edited
+this file at some point today" is not a collision, and answering the question
+needs *when*, not just *what*.

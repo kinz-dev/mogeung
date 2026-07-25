@@ -25,6 +25,20 @@ struct Args {
     /// How often to poll for session changes, in milliseconds.
     #[arg(long, default_value_t = 1500)]
     poll_ms: u64,
+
+    /// Post a macOS banner when a session starts needing you (R-C1).
+    ///
+    /// Off by default: a tool that starts posting notifications the first time
+    /// you run it has overstepped.
+    #[arg(long)]
+    notify: bool,
+
+    /// POST notifications to a URL as well — ntfy.sh, Pushover, a webhook (R-C4).
+    ///
+    /// The body is the message. Use with `--listen 0.0.0.0:7717` and the web
+    /// client at `/` to triage away from the desk.
+    #[arg(long, value_name = "URL")]
+    push_url: Option<String>,
 }
 
 fn default_db() -> PathBuf {
@@ -45,6 +59,20 @@ async fn main() -> Result<()> {
     let db = args.db.unwrap_or_else(default_db);
     let store = store::Store::open(&db)?;
     let state = AppState::new(store)?;
+
+    if args.notify || args.push_url.is_some() {
+        state
+            .configure_notifications(mogeungd::notify::NotifyConfig {
+                desktop: args.notify,
+                push_url: args.push_url.clone(),
+            })
+            .await;
+        tracing::info!(
+            "notifications on (desktop: {}, push: {})",
+            args.notify,
+            args.push_url.is_some()
+        );
+    }
 
     let home = watcher::default_home();
     if !home.join("projects").exists() {
@@ -82,6 +110,16 @@ async fn main() -> Result<()> {
         args.listen,
         db.display()
     );
+    tracing::info!("web client at http://{}/", args.listen);
+    if !args.listen.starts_with("127.") && !args.listen.starts_with("localhost") {
+        // Worth shouting about: there is no authentication, by design and by
+        // omission. See docs/design/wire-protocol.md.
+        tracing::warn!(
+            "listening beyond localhost with NO AUTHENTICATION — anyone who can \
+             reach {} can read your transcripts and open terminals on this machine",
+            args.listen
+        );
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

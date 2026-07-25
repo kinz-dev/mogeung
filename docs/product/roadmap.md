@@ -10,7 +10,9 @@ The ranked backlog.
 
 Effort: **S** = hours · **M** = about a day · **L** = multi-day.
 
-Nothing here is committed. Priority is unresolved pending [item 0](#0-the-non-feature).
+Pillars `A`, `B`, `C` (bar one item) and `D` are shipped. What remains — `E`
+verification, `F` cross-session intelligence, `G` rate limits, `H` doc sprawl —
+is still speculation until [item 0](#0-the-non-feature) is done.
 
 ## Identifiers
 
@@ -62,43 +64,54 @@ alert of its own that was confidently wrong.
 | R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
 | R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
-## B. Sharpen the queue
+## B. Sharpen the queue — **shipped**
 
-| # | Item | Effort |
-|---|---|---|
-| R-B1 | **Keyboard triage** — `j/k` move, `enter` open, `r` mark read, `o` open terminal | S |
-| R-B2 | **Jump to terminal** — focus the actual Terminal tab for a session via pid/tty. Closes `WAITING` → acting | M |
-| R-B3 | **Collision warning** — two *live* sessions editing the same file right now | M |
-| R-B4 | **Permission vs. instruction** — distinguish "waiting for approval" from "waiting for next task", via a pending `tool_use` with no result | M |
-| R-B5 | **Snooze** a session for N minutes | S |
-| R-B6 | **Group by repo**, collapsible | S |
-| R-B7 | **Loop detection** — same tool + same path repeatedly is thrashing, not progress | M |
-| R-B8 | **Auto-select top item** and a "next" key | S |
-| R-B9 | **Search/filter** the session list | S |
+Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 
-## C. Notifications and reach
+| # | Item | Effort | |
+|---|---|---|---|
+| R-B1 | **Keyboard triage** — `j/k` move, `enter` open, `r` mark read, `o` open terminal | S | ✅ |
+| R-B2 | **Jump to terminal** — focus the actual Terminal tab for a session via pid/tty. Closes `WAITING` → acting | M | ✅ |
+| R-B3 | **Collision warning** — two *live* sessions editing the same file right now | M | ✅ |
+| R-B4 | **Permission vs. instruction** — distinguish "waiting for approval" from "waiting for next task", via a pending `tool_use` with no result | M | ✅ |
+| R-B5 | **Snooze** a session for N minutes | S | ✅ |
+| R-B6 | **Group by repo**, collapsible | S | ✅ |
+| R-B7 | **Loop detection** — same tool + same path repeatedly is thrashing, not progress | M | ✅ |
+| R-B8 | **Auto-select top item** and a "next" key | S | ✅ |
+| R-B9 | **Search/filter** the session list | S | ✅ |
 
-| # | Item | Effort |
-|---|---|---|
-| R-C1 | **macOS notification** when a session flips to `WAITING` | S |
-| R-C2 | **Menu-bar item** with the waiting count — glanceable without the window | M |
-| R-C3 | **Thin web client** — review and unblock from a phone. The daemon already supports it | L |
-| R-C4 | **Push** via ntfy/Pushover for away-from-desk | S |
-| R-C5 | **Ambient mode** — big-screen board for a second monitor | M |
+## C. Notifications and reach — **shipped except `R-C2`**
 
-## D. Review depth
+Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
+`R-C2` needs a fourth binary with its own event loop to outlive the window,
+which is a bigger commitment than the rest of the pillar combined — and may be
+made redundant by `R-C1` banners. Left open deliberately.
 
-| # | Item | Effort |
-|---|---|---|
-| R-D1 | **Copy as prompt** — build a follow-up from flagged hunks + notes, ready to paste into the terminal. The observer-safe version of note→instruction | M |
-| R-D2 | **Whitespace-insensitive anchors** — stop reformatting from making hunks unread | S |
-| R-D3 | **Keyboard review flow** — `space` = mark read and advance | S |
-| R-D4 | **Syntax highlighting** in diffs (tree-sitter) | M |
-| R-D5 | **Intra-line word diff** | M |
-| R-D6 | **Side-by-side view** | M |
-| R-D7 | **Commit-aware diffing** — committed work currently vanishes as the base moves with HEAD ([A9](assumptions.md)) | M |
-| R-D8 | **Review debt across HEAD** — what fraction of the repo no human has read | L |
-| R-D9 | **Blast radius** — callers and tests affected by a changed symbol | L |
+| # | Item | Effort | |
+|---|---|---|---|
+| R-C1 | **macOS notification** when a session flips to `WAITING` | S | ✅ |
+| R-C2 | **Menu-bar item** with the waiting count — glanceable without the window | M |  |
+| R-C3 | **Thin web client** — review and unblock from a phone. The daemon already supports it | L | ✅ |
+| R-C4 | **Push** via ntfy/Pushover for away-from-desk | S | ✅ |
+| R-C5 | **Ambient mode** — big-screen board for a second monitor | M | ✅ |
+
+## D. Review depth — **shipped**
+
+Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
+`R-D1` is the observer-safe shape: mogeung writes the prompt, you paste it
+([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
+
+| # | Item | Effort | |
+|---|---|---|---|
+| R-D1 | **Copy as prompt** — build a follow-up from flagged hunks + notes, ready to paste into the terminal. The observer-safe version of note→instruction | M | ✅ |
+| R-D2 | **Whitespace-insensitive anchors** — stop reformatting from making hunks unread | S | ✅ |
+| R-D3 | **Keyboard review flow** — `space` = mark read and advance | S | ✅ |
+| R-D4 | **Syntax highlighting** in diffs (tree-sitter) | M | ✅ |
+| R-D5 | **Intra-line word diff** | M | ✅ |
+| R-D6 | **Side-by-side view** | M | ✅ |
+| R-D7 | **Commit-aware diffing** — committed work currently vanishes as the base moves with HEAD ([A9](assumptions.md)) | M | ✅ |
+| R-D8 | **Review debt across HEAD** — what fraction of the repo no human has read | L | ✅ |
+| R-D9 | **Blast radius** — callers and tests affected by a changed symbol | L | ✅ |
 
 ## E. Verification
 

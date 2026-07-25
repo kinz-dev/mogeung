@@ -5,6 +5,7 @@ use egui::{Color32, RichText};
 use mogeung_core::attention::{fmt_dur, AttentionItem, AttentionReason};
 use mogeung_core::change::RiskLevel;
 use mogeung_core::health::{human_bytes, Health};
+use mogeung_core::review::{BlastRadius, ReviewDebt};
 use mogeung_core::session::LiveStatus;
 use mogeung_core::transcript::{EventKind, NoticeLevel};
 use mogeung_core::{Change, ClientMsg, ServerMsg, Session, SessionId, TranscriptEvent};
@@ -15,6 +16,31 @@ enum Tab {
     Changes,
     Transcript,
     Info,
+    /// Review debt for the selected session's repo. `R-D8`.
+    Debt,
+}
+
+/// How a diff is laid out. `R-D6`.
+#[derive(PartialEq, Clone, Copy)]
+enum DiffView {
+    Unified,
+    SideBySide,
+}
+
+/// A hunk you marked while reading, to be turned into a follow-up prompt.
+///
+/// `R-D1` is the observer-safe version of "send an instruction": mogeung builds
+/// the text and puts it on your clipboard. **You** paste it into your terminal.
+/// It never types into a session — that would be steering, which is the whole
+/// thing v0.1 died of ([ADR-0003]).
+#[derive(Clone)]
+struct FlaggedHunk {
+    session_id: SessionId,
+    path: String,
+    header: String,
+    note: String,
+    /// Just the changed lines, for quoting back.
+    body: Vec<String>,
 }
 
 pub struct App {
@@ -33,6 +59,33 @@ pub struct App {
     hide_reviewed: bool,
     hide_noise: bool,
     show_quiet: bool,
+
+    /// Queue text filter. `R-B9`.
+    filter: String,
+    /// Group the queue by repository. `R-B6`.
+    group_by_repo: bool,
+    collapsed_repos: HashSet<String>,
+    /// Follow the top of the queue as it changes. `R-B8`.
+    auto_select: bool,
+    /// Big-text board for a second monitor. `R-C5`.
+    ambient: bool,
+
+    /// Diff presentation. `R-D4`, `R-D5`, `R-D6`.
+    diff_view: DiffView,
+    syntax: bool,
+    word_diff: bool,
+
+    /// Hunks flagged for the follow-up prompt, and the note attached to each.
+    /// `R-D1`.
+    flagged: Vec<FlaggedHunk>,
+    prompt_note: String,
+    show_prompt: bool,
+
+    /// Review debt for the current repo. `R-D8`.
+    debt: Option<ReviewDebt>,
+    /// Blast radius for the selected file. `R-D9`.
+    blast: Option<BlastRadius>,
+    blast_pending: bool,
 
     launch_dir: String,
     launch_worktree: bool,
@@ -62,6 +115,20 @@ impl App {
             hide_reviewed: false,
             hide_noise: true,
             show_quiet: false,
+            filter: String::new(),
+            group_by_repo: false,
+            collapsed_repos: HashSet::new(),
+            auto_select: false,
+            ambient: false,
+            diff_view: DiffView::Unified,
+            syntax: true,
+            word_diff: true,
+            flagged: Vec::new(),
+            prompt_note: String::new(),
+            show_prompt: false,
+            debt: None,
+            blast: None,
+            blast_pending: false,
             launch_dir: String::new(),
             launch_worktree: true,
             show_launch: false,
@@ -118,6 +185,11 @@ impl App {
                     self.changes.insert(session_id, change);
                 }
                 ServerMsg::Health { health } => self.health = *health,
+                ServerMsg::ReviewDebt { debt } => self.debt = Some(*debt),
+                ServerMsg::BlastRadius { radius } => {
+                    self.blast_pending = false;
+                    self.blast = Some(*radius);
+                }
                 ServerMsg::Error { message } => {
                     self.errors.push(message);
                     if self.errors.len() > 6 {
@@ -152,11 +224,14 @@ impl eframe::App for App {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(1000));
 
+        self.handle_keys(ui);
         self.top_bar(ui);
         self.queue_panel(ui);
         self.detail_panel(ui);
         self.launch_window(ui);
         self.health_window(ui);
+        self.prompt_window(ui);
+        self.ambient_window(ui);
     }
 }
 
@@ -246,6 +321,13 @@ impl App {
                     if ui.button("Rescan").clicked() {
                         self.net.send(ClientMsg::Rescan);
                     }
+                    if ui
+                        .selectable_label(self.ambient, "Ambient")
+                        .on_hover_text("big-text board for a second monitor")
+                        .clicked()
+                    {
+                        self.ambient = !self.ambient;
+                    }
                 });
             });
 
@@ -271,6 +353,140 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
+    /// The queue after "show quiet" and the text filter, in rank order.
+    ///
+    /// One definition used by rendering *and* by the keyboard, so `j` always
+    /// moves to the row you can actually see. Two separate notions of "the
+    /// list" is how keyboard navigation ends up jumping to invisible items.
+    fn visible_queue(&self) -> Vec<AttentionItem> {
+        let needle = self.filter.trim().to_lowercase();
+        self.queue
+            .iter()
+            .filter(|item| {
+                let Some(s) = self.sessions.get(&item.session_id) else {
+                    return false;
+                };
+                if item.reason == AttentionReason::Idle && !self.show_quiet {
+                    return false;
+                }
+                if needle.is_empty() {
+                    return true;
+                }
+                // Everything you might plausibly remember a session by.
+                let hay = format!(
+                    "{} {} {} {} {}",
+                    s.label(),
+                    s.repo_name(),
+                    s.cwd,
+                    s.git_branch.clone().unwrap_or_default(),
+                    s.last_activity.clone().unwrap_or_default()
+                )
+                .to_lowercase();
+                hay.contains(&needle)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Move the selection by `delta` within the visible queue. `R-B1`.
+    fn move_selection(&mut self, delta: i32) {
+        let vis = self.visible_queue();
+        if vis.is_empty() {
+            return;
+        }
+        let cur = self
+            .selected
+            .as_ref()
+            .and_then(|id| vis.iter().position(|i| &i.session_id == id));
+        let next = match cur {
+            Some(i) => (i as i32 + delta).clamp(0, vis.len() as i32 - 1) as usize,
+            // No selection yet: `j` starts at the top, `k` at the bottom.
+            None if delta > 0 => 0,
+            None => vis.len() - 1,
+        };
+        self.select(vis[next].session_id.clone());
+    }
+
+    /// Keyboard triage. `R-B1`, `R-B3`, `R-B5`, `R-B8`.
+    ///
+    /// Suppressed whenever a text field has focus, or typing "job" into the
+    /// filter box would move the selection three times and mark something read.
+    fn handle_keys(&mut self, ui: &mut egui::Ui) {
+        if ui.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let keys: Vec<egui::Key> = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if !modifiers.command && !modifiers.ctrl => Some(*key),
+                    _ => None,
+                })
+                .collect()
+        });
+
+        for key in keys {
+            match key {
+                egui::Key::J | egui::Key::ArrowDown => self.move_selection(1),
+                egui::Key::K | egui::Key::ArrowUp => self.move_selection(-1),
+                egui::Key::N => self.move_selection(1),
+                egui::Key::G => {
+                    if let Some(top) = self.visible_queue().first() {
+                        self.select(top.session_id.clone());
+                    }
+                }
+                egui::Key::O | egui::Key::Enter => self.focus_selected_terminal(),
+                egui::Key::R => {
+                    if let Some(id) = self.selected.clone() {
+                        self.net.send(ClientMsg::ReviewAll { session_id: id });
+                    }
+                }
+                egui::Key::S => {
+                    if let Some(id) = self.selected.clone() {
+                        let snoozed = self
+                            .sessions
+                            .get(&id)
+                            .map(|s| s.is_snoozed(Utc::now()))
+                            .unwrap_or(false);
+                        self.net.send(ClientMsg::Snooze {
+                            session_id: id,
+                            minutes: if snoozed { 0 } else { 30 },
+                        });
+                    }
+                }
+                egui::Key::Slash => {
+                    // Focus the filter box, vim-style.
+                    ui.memory_mut(|m| m.request_focus(egui::Id::new("queue-filter")));
+                }
+                egui::Key::Escape => {
+                    self.filter.clear();
+                    self.ambient = false;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn focus_selected_terminal(&mut self) {
+        if let Some(id) = self.selected.clone() {
+            let alive = self.sessions.get(&id).map(|s| s.alive).unwrap_or(false);
+            if alive {
+                self.net.send(ClientMsg::FocusTerminal { session_id: id });
+            } else if let Some(s) = self.sessions.get(&id) {
+                // Exited: the useful equivalent is opening where it worked.
+                let dir = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
+                if let Err(e) = ui::open_in(ui::OpenTarget::Terminal, &dir) {
+                    self.errors.push(e);
+                }
+            }
+        }
+    }
+
     fn queue_panel(&mut self, root: &mut egui::Ui) {
         egui::Panel::left("queue")
             .default_size(380.0)
@@ -280,67 +496,191 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("ATTENTION").size(11.0).color(DIM).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(&mut self.show_quiet, "show quiet");
+                        ui.checkbox(&mut self.show_quiet, "quiet");
+                        ui.checkbox(&mut self.group_by_repo, "group");
+                        ui.checkbox(&mut self.auto_select, "follow")
+                            .on_hover_text("keep the top of the queue selected as it changes");
                     });
                 });
-                ui.label(dim("waiting → failed → review → stalled → running"));
+
+                // R-B9. Filter first: with a dozen sessions this is faster than
+                // reading the list.
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.filter)
+                            .id(egui::Id::new("queue-filter"))
+                            .hint_text("filter  (/)")
+                            .desired_width(ui.available_width() - 4.0),
+                    );
+                });
+                ui.label(dim("j/k move · enter or o → terminal · r read · s snooze"));
                 ui.separator();
 
                 let now = Utc::now();
-                let queue = self.queue.clone();
+                let vis = self.visible_queue();
+                let hidden = self.queue.len() - vis.len();
                 let mut to_select = None;
-                let show_quiet = self.show_quiet;
+                let mut to_snooze = None;
+                let mut to_focus = None;
+
+                // R-B8. Follow mode: the top of the queue is by definition the
+                // thing most worth looking at, so let it drive the pane.
+                if self.auto_select {
+                    if let Some(top) = vis.first() {
+                        if self.selected.as_ref() != Some(&top.session_id) {
+                            to_select = Some(top.session_id.clone());
+                        }
+                    }
+                }
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let mut shown = 0;
-                        let mut hidden = 0;
-                        for item in &queue {
-                            let Some(session) = self.sessions.get(&item.session_id) else {
-                                continue;
-                            };
-                            let quiet = item.reason == AttentionReason::Idle;
-                            if quiet && !show_quiet {
-                                hidden += 1;
-                                continue;
-                            }
-                            shown += 1;
-
-                            let selected = self.selected.as_ref() == Some(&item.session_id);
-                            let resp = ui.push_id(&item.session_id, |ui| {
-                                egui::Frame::group(ui.style())
-                                    .fill(if selected {
-                                        ui.visuals().selection.bg_fill.linear_multiply(0.35)
-                                    } else {
-                                        Color32::TRANSPARENT
-                                    })
-                                    .show(ui, |ui| {
-                                        ui.set_width(ui.available_width());
-                                        queue_card(ui, session, item, now);
-                                    })
-                            });
-                            if resp.response.interact(egui::Sense::click()).clicked() {
-                                to_select = Some(item.session_id.clone());
-                            }
-                            ui.add_space(2.0);
-                        }
-
-                        if shown == 0 {
+                        if vis.is_empty() {
                             ui.add_space(20.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(dim("nothing needs you"));
-                                ui.label(dim("run claude in a terminal and it shows up here"));
+                                if self.filter.trim().is_empty() {
+                                    ui.label(dim("nothing needs you"));
+                                    ui.label(dim("run claude in a terminal and it shows up here"));
+                                } else {
+                                    ui.label(dim("nothing matches that filter"));
+                                }
                             });
                         }
+
+                        // R-B6. Grouping preserves rank *within* a repo, and
+                        // orders repos by their most urgent session — so the
+                        // top of the panel is still the top of the queue.
+                        let groups: Vec<(String, Vec<AttentionItem>)> = if self.group_by_repo {
+                            let mut order: Vec<String> = Vec::new();
+                            let mut by: HashMap<String, Vec<AttentionItem>> = HashMap::new();
+                            for item in &vis {
+                                let repo = self
+                                    .sessions
+                                    .get(&item.session_id)
+                                    .map(|s| s.repo_name())
+                                    .unwrap_or_else(|| "—".into());
+                                if !by.contains_key(&repo) {
+                                    order.push(repo.clone());
+                                }
+                                by.entry(repo).or_default().push(item.clone());
+                            }
+                            order
+                                .into_iter()
+                                .map(|r| {
+                                    let items = by.remove(&r).unwrap_or_default();
+                                    (r, items)
+                                })
+                                .collect()
+                        } else {
+                            vec![(String::new(), vis.clone())]
+                        };
+
+                        for (repo, items) in groups {
+                            if !repo.is_empty() {
+                                let collapsed = self.collapsed_repos.contains(&repo);
+                                let needing =
+                                    items.iter().filter(|i| i.reason.needs_human()).count();
+                                ui.add_space(4.0);
+                                let head = ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(if collapsed { "▸" } else { "▾" })
+                                            .size(11.0)
+                                            .color(DIM),
+                                    );
+                                    ui.label(RichText::new(&repo).size(12.0).strong());
+                                    ui.label(dim(format!(
+                                        "{} session(s){}",
+                                        items.len(),
+                                        if needing > 0 {
+                                            format!(", {needing} need you")
+                                        } else {
+                                            String::new()
+                                        }
+                                    )));
+                                });
+                                if head.response.interact(egui::Sense::click()).clicked() {
+                                    if collapsed {
+                                        self.collapsed_repos.remove(&repo);
+                                    } else {
+                                        self.collapsed_repos.insert(repo.clone());
+                                    }
+                                }
+                                if collapsed {
+                                    continue;
+                                }
+                            }
+
+                            for item in &items {
+                                let Some(session) = self.sessions.get(&item.session_id) else {
+                                    continue;
+                                };
+                                let selected = self.selected.as_ref() == Some(&item.session_id);
+                                let resp = ui.push_id(&item.session_id, |ui| {
+                                    egui::Frame::group(ui.style())
+                                        .fill(if selected {
+                                            ui.visuals().selection.bg_fill.linear_multiply(0.35)
+                                        } else {
+                                            Color32::TRANSPARENT
+                                        })
+                                        .show(ui, |ui| {
+                                            ui.set_width(ui.available_width());
+                                            queue_card(ui, session, item, now);
+
+                                            if selected {
+                                                ui.horizontal(|ui| {
+                                                    if session.alive
+                                                        && ui
+                                                            .small_button("→ terminal")
+                                                            .on_hover_text(
+                                                                "focus the Terminal tab this session runs in",
+                                                            )
+                                                            .clicked()
+                                                    {
+                                                        to_focus = Some(item.session_id.clone());
+                                                    }
+                                                    let snoozed = session.is_snoozed(now);
+                                                    if ui
+                                                        .small_button(if snoozed {
+                                                            "wake"
+                                                        } else {
+                                                            "snooze 30m"
+                                                        })
+                                                        .clicked()
+                                                    {
+                                                        to_snooze = Some((
+                                                            item.session_id.clone(),
+                                                            if snoozed { 0 } else { 30 },
+                                                        ));
+                                                    }
+                                                });
+                                            }
+                                        })
+                                });
+                                if resp.response.interact(egui::Sense::click()).clicked() {
+                                    to_select = Some(item.session_id.clone());
+                                }
+                                ui.add_space(2.0);
+                            }
+                        }
+
                         if hidden > 0 {
                             ui.add_space(6.0);
-                            ui.label(dim(format!("{hidden} quiet session(s) hidden")));
+                            ui.label(dim(format!("{hidden} session(s) hidden")));
                         }
                     });
 
                 if let Some(id) = to_select {
                     self.select(id);
+                }
+                if let Some((session_id, minutes)) = to_snooze {
+                    self.net.send(ClientMsg::Snooze {
+                        session_id,
+                        minutes,
+                    });
+                }
+                if let Some(session_id) = to_focus {
+                    self.net.send(ClientMsg::FocusTerminal { session_id });
                 }
             });
     }
@@ -354,6 +694,9 @@ fn queue_card(
 ) {
     ui.horizontal(|ui| {
         ui.label(badge(item.reason.label(), reason_color(item.reason)));
+        if s.is_snoozed(now) {
+            ui.label(badge("ZZZ", DIM));
+        }
         if s.alive {
             let (txt, col) = match s.live_status {
                 Some(LiveStatus::Busy) => ("live·busy", BLUE),
@@ -385,6 +728,41 @@ fn queue_card(
         }
     });
     ui.label(dim(truncate(&item.detail, 90)));
+
+    // R-B3. The one thing only a cross-session observer can tell you. Loud,
+    // because two agents writing the same file is how work gets silently lost.
+    if !s.collisions.is_empty() {
+        let mut paths: Vec<&str> = s.collisions.iter().map(|c| c.path.as_str()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        let others: Vec<&str> = {
+            let mut v: Vec<&str> = s.collisions.iter().map(|c| c.other_label.as_str()).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("⚠ COLLISION").size(10.5).color(RED).strong());
+            ui.label(
+                RichText::new(format!(
+                    "{} also being edited by {}",
+                    truncate(&paths.join(", "), 60),
+                    truncate(&others.join(", "), 40)
+                ))
+                .size(11.0)
+                .color(RED),
+            );
+        });
+    }
+
+    // R-B7. Advisory, not a queue tier: repetition is suggestive, not proof.
+    if let Some(sig) = &s.loop_signal {
+        ui.label(
+            RichText::new(format!("↻ {}", truncate(sig, 80)))
+                .size(11.0)
+                .color(PURPLE),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +871,25 @@ impl App {
                 ui.selectable_value(&mut self.tab, Tab::Changes, changes_label);
                 ui.selectable_value(&mut self.tab, Tab::Transcript, "Transcript");
                 ui.selectable_value(&mut self.tab, Tab::Info, "Info");
+                if ui
+                    .selectable_value(&mut self.tab, Tab::Debt, "Debt")
+                    .on_hover_text("how much of this repo's agent output nobody has read")
+                    .clicked()
+                {
+                    if let Some(repo) = s.repo_root.clone() {
+                        self.net.send(ClientMsg::FetchReviewDebt { repo });
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !self.flagged.is_empty()
+                        && ui
+                            .button(RichText::new(format!("✎ {} flagged", self.flagged.len())).color(AMBER))
+                            .on_hover_text("build a follow-up prompt from what you flagged")
+                            .clicked()
+                    {
+                        self.show_prompt = true;
+                    }
+                });
             });
             ui.separator();
 
@@ -500,6 +897,7 @@ impl App {
                 Tab::Changes => self.changes_tab(ui, &s),
                 Tab::Transcript => self.transcript_tab(ui, &s),
                 Tab::Info => self.info_tab(ui, &s),
+                Tab::Debt => self.debt_tab(ui, &s),
             }
         });
     }
@@ -554,6 +952,16 @@ impl App {
                     session_id: s.id.clone(),
                 });
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.selectable_value(&mut self.diff_view, DiffView::SideBySide, "⇹")
+                    .on_hover_text("side by side (R-D6)");
+                ui.selectable_value(&mut self.diff_view, DiffView::Unified, "≡")
+                    .on_hover_text("unified");
+                ui.checkbox(&mut self.word_diff, "words")
+                    .on_hover_text("highlight only the part of a line that moved (R-D5)");
+                ui.checkbox(&mut self.syntax, "syntax")
+                    .on_hover_text("approximate highlighting — a tokenizer, not a parser (R-D4)");
+            });
         });
         ui.separator();
 
@@ -613,10 +1021,39 @@ impl App {
                     ui.label(dim("diff not shown (binary or too large)"));
                     return;
                 }
+                // R-D9. Per file, not per hunk: the question "what else uses
+                // this?" is about the file's symbols as a whole.
+                ui.horizontal(|ui| {
+                    if ui
+                        .small_button("⌁ blast radius")
+                        .on_hover_text("what else mentions the symbols this diff changed")
+                        .clicked()
+                    {
+                        self.blast = None;
+                        self.blast_pending = true;
+                        self.net.send(ClientMsg::FetchBlastRadius {
+                            session_id: s.id.clone(),
+                            path: file.path.clone(),
+                        });
+                    }
+                    if self.blast_pending {
+                        ui.label(dim("searching…"));
+                    }
+                });
+                if let Some(b) = self.blast.clone() {
+                    if b.path == file.path {
+                        blast_panel(ui, &b);
+                    }
+                }
+
                 for hunk in &file.hunks {
                     if self.hide_reviewed && hunk.reviewed {
                         continue;
                     }
+                    let flagged = self
+                        .flagged
+                        .iter()
+                        .any(|f| f.session_id == s.id && f.header == hunk.header && f.path == file.path);
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal_wrapped(|ui| {
@@ -633,9 +1070,58 @@ impl App {
                             for fl in hunk.flags.iter().take(4) {
                                 ui.label(dim(fl.label()));
                             }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // R-D1. Collect now, write the prompt later.
+                                    let label = if flagged { "✎ flagged" } else { "✎ flag" };
+                                    let btn = if flagged {
+                                        ui.small_button(RichText::new(label).color(AMBER))
+                                    } else {
+                                        ui.small_button(label)
+                                    };
+                                    if btn
+                                        .on_hover_text("add to a follow-up prompt you will paste yourself")
+                                        .clicked()
+                                    {
+                                        if flagged {
+                                            self.flagged.retain(|f| {
+                                                !(f.session_id == s.id
+                                                    && f.header == hunk.header
+                                                    && f.path == file.path)
+                                            });
+                                        } else {
+                                            self.flagged.push(FlaggedHunk {
+                                                session_id: s.id.clone(),
+                                                path: file.path.clone(),
+                                                header: hunk.header.clone(),
+                                                note: String::new(),
+                                                body: hunk
+                                                    .lines
+                                                    .iter()
+                                                    .filter(|l| {
+                                                        l.starts_with('+') || l.starts_with('-')
+                                                    })
+                                                    .take(40)
+                                                    .cloned()
+                                                    .collect(),
+                                            });
+                                            self.show_prompt = true;
+                                        }
+                                    }
+                                },
+                            );
                         });
-                        for line in hunk.lines.iter().take(500) {
-                            diff_line(ui, line);
+
+                        let shown: Vec<String> =
+                            hunk.lines.iter().take(500).cloned().collect();
+                        match self.diff_view {
+                            DiffView::Unified => {
+                                render_unified(ui, &shown, self.syntax, self.word_diff)
+                            }
+                            DiffView::SideBySide => {
+                                render_side_by_side(ui, &shown, self.syntax, self.word_diff)
+                            }
                         }
                         if hunk.lines.len() > 500 {
                             ui.label(dim(format!(
@@ -647,6 +1133,76 @@ impl App {
                     ui.add_space(4.0);
                 }
             });
+    }
+
+    /// R-D8. Review debt for the selected session's repo.
+    fn debt_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let Some(repo) = s.repo_root.clone() else {
+            ui.label(dim("this session is not inside a git repository"));
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label(mono(&repo).color(DIM));
+            if ui.small_button("refresh").clicked() {
+                self.net.send(ClientMsg::FetchReviewDebt { repo: repo.clone() });
+            }
+        });
+        ui.separator();
+
+        let Some(debt) = self.debt.clone().filter(|d| d.repo == repo) else {
+            self.net.send(ClientMsg::FetchReviewDebt { repo });
+            ui.label(dim("computing…"));
+            return;
+        };
+
+        ui.label(RichText::new(debt.headline()).size(15.0).strong());
+        ui.add(
+            egui::ProgressBar::new(debt.progress())
+                .desired_width(320.0)
+                .show_percentage(),
+        );
+        ui.add_space(6.0);
+        ui.label(dim(format!(
+            "{} session(s) with changes · {} still unread · {} file(s) touched · +{} unread insertions",
+            debt.sessions, debt.sessions_unread, debt.files_touched, debt.unread_insertions
+        )));
+        ui.add_space(4.0);
+        ui.label(dim(
+            "Counts sessions mogeung has seen, not the whole history of the repo — \
+             work done before it was watching is not in here.",
+        ));
+
+        ui.add_space(10.0);
+        if debt.worst_files.is_empty() {
+            ui.label(RichText::new("Nothing outstanding.").color(GREEN));
+            return;
+        }
+        ui.label(RichText::new("Riskiest unread files").strong().size(12.5));
+        ui.add_space(4.0);
+
+        let mut jump = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for f in &debt.worst_files {
+                    ui.horizontal(|ui| {
+                        let level = RiskLevel::from_score(f.score);
+                        ui.label(badge(level.label(), risk_color(level)));
+                        ui.label(dim(format!("{} unread", f.unread_hunks)));
+                        if ui
+                            .selectable_label(false, RichText::new(&f.path).size(12.5))
+                            .clicked()
+                        {
+                            jump = Some((f.session_id.clone(), f.path.clone()));
+                        }
+                    });
+                }
+            });
+        if let Some((id, path)) = jump {
+            self.select(id);
+            self.selected_file = Some(path);
+            self.tab = Tab::Changes;
+        }
     }
 
     fn info_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
@@ -688,18 +1244,219 @@ impl App {
     }
 }
 
-fn diff_line(ui: &mut egui::Ui, line: &str) {
-    let text = RichText::new(line).monospace().size(11.5);
-    let styled = match line.chars().next() {
-        Some('+') => text
-            .color(Color32::from_rgb(0x8F, 0xE0, 0xA6))
-            .background_color(ADD_BG),
-        Some('-') => text
-            .color(Color32::from_rgb(0xF0, 0x9C, 0xA0))
-            .background_color(DEL_BG),
-        _ => text.color(Color32::from_rgb(0xA8, 0xA8, 0xB0)),
-    };
-    ui.label(styled);
+/// Colour for a syntax token, tuned to stay legible over the add/delete tints.
+fn tok_color(t: crate::diff::Tok, base: Color32) -> Color32 {
+    use crate::diff::Tok;
+    match t {
+        Tok::Keyword => Color32::from_rgb(0xC5, 0x92, 0xE8),
+        Tok::Str => Color32::from_rgb(0xB6, 0xD7, 0x8B),
+        Tok::Comment => Color32::from_rgb(0x77, 0x7C, 0x88),
+        Tok::Number => Color32::from_rgb(0xE8, 0xB0, 0x75),
+        Tok::Type => Color32::from_rgb(0x7E, 0xC0, 0xE0),
+        Tok::Plain => base,
+    }
+}
+
+fn line_bg(line: &str) -> Option<Color32> {
+    match line.chars().next() {
+        Some('+') => Some(ADD_BG),
+        Some('-') => Some(DEL_BG),
+        _ => None,
+    }
+}
+
+fn line_fg(line: &str) -> Color32 {
+    match line.chars().next() {
+        Some('+') => Color32::from_rgb(0x8F, 0xE0, 0xA6),
+        Some('-') => Color32::from_rgb(0xF0, 0x9C, 0xA0),
+        _ => Color32::from_rgb(0xA8, 0xA8, 0xB0),
+    }
+}
+
+/// One diff line as a row of coloured spans.
+///
+/// `emphasis` marks the byte ranges the word diff says actually moved; they get
+/// a brighter background so the eye lands on the change rather than the line.
+fn styled_line(
+    ui: &mut egui::Ui,
+    line: &str,
+    syntax: bool,
+    emphasis: Option<&[crate::diff::Span]>,
+) {
+    let bg = line_bg(line);
+    let fg = line_fg(line);
+
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+
+        // Word-diff emphasis takes precedence: knowing *what changed* beats
+        // knowing what is a keyword.
+        if let Some(spans) = emphasis {
+            for sp in spans {
+                let mut t = RichText::new(&sp.text).monospace().size(11.5).color(fg);
+                if sp.changed {
+                    t = t.background_color(if line.starts_with('+') {
+                        Color32::from_rgb(0x25, 0x6B, 0x3C)
+                    } else {
+                        Color32::from_rgb(0x74, 0x2B, 0x30)
+                    });
+                } else if let Some(b) = bg {
+                    t = t.background_color(b);
+                }
+                ui.label(t);
+            }
+            return;
+        }
+
+        if !syntax {
+            let mut t = RichText::new(line).monospace().size(11.5).color(fg);
+            if let Some(b) = bg {
+                t = t.background_color(b);
+            }
+            ui.label(t);
+            return;
+        }
+
+        for (tok, text) in crate::diff::highlight(line) {
+            let mut t = RichText::new(&text)
+                .monospace()
+                .size(11.5)
+                .color(tok_color(tok, fg));
+            if let Some(b) = bg {
+                t = t.background_color(b);
+            }
+            ui.label(t);
+        }
+    });
+}
+
+/// Unified view, with word-level emphasis on runs that look like replacements.
+fn render_unified(ui: &mut egui::Ui, lines: &[String], syntax: bool, words: bool) {
+    let pairs = replacement_pairs(lines, words);
+    for (i, line) in lines.iter().enumerate() {
+        styled_line(ui, line, syntax, pairs.get(&i).map(|v| v.as_slice()));
+    }
+}
+
+fn render_side_by_side(ui: &mut egui::Ui, lines: &[String], syntax: bool, words: bool) {
+    let rows = crate::diff::side_by_side(lines);
+    let half = (ui.available_width() - 12.0).max(160.0) / 2.0;
+    for row in &rows {
+        // Compute the word diff once per row, not once per side.
+        let pair = match (&row.left, &row.right) {
+            (Some(a), Some(b)) if words && a.starts_with('-') && b.starts_with('+') => {
+                Some(crate::diff::word_diff(a, b))
+            }
+            _ => None,
+        };
+
+        ui.horizontal_top(|ui| {
+            for (idx, side) in [&row.left, &row.right].into_iter().enumerate() {
+                ui.allocate_ui(egui::vec2(half, 0.0), |ui| {
+                    ui.set_width(half);
+                    match side {
+                        Some(l) => {
+                            let emph = pair
+                                .as_ref()
+                                .map(|(left, right)| if idx == 0 { left } else { right });
+                            styled_line(ui, l, syntax, emph.map(|v| v.as_slice()));
+                        }
+                        // A blank keeps the two columns aligned when one side of
+                        // a replacement run is longer than the other.
+                        None => {
+                            ui.label(RichText::new(" ").monospace().size(11.5));
+                        }
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// Index → word-diff spans, for lines that are half of a replacement pair.
+///
+/// A run of N removals followed by N additions is treated as N replacements;
+/// anything lopsided is left alone, because pairing lines that are not really
+/// counterparts produces noise rather than insight.
+fn replacement_pairs(
+    lines: &[String],
+    enabled: bool,
+) -> HashMap<usize, Vec<crate::diff::Span>> {
+    let mut out = HashMap::new();
+    if !enabled {
+        return out;
+    }
+    let mut i = 0;
+    while i < lines.len() {
+        if !lines[i].starts_with('-') {
+            i += 1;
+            continue;
+        }
+        let del_start = i;
+        while i < lines.len() && lines[i].starts_with('-') {
+            i += 1;
+        }
+        let add_start = i;
+        while i < lines.len() && lines[i].starts_with('+') {
+            i += 1;
+        }
+        let dels = add_start - del_start;
+        let adds = i - add_start;
+        if dels > 0 && dels == adds {
+            for k in 0..dels {
+                let (l, r) = crate::diff::word_diff(&lines[del_start + k], &lines[add_start + k]);
+                out.insert(del_start + k, l);
+                out.insert(add_start + k, r);
+            }
+        }
+    }
+    out
+}
+
+/// R-D9. Grep results, presented as what they are.
+fn blast_panel(ui: &mut egui::Ui, b: &BlastRadius) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("⌁ blast radius").strong().size(12.0));
+            ui.label(dim(b.headline()));
+        });
+        ui.label(dim(
+            "Textual search, not a call graph — it over-reports common names and \
+             misses anything dynamic.",
+        ));
+        if !b.symbols.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(dim("symbols:"));
+                for s in &b.symbols {
+                    ui.label(mono(s));
+                }
+            });
+        }
+        if b.references.is_empty() {
+            return;
+        }
+        // Tests first: "did anything test this?" is the question with teeth.
+        let mut refs = b.references.clone();
+        refs.sort_by_key(|r| (!r.is_test, r.path.clone(), r.line));
+        egui::ScrollArea::vertical()
+            .max_height(220.0)
+            .id_salt("blast")
+            .show(ui, |ui| {
+                for r in refs.iter().take(60) {
+                    ui.horizontal(|ui| {
+                        if r.is_test {
+                            ui.label(badge("test", GREEN));
+                        }
+                        ui.label(mono(format!("{}:{}", r.path, r.line)).color(DIM));
+                        ui.label(RichText::new(truncate(&r.text, 90)).monospace().size(11.0));
+                    });
+                }
+            });
+        if b.truncated {
+            ui.label(dim("… search capped; results are incomplete"));
+        }
+    });
 }
 
 fn event_row(ui: &mut egui::Ui, ev: &TranscriptEvent) {
@@ -894,6 +1651,232 @@ impl App {
         }
         if !open {
             self.show_launch = false;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up prompt (R-D1) and ambient board (R-C5)
+// ---------------------------------------------------------------------------
+
+impl App {
+    /// Render the flagged hunks as prompt text.
+    ///
+    /// Quotes the actual changed lines rather than just naming files, because
+    /// an agent given "fix the error handling in state.rs" will guess, and one
+    /// given the hunk will not.
+    fn build_prompt(&self) -> String {
+        let mut out = String::new();
+        if !self.prompt_note.trim().is_empty() {
+            out.push_str(self.prompt_note.trim());
+            out.push_str("\n\n");
+        }
+        out.push_str("Please look at the following, which I flagged while reviewing:\n");
+        for (i, f) in self.flagged.iter().enumerate() {
+            out.push_str(&format!("\n{}. `{}` {}\n", i + 1, f.path, f.header));
+            if !f.note.trim().is_empty() {
+                out.push_str(&format!("   {}\n", f.note.trim()));
+            }
+            if !f.body.is_empty() {
+                out.push_str("```diff\n");
+                for l in &f.body {
+                    out.push_str(l);
+                    out.push('\n');
+                }
+                out.push_str("```\n");
+            }
+        }
+        out
+    }
+
+    fn prompt_window(&mut self, root: &mut egui::Ui) {
+        if !self.show_prompt {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let mut open = true;
+
+        egui::Window::new("Follow-up prompt")
+            .open(&mut open)
+            .default_width(660.0)
+            .collapsible(false)
+            .show(&ctx, |ui| {
+                ui.label(
+                    RichText::new("mogeung writes this. You paste it.")
+                        .size(13.0)
+                        .strong(),
+                );
+                ui.label(dim(
+                    "Nothing is sent to any session — that would be steering, which is \
+                     exactly what made v0.1 worse than a terminal (ADR-0003).",
+                ));
+                ui.add_space(8.0);
+
+                ui.label(dim("what you want done"));
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.prompt_note)
+                        .desired_rows(2)
+                        .hint_text("e.g. these three need error handling before I merge")
+                        .desired_width(f32::INFINITY),
+                );
+
+                ui.add_space(8.0);
+                ui.label(dim(format!("{} flagged hunk(s)", self.flagged.len())));
+
+                let mut remove = None;
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .id_salt("flagged")
+                    .show(ui, |ui| {
+                        for (i, f) in self.flagged.iter_mut().enumerate() {
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(mono(&f.path).color(DIM));
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.small_button("✕").clicked() {
+                                                remove = Some(i);
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.note)
+                                        .hint_text("note for this hunk (optional)")
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+                        }
+                    });
+                if let Some(i) = remove {
+                    self.flagged.remove(i);
+                }
+
+                ui.add_space(8.0);
+                let text = self.build_prompt();
+                ui.label(dim("preview"));
+                egui::ScrollArea::vertical()
+                    .max_height(160.0)
+                    .id_salt("prompt-preview")
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(&text).monospace().size(11.0));
+                    });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Copy to clipboard").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                    }
+                    if ui.button("Clear flags").clicked() {
+                        self.flagged.clear();
+                        self.prompt_note.clear();
+                        self.show_prompt = false;
+                    }
+                    ui.label(dim("then paste it into that session's terminal"));
+                });
+            });
+
+        if !open {
+            self.show_prompt = false;
+        }
+    }
+
+    /// A big, glanceable board for a second monitor. `R-C5`.
+    ///
+    /// Readable across a room, which means: only what needs you, only the
+    /// label and the reason, and nothing you have to click.
+    fn ambient_window(&mut self, root: &mut egui::Ui) {
+        if !self.ambient {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let mut open = true;
+        let now = Utc::now();
+        let queue = self.visible_queue();
+
+        egui::Window::new("Ambient")
+            .open(&mut open)
+            .default_size(egui::vec2(760.0, 520.0))
+            .collapsible(false)
+            .show(&ctx, |ui| {
+                let needing: Vec<&AttentionItem> =
+                    queue.iter().filter(|i| i.reason.needs_human()).collect();
+
+                if needing.is_empty() {
+                    ui.add_space(60.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(RichText::new("All clear").size(48.0).color(GREEN));
+                        ui.label(
+                            RichText::new(format!(
+                                "{} live session(s) working",
+                                self.sessions.values().filter(|s| s.alive).count()
+                            ))
+                            .size(20.0)
+                            .color(DIM),
+                        );
+                    });
+                    return;
+                }
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for item in needing {
+                            let Some(s) = self.sessions.get(&item.session_id) else {
+                                continue;
+                            };
+                            let col = reason_color(item.reason);
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(item.reason.label())
+                                            .size(24.0)
+                                            .strong()
+                                            .color(col),
+                                    );
+                                    ui.label(
+                                        RichText::new(truncate(&s.label(), 60))
+                                            .size(24.0),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(fmt_dur(
+                                                    s.waiting_secs(now)
+                                                        .unwrap_or_else(|| s.duration_secs(now)),
+                                                ))
+                                                .size(24.0)
+                                                .color(DIM),
+                                            );
+                                        },
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · {}",
+                                        s.repo_name(),
+                                        truncate(&item.detail, 80)
+                                    ))
+                                    .size(16.0)
+                                    .color(DIM),
+                                );
+                                if !s.collisions.is_empty() {
+                                    ui.label(
+                                        RichText::new("⚠ COLLISION").size(18.0).color(RED).strong(),
+                                    );
+                                }
+                            });
+                            ui.add_space(6.0);
+                        }
+                    });
+            });
+
+        if !open {
+            self.ambient = false;
         }
     }
 }

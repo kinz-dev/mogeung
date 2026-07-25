@@ -7,13 +7,15 @@
 use crate::adapter::{self, LineOutcome};
 use crate::git;
 use crate::health::HealthTracker;
+use crate::notify::{NotifyConfig, Notifier};
 use crate::store::Store;
 use crate::watcher::{self, Tailer};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use mogeung_core::attention::{rank, AttentionConfig};
+use mogeung_core::attention::{rank, AttentionConfig, AttentionItem};
 use mogeung_core::health::Health;
-use mogeung_core::session::{Session, SessionId};
+use mogeung_core::review::{BlastRadius, DebtFile, ReviewDebt};
+use mogeung_core::session::{Collision, OpenTool, Session, SessionId, Touch};
 use mogeung_core::{Change, EventKind, ServerMsg, TranscriptEvent};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +41,20 @@ const MAX_TRANSCRIPT_BYTES: u64 = 4 << 20; // 4 MiB
 /// was recently doing without paying for its whole history.
 const TAIL_BYTES: u64 = 1 << 20; // 1 MiB
 
+/// Two live sessions touching the same file within this window are colliding.
+///
+/// Long enough to catch a real overlap, short enough that "we both edited this
+/// file at some point today" does not count. `R-B3`.
+const COLLISION_WINDOW_SECS: i64 = 600;
+
+/// How many recent tool calls to remember per session, and how many repeats of
+/// the same `tool:target` within them counts as thrashing. `R-B7`.
+const LOOP_HISTORY: usize = 12;
+const LOOP_REPEATS: usize = 4;
+
+/// Cap on remembered touches, so a long session cannot grow without bound.
+const MAX_RECENT_TOUCHES: usize = 200;
+
 pub struct AppState {
     pub store: Store,
     pub sessions: RwLock<HashMap<SessionId, Session>>,
@@ -51,6 +67,8 @@ pub struct AppState {
     pub attention: AttentionConfig,
     /// What we have and have not managed to read. See `health.rs`.
     health: Mutex<HealthTracker>,
+    /// Tells you a session needs attention when the window is not in front.
+    notifier: Mutex<Notifier>,
 }
 
 impl AppState {
@@ -82,7 +100,14 @@ impl AppState {
             claude_home,
             attention: AttentionConfig::default(),
             health: Mutex::new(HealthTracker::new(MAX_TRANSCRIPT_BYTES)),
+            notifier: Mutex::new(Notifier::default()),
         }))
+    }
+
+    /// Turn desktop/push notifications on. Off unless asked for: a tool that
+    /// starts posting banners the first time you run it has overstepped.
+    pub async fn configure_notifications(&self, cfg: NotifyConfig) {
+        *self.notifier.lock().await = Notifier::new(cfg);
     }
 
     /// What mogeung can currently see, and what it cannot.
@@ -110,7 +135,28 @@ impl AppState {
     pub async fn publish_queue(&self) {
         let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
         let queue = rank(&sessions, Utc::now(), &self.attention);
+        self.notify_for(&queue, &sessions).await;
         self.broadcast(ServerMsg::Queue { queue });
+    }
+
+    /// Announce anything that has newly started needing you.
+    ///
+    /// Delivery is spawned rather than awaited: `osascript` and `curl` are
+    /// external processes, and the scan loop must not be held up by either.
+    async fn notify_for(&self, queue: &[AttentionItem], sessions: &[Session]) {
+        let mut notifier = self.notifier.lock().await;
+        if !notifier.config().enabled() {
+            return;
+        }
+        let labels: HashMap<&str, String> =
+            sessions.iter().map(|s| (s.id.as_str(), s.label())).collect();
+        let pending = notifier.diff(queue, |id| {
+            labels.get(id).cloned().unwrap_or_else(|| id.to_string())
+        });
+        for n in pending {
+            let cfg = notifier.config().clone();
+            tokio::task::spawn_blocking(move || Notifier::new(cfg).send(&n));
+        }
     }
 
     pub async fn get(&self, id: &str) -> Option<Session> {
@@ -233,6 +279,8 @@ impl AppState {
             self.recompute_change(&id).await;
         }
 
+        self.refresh_collisions().await;
+
         {
             let sessions = self.sessions.read().await;
             let live_count = sessions.values().filter(|s| s.alive).count() as u64;
@@ -243,6 +291,51 @@ impl AppState {
         }
         self.publish_queue().await;
         self.publish_health().await;
+    }
+
+    /// Recompute cross-session collisions and publish any that changed.
+    ///
+    /// Runs every scan rather than only when files move, because a collision
+    /// also *ends* — when one side exits or the window lapses — and a stale
+    /// warning is worse than none.
+    async fn refresh_collisions(&self) {
+        let now = Utc::now();
+        let all: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        let found = detect_collisions(&all, now);
+
+        let mut changed = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in all {
+                let next = found.get(&s.id).cloned().unwrap_or_default();
+                if next != s.collisions {
+                    if let Some(live) = sessions.get_mut(&s.id) {
+                        live.collisions = next;
+                        changed.push(live.clone());
+                    }
+                }
+            }
+        }
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
+    }
+
+    /// Silence a session for `minutes`. `R-B5`.
+    pub async fn snooze(&self, id: &str, minutes: i64) {
+        let Some(mut s) = self.get(id).await else {
+            return;
+        };
+        s.snoozed_until = if minutes <= 0 {
+            None
+        } else {
+            Some(Utc::now() + chrono::Duration::minutes(minutes))
+        };
+        self.put(s).await;
+        self.publish_queue().await;
     }
 
     /// Register a transcript we have not seen before.
@@ -275,6 +368,12 @@ impl AppState {
             error: None,
             transcript_path: f.path.to_string_lossy().to_string(),
             reviewed: false,
+            open_tools: Vec::new(),
+            snoozed_until: None,
+            collisions: Vec::new(),
+            loop_signal: None,
+            recent_touches: Vec::new(),
+            recent_tools: Vec::new(),
         };
         self.sessions.write().await.insert(s.id.clone(), s);
 
@@ -375,13 +474,56 @@ impl AppState {
             if p.last_activity.is_some() {
                 s.last_activity = p.last_activity;
             }
+            let at = p.ts.unwrap_or_else(Utc::now);
             for f in p.touched {
                 if !s.touched_files.contains(&f) {
-                    s.touched_files.push(f);
+                    s.touched_files.push(f.clone());
+                }
+                // Timestamped separately: collision detection needs to know
+                // *when*, and `touched_files` is cumulative for the session.
+                s.recent_touches.push(Touch { path: f, at });
+            }
+            if s.recent_touches.len() > MAX_RECENT_TOUCHES {
+                let excess = s.recent_touches.len() - MAX_RECENT_TOUCHES;
+                s.recent_touches.drain(..excess);
+            }
+
+            // Open tool calls: a `tool_use` with no matching `tool_result` is
+            // what distinguishes "blocked on a permission prompt" from
+            // "finished and waiting for you". A new human turn clears them —
+            // you cannot be blocked on a prompt you have already answered.
+            if p.is_turn {
+                s.open_tools.clear();
+            }
+            for ev in &p.events {
+                match ev {
+                    EventKind::ToolUse {
+                        tool_use_id,
+                        name,
+                        summary,
+                    } if !p.sidechain => {
+                        s.open_tools.push(OpenTool {
+                            id: tool_use_id.clone(),
+                            name: name.clone(),
+                            summary: summary.clone(),
+                            at,
+                        });
+                        s.recent_tools.push(format!("{name}\u{1}{summary}"));
+                        if s.recent_tools.len() > LOOP_HISTORY {
+                            let excess = s.recent_tools.len() - LOOP_HISTORY;
+                            s.recent_tools.drain(..excess);
+                        }
+                    }
+                    EventKind::ToolResult { tool_use_id, .. } => {
+                        s.open_tools.retain(|t| &t.id != tool_use_id);
+                    }
+                    _ => {}
                 }
             }
             events.extend(p.events);
         }
+
+        s.loop_signal = detect_loop(&s.recent_tools);
 
         // Resolve the repo once the cwd is known, and pin a diff base the first
         // time we see the session.
@@ -390,7 +532,9 @@ impl AppState {
             if git::is_repo(&cwd) {
                 s.repo_root = git::repo_root(&cwd).ok().map(|p| p.to_string_lossy().to_string());
                 if s.base_sha.is_none() {
-                    s.base_sha = git::head_sha(&cwd).ok();
+                    // Not HEAD: the last commit predating the session, so work
+                    // it committed before mogeung noticed it is still visible.
+                    s.base_sha = git::base_for_session(&cwd, s.started_at).ok();
                 }
             }
         }
@@ -468,6 +612,122 @@ impl AppState {
         Some(change)
     }
 
+    // -----------------------------------------------------------------------
+    // Review debt and blast radius
+    // -----------------------------------------------------------------------
+
+    /// How much of what agents produced in one repo nobody has read. `R-D8`.
+    ///
+    /// Built from the diffs already computed rather than by re-walking git, so
+    /// it costs nothing and always agrees with what the review tab shows. The
+    /// limitation that follows: it covers sessions mogeung knows about, not the
+    /// entire history of the repository.
+    pub async fn review_debt(&self, repo: &str) -> ReviewDebt {
+        let sessions = self.sessions.read().await;
+        let changes = self.changes.read().await;
+
+        let mut debt = ReviewDebt {
+            repo: repo.to_string(),
+            ..Default::default()
+        };
+        let mut files = std::collections::HashSet::new();
+
+        for s in sessions.values() {
+            let in_repo = s.repo_root.as_deref() == Some(repo) || s.cwd == repo;
+            if !in_repo {
+                continue;
+            }
+            let Some(change) = changes.get(&s.id) else {
+                continue;
+            };
+            if change.files.is_empty() {
+                continue;
+            }
+            debt.sessions += 1;
+            let mut session_unread = 0u32;
+
+            for f in &change.files {
+                files.insert(f.path.clone());
+                let unread = f.hunks.iter().filter(|h| !h.reviewed).count() as u32;
+                debt.hunks_total += f.hunks.len() as u32;
+                debt.hunks_read += (f.hunks.len() as u32).saturating_sub(unread);
+                session_unread += unread;
+                debt.unread_insertions += f
+                    .hunks
+                    .iter()
+                    .filter(|h| !h.reviewed)
+                    .map(|h| h.insertions)
+                    .sum::<u32>();
+
+                if unread > 0 {
+                    debt.worst_files.push(DebtFile {
+                        path: f.path.clone(),
+                        session_id: s.id.clone(),
+                        unread_hunks: unread,
+                        score: f.score,
+                    });
+                }
+            }
+            if session_unread > 0 {
+                debt.sessions_unread += 1;
+            }
+        }
+
+        debt.files_touched = files.len() as u32;
+        // Riskiest first — the same ordering the diff view uses, so "worst"
+        // means the same thing in both places.
+        debt.worst_files
+            .sort_by(|a, b| b.score.cmp(&a.score).then(a.path.cmp(&b.path)));
+        debt.worst_files.truncate(25);
+        debt
+    }
+
+    /// Every repo we have seen a session in, for the debt view.
+    pub async fn known_repos(&self) -> Vec<String> {
+        let sessions = self.sessions.read().await;
+        let mut repos: Vec<String> = sessions
+            .values()
+            .filter_map(|s| s.repo_root.clone())
+            .collect();
+        repos.sort();
+        repos.dedup();
+        repos
+    }
+
+    /// What else mentions the symbols this file's diff changed. `R-D9`.
+    ///
+    /// Textual search, deliberately: it points at things worth a look and makes
+    /// no claim to be a call graph.
+    pub async fn blast_radius(&self, id: &str, path: &str) -> Option<BlastRadius> {
+        let session = self.get(id).await?;
+        let repo = session
+            .repo_root
+            .clone()
+            .unwrap_or_else(|| session.cwd.clone());
+        if repo.is_empty() {
+            return None;
+        }
+
+        let change = self.changes.read().await.get(id).cloned()?;
+        let file = change.files.iter().find(|f| f.path == path)?;
+        let lines: Vec<String> = file.hunks.iter().flat_map(|h| h.lines.clone()).collect();
+        let symbols = git::symbols_in(&lines);
+
+        let (references, truncated) = if symbols.is_empty() {
+            (Vec::new(), false)
+        } else {
+            git::find_references(Path::new(&repo), &symbols, path)
+        };
+
+        Some(BlastRadius {
+            session_id: id.to_string(),
+            path: path.to_string(),
+            symbols,
+            references,
+            truncated,
+        })
+    }
+
     pub async fn set_hunk_reviewed(&self, id: &str, anchor: &str, reviewed: bool) {
         let _ = self.store.set_reviewed(id, anchor, reviewed);
         self.recompute_change(id).await;
@@ -504,6 +764,63 @@ impl AppState {
     // -----------------------------------------------------------------------
     // Launching a real session
     // -----------------------------------------------------------------------
+
+    /// Bring the terminal a live session is running in to the front. `R-B2`.
+    ///
+    /// This closes the loop that `WAITING` opens: the queue tells you which
+    /// session needs you, and this puts you in front of it. It moves *your*
+    /// window and types nothing — the agent is untouched.
+    ///
+    /// Works by resolving the session's pid to its controlling tty and asking
+    /// Terminal.app which of its tabs owns that tty. iTerm and other terminals
+    /// are not handled; there is no portable way to ask, and guessing wrong
+    /// would focus the wrong window.
+    pub async fn focus_terminal(&self, id: &str) -> Result<()> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow!("no such session"))?;
+        let pid = session
+            .pid
+            .filter(|_| session.alive)
+            .ok_or_else(|| anyhow!("session is not running, so it has no terminal"))?;
+
+        let tty = tty_of(pid).ok_or_else(|| {
+            anyhow!("could not find the terminal for pid {pid} — it may not be a Terminal.app tab")
+        })?;
+
+        // `tty` from ps is "ttys004"; Terminal reports "/dev/ttys004".
+        let dev = format!("/dev/{}", tty.trim_start_matches("/dev/"));
+        let script = format!(
+            r#"tell application "Terminal"
+  activate
+  repeat with w in windows
+    repeat with t in tabs of w
+      if tty of t is "{dev}" then
+        set frontmost of w to true
+        set selected of t to true
+        return "ok"
+      end if
+    end repeat
+  end repeat
+end tell
+return "not found""#
+        );
+
+        let out = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .map_err(|e| anyhow!("osascript failed: {e}"))?;
+        let said = String::from_utf8_lossy(&out.stdout);
+        if said.trim() == "ok" {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "no Terminal.app tab is attached to {dev} — the session may be running in a different terminal"
+            ))
+        }
+    }
 
     /// Open a terminal running interactive `claude` in `dir`.
     ///
@@ -551,6 +868,84 @@ impl AppState {
             }
         }
     }
+}
+
+/// Is this session repeating itself rather than making progress?
+///
+/// Deliberately crude: the same tool against the same target, several times,
+/// inside a short window. It catches the common real failure — an agent
+/// retrying an edit that keeps not applying, or re-reading a file it has
+/// already read — without pretending to understand intent.
+///
+/// It cannot distinguish "stuck" from "legitimately doing the same thing to
+/// many similar inputs", which is why it produces an advisory string rather
+/// than a queue tier of its own. `R-B7`.
+fn detect_loop(recent: &[String]) -> Option<String> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for k in recent {
+        *counts.entry(k.as_str()).or_insert(0) += 1;
+    }
+    let (key, n) = counts.into_iter().max_by_key(|(_, n)| *n)?;
+    if n < LOOP_REPEATS {
+        return None;
+    }
+    let (tool, target) = key.split_once('\u{1}').unwrap_or((key, ""));
+    let what = if target.is_empty() {
+        tool.to_string()
+    } else {
+        format!("{tool}: {target}")
+    };
+    Some(format!("repeated {n}× in the last {LOOP_HISTORY} calls — {what}"))
+}
+
+/// Which live sessions are editing the same file at the same time.
+///
+/// Only the observer can see this — it needs a view across sessions that no
+/// individual agent has. Both sides get the warning, because either one might
+/// be the one you want to stop. `R-B3`.
+fn detect_collisions(sessions: &[Session], now: chrono::DateTime<Utc>) -> HashMap<SessionId, Vec<Collision>> {
+    let mut out: HashMap<SessionId, Vec<Collision>> = HashMap::new();
+    let live: Vec<&Session> = sessions.iter().filter(|s| s.alive).collect();
+
+    for (i, a) in live.iter().enumerate() {
+        for b in live.iter().skip(i + 1) {
+            let a_files = a.files_touched_since(now, COLLISION_WINDOW_SECS);
+            if a_files.is_empty() {
+                continue;
+            }
+            let b_files = b.files_touched_since(now, COLLISION_WINDOW_SECS);
+            for path in a_files.iter().filter(|p| b_files.contains(p)) {
+                out.entry(a.id.clone()).or_default().push(Collision {
+                    other: b.id.clone(),
+                    other_label: b.label(),
+                    path: path.to_string(),
+                });
+                out.entry(b.id.clone()).or_default().push(Collision {
+                    other: a.id.clone(),
+                    other_label: a.label(),
+                    path: path.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The controlling terminal of a process, e.g. `ttys004`.
+///
+/// A session's own pid is the `claude` process, whose tty is the tab it runs
+/// in. Returns `None` for a daemon or anything without a controlling terminal,
+/// where `ps` prints `??`.
+fn tty_of(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "tty=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let tty = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if tty.is_empty() || tty == "??" || tty == "?" {
+        return None;
+    }
+    Some(tty)
 }
 
 fn shell_quote(s: &str) -> String {

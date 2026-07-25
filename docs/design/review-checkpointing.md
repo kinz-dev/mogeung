@@ -5,6 +5,8 @@ updated: 2026-07-25
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
+  - crates/mogeung-core/src/review.rs
+  - crates/mogeung-ui/src/diff.rs
 ---
 
 # Review checkpointing and risk ordering
@@ -27,8 +29,15 @@ Line numbers and context lines are excluded. That is the whole trick:
 Pinned by tests both ways. Verified live: after a follow-up that touched only
 `main.rs`, `auth.rs` stayed read while the rewritten `main.rs` came back unread.
 
-**Known limitation:** reformatting or re-indenting changes the hash, so a purely
-cosmetic edit makes a hunk unread again. Roadmap `R-D2`.
+Anchors are computed over **whitespace-normalised** content (`R-D2`): leading
+indentation and runs of internal spaces are collapsed, so reformatting or
+re-indenting does not resurrect a hunk you have already read.
+
+Normalisation stops there, deliberately. String contents, case and the `+`/`-`
+sign all still count. Going further would start marking genuinely different code
+as already-reviewed — a silent false negative, which is the one failure this
+system must never have. Pinned in both directions by
+`reindenting_does_not_make_a_hunk_unread` and `normalisation_stops_at_whitespace`.
 
 ## What the diff covers
 
@@ -70,3 +79,66 @@ surrounding boilerplate.
 positives (a variable named `password_field`) and false negatives (a subtle auth
 bug in a boring file). It is a reading order and must never be presented as a
 safety guarantee ([A3](../product/assumptions.md)).
+
+
+## Diff base (`R-D7`)
+
+The base is **the last commit made before the session started**, not `HEAD` when
+mogeung first saw it.
+
+`HEAD`-at-first-sight is wrong whenever the daemon starts *after* an agent has
+already committed: those commits are inside the base, so the work is invisible
+and the session looks like it did nothing. Resolved with
+`git rev-list -1 --before <session start> HEAD`, falling back to `HEAD` when the
+repo has no commit that old.
+
+## Presentation
+
+All of it is pure text-in/spans-out in `crates/mogeung-ui/src/diff.rs`, so the
+interesting parts are testable without a window.
+
+**Syntax highlighting (`R-D4`)** is a tokenizer, not a parser: strings,
+comments, numbers and one shared keyword set across languages. No tree-sitter,
+no grammars, no language detection. It will mis-colour things. The property that
+*is* enforced is losslessness — colouring must never alter the text, pinned by a
+test over unicode, unterminated strings and empty lines. If it ever needs to be
+correct rather than helpful, replace it wholesale rather than patching it toward
+accuracy.
+
+**Word diff (`R-D5`)** finds the common prefix and suffix on word boundaries and
+marks the middle as changed. Not a minimal edit script — a real Myers diff would
+highlight less — but O(n), and it never produces the confetti that
+character-level diffing makes of reformatted code.
+
+The `-`/`+` marker is stripped before comparing. The first implementation did
+not, so every pair differed at position 0 and the whole line lit up, which is no
+better than having no word diff at all. Pinned by
+`the_marker_never_widens_the_highlight`.
+
+**Side by side (`R-D6`)** zips equal-length runs of removals and additions so a
+modified line sits opposite the line it replaced, which is what makes the word
+diff meaningful. Lopsided runs get blanks. A test asserts no line is ever
+dropped or invented.
+
+## Review debt (`R-D8`)
+
+Counted in **hunks**, because the hunk is the unit the review UI checks off — a
+metric you cannot act on in the units you measure it in is decoration.
+
+Built from diffs already computed rather than by re-walking git, so it costs
+nothing and always agrees with what the Changes tab shows. The limitation that
+follows: it covers sessions mogeung knows about, not the whole history of the
+repository.
+
+An empty repo reports **1.0, "nothing outstanding"** rather than 0%. A false
+alarm on an empty set is how a metric loses credibility on day one.
+
+## Blast radius (`R-D9`)
+
+`git grep -w` for symbols pulled out of a hunk's added and removed lines by
+matching declaration keywords (`fn`, `def`, `class`, `func`, `struct`, …).
+
+**This is grep, not a compiler.** It over-reports common names and misses
+anything dynamic. The UI says so on the panel itself rather than in
+documentation nobody reads. Test references are called out first: "did anything
+test this?" is the question with teeth.

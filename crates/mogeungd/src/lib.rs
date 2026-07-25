@@ -5,6 +5,8 @@ pub mod adapter;
 pub mod api;
 pub mod git;
 pub mod health;
+pub mod notify;
 pub mod state;
 pub mod store;
 pub mod watcher;
+pub mod web;

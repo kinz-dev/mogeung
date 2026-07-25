@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — sharpen triage, reach and review (2026-07-25)
+
+Roadmap pillars `B`, `C` (bar `R-C2`) and `D`; see
+[docs/features/0002-sharpen-triage-and-review.md](docs/features/0002-sharpen-triage-and-review.md).
+
+**Added — queue.** `APPROVE`, a tier above `WAITING` for sessions blocked on a
+permission prompt rather than waiting for a new instruction, told apart by an
+unanswered tool call. Keyboard triage (`j/k`, `enter`, `r`, `s`, `g`, `/`).
+Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
+Collision warning when two live sessions edit one file. Loop detection for an
+agent repeating itself. Jump to the session's Terminal tab.
+
+**Added — reach.** Desktop notifications and push-to-URL, both fired only on the
+transition into needing you. A self-contained web client at `/`. Ambient mode
+for a second monitor.
+
+**Added — review.** Whitespace-insensitive anchors, so reformatting no longer
+resurrects read hunks. Approximate syntax highlighting, intra-line word diff,
+side-by-side view. Flag hunks and build a follow-up prompt — which mogeung
+copies to your clipboard and never sends
+([ADR-0008](docs/decisions/0008-build-the-prompt-never-send-it.md)). Review debt
+per repo. Blast radius via `git grep`.
+
+**Fixed.** The diff base is now the last commit *before* the session started, so
+work an agent committed before mogeung noticed it no longer vanishes.
+
+**Not built.** `R-C2` (menu-bar item) needs a separate binary to outlive the
+window; left open deliberately.
+
+63 tests → 98.
+
 ## Unreleased — trust the tool (2026-07-25)
 
 Instrumentation so that "the board looks quiet" becomes a checkable claim rather

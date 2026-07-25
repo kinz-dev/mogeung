@@ -37,6 +37,10 @@ fn fake_home(tag: &str) -> PathBuf {
             r#"{"type":"ai-title","aiTitle":"Wire up the retry loop","sessionId":"x"}"#,
             r#"{"type":"user","timestamp":"2026-07-25T10:00:00.000Z","cwd":"/tmp","gitBranch":"main","message":{"role":"user","content":"please fix the retry loop"}}"#,
             r#"{"type":"assistant","timestamp":"2026-07-25T10:00:05.000Z","cwd":"/tmp","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/tmp/retry.rs"}}],"usage":{"output_tokens":42}}}"#,
+            // The tool came back. Without this the session would be sitting on
+            // an unanswered tool call, which is a permission prompt, not
+            // "finished and waiting for a new instruction".
+            r#"{"type":"user","timestamp":"2026-07-25T10:00:06.000Z","cwd":"/tmp","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}}"#,
         ]
         .join("\n"),
     );
@@ -109,6 +113,53 @@ async fn an_idle_live_session_tops_the_queue() {
     assert_eq!(queue[0].session_id, "11111111-1111-1111-1111-111111111111");
     assert_eq!(queue[0].reason, AttentionReason::AwaitingInput);
     assert!(queue[0].detail.contains("waiting for you"));
+}
+
+/// R-B4, end to end. The same registry status ("idle") must produce a different
+/// queue tier depending on whether a tool call is still outstanding.
+#[tokio::test]
+async fn an_unanswered_tool_call_reads_as_a_permission_prompt() {
+    let state = boot("permission").await;
+    let id = "11111111-1111-1111-1111-111111111111";
+    let path = {
+        let s = state.sessions.read().await;
+        s.get(id).unwrap().transcript_path.clone()
+    };
+
+    // The agent asks to run something, and nothing answers.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    use std::io::Write;
+    writeln!(
+        f,
+        r#"{{"type":"assistant","timestamp":"2026-07-25T10:06:00.000Z","cwd":"/tmp","message":{{"content":[{{"type":"tool_use","id":"t9","name":"Bash","input":{{"command":"rm -rf build/"}}}}]}}}}"#
+    )
+    .unwrap();
+    drop(f);
+    state.scan().await;
+
+    let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+    let queue = mogeung_core::attention::rank(&sessions, chrono::Utc::now(), &state.attention);
+    assert_eq!(queue[0].session_id, id);
+    assert_eq!(queue[0].reason, AttentionReason::AwaitingPermission);
+    assert!(
+        queue[0].detail.contains("rm -rf build/"),
+        "the queue must say what needs approving, got: {}",
+        queue[0].detail
+    );
+
+    // And once the tool returns, it is an ordinary wait again.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(
+        f,
+        r#"{{"type":"user","timestamp":"2026-07-25T10:06:30.000Z","cwd":"/tmp","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t9","is_error":false,"content":"done"}}]}}}}"#
+    )
+    .unwrap();
+    drop(f);
+    state.scan().await;
+
+    let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+    let queue = mogeung_core::attention::rank(&sessions, chrono::Utc::now(), &state.attention);
+    assert_eq!(queue[0].reason, AttentionReason::AwaitingInput);
 }
 
 #[tokio::test]

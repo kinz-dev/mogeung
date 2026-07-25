@@ -19,6 +19,9 @@ pub const DEL_BG: Color32 = Color32::from_rgb(0x45, 0x1A, 0x1D);
 
 pub fn reason_color(r: AttentionReason) -> Color32 {
     match r {
+        // Blocked on a permission prompt: the most urgent thing on the board,
+        // and visually distinct from "finished, waiting for a new task".
+        AttentionReason::AwaitingPermission => Color32::from_rgb(0xFF, 0x6B, 0x35),
         AttentionReason::AwaitingInput => RED,
         AttentionReason::Failed => RED,
         AttentionReason::NeedsReview => AMBER,

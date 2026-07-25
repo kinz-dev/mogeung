@@ -16,16 +16,36 @@ Evaluated in this order — the first match wins.
 
 | Reason | Badge | Score | Fires when |
 |---|---|---|---|
+| `AwaitingPermission` | `APPROVE` | 1100 | Alive, registry `idle`, **and a tool call has no result** |
 | `AwaitingInput` | `WAITING` | 1000 | Alive and the registry reports `idle` |
 | `Failed` | `FAILED` | 900 | An API error was recorded |
 | `NeedsReview` | `REVIEW` | 800 | Exited, changed files, not all read |
 | `Stalled` | `STALLED` | 700 | Alive and busy, silent ≥ `stall_secs` |
 | `Running` | `running` | 100 | Alive and busy, recently active |
-| `Idle` | `idle` | 0 | Reviewed, or exited with no changes |
+| `Idle` | `idle` | 0 | Reviewed, exited with no changes, **or snoozed** |
 
 **`Failed` is checked before liveness**, so a live session that hit an API error
 still ranks as failed. The error clears when a new human turn appears — you
 responded, so it no longer needs you.
+
+**Snooze is checked before everything**, including failure. "Stop telling me
+about this one" has to mean it, or you would never trust it enough to use it.
+The row stays visible with a `ZZZ` badge; it just stops competing for the top.
+
+### `APPROVE` vs `WAITING` (`R-B4`)
+
+The registry says `idle` in both cases, and they want opposite things from you:
+one needs a decision about work **already in flight**, the other needs a new
+instruction. They are told apart by an unmatched `tool_use` — a tool call with
+no corresponding `tool_result` later in the transcript.
+
+`APPROVE` outranks `WAITING` because the agent cannot proceed until you answer,
+whereas a session waiting for a task has finished what you asked. A new human
+turn clears the open-tool list: you cannot be blocked on a prompt you have
+already answered.
+
+An open tool on a *busy* session is not a prompt — the tool simply has not
+returned yet — so both conditions are required.
 
 ## Scoring
 

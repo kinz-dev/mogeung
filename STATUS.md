@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 63 passing |
-| Rust | 6008 lines |
-| Docs | 29 files, 7 ADRs |
+| Tests | 98 passing |
+| Rust | 9289 lines |
+| Docs | 33 files, 8 ADRs |
 
 ## Assumptions
 
@@ -22,4 +22,5 @@ Untested: **5** · At risk: **2** · Supported: 2 · Refuted: 1
 | Feature | Status | Depends on |
 |---|---|---|
 | [Trust the tool](docs/features/0001-trust-the-tool.md) | `shipped` | [A4] |
+| [Sharpen triage, reach and review](docs/features/0002-sharpen-triage-and-review.md) | `shipped` | [A1, A3, A6, A8] |
 

@@ -266,7 +266,39 @@ fn score_of(flags: &[RiskFlag]) -> i32 {
     flags.iter().map(|f| f.weight()).sum()
 }
 
-/// Content hash that survives the hunk moving within its file.
+/// Collapse a diff line to what a reviewer would call "the same code".
+///
+/// Leading indentation and runs of internal whitespace are flattened. A
+/// reformat, a re-indent, or a change of tabs to spaces then produces the same
+/// anchor, so hunks you have already read do not come back unread. `R-D2`.
+///
+/// Deliberately *not* normalised away: the `+`/`-` sign, punctuation, string
+/// contents, and case. Whitespace is the only thing a formatter is guaranteed
+/// to be free to move; anything more aggressive would start silently marking
+/// genuinely different code as already-reviewed, which is the one failure this
+/// system must never have.
+fn normalize_for_anchor(line: &str) -> String {
+    let sign = &line[..1];
+    let body = &line[1..];
+    let mut out = String::with_capacity(body.len() + 1);
+    out.push_str(sign);
+    let mut space = false;
+    for c in body.chars() {
+        if c.is_whitespace() {
+            space = !out.is_empty() && out.len() > 1;
+        } else {
+            if space {
+                out.push(' ');
+                space = false;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Content hash that survives the hunk moving within its file, and survives
+/// reformatting.
 ///
 /// Only the path and the added/removed lines feed the hash — not line numbers
 /// and not context. That is what makes a review mark stick when the agent
@@ -277,11 +309,40 @@ fn anchor_of(path: &str, lines: &[String]) -> String {
     h.update(b"\n");
     for l in lines {
         if l.starts_with('+') || l.starts_with('-') {
-            h.update(l.trim_end().as_bytes());
+            h.update(normalize_for_anchor(l).as_bytes());
             h.update(b"\n");
         }
     }
     format!("{:x}", h.finalize())[..16].to_string()
+}
+
+/// Pick a diff base that includes work the session committed before we saw it.
+///
+/// `HEAD`-when-first-seen is wrong whenever mogeung starts *after* an agent has
+/// already committed: those commits are inside the base, so the work is
+/// invisible and the session looks like it did nothing. Instead, walk back to
+/// the last commit made before the session started. `R-D7`.
+///
+/// Falls back to `HEAD` when the repo has no commit that old, which is the
+/// previous behaviour and still the only safe answer.
+pub fn base_for_session(cwd: &Path, started_at: chrono::DateTime<chrono::Utc>) -> Result<String> {
+    let before = started_at.to_rfc3339();
+    let out = run_git(
+        cwd,
+        &[
+            "rev-list",
+            "-1",
+            "--before",
+            &before,
+            "HEAD",
+        ],
+    )
+    .unwrap_or_default();
+    let sha = out.trim();
+    if sha.is_empty() {
+        return head_sha(cwd);
+    }
+    Ok(sha.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +540,106 @@ fn compute_change_inner(
     Ok(change)
 }
 
+// ---------------------------------------------------------------------------
+// Blast radius (R-D9)
+// ---------------------------------------------------------------------------
+
+/// Cap on grep hits, so a change to a name like `new` cannot produce a
+/// thousand-row table nobody reads.
+const MAX_REFERENCES: usize = 60;
+
+/// Pull probable symbol names out of a hunk's added and removed lines.
+///
+/// Pattern-matching on declaration keywords across the handful of languages we
+/// see most. It is not a parser and will miss plenty; every symbol it *does*
+/// find is one the reviewer can act on, and a miss costs nothing beyond a
+/// smaller table.
+pub fn symbols_in(lines: &[String]) -> Vec<String> {
+    const DECL: &[&str] = &[
+        "fn ", "func ", "def ", "class ", "struct ", "enum ", "trait ", "interface ",
+        "type ", "impl ", "function ",
+    ];
+    let mut out: Vec<String> = Vec::new();
+
+    for line in lines {
+        if !(line.starts_with('+') || line.starts_with('-')) {
+            continue;
+        }
+        let body = line[1..].trim_start();
+        // Strip visibility and async/export noise before matching.
+        let body = body
+            .trim_start_matches("pub ")
+            .trim_start_matches("export ")
+            .trim_start_matches("default ")
+            .trim_start_matches("async ")
+            .trim_start_matches("static ")
+            .trim_start_matches("const ");
+
+        for kw in DECL {
+            let Some(rest) = body.strip_prefix(kw) else {
+                continue;
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            // Single letters are almost always generics or noise.
+            if name.len() >= 3 && !out.contains(&name) {
+                out.push(name);
+            }
+            break;
+        }
+    }
+    out.sort();
+    out.truncate(12);
+    out
+}
+
+/// Find where the given symbols are referenced, excluding their own file.
+///
+/// **Textual, not semantic.** `git grep -w` over tracked files only, so it
+/// respects `.gitignore` and never wanders into `node_modules`.
+pub fn find_references(
+    repo: &Path,
+    symbols: &[String],
+    exclude_path: &str,
+) -> (Vec<mogeung_core::review::Reference>, bool) {
+    let mut refs = Vec::new();
+    let mut truncated = false;
+
+    for sym in symbols {
+        if refs.len() >= MAX_REFERENCES {
+            truncated = true;
+            break;
+        }
+        let out = run_git_diff(repo, &["grep", "-n", "-w", "--", sym]).unwrap_or_default();
+        for line in out.lines() {
+            // "path:line:text"
+            let mut parts = line.splitn(3, ':');
+            let (Some(path), Some(num), Some(text)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            if path == exclude_path {
+                continue;
+            }
+            if refs.len() >= MAX_REFERENCES {
+                truncated = true;
+                break;
+            }
+            refs.push(mogeung_core::review::Reference {
+                path: path.to_string(),
+                line: num.parse().unwrap_or(0),
+                text: text.trim().chars().take(160).collect(),
+                symbol: sym.clone(),
+                is_test: is_test_path(path),
+            });
+        }
+    }
+    (refs, truncated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +707,61 @@ index 333..444 100644
         let again = parse_unified(SAMPLE, &seen);
         assert!(again[0].hunks[0].reviewed);
         assert!(!again[1].hunks[0].reviewed);
+    }
+
+    /// R-D2. Reformatting is the single most common cause of a hunk you have
+    /// already read coming back unread, and it carries no new information.
+    #[test]
+    fn reindenting_does_not_make_a_hunk_unread() {
+        let a = parse_unified(SAMPLE, &HashSet::new());
+        let reindented = SAMPLE.replace(
+            "+let password = \"hunter2\";",
+            "+        let password   =  \"hunter2\";",
+        );
+        let b = parse_unified(&reindented, &HashSet::new());
+        assert_eq!(
+            a[0].hunks[0].anchor, b[0].hunks[0].anchor,
+            "whitespace-only change produced a different anchor"
+        );
+    }
+
+    /// The other half of R-D2, and the more important one: normalisation must
+    /// not go so far that different code collides. A collision would silently
+    /// mark unread code as reviewed.
+    #[test]
+    fn normalisation_stops_at_whitespace() {
+        let base = parse_unified(SAMPLE, &HashSet::new());
+        for changed in [
+            SAMPLE.replace("hunter2", "hunter3"),          // string contents
+            SAMPLE.replace("let password", "let Password"), // case
+            SAMPLE.replace("+let password", "-let password"), // sign
+        ] {
+            let other = parse_unified(&changed, &HashSet::new());
+            assert_ne!(
+                base[0].hunks[0].anchor, other[0].hunks[0].anchor,
+                "anchor collided on a change that is not whitespace"
+            );
+        }
+    }
+
+    #[test]
+    fn symbols_are_pulled_from_declarations() {
+        let lines: Vec<String> = vec![
+            "+pub fn compute_change(x: u8) {}".into(),
+            "+    def handle_request(self):".into(),
+            "-export function renderQueue() {".into(),
+            "+struct Session {".into(),
+            " fn untouched_context() {}".into(), // context line, not a change
+            "+let x = 1;".into(),                // not a declaration
+            "+fn ab() {}".into(),                // too short to be useful
+        ];
+        let got = symbols_in(&lines);
+        assert!(got.contains(&"compute_change".to_string()));
+        assert!(got.contains(&"handle_request".to_string()));
+        assert!(got.contains(&"renderQueue".to_string()));
+        assert!(got.contains(&"Session".to_string()));
+        assert!(!got.contains(&"untouched_context".to_string()));
+        assert!(!got.contains(&"ab".to_string()));
     }
 
     #[test]

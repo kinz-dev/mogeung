@@ -31,6 +31,38 @@ impl LiveStatus {
     }
 }
 
+/// A tool call the agent made that has not come back yet.
+///
+/// The registry says `idle` both when an agent finished its turn and when it is
+/// sitting on a permission prompt. Those need very different responses from you,
+/// and an unmatched `tool_use` is what tells them apart — see `R-B4`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenTool {
+    pub id: String,
+    pub name: String,
+    pub summary: String,
+    pub at: DateTime<Utc>,
+}
+
+/// A file this session touched, with when. Cumulative `touched_files` cannot
+/// answer "are two agents fighting over this *right now*" — `R-B3` needs recency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Touch {
+    pub path: String,
+    pub at: DateTime<Utc>,
+}
+
+/// Two live sessions editing the same file at the same time.
+///
+/// Only the observer model can see this: it needs a view across sessions that
+/// none of them has. `R-B3`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Collision {
+    pub other: SessionId,
+    pub other_label: String,
+    pub path: String,
+}
+
 /// An agent session mogeung is watching.
 ///
 /// Everything here is derived from files Claude Code writes for its own
@@ -90,6 +122,35 @@ pub struct Session {
     pub transcript_path: String,
     /// True once every hunk in this session's diff has been read.
     pub reviewed: bool,
+
+    // -- Fields added after v0.2. All `serde(default)`: the store keeps whole
+    // -- sessions as JSON blobs, so a row written by an older build must still
+    // -- load rather than being dropped as unreadable.
+    /// Tool calls with no result yet. Non-empty while idle means the session is
+    /// sitting on a permission prompt rather than waiting for a new instruction.
+    #[serde(default)]
+    pub open_tools: Vec<OpenTool>,
+
+    /// Suppress this session from the queue until this time. `R-B5`.
+    #[serde(default)]
+    pub snoozed_until: Option<DateTime<Utc>>,
+
+    /// Other live sessions editing the same files right now. `R-B3`.
+    #[serde(default)]
+    pub collisions: Vec<Collision>,
+
+    /// Set when the session keeps repeating the same tool on the same path —
+    /// thrashing rather than progress. `R-B7`.
+    #[serde(default)]
+    pub loop_signal: Option<String>,
+
+    /// Recently touched files, newest last, capped. Feeds collision detection.
+    #[serde(default)]
+    pub recent_touches: Vec<Touch>,
+
+    /// Recent `tool:path` keys, newest last, capped. Feeds loop detection.
+    #[serde(default)]
+    pub recent_tools: Vec<String>,
 }
 
 impl Session {
@@ -128,5 +189,43 @@ impl Session {
     pub fn repo_name(&self) -> String {
         let p = self.repo_root.as_deref().unwrap_or(&self.cwd);
         p.rsplit('/').next().unwrap_or(p).to_string()
+    }
+
+    /// The tool this session is blocked on, if it is blocked rather than simply
+    /// finished.
+    ///
+    /// Requires *both* an unmatched tool call and an idle registry status. A
+    /// busy session with open tools is just working; the tool has not come back
+    /// yet and nobody needs to do anything.
+    pub fn awaiting_permission(&self) -> Option<&OpenTool> {
+        if self.alive && self.live_status == Some(LiveStatus::Idle) {
+            self.open_tools.last()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_snoozed(&self, now: DateTime<Utc>) -> bool {
+        self.snoozed_until.map(|t| t > now).unwrap_or(false)
+    }
+
+    pub fn snooze_remaining(&self, now: DateTime<Utc>) -> Option<i64> {
+        self.snoozed_until
+            .filter(|t| *t > now)
+            .map(|t| (t - now).num_seconds())
+    }
+
+    /// Files touched within the last `window_secs`.
+    pub fn files_touched_since(&self, now: DateTime<Utc>, window_secs: i64) -> Vec<&str> {
+        let cutoff = now - chrono::Duration::seconds(window_secs);
+        let mut out: Vec<&str> = self
+            .recent_touches
+            .iter()
+            .filter(|t| t.at >= cutoff)
+            .map(|t| t.path.as_str())
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 }

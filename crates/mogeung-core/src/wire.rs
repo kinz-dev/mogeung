@@ -1,6 +1,7 @@
 use crate::attention::AttentionItem;
 use crate::change::Change;
 use crate::health::Health;
+use crate::review::{BlastRadius, ReviewDebt};
 use crate::session::{Session, SessionId};
 use crate::transcript::TranscriptEvent;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,16 @@ pub enum ClientMsg {
     Rescan,
     /// Ask what mogeung can and cannot currently see.
     FetchHealth,
+    /// Silence a session for `minutes`. Zero or less clears the snooze.
+    Snooze { session_id: SessionId, minutes: i64 },
+    /// How much of a repo's agent output nobody has read.
+    FetchReviewDebt { repo: String },
+    /// What else references the symbols this file's diff changed.
+    FetchBlastRadius { session_id: SessionId, path: String },
+    /// Focus the terminal a live session is running in.
+    ///
+    /// Still not steering the agent: it moves *your* window, and then you type.
+    FocusTerminal { session_id: SessionId },
 }
 
 /// What the daemon tells clients.
@@ -67,5 +78,7 @@ pub enum ServerMsg {
     /// Sent after every scan. A client should never have to ask whether the
     /// board it is showing is complete — the daemon volunteers it.
     Health { health: Box<Health> },
+    ReviewDebt { debt: Box<ReviewDebt> },
+    BlastRadius { radius: Box<BlastRadius> },
     Error { message: String },
 }

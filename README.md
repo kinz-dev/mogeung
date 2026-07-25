@@ -12,6 +12,8 @@ Claude Code already writes and adds the layer that doesn't exist:
   the agent rewriting the file
 - **a health panel that says what it cannot see**, because the formats it reads
   are undocumented and going quietly blind must not look like a quiet day
+- **a collision warning** when two live sessions edit the same file — the one
+  thing no single agent can know about itself
 
 Because it observes rather than wraps, it cannot make any individual session
 worse. That was the fatal flaw of the first version — see
@@ -37,6 +39,7 @@ the last 14 days, it appears. Nothing is ever written to `~/.claude`.
 ## The queue
 
 ```
+APPROVE  → blocked on a permission prompt it needs you to answer
 WAITING  → alive and idle: it is waiting for you to type
 FAILED   → hit an API error
 REVIEW   → exited, and left changes nobody has read
@@ -45,11 +48,27 @@ running  → working normally
 ```
 
 `WAITING` is not a heuristic — Claude Code publishes `busy`/`idle` in its own
-live registry, so mogeung is told, not guessing.
+live registry, so mogeung is told, not guessing. `APPROVE` splits that: an
+unanswered tool call means the agent is *blocked*, not merely finished.
+
+`j`/`k` to move, `enter` to jump to that session's terminal, `r` to mark read,
+`s` to snooze, `/` to filter.
 
 → [The attention queue](docs/guide/the-queue.md) ·
 [Reviewing changes](docs/guide/reviewing.md) ·
+[Away from the desk](docs/guide/away-from-the-desk.md) ·
 [Troubleshooting](docs/guide/troubleshooting.md)
+
+## Away from the window
+
+```sh
+./target/release/mogeungd --notify                  # macOS banners
+./target/release/mogeungd --push-url https://ntfy.sh/your-topic
+open http://127.0.0.1:7717/                         # web client
+```
+
+Notifications fire on the *transition* into needing you, once — never on a state
+that is merely continuing.
 
 ## Documentation
 
@@ -76,7 +95,7 @@ read your transcripts. Do not expose it.
 ## Develop
 
 ```sh
-cargo test --workspace      # 63 tests, all free — nothing spawns an agent
+cargo test --workspace      # 98 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```

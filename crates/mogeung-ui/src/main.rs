@@ -5,6 +5,7 @@
 //! the event stream. Closing this window does not stop any agent.
 
 mod app;
+mod diff;
 mod net;
 mod ui;
 

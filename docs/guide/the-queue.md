@@ -11,6 +11,7 @@ the dim line beneath it is the evidence.
 
 | Badge | Meaning | Detail shows |
 |---|---|---|
+| `APPROVE` | Blocked on a permission prompt — it asked to do something and is waiting on your answer | `needs approval for Bash: rm -rf build/` |
 | `WAITING` | Alive and idle — it has finished its turn and wants you to type | `waiting for you — 4m12s` |
 | `FAILED` | An API error was recorded | the error, e.g. `server_error` |
 | `REVIEW` | Exited, changed files, not all read | `3 file(s), +47 -12 unread` |
@@ -18,13 +19,66 @@ the dim line beneath it is the evidence.
 | `running` | Alive and busy, producing output | its current tool call |
 | `idle` | Nothing to do | `reviewed` / `ended with no changes` |
 
-Uppercase wants a human. Lowercase is informational. **show quiet** controls
-whether `idle` sessions are listed at all.
+Uppercase wants a human. Lowercase is informational. **quiet** controls whether
+`idle` sessions are listed at all.
+
+`APPROVE` and `WAITING` both look like "idle" to Claude Code. mogeung tells them
+apart by whether a tool call is still unanswered, and ranks `APPROVE` higher:
+that session has work in flight it cannot finish, while a `WAITING` one has
+already done what you asked.
+
+## Keyboard
+
+| Key | Does |
+|---|---|
+| `j` / `k` | move down / up the queue |
+| `enter` or `o` | focus that session's Terminal tab |
+| `r` | mark everything in its diff read |
+| `s` | snooze 30 minutes, or wake it |
+| `g` | jump to the top of the queue |
+| `/` | jump to the filter box |
+| `esc` | clear the filter, close ambient mode |
+
+Keys are ignored while a text box has focus, so typing in the filter does not
+trigger them.
+
+## Filter, group, follow
+
+**filter** (`/`) matches the label, repo, branch, cwd and current activity.
+
+**group** collapses the queue by repository. Repos are ordered by their most
+urgent session, so the top of the panel is still the top of the queue. Click a
+repo header to fold it.
+
+**follow** keeps the top of the queue selected as it changes — useful on a
+second monitor, disorienting while you are reading something.
+
+## Snooze
+
+`s`, or the button on the selected row. The session stays visible with a `ZZZ`
+badge but drops to the bottom and stops counting as needing you.
+
+**Snooze beats everything, including `FAILED`.** A mute button that failure could
+override is one you would never trust.
+
+## Collisions and loops
+
+`⚠ COLLISION` means **another live session is editing the same file right now**
+(within 10 minutes). Both sides are warned. This is the one thing only a
+cross-session observer can tell you — neither agent can see the other.
+
+It is based on `Edit`/`Write` tool calls, so an agent changing files through a
+shell command is invisible to it.
+
+`↻` means the session has repeated the same tool on the same target four times
+in its last twelve calls — usually retrying something that is not working. It is
+advisory and never changes the ranking, because repetition is suggestive rather
+than conclusive.
 
 ## Ordering is strict
 
-Scores are 1000 / 900 / 800 / 700 / 100 / 0, and the tiebreaker (longest wait
-first) is capped at 99. A session can never jump into a more urgent tier, so a
+Scores are 1100 / 1000 / 900 / 800 / 700 / 100 / 0, and the tiebreaker (longest
+wait first) is capped at 99. A session can never jump into a more urgent tier, so a
 brand-new `FAILED` always outranks a three-day-old `REVIEW`.
 
 ## `WAITING` is a fact

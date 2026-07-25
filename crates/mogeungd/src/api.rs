@@ -19,6 +19,9 @@ use std::sync::Arc;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        // The thin web client (R-C3). Same WebSocket, same authority model:
+        // the phone is a projection, exactly like the desktop window.
+        .route("/", get(index))
         .route("/api/health", get(health))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
@@ -28,6 +31,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}/review", post(review_hunk))
         .route("/api/queue", get(get_queue))
         .route("/api/rescan", post(rescan))
+        .route("/api/repos", get(list_repos))
+        .route("/api/repos/{repo}/debt", get(get_debt))
+        .route("/api/sessions/{id}/blast", get(get_blast))
         .route("/ws", get(ws_upgrade))
         .with_state(state)
 }
@@ -47,6 +53,38 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "alerts": h.alerts.iter().map(|a| a.message()).collect::<Vec<_>>(),
         "detail": h,
     }))
+}
+
+async fn index() -> impl IntoResponse {
+    axum::response::Html(crate::web::INDEX_HTML)
+}
+
+async fn list_repos(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::to_value(state.known_repos().await).unwrap_or_default())
+}
+
+async fn get_debt(
+    State(state): State<Arc<AppState>>,
+    AxPath(repo): AxPath<String>,
+) -> impl IntoResponse {
+    let debt = state.review_debt(&repo).await;
+    Json(serde_json::to_value(debt).unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    path: String,
+}
+
+async fn get_blast(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<PathQuery>,
+) -> impl IntoResponse {
+    match state.blast_radius(&id, &q.path).await {
+        Some(r) => Json(serde_json::to_value(r).unwrap_or_default()),
+        None => Json(serde_json::json!({ "error": "no diff for that path" })),
+    }
 }
 
 async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -235,6 +273,31 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             state.broadcast(ServerMsg::Health {
                 health: Box::new(health),
             });
+        }
+        ClientMsg::Snooze {
+            session_id,
+            minutes,
+        } => state.snooze(&session_id, minutes).await,
+        ClientMsg::FetchReviewDebt { repo } => {
+            let debt = state.review_debt(&repo).await;
+            state.broadcast(ServerMsg::ReviewDebt {
+                debt: Box::new(debt),
+            });
+        }
+        ClientMsg::FetchBlastRadius { session_id, path } => {
+            match state.blast_radius(&session_id, &path).await {
+                Some(radius) => state.broadcast(ServerMsg::BlastRadius {
+                    radius: Box::new(radius),
+                }),
+                None => err(anyhow::anyhow!(
+                    "no diff for {path} in that session, or it is not in a repo"
+                )),
+            }
+        }
+        ClientMsg::FocusTerminal { session_id } => {
+            if let Err(e) = state.focus_terminal(&session_id).await {
+                err(e);
+            }
         }
     }
 }

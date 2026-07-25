@@ -54,3 +54,57 @@ your repo — review state lives only in mogeung's database.
 
 **Terminal**, **IntelliJ**, **VS Code** and **Finder** open the session's working
 directory. Editing properly is not mogeung's job and is not planned to be.
+
+
+## Reading the diff
+
+**syntax** approximates highlighting with a tokenizer — no grammars, no language
+detection. It mis-colours things occasionally; it never alters the text.
+
+**words** highlights only the part of a line that actually moved, for lines that
+look like replacements. Turn it off if a hunk is mostly rewritten, where
+everything is a change and the emphasis stops meaning anything.
+
+**≡ / ⇹** switches unified and side-by-side. Side-by-side pairs a removed line
+with the addition that replaced it, which is what makes the word diff readable.
+
+## Reformatting no longer resurrects hunks
+
+Anchors ignore indentation and internal whitespace, so re-indenting a file does
+not bring back hunks you already read.
+
+Normalisation stops at whitespace on purpose. String contents and case still
+count, because the failure to avoid at all costs is marking code you have *not*
+read as read.
+
+## Flagging and the follow-up prompt
+
+`✎ flag` on a hunk collects it. The prompt window turns everything you flagged
+into text — file, hunk header, the actual changed lines, plus any note you add —
+and offers one button: **Copy to clipboard.**
+
+**mogeung does not send it.** You paste it into that session's terminal
+yourself. That friction is deliberate and permanent: a supervision layer that
+starts putting words into agents is the thing that made v0.1 worse than a plain
+terminal ([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
+
+Quoting the real diff lines matters — an agent handed the hunk does better than
+one handed "fix the error handling in state.rs".
+
+## Blast radius
+
+**⌁ blast radius** on a file finds the symbols its diff declares or changes, then
+searches the repo for other references. Test files are listed first, because
+"did anything test this?" is the question with teeth.
+
+**It is `git grep`, not a compiler.** It over-reports common names and misses
+anything dynamic. Treat it as "these places mention it, you may want to look".
+
+## Debt
+
+The **Debt** tab answers "how much of what agents wrote in this repo has nobody
+read?", counted in hunks and listed riskiest-first. Clicking a file jumps
+straight to it.
+
+It only covers sessions mogeung has seen — work from before it was watching is
+not in the number.

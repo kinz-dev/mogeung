@@ -24,6 +24,13 @@ pub enum AttentionReason {
     /// Unlike v0.1's inferred "blocked", this comes straight from Claude Code's
     /// own live registry, so it is fact rather than heuristic.
     AwaitingInput,
+    /// Alive, idle, and holding an unanswered tool call: it is sitting on a
+    /// permission prompt.
+    ///
+    /// Ranked above `AwaitingInput` because the work is *already in flight* and
+    /// stopped. A session waiting for a new instruction has finished what you
+    /// asked; this one cannot finish until you answer. `R-B4`.
+    AwaitingPermission,
 }
 
 impl AttentionReason {
@@ -31,6 +38,7 @@ impl AttentionReason {
     /// promote a session past a more urgent tier.
     pub fn base_score(&self) -> i64 {
         match self {
+            AttentionReason::AwaitingPermission => 1100,
             AttentionReason::AwaitingInput => 1000,
             AttentionReason::Failed => 900,
             AttentionReason::NeedsReview => 800,
@@ -42,6 +50,7 @@ impl AttentionReason {
 
     pub fn label(&self) -> &'static str {
         match self {
+            AttentionReason::AwaitingPermission => "APPROVE",
             AttentionReason::AwaitingInput => "WAITING",
             AttentionReason::Failed => "FAILED",
             AttentionReason::NeedsReview => "REVIEW",
@@ -54,7 +63,8 @@ impl AttentionReason {
     pub fn needs_human(&self) -> bool {
         matches!(
             self,
-            AttentionReason::AwaitingInput
+            AttentionReason::AwaitingPermission
+                | AttentionReason::AwaitingInput
                 | AttentionReason::Failed
                 | AttentionReason::NeedsReview
                 | AttentionReason::Stalled
@@ -91,10 +101,37 @@ impl Default for AttentionConfig {
 pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> AttentionItem {
     let silent = s.seconds_since_activity(now);
 
+    // Snooze wins over everything, including failure. "Stop telling me about
+    // this one" has to mean it, or you would never trust it enough to use it.
+    // The row stays visible with a badge; it just stops competing for the top.
+    if let Some(left) = s.snooze_remaining(now) {
+        return AttentionItem {
+            session_id: s.id.clone(),
+            reason: AttentionReason::Idle,
+            score: AttentionReason::Idle.base_score(),
+            detail: format!("snoozed — {} left", fmt_dur(left)),
+        };
+    }
+
     let (reason, detail) = if let Some(err) = &s.error {
         (AttentionReason::Failed, err.clone())
     } else if s.alive {
         match s.live_status {
+            // An unanswered tool call means it is blocked on a prompt, not
+            // merely finished. Checked before the plain-idle case.
+            Some(LiveStatus::Idle) if s.awaiting_permission().is_some() => {
+                let tool = s.awaiting_permission().expect("checked above");
+                let waited = s.waiting_secs(now).unwrap_or(0);
+                let what = if tool.summary.is_empty() {
+                    tool.name.clone()
+                } else {
+                    format!("{}: {}", tool.name, tool.summary)
+                };
+                (
+                    AttentionReason::AwaitingPermission,
+                    format!("needs approval for {what} — {}", fmt_dur(waited)),
+                )
+            }
             Some(LiveStatus::Idle) => {
                 let waited = s.waiting_secs(now).unwrap_or(0);
                 (
@@ -130,7 +167,9 @@ pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> Atten
     // Within a tier, the longest wait goes first. Capped so it can never leak
     // into the tier above.
     let waited = match reason {
-        AttentionReason::AwaitingInput => s.waiting_secs(now).unwrap_or(0),
+        AttentionReason::AwaitingInput | AttentionReason::AwaitingPermission => {
+            s.waiting_secs(now).unwrap_or(0)
+        }
         _ => s.duration_secs(now),
     };
     let tiebreak = (waited / 30).clamp(0, 99);
@@ -196,6 +235,21 @@ mod tests {
             error: None,
             transcript_path: "/t".into(),
             reviewed: false,
+            open_tools: vec![],
+            snoozed_until: None,
+            collisions: vec![],
+            loop_signal: None,
+            recent_touches: vec![],
+            recent_tools: vec![],
+        }
+    }
+
+    fn open_tool(name: &str, summary: &str, now: DateTime<Utc>) -> crate::session::OpenTool {
+        crate::session::OpenTool {
+            id: "toolu_1".into(),
+            name: name.into(),
+            summary: summary.into(),
+            at: now,
         }
     }
 
@@ -260,6 +314,74 @@ mod tests {
         assert_eq!(
             classify(&s, now, &AttentionConfig::default()).reason,
             AttentionReason::Idle
+        );
+    }
+
+    /// R-B4. Both of these are "idle" to the registry, and they need opposite
+    /// responses from you: one wants a decision about work already in flight,
+    /// the other wants a new instruction.
+    #[test]
+    fn a_permission_prompt_outranks_waiting_for_a_new_instruction() {
+        let now = Utc::now();
+        let cfg = AttentionConfig::default();
+
+        let mut blocked = sess(true, Some(LiveStatus::Idle), 10, now);
+        blocked.id = "blocked".into();
+        blocked.open_tools = vec![open_tool("Bash", "rm -rf build/", now)];
+
+        // Waiting far longer, and still ranked below: the tier gap is absolute.
+        let mut finished = sess(true, Some(LiveStatus::Idle), 9_000, now);
+        finished.id = "finished".into();
+
+        let item = classify(&blocked, now, &cfg);
+        assert_eq!(item.reason, AttentionReason::AwaitingPermission);
+        assert!(
+            item.detail.contains("rm -rf build/"),
+            "the queue must say what it wants approved, got: {}",
+            item.detail
+        );
+
+        let ranked = rank(&[finished, blocked], now, &cfg);
+        assert_eq!(ranked[0].session_id, "blocked");
+    }
+
+    #[test]
+    fn an_open_tool_on_a_busy_session_is_just_work_in_progress() {
+        let now = Utc::now();
+        let mut s = sess(true, Some(LiveStatus::Busy), 5, now);
+        s.open_tools = vec![open_tool("Bash", "cargo test", now)];
+        // The tool has not come back yet — nobody needs to do anything.
+        assert_eq!(
+            classify(&s, now, &AttentionConfig::default()).reason,
+            AttentionReason::Running
+        );
+        assert!(s.awaiting_permission().is_none());
+    }
+
+    /// R-B5. Snooze has to beat *everything*, or you would never trust it.
+    #[test]
+    fn snoozing_silences_even_a_failure() {
+        let now = Utc::now();
+        let cfg = AttentionConfig::default();
+        let mut s = sess(true, Some(LiveStatus::Idle), 60, now);
+        s.error = Some("api error".into());
+        s.snoozed_until = Some(now + chrono::Duration::minutes(10));
+
+        let item = classify(&s, now, &cfg);
+        assert_eq!(item.reason, AttentionReason::Idle);
+        assert!(!item.reason.needs_human());
+        assert!(item.detail.starts_with("snoozed"), "{}", item.detail);
+    }
+
+    #[test]
+    fn an_expired_snooze_stops_suppressing() {
+        let now = Utc::now();
+        let mut s = sess(true, Some(LiveStatus::Idle), 60, now);
+        s.snoozed_until = Some(now - chrono::Duration::seconds(1));
+        assert!(!s.is_snoozed(now));
+        assert_eq!(
+            classify(&s, now, &AttentionConfig::default()).reason,
+            AttentionReason::AwaitingInput
         );
     }
 
