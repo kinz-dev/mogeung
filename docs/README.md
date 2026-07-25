@@ -63,12 +63,22 @@ This is load-bearing. `scripts/check-docs.sh` asks git whether any covered path
 changed after `updated` — so a doc that has drifted from its code says so out
 loud instead of quietly lying.
 
-Feature specs add `depends_on:`, naming assumptions from
-[product/assumptions.md](product/assumptions.md):
+Feature specs add `roadmap:` and `depends_on:`:
 
 ```yaml
+roadmap: R-A1
 depends_on: [A1, A4]
 ```
+
+**Two id namespaces, and they used to collide.** Roadmap items are prefixed
+(`R-A1`, `R-B3`) and live in [product/roadmap.md](product/roadmap.md);
+assumptions are bare (`A1`, `A6`) and live in
+[product/assumptions.md](product/assumptions.md). The example above is a real
+pairing: `R-A1` is the format canary, and it rests on assumption `A1`. Those are
+unrelated things that happened to share a name until 2026-07-25.
+
+`check-docs.sh` verifies that every `R-…` reference in the docs resolves to an
+item that actually exists in the roadmap.
 
 ## Generated files — never hand-edit
 

@@ -5,7 +5,7 @@
 # hand goes stale because it is prose frozen at a moment; a status derived from
 # the repository cannot lie and never needs garbage collecting.
 #
-# This is roadmap item H4 (derived progress) built for ourselves first.
+# This is roadmap item R-H4 (derived progress) built for ourselves first.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."

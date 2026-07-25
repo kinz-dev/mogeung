@@ -28,7 +28,7 @@ Pinned by tests both ways. Verified live: after a follow-up that touched only
 `main.rs`, `auth.rs` stayed read while the rewritten `main.rs` came back unread.
 
 **Known limitation:** reformatting or re-indenting changes the hash, so a purely
-cosmetic edit makes a hunk unread again. Roadmap `D2`.
+cosmetic edit makes a hunk unread again. Roadmap `R-D2`.
 
 ## What the diff covers
 

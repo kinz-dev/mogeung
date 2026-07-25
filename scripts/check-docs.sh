@@ -5,7 +5,7 @@
 # code it describes; if any covered path has a commit newer than the doc's
 # `updated:` date, the doc has drifted from its code and says so out loud.
 #
-# This is roadmap item H2 (staleness detection) built for ourselves first, at toy
+# This is roadmap item R-H2 (staleness detection) built for ourselves first, at toy
 # scale. Read it before building the real thing.
 
 set -uo pipefail
@@ -107,7 +107,33 @@ else
     ok "all relative markdown links resolve"
 fi
 
-# --- 5. orphans: ADRs and features nobody links to ----------------------------
+# --- 5. roadmap ids resolve ---------------------------------------------------
+#
+# Roadmap items are `R-A1`, assumptions are bare `A1`. They collided before
+# 2026-07-25 and "A1 is untested" meant two different things depending on which
+# file you had open. This check keeps the prefixed ids honest: every R-… mentioned
+# anywhere must name a row that actually exists in the roadmap table.
+say ""
+say "Roadmap ids"
+roadmap=docs/product/roadmap.md
+known=$(grep -oE '^\| R-[A-Z][0-9]+ \|' "$roadmap" 2>/dev/null | tr -d '|' | tr '\n' ' ')
+dangling=0
+while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    file=${ref%%:*}
+    id=${ref#*:}
+    case " $known " in
+        *" $id "*) ;;
+        *) err "$file references '$id', which is not a roadmap item"
+           dangling=$((dangling + 1)) ;;
+    esac
+done < <(grep -roE --include='*.md' --include='*.sh' \
+             --exclude-dir=archive --exclude-dir=.git --exclude-dir=target \
+             'R-[A-Z][0-9]+' . 2>/dev/null \
+         | sort -u)
+[ "$dangling" -eq 0 ] && ok "every R-… reference resolves ($(printf '%s' "$known" | wc -w | tr -d ' ') items)"
+
+# --- 6. orphans: ADRs and features nobody links to ----------------------------
 say ""
 say "Cross-references"
 for adr in docs/decisions/*.md; do

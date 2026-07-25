@@ -82,4 +82,4 @@ Unknown event types and unexpected shapes are **ignored, never fatal**. The
 realistic failure mode is therefore a degraded board rather than a crash — which
 is also the dangerous one, because it looks like "nothing is happening".
 
-Roadmap `A1` (format canary) exists to make that failure loud.
+Roadmap `R-A1` (format canary) exists to make that failure loud.

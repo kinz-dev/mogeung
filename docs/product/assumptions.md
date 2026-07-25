@@ -37,7 +37,7 @@ assumption — not to build the feature.**
 | A1 | A cross-session attention queue changes where the user looks | `UNTESTED` | Never used in anger. v0.1 died before reaching the question | — |
 | A2 | mogeung must spawn agents to populate the queue | `REFUTED` | v0.1 use, 2026-07-25: "a handicapped Claude Code with a single session" | [ADR-0003](../decisions/0003-observe-do-not-spawn.md) |
 | A3 | Keyword heuristics over diff text are good enough for reading order | `UNTESTED` | Ranked `auth.rs` above a lockfile once, in a test | — |
-| A4 | Claude Code's on-disk formats are stable enough to depend on | `AT RISK` | Undocumented private files. Verified against 2.1.219/2.1.220 only | Canary planned (roadmap A1) |
+| A4 | Claude Code's on-disk formats are stable enough to depend on | `AT RISK` | Undocumented private files. Verified against 2.1.219/2.1.220 only | Canary planned (roadmap `R-A1`) |
 | A5 | Content-hash hunk anchors keep review marks stable across rewrites | `SUPPORTED` | Verified live: `auth.rs` stayed read while a rewritten `main.rs` came back unread | — |
 | A6 | The user will run 3–4 concurrent sessions in normal work | `UNTESTED` | The whole product depends on this. Never measured | — |
 | A7 | Reviewing agent output is a distinct activity worth its own tool | `UNTESTED` | Stated in [concept.md](concept.md) §1, never validated | — |

@@ -64,4 +64,4 @@ POST /api/rescan
 
 **No authentication.** The daemon binds localhost and anyone who can reach the
 port can read your transcripts and open terminals on your machine. Do not
-expose it. A remote daemon (roadmap `I4`) requires solving this first.
+expose it. A remote daemon (roadmap `R-I4`) requires solving this first.

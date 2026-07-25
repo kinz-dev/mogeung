@@ -31,7 +31,7 @@ Should not happen — liveness is checked against the OS, not the registry files
 
 Either the agent genuinely rewrote it, or it was reformatted. Anchors hash
 content including whitespace, so re-indenting counts as a change. Known
-limitation; roadmap `D2`.
+limitation; roadmap `R-D2`.
 
 ## The board looks emptier than it should
 
@@ -42,7 +42,7 @@ what it does not recognise rather than crash. So a format change looks like
 
 Check the CLI version against
 [claude-code-formats.md](../design/claude-code-formats.md) — verified against
-2.1.219/2.1.220 only. Roadmap `A1` will make this loud instead of silent.
+2.1.219/2.1.220 only. Roadmap `R-A1` will make this loud instead of silent.
 
 ## Port already in use
 

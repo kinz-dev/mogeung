@@ -6,12 +6,26 @@ updated: 2026-07-25
 
 # Roadmap
 
-The ranked backlog. Items are identified by their group letter and number
-(`B3`, `E1`) and referenced from feature specs.
+The ranked backlog.
 
 Effort: **S** = hours · **M** = about a day · **L** = multi-day.
 
 Nothing here is committed. Priority is unresolved pending [item 0](#0-the-non-feature).
+
+## Identifiers
+
+Roadmap items are `R-` plus a group letter and number: `R-A1`, `R-B3`, `R-H4`.
+Assumptions in [assumptions.md](assumptions.md) are bare: `A1`, `A6`.
+
+The prefix exists because the two collided. Roadmap `A1` (format canary) and
+assumption `A1` (a queue changes where you look) are unrelated, and "A1 is
+untested" meant different things depending on which file you had open. Feature
+specs carry both a `roadmap:` and a `depends_on:` field, so the ambiguity was
+going to land in every spec we ever wrote.
+
+ADRs written before 2026-07-25 use bare roadmap ids — they are immutable and
+were left alone. None of them reference a group-`A` item, so nothing there is
+ambiguous.
 
 ---
 
@@ -25,7 +39,7 @@ is speculation until this is done, and some will look obviously wrong
 afterwards.
 
 The only work that should precede it is whatever makes the tool trustworthy
-enough to judge — realistically `A1` and `A4` below.
+enough to judge — realistically `R-A1` and `R-A4` below.
 
 ---
 
@@ -36,49 +50,49 @@ mogeung silently stops seeing things, nobody would know.
 
 | # | Item | Effort |
 |---|---|---|
-| A1 | **Format canary** — count unparsed lines per scan, surface it, warn when the ratio jumps | S |
-| A2 | **CLI version watch** — record versions seen; warn on Claude Code updates, which is when formats move | S |
-| A3 | **Golden-corpus test** — snapshot-test the parser against anonymised real transcripts | M |
-| A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S |
-| A5 | **Huge-transcript handling** — the corpus is 67 MB; cap and stream rather than reading whole files | S |
+| R-A1 | **Format canary** — count unparsed lines per scan, surface it, warn when the ratio jumps | S |
+| R-A2 | **CLI version watch** — record versions seen; warn on Claude Code updates, which is when formats move | S |
+| R-A3 | **Golden-corpus test** — snapshot-test the parser against anonymised real transcripts | M |
+| R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S |
+| R-A5 | **Huge-transcript handling** — the corpus is 67 MB; cap and stream rather than reading whole files | S |
 
 ## B. Sharpen the queue
 
 | # | Item | Effort |
 |---|---|---|
-| B1 | **Keyboard triage** — `j/k` move, `enter` open, `r` mark read, `o` open terminal | S |
-| B2 | **Jump to terminal** — focus the actual Terminal tab for a session via pid/tty. Closes `WAITING` → acting | M |
-| B3 | **Collision warning** — two *live* sessions editing the same file right now | M |
-| B4 | **Permission vs. instruction** — distinguish "waiting for approval" from "waiting for next task", via a pending `tool_use` with no result | M |
-| B5 | **Snooze** a session for N minutes | S |
-| B6 | **Group by repo**, collapsible | S |
-| B7 | **Loop detection** — same tool + same path repeatedly is thrashing, not progress | M |
-| B8 | **Auto-select top item** and a "next" key | S |
-| B9 | **Search/filter** the session list | S |
+| R-B1 | **Keyboard triage** — `j/k` move, `enter` open, `r` mark read, `o` open terminal | S |
+| R-B2 | **Jump to terminal** — focus the actual Terminal tab for a session via pid/tty. Closes `WAITING` → acting | M |
+| R-B3 | **Collision warning** — two *live* sessions editing the same file right now | M |
+| R-B4 | **Permission vs. instruction** — distinguish "waiting for approval" from "waiting for next task", via a pending `tool_use` with no result | M |
+| R-B5 | **Snooze** a session for N minutes | S |
+| R-B6 | **Group by repo**, collapsible | S |
+| R-B7 | **Loop detection** — same tool + same path repeatedly is thrashing, not progress | M |
+| R-B8 | **Auto-select top item** and a "next" key | S |
+| R-B9 | **Search/filter** the session list | S |
 
 ## C. Notifications and reach
 
 | # | Item | Effort |
 |---|---|---|
-| C1 | **macOS notification** when a session flips to `WAITING` | S |
-| C2 | **Menu-bar item** with the waiting count — glanceable without the window | M |
-| C3 | **Thin web client** — review and unblock from a phone. The daemon already supports it | L |
-| C4 | **Push** via ntfy/Pushover for away-from-desk | S |
-| C5 | **Ambient mode** — big-screen board for a second monitor | M |
+| R-C1 | **macOS notification** when a session flips to `WAITING` | S |
+| R-C2 | **Menu-bar item** with the waiting count — glanceable without the window | M |
+| R-C3 | **Thin web client** — review and unblock from a phone. The daemon already supports it | L |
+| R-C4 | **Push** via ntfy/Pushover for away-from-desk | S |
+| R-C5 | **Ambient mode** — big-screen board for a second monitor | M |
 
 ## D. Review depth
 
 | # | Item | Effort |
 |---|---|---|
-| D1 | **Copy as prompt** — build a follow-up from flagged hunks + notes, ready to paste into the terminal. The observer-safe version of note→instruction | M |
-| D2 | **Whitespace-insensitive anchors** — stop reformatting from making hunks unread | S |
-| D3 | **Keyboard review flow** — `space` = mark read and advance | S |
-| D4 | **Syntax highlighting** in diffs (tree-sitter) | M |
-| D5 | **Intra-line word diff** | M |
-| D6 | **Side-by-side view** | M |
-| D7 | **Commit-aware diffing** — committed work currently vanishes as the base moves with HEAD ([A9](assumptions.md)) | M |
-| D8 | **Review debt across HEAD** — what fraction of the repo no human has read | L |
-| D9 | **Blast radius** — callers and tests affected by a changed symbol | L |
+| R-D1 | **Copy as prompt** — build a follow-up from flagged hunks + notes, ready to paste into the terminal. The observer-safe version of note→instruction | M |
+| R-D2 | **Whitespace-insensitive anchors** — stop reformatting from making hunks unread | S |
+| R-D3 | **Keyboard review flow** — `space` = mark read and advance | S |
+| R-D4 | **Syntax highlighting** in diffs (tree-sitter) | M |
+| R-D5 | **Intra-line word diff** | M |
+| R-D6 | **Side-by-side view** | M |
+| R-D7 | **Commit-aware diffing** — committed work currently vanishes as the base moves with HEAD ([A9](assumptions.md)) | M |
+| R-D8 | **Review debt across HEAD** — what fraction of the repo no human has read | L |
+| R-D9 | **Blast radius** — callers and tests affected by a changed symbol | L |
 
 ## E. Verification
 
@@ -86,11 +100,11 @@ The observer pivot made this *easier*: the full transcript is on disk.
 
 | # | Item | Effort |
 |---|---|---|
-| E1 | **"Did it actually run the tests?"** — the agent claims they pass; check whether a Bash call ran them | M |
-| E2 | **Signal runner** — run tests/typecheck per repo, attach results to the session | L |
-| E3 | **Claim ledger** — extract assertions from assistant text, bind each to evidence | L |
-| E4 | **Edit-without-verify** — flag sessions that changed code and never built or tested | S |
-| E5 | **Coverage delta** on changed lines only | L |
+| R-E1 | **"Did it actually run the tests?"** — the agent claims they pass; check whether a Bash call ran them | M |
+| R-E2 | **Signal runner** — run tests/typecheck per repo, attach results to the session | L |
+| R-E3 | **Claim ledger** — extract assertions from assistant text, bind each to evidence | L |
+| R-E4 | **Edit-without-verify** — flag sessions that changed code and never built or tested | S |
+| R-E5 | **Coverage delta** on changed lines only | L |
 
 ## F. Cross-session intelligence
 
@@ -99,22 +113,22 @@ Newly possible: 52 transcripts (67 MB) plus 2,084 prompts in
 
 | # | Item | Effort |
 |---|---|---|
-| F1 | **Global search** across transcripts and prompt history | M |
-| F2 | **Prompt-blame** — for a file or line, find the session and prompt that produced it | M |
-| F3 | **Daily digest** — what happened across all repos, from evidence not self-reports | M |
-| F4 | **Recurring-failure detection** — the same error across many sessions | M |
-| F5 | **Personal analytics** — sessions/day, token burn, repos, time of day | S |
-| F6 | **Prompt library** — most-reused prompts, mined from history | S |
-| F7 | **Decision extraction** — pull architectural decisions out of transcripts into ADRs | L |
-| F8 | **Subagent trees** — visualise `isSidechain` work | M |
+| R-F1 | **Global search** across transcripts and prompt history | M |
+| R-F2 | **Prompt-blame** — for a file or line, find the session and prompt that produced it | M |
+| R-F3 | **Daily digest** — what happened across all repos, from evidence not self-reports | M |
+| R-F4 | **Recurring-failure detection** — the same error across many sessions | M |
+| R-F5 | **Personal analytics** — sessions/day, token burn, repos, time of day | S |
+| R-F6 | **Prompt library** — most-reused prompts, mined from history | S |
+| R-F7 | **Decision extraction** — pull architectural decisions out of transcripts into ADRs | L |
+| R-F8 | **Subagent trees** — visualise `isSidechain` work | M |
 
 ## G. Rate limits and cost
 
 | # | Item | Effort |
 |---|---|---|
-| G1 | **Five-hour window status** — the CLI emits `rate_limit_event`; currently discarded. With overage disabled, exhausting it hard-fails sessions | S |
-| G2 | **Warn before exhaustion** | S |
-| G3 | **Token burn** per session/day/repo | S |
+| R-G1 | **Five-hour window status** — the CLI emits `rate_limit_event`; currently discarded. With overage disabled, exhausting it hard-fails sessions | S |
+| R-G2 | **Warn before exhaustion** | S |
+| R-G3 | **Token burn** per session/day/repo | S |
 
 ## H. The doc-sprawl thesis
 
@@ -123,23 +137,24 @@ The original stated pain, still entirely unbuilt after two versions. See
 
 | # | Item | Effort |
 |---|---|---|
-| H1 | **Doc inventory** — classify every markdown artifact, assign lifecycle | M |
-| H2 | **Staleness detection** — doc describes module X; X moved 40 commits ago | M |
-| H3 | **Doc GC** — propose archive/merge/delete in batch, with evidence | M |
-| H4 | **Derived progress** — plan items bound to real diffs | L |
-| H5 | **Agent-instruction hub** — `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` from one source | M |
+| R-H1 | **Doc inventory** — classify every markdown artifact, assign lifecycle | M |
+| R-H2 | **Staleness detection** — doc describes module X; X moved 40 commits ago | M |
+| R-H3 | **Doc GC** — propose archive/merge/delete in batch, with evidence | M |
+| R-H4 | **Derived progress** — plan items bound to real diffs | L |
+| R-H5 | **Agent-instruction hub** — `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` from one source | M |
 
-Note: `scripts/check-docs.sh` and `scripts/gen-status.sh` are H2 and H4 built
-for ourselves first, at toy scale. Worth reading before building the real thing.
+Note: `scripts/check-docs.sh` and `scripts/gen-status.sh` are `R-H2` and `R-H4`
+built for ourselves first, at toy scale. Worth reading before building the real
+thing.
 
 ## I. Breadth
 
 | # | Item | Effort |
 |---|---|---|
-| I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises | M |
-| I2 | **Gemini CLI adapter** | M |
-| I3 | **Linux/Windows** — watching and diffing are portable; terminal launch and "open in" are not | M |
-| I4 | **Remote daemon** — watch a dev box, run the UI locally | M |
+| R-I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises | M |
+| R-I2 | **Gemini CLI adapter** | M |
+| R-I3 | **Linux/Windows** — watching and diffing are portable; terminal launch and "open in" are not | M |
+| R-I4 | **Remote daemon** — watch a dev box, run the UI locally | M |
 
 ## J. Polish
 
@@ -163,16 +178,16 @@ subcommands wrapping the REST API.
 
 Not decisions — starting points for the priority conversation.
 
-**Cheap trust and triage** — `A1 + A4 + G1 + B1 + C1`, roughly a day. Makes the
-tool trustworthy and fast to triage without betting on anything unproven. The
-natural companion to [item 0](#0-the-non-feature).
+**Cheap trust and triage** — `R-A1 + R-A4 + R-G1 + R-B1 + R-C1`, roughly a day.
+Makes the tool trustworthy and fast to triage without betting on anything
+unproven. The natural companion to [item 0](#0-the-non-feature).
 
-**Most distinctive** — `B3` collision warning. Two live agents editing the same
-file is a real failure mode of parallel work, is invisible today, and only the
-observer model can see it. Nothing else here is unique to what we built.
+**Most distinctive** — `R-B3` collision warning. Two live agents editing the
+same file is a real failure mode of parallel work, is invisible today, and only
+the observer model can see it. Nothing else here is unique to what we built.
 
 **Honouring the original brief** — Pillar `H`. Doc sprawl was the opening
 complaint and two versions have not touched it.
 
-**The sleeper** — `E1`. A few hours, and it is the smallest real slice of the
+**The sleeper** — `R-E1`. A few hours, and it is the smallest real slice of the
 trust layer that made [concept.md](concept.md) interesting.
