@@ -25,16 +25,22 @@ worse. That was the fatal flaw of the first version — see
 ## Run it
 
 ```sh
-./scripts/start.sh           # builds, runs both, Ctrl-C stops both
+cargo build --release
+./target/release/mogeung     # that is all
 ```
 
-or by hand, which is the same thing:
+One executable. It starts a daemon if none is watching, attaches to one if there
+is, and a daemon it started stops when you close the window.
+
+For a daemon that outlives every window — so notifications and the phone client
+keep working while nothing is on screen — run it separately:
 
 ```sh
-cargo build --release
-./target/release/mogeungd    # terminal 1 — the daemon
-./target/release/mogeung     # terminal 2 — the window
+./target/release/mogeungd --notify   # keeps watching with no window open
+./target/release/mogeung             # attaches to it
 ```
+
+See [ADR-0009](docs/decisions/0009-the-window-may-host-a-daemon.md).
 
 Nothing to configure, no repos to register. If you have run `claude` anywhere in
 the last 14 days, it appears. Nothing is ever written to `~/.claude`.
@@ -106,7 +112,7 @@ read your transcripts. Do not expose it.
 ./scripts/start.sh          # build + run both; --fresh for a throwaway db
 mprocs                      # both side by side, plus test/docs on a keypress
 
-cargo test --workspace      # 142 tests, all free — nothing spawns an agent
+cargo test --workspace      # 147 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```

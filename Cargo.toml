@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 mogeung-core = { path = "crates/mogeung-core" }
+mogeungd = { path = "crates/mogeungd" }
 
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

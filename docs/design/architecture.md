@@ -60,6 +60,23 @@ Polling rather than filesystem events: a few dozen files every 1.5 s costs
 nothing, and it avoids every rename and atomic-write edge case that makes
 FSEvents miserable.
 
+## Who runs the daemon
+
+The window binds the daemon port at start-up. Winning the bind means hosting a
+daemon **on a thread in its own process**; losing it means attaching to the one
+already there. A hosted daemon dies with the window; an attached one is left
+alone. `mogeungd` is still a separate binary and is still how you get a daemon
+that outlives every window.
+
+The bind *is* the check — probing first and starting second races two windows
+against each other. A thread rather than a child process because a thread cannot
+outlive its process, which removes the pid file, the cleanup-on-exit and the
+orphan-holding-the-port problem all at once.
+
+This does not weaken the client contract below: the window talks over the same
+websocket either way and cannot tell which process the daemon is in.
+[ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md).
+
 ## Client contract
 
 Commands are fire-and-forget; their effect returns on the event stream. Clients

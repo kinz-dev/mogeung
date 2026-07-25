@@ -6,6 +6,10 @@ updated: 2026-07-25
 
 # Getting started
 
+Running it is one command — `mogeung` starts a daemon if none is watching and
+attaches to one if there is. If you want watching to continue with no window
+open, start `mogeungd` yourself first and the window will attach to it.
+
 **Developing on mogeung?** `./scripts/start.sh` builds and runs both processes
 with one command, or `mprocs` puts them side by side. The rest of this page is
 the manual route.

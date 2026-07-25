@@ -12,6 +12,14 @@ Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
 Collision warning when two live sessions edit one file. Loop detection for an
 agent repeating itself. Jump to the session's Terminal tab.
 
+**Changed — one executable.** `mogeung` now starts a daemon if none is watching
+and attaches to one if there is. A daemon it started stops with the window; one
+that was already running is left alone. The bind is the test, so two windows
+opened together cannot both start one, and the hosted daemon is a thread rather
+than a child process — no pid file, no cleanup to skip, no orphan on the port.
+`mogeungd` remains the way to get a daemon that outlives every window
+([ADR-0009](docs/decisions/0009-the-window-may-host-a-daemon.md)).
+
 **Added — finding a session.** Hide and pin sessions, both persisted across
 restarts (`R-B13`). A scope selector — needs-you / live / all — replacing the
 "quiet" checkbox (`R-B14`). Field filters `repo:` `branch:` `file:`, where

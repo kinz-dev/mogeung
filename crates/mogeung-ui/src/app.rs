@@ -108,6 +108,10 @@ pub struct App {
     /// already taken by another application.
     hotkey: Option<crate::hotkey::Hotkey>,
 
+    /// Where the daemon came from, and how to describe it.
+    daemon_mode: crate::daemon::Mode,
+    daemon_addr: String,
+
     /// Which pane the keyboard drives, and the editable bindings.
     pane: Pane,
     keymap: crate::keymap::Keymap,
@@ -128,6 +132,8 @@ impl App {
         url: String,
         hotkey: Option<crate::hotkey::Hotkey>,
         hotkey_error: Option<String>,
+        daemon_mode: crate::daemon::Mode,
+        daemon_addr: String,
     ) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         if let Some(h) = &hotkey {
@@ -163,6 +169,8 @@ impl App {
             show_launch: false,
             health: Health::default(),
             show_health: false,
+            daemon_mode,
+            daemon_addr,
             pane: Pane::Queue,
             keymap,
             show_keymap: false,
@@ -322,8 +330,20 @@ impl App {
                             .unwrap_or_else(|| "disconnected".into()),
                     )
                 };
-                ui.label(dot)
-                    .on_hover_text(format!("{} — {}", self.net.url, tip));
+                ui.label(dot).on_hover_text(format!(
+                    "{} — {}\n\n{}",
+                    self.net.url,
+                    tip,
+                    self.daemon_mode.detail(&self.daemon_addr)
+                ));
+
+                // Worth a word on screen, not just a tooltip: with a hosted
+                // daemon, closing this window stops watching entirely — which
+                // is not what "close a window" usually means.
+                if self.daemon_mode == crate::daemon::Mode::Hosting {
+                    ui.label(dim(self.daemon_mode.label()))
+                        .on_hover_text(self.daemon_mode.detail(&self.daemon_addr));
+                }
 
                 ui.separator();
 

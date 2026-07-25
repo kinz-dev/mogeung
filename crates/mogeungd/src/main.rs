@@ -3,13 +3,17 @@
 //! Watches the Claude Code sessions you run yourself, ranks them by who needs
 //! you, diffs what they changed, and remembers what you have already read. It
 //! never starts, steers or stops an agent.
+//!
+//! The serving logic lives in `mogeungd::server` so the window can host a
+//! daemon in-process when none is running — see
+//! [ADR-0009](../../../docs/decisions/0009-the-window-may-host-a-daemon.md).
+//! This binary remains the way to run one that outlives any window.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
-use mogeungd::state::AppState;
-use mogeungd::{api, store, watcher};
+use mogeungd::notify::NotifyConfig;
+use mogeungd::server::{self, Options};
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "mogeungd", version, about = "mogeung daemon — watches Claude Code sessions")]
@@ -41,11 +45,6 @@ struct Args {
     push_url: Option<String>,
 }
 
-fn default_db() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".mogeung").join("mogeung.db")
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -56,76 +55,24 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let db = args.db.unwrap_or_else(default_db);
-    let store = store::Store::open(&db)?;
-    let state = AppState::new(store)?;
+    let listener = std::net::TcpListener::bind(&args.listen)
+        .with_context(|| format!("could not bind {} — is a daemon already running?", args.listen))?;
 
-    if args.notify || args.push_url.is_some() {
-        state
-            .configure_notifications(mogeungd::notify::NotifyConfig {
+    server::run(
+        listener,
+        Options {
+            db: args.db.unwrap_or_else(server::default_db),
+            poll_ms: args.poll_ms,
+            notify: NotifyConfig {
                 desktop: args.notify,
-                push_url: args.push_url.clone(),
-            })
-            .await;
-        tracing::info!(
-            "notifications on (desktop: {}, push: {})",
-            args.notify,
-            args.push_url.is_some()
-        );
-    }
-
-    let home = watcher::default_home();
-    if !home.join("projects").exists() {
-        tracing::warn!(
-            "no session transcripts at {} — is Claude Code installed for this user?",
-            home.join("projects").display()
-        );
-    }
-
-    // First pass before serving, so a client connecting immediately gets a
-    // populated snapshot rather than an empty board.
-    state.scan().await;
-    tracing::info!(
-        "watching {} — {} session(s) known",
-        home.display(),
-        state.sessions.read().await.len()
-    );
-
-    {
-        let s = state.clone();
-        let period = Duration::from_millis(args.poll_ms.max(250));
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(period);
-            loop {
-                tick.tick().await;
-                s.scan().await;
-            }
-        });
-    }
-
-    let app = api::router(state.clone());
-    let listener = tokio::net::TcpListener::bind(&args.listen).await?;
-    tracing::info!(
-        "mogeungd listening on http://{} (db {})",
-        args.listen,
-        db.display()
-    );
-    tracing::info!("web client at http://{}/", args.listen);
-    if !args.listen.starts_with("127.") && !args.listen.starts_with("localhost") {
-        // Worth shouting about: there is no authentication, by design and by
-        // omission. See docs/design/wire-protocol.md.
-        tracing::warn!(
-            "listening beyond localhost with NO AUTHENTICATION — anyone who can \
-             reach {} can read your transcripts and open terminals on this machine",
-            args.listen
-        );
-    }
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
+                push_url: args.push_url,
+            },
+            claude_home: None,
+        },
+        async {
             let _ = tokio::signal::ctrl_c().await;
             tracing::info!("shutting down");
-        })
-        .await?;
-    Ok(())
+        },
+    )
+    .await
 }

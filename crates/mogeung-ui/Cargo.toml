@@ -10,14 +10,16 @@ path = "src/main.rs"
 
 [dependencies]
 mogeung-core.workspace = true
+mogeungd.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing-subscriber.workspace = true
 
 eframe = "0.35"
 egui = "0.35"
-tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
 global-hotkey = "0.8.0"

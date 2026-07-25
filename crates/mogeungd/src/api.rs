@@ -47,6 +47,10 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
+        // So a client can confirm an already-running daemon is watching the
+        // same place before attaching to it.
+        "claude_home": state.claude_home.to_string_lossy(),
+        "pid": std::process::id(),
         "headline": h.headline(),
         "blind_ratio": h.blind_ratio(),
         "urgent_alerts": h.urgent_alerts(),
