@@ -6,6 +6,10 @@ updated: 2026-07-25
 
 # Getting started
 
+**Developing on mogeung?** `./scripts/start.sh` builds and runs both processes
+with one command, or `mprocs` puts them side by side. The rest of this page is
+the manual route.
+
 ## What mogeung does
 
 It watches the Claude Code sessions **you** run and tells you which one needs

@@ -25,8 +25,13 @@ worse. That was the fatal flaw of the first version — see
 ## Run it
 
 ```sh
-cargo build --release
+./scripts/start.sh           # builds, runs both, Ctrl-C stops both
+```
 
+or by hand, which is the same thing:
+
+```sh
+cargo build --release
 ./target/release/mogeungd    # terminal 1 — the daemon
 ./target/release/mogeung     # terminal 2 — the window
 ```
@@ -95,6 +100,9 @@ read your transcripts. Do not expose it.
 ## Develop
 
 ```sh
+./scripts/start.sh          # build + run both; --fresh for a throwaway db
+mprocs                      # both side by side, plus test/docs on a keypress
+
 cargo test --workspace      # 102 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md

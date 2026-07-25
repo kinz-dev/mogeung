@@ -68,11 +68,21 @@ Never edit its output.
 ## Commands
 
 ```sh
+./scripts/start.sh          # build + run daemon and window together
+mprocs                      # same two, side by side, with test/docs on a key
+
 cargo build --release
 cargo test --workspace      # all free — nothing spawns an agent
 ./scripts/check-docs.sh     # REQUIRED after any doc change — see above
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```
+
+`start.sh --fresh` uses a throwaway database. Worth reaching for when a diff
+looks wrong: sessions pin their diff base the first time they are seen, so a
+database carried over from an older build can mislead you.
+
+**Shell scripts here must run on bash 3.2**, which is what macOS ships. No
+`mapfile`, and expanding an empty array under `set -u` is an error.
 
 Before handing work back: `cargo test --workspace` **and**
 `./scripts/check-docs.sh` must both pass.

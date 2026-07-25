@@ -1,0 +1,31 @@
+# Run mogeung's two processes side by side: `mprocs` in the repo root.
+#
+# Both delegate to scripts/start.sh so the flags live in exactly one place.
+# The window waits on the daemon's health endpoint, which also means it waits
+# for whatever build the daemon process is doing — one dependency, not two.
+#
+# Keys: `x` stop, `s` start, `r` restart, `a` show all output, `q` quit.
+
+procs:
+  daemon:
+    shell: ./scripts/start.sh --daemon-only
+    autostart: true
+    # Restarting the daemon by hand is the common case while developing: press
+    # `r` here and the window reconnects on its own.
+    autorestart: false
+
+  window:
+    shell: ./scripts/start.sh --ui-only
+    autostart: true
+    autorestart: false
+
+  # Not autostarted — press `s` to run them.
+  test:
+    shell: cargo test --workspace
+    autostart: false
+
+  docs:
+    shell: ./scripts/check-docs.sh && ./scripts/gen-status.sh
+    autostart: false
+
+proc_list_width: 22
