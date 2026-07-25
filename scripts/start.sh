@@ -32,6 +32,7 @@ usage() {
     cat <<'EOF'
 
 Options:
+  --release          optimised build (default)
   --debug            build without optimisation (compiles faster, runs slower)
   --port N           listen port (default 7717)
   --fresh            use a throwaway database instead of ~/.mogeung/mogeung.db
