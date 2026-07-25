@@ -79,6 +79,7 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B7 | **Loop detection** — same tool + same path repeatedly is thrashing, not progress | M | ✅ |
 | R-B8 | **Auto-select top item** and a "next" key | S | ✅ |
 | R-B9 | **Search/filter** the session list | S | ✅ |
+| R-B10 | **Global hotkey** to raise the window — the return half of `R-B2` | S | ✅ |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 

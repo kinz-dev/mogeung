@@ -6,32 +6,81 @@
 
 mod app;
 mod diff;
+mod hotkey;
 mod net;
 mod ui;
 
-/// Tiny argument parsing, so the UI does not pull in clap for one flag.
-fn parse_url() -> String {
-    let mut url = "ws://127.0.0.1:7717/ws".to_string();
+struct Args {
+    url: String,
+    /// System-wide shortcut that raises this window. `None` disables it.
+    hotkey: Option<String>,
+}
+
+/// Tiny argument parsing, so the UI does not pull in clap for three flags.
+fn parse_args() -> Args {
+    let mut args = Args {
+        url: "ws://127.0.0.1:7717/ws".to_string(),
+        hotkey: Some(hotkey::DEFAULT.to_string()),
+    };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--url" => {
                 if let Some(v) = it.next() {
-                    url = v;
+                    args.url = v;
                 }
             }
+            "--hotkey" => {
+                if let Some(v) = it.next() {
+                    args.hotkey = Some(v);
+                }
+            }
+            "--no-hotkey" => args.hotkey = None,
             "-h" | "--help" => {
-                println!("mogeung [--url ws://host:port/ws]");
+                println!(
+"mogeung — the mogeung window
+
+Options:
+  --url URL        daemon websocket (default ws://127.0.0.1:7717/ws)
+  --hotkey ACCEL   system-wide key that raises this window
+                   default {default}; e.g. \"Alt+Space\", \"Shift+Cmd+J\", \"F13\"
+  --no-hotkey      do not register a system-wide key
+  -h, --help       this
+
+A shortcut macOS reserves for itself (Cmd+Space, Cmd+Tab) will appear to
+register and then never fire — the system consumes it first. If nothing
+happens, try another combination rather than assuming it is broken.",
+                    default = hotkey::DEFAULT
+                );
                 std::process::exit(0);
             }
             other => eprintln!("ignoring unknown argument: {other}"),
         }
     }
-    url
+    args
 }
 
 fn main() -> eframe::Result<()> {
-    let url = parse_url();
+    let args = parse_args();
+
+    // Registered before the event loop starts, and on the main thread, which
+    // macOS requires. A failure here is reported into the window rather than
+    // being fatal — someone else owning a shortcut must not stop mogeung from
+    // opening.
+    let (hk, hk_error) = match &args.hotkey {
+        None => (None, None),
+        Some(accel) => match hotkey::Hotkey::register(accel) {
+            Ok(h) => {
+                eprintln!("global hotkey: {accel} raises this window");
+                (Some(h), None)
+            }
+            Err(e) => {
+                eprintln!("global hotkey unavailable: {e}");
+                (None, Some(e))
+            }
+        },
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 900.0])
@@ -42,6 +91,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "mogeung",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, url)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, args.url, hk, hk_error)))),
     )
 }

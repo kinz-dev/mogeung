@@ -95,15 +95,28 @@ pub struct App {
     health: Health,
     show_health: bool,
 
+    /// System-wide key that raises this window. `None` when disabled or
+    /// already taken by another application.
+    hotkey: Option<crate::hotkey::Hotkey>,
+
     errors: Vec<String>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, url: String) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        url: String,
+        hotkey: Option<crate::hotkey::Hotkey>,
+        hotkey_error: Option<String>,
+    ) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        if let Some(h) = &hotkey {
+            h.start_waker(cc.egui_ctx.clone());
+        }
         let net = Net::connect(url, cc.egui_ctx.clone());
         App {
             net,
+            hotkey,
             sessions: HashMap::new(),
             queue: Vec::new(),
             changes: HashMap::new(),
@@ -134,7 +147,9 @@ impl App {
             show_launch: false,
             health: Health::default(),
             show_health: false,
-            errors: Vec::new(),
+            // Surfaced in the window, not only on stderr: the terminal that
+            // launched this is exactly what you are trying to stop looking at.
+            errors: hotkey_error.into_iter().collect(),
         }
     }
 
@@ -224,6 +239,12 @@ impl eframe::App for App {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(1000));
 
+        // Checked before anything else so a press raises the window on the
+        // same frame it arrives.
+        if self.hotkey.as_ref().map(|h| h.pressed()).unwrap_or(false) {
+            crate::hotkey::raise(ui.ctx());
+        }
+
         self.handle_keys(ui);
         self.top_bar(ui);
         self.queue_panel(ui);
@@ -243,7 +264,15 @@ impl App {
     fn top_bar(&mut self, root: &mut egui::Ui) {
         egui::Panel::top("top").show(root, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("mogeung").strong().size(17.0));
+                let title = ui.label(RichText::new("mogeung").strong().size(17.0));
+                match &self.hotkey {
+                    Some(h) => {
+                        title.on_hover_text(format!("{} brings this window forward", h.accel));
+                    }
+                    None => {
+                        title.on_hover_text("no global shortcut — see --hotkey");
+                    }
+                }
 
                 let (dot, tip) = if self.net.connected {
                     (RichText::new("●").color(GREEN), "connected".to_string())

@@ -20,3 +20,4 @@ egui = "0.35"
 tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
+global-hotkey = "0.8.0"

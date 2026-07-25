@@ -136,6 +136,39 @@ ancestry detection fails, mogeung falls back to asking every terminal it knows �
 and a script that activated first would shuffle the user's windows on every
 miss. Pinned by `a_miss_does_not_raise_the_application`.
 
+### Getting back (`R-B10`)
+
+Jump-to-terminal solves half a round trip. A system-wide shortcut —
+`Ctrl+Cmd+M` by default — raises the mogeung window from wherever you are, so
+the return leg is one key rather than a hunt through whatever is on screen.
+
+Registered with Carbon's `RegisterEventHotKey` via the `global-hotkey` crate,
+on the main thread, before the event loop starts. Failure is reported into the
+window and onto stderr but is **never fatal**: a shortcut another application
+already owns is an ordinary thing to hit, and it must not stop mogeung opening.
+
+A dedicated thread blocks on the event channel and pokes egui. Polling from the
+frame loop alone is not enough — a backgrounded window repaints roughly once a
+second, and a second of lag on *get me back here now* reads as broken.
+
+Only `Pressed` is acted on; every hotkey also reports `Released`, which would
+otherwise fire twice per press. The pending flag is a boolean rather than a
+count, so holding the key down cannot build a backlog that keeps re-raising the
+window after you let go.
+
+**Caveat that cannot be detected:** registering a shortcut macOS reserves for
+itself (`Cmd+Space`, `Cmd+Tab`) *succeeds* and then never fires, because the
+system consumes the key first. Verified live — `Cmd+Space` registers happily.
+`--help` says so; there is nothing to check at runtime.
+
+### Why not an in-app terminal
+
+Asked and answered: embedding a *running* session is impossible, because its
+PTY master belongs to the terminal that created it and there is no way to hand
+that off. Spawning our own sessions into an embedded emulator is possible but
+means writing a worse iTerm2 inside mogeung — the same trade that made v0.1 a
+worse Claude Code. The hotkey costs two keys and nothing else.
+
 ### What still cannot work
 
 Terminals without AppleScript support — Alacritty, Ghostty, kitty — cannot be

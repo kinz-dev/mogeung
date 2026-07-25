@@ -12,6 +12,9 @@ Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
 Collision warning when two live sessions edit one file. Loop detection for an
 agent repeating itself. Jump to the session's Terminal tab.
 
+**Added — reach.** A system-wide `Ctrl+Cmd+M` that raises the mogeung window,
+the return half of jump-to-terminal (`R-B10`, `--hotkey` / `--no-hotkey`).
+
 **Added — reach.** Desktop notifications and push-to-URL, both fired only on the
 transition into needing you. A self-contained web client at `/`. Ambient mode
 for a second monitor.

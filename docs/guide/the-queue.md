@@ -42,6 +42,13 @@ already done what you asked.
 Keys are ignored while a text box has focus, so typing in the filter does not
 trigger them.
 
+**`Ctrl+Cmd+M` brings mogeung back** from anywhere — the return half of the
+round trip. Change it with `mogeung --hotkey "Alt+Space"`, or turn it off with
+`--no-hotkey`. Hover the "mogeung" title to see the current one.
+
+A shortcut macOS reserves (`Cmd+Space`, `Cmd+Tab`) will appear to register and
+then never fire; pick another rather than assuming it is broken.
+
 **Terminal.app and iTerm2** are supported for jump-to-terminal. Terminals without
 AppleScript support (Alacritty, Ghostty, kitty) cannot be focused, and a pane
 inside `tmux` or `screen` cannot be picked out — the multiplexer owns the tty.

@@ -57,7 +57,8 @@ live registry, so mogeung is told, not guessing. `APPROVE` splits that: an
 unanswered tool call means the agent is *blocked*, not merely finished.
 
 `j`/`k` to move, `enter` to jump to that session's terminal, `r` to mark read,
-`s` to snooze, `/` to filter.
+`s` to snooze, `/` to filter. **`Ctrl+Cmd+M` brings mogeung back** from
+anywhere, which is the other half of that round trip.
 
 → [The attention queue](docs/guide/the-queue.md) ·
 [Reviewing changes](docs/guide/reviewing.md) ·
@@ -103,7 +104,7 @@ read your transcripts. Do not expose it.
 ./scripts/start.sh          # build + run both; --fresh for a throwaway db
 mprocs                      # both side by side, plus test/docs on a keypress
 
-cargo test --workspace      # 102 tests, all free — nothing spawns an agent
+cargo test --workspace      # 105 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```
