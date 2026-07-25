@@ -1,6 +1,28 @@
-# mogeung — a workbench for people who supervise agents
+---
+title: Original concept (superseded)
+status: archived
+updated: 2026-07-25
+superseded_by: ../product/concept.md
+---
 
-Status: draft concept, nothing built yet. Written 2026-07-25.
+# ORIGINAL CONCEPT — superseded, kept for the record
+
+> **This document is history, not guidance.** It is the thesis as written on
+> 2026-07-25 before any code existed, plus the §8b amendment added after v0.1
+> was thrown away the same day.
+>
+> The current thesis is [../product/concept.md](../product/concept.md).
+>
+> It is preserved unedited because the parts it got *wrong* are the most
+> instructive thing in this repository. In particular §5 pillar A and §8 assume
+> mogeung must spawn agents to populate its queue — an assumption never stated
+> plainly enough to be challenged, which cost the entire first implementation.
+> See [ADR-0003](../decisions/0003-observe-do-not-spawn.md) and
+> [assumptions.md A2](../product/assumptions.md).
+
+---
+
+# mogeung — a workbench for people who supervise agents
 
 ---
 
