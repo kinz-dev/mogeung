@@ -25,6 +25,13 @@ enum Tab {
 /// Navigation actions are pane-agnostic — `Next` means "next thing in whatever
 /// has focus" — so one set of bindings works everywhere instead of three sets
 /// you have to remember the context for.
+/// Transcript events drawn before "show earlier" is needed.
+///
+/// Markdown is parsed on every frame it is visible, so an unbounded transcript
+/// would make the frame rate a function of how long the session has been
+/// running. A session here already has thousands of events.
+const TRANSCRIPT_PAGE: usize = 150;
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Pane {
     Queue,
@@ -108,6 +115,12 @@ pub struct App {
     /// already taken by another application.
     hotkey: Option<crate::hotkey::Hotkey>,
 
+    /// Markdown render cache. Must outlive a frame — rebuilding it every frame
+    /// would re-do the work it exists to avoid.
+    md_cache: egui_commonmark::CommonMarkCache,
+    /// How many transcript events to draw. Raised by "show earlier".
+    transcript_limit: usize,
+
     /// Where the daemon came from, and how to describe it.
     daemon_mode: crate::daemon::Mode,
     daemon_addr: String,
@@ -169,6 +182,8 @@ impl App {
             show_launch: false,
             health: Health::default(),
             show_health: false,
+            md_cache: egui_commonmark::CommonMarkCache::default(),
+            transcript_limit: TRANSCRIPT_PAGE,
             daemon_mode,
             daemon_addr,
             pane: Pane::Queue,
@@ -1462,6 +1477,34 @@ impl App {
 
     fn transcript_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
         let events = self.events.get(&s.id).cloned().unwrap_or_default();
+
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(&mut self.prefs.markdown, "markdown")
+                .on_hover_text("render agent replies as Markdown rather than raw text")
+                .changed()
+            {
+                self.prefs_dirty = true;
+            }
+            if ui
+                .checkbox(&mut self.prefs.show_thinking, "thinking")
+                .on_hover_text("show the agent's reasoning blocks")
+                .changed()
+            {
+                self.prefs_dirty = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(dim(format!("{} event(s)", events.len())));
+            });
+        });
+        ui.separator();
+
+        // Only the tail is drawn: markdown is parsed per visible event per
+        // frame, so an unbounded transcript would tie the frame rate to how
+        // long the session has been running.
+        let skipped = events.len().saturating_sub(self.transcript_limit);
+        let shown = &events[skipped..];
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .stick_to_bottom(true)
@@ -1469,8 +1512,19 @@ impl App {
                 if events.is_empty() {
                     ui.label(dim("no events yet"));
                 }
-                for ev in &events {
-                    event_row(ui, ev);
+                if skipped > 0 {
+                    ui.vertical_centered(|ui| {
+                        if ui
+                            .button(dim(format!("show {skipped} earlier event(s)")))
+                            .clicked()
+                        {
+                            self.transcript_limit += TRANSCRIPT_PAGE.max(skipped.min(500));
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+                for ev in shown {
+                    event_row(ui, ev, &mut self.md_cache, &self.prefs);
                 }
             });
     }
@@ -2137,7 +2191,50 @@ fn blast_panel(ui: &mut egui::Ui, b: &BlastRadius) {
     });
 }
 
-fn event_row(ui: &mut egui::Ui, ev: &TranscriptEvent) {
+/// Render Markdown, or plain text when the user has turned it off.
+///
+/// **Only conversation text goes through here.** Tool *output* deliberately
+/// does not: a stack trace, a log or a diff is literal, and Markdown would eat
+/// its `*`, turn a leading `#` into a heading and collapse its line breaks. The
+/// rule is that anything a model wrote as prose is Markdown, and anything a
+/// program emitted is monospace.
+fn prose(
+    ui: &mut egui::Ui,
+    text: &str,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    prefs: &crate::prefs::Prefs,
+) {
+    if prefs.markdown {
+        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+    } else {
+        ui.label(RichText::new(text).size(12.5));
+    }
+}
+
+/// A message header with a copy button, since egui labels are not selectable
+/// and a transcript you cannot get text out of is half a transcript.
+fn message_header(ui: &mut egui::Ui, time: &str, who: &str, color: Color32, body: &str) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(dim(time.to_string()));
+        ui.label(badge(who, color));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button(icon::CLIPBOARD)
+                .on_hover_text("copy this message")
+                .clicked()
+            {
+                ui.ctx().copy_text(body.to_string());
+            }
+        });
+    });
+}
+
+fn event_row(
+    ui: &mut egui::Ui,
+    ev: &TranscriptEvent,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    prefs: &crate::prefs::Prefs,
+) {
     let time = ev.ts.format("%H:%M:%S").to_string();
     match &ev.kind {
         EventKind::Init {
@@ -2152,29 +2249,22 @@ fn event_row(ui: &mut egui::Ui, ev: &TranscriptEvent) {
             });
         }
         EventKind::UserPrompt { text } => {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(dim(time));
-                ui.label(badge("you", BLUE));
-            });
-            ui.indent("u", |ui| {
-                ui.label(RichText::new(text).size(12.5));
-            });
+            message_header(ui, &time, "you", BLUE, text);
+            ui.indent(ev.seq, |ui| prose(ui, text, cache, prefs));
+            ui.add_space(4.0);
         }
         EventKind::AssistantText { text } => {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(dim(time));
-                ui.label(badge("agent", GREEN));
-            });
-            ui.indent("a", |ui| {
-                ui.label(RichText::new(text).size(12.5));
-            });
+            message_header(ui, &time, "agent", GREEN, text);
+            ui.indent(ev.seq, |ui| prose(ui, text, cache, prefs));
+            ui.add_space(4.0);
         }
         EventKind::Thinking { text } => {
+            if !prefs.show_thinking {
+                return;
+            }
             egui::CollapsingHeader::new(dim(format!("{time}  thinking")))
                 .id_salt(ev.seq)
-                .show(ui, |ui| {
-                    ui.label(dim(text.clone()));
-                });
+                .show(ui, |ui| prose(ui, text, cache, prefs));
         }
         EventKind::ToolUse { name, summary, .. } => {
             ui.horizontal_wrapped(|ui| {
@@ -2195,6 +2285,8 @@ fn event_row(ui: &mut egui::Ui, ev: &TranscriptEvent) {
             )
             .id_salt(ev.seq)
             .show(ui, |ui| {
+                // Deliberately not Markdown: this is program output, and
+                // rendering it as prose would mangle logs and stack traces.
                 ui.label(mono(preview.clone()));
             });
         }
@@ -2218,9 +2310,7 @@ fn event_row(ui: &mut egui::Ui, ev: &TranscriptEvent) {
                 )));
             });
             if !text.trim().is_empty() {
-                ui.indent("r", |ui| {
-                    ui.label(RichText::new(text).size(12.5));
-                });
+                ui.indent(ev.seq, |ui| prose(ui, text, cache, prefs));
             }
         }
         EventKind::Notice { level, message } => {

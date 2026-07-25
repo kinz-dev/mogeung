@@ -56,6 +56,27 @@ your repo — review state lives only in mogeung's database.
 directory. Editing properly is not mogeung's job and is not planned to be.
 
 
+## The transcript
+
+Agent replies render as Markdown — headings, lists, tables, inline code and
+fenced code blocks. 46% of assistant messages in a real corpus contain at least
+one of those, so as one flat string a transcript is markedly harder to read than
+what the agent actually wrote.
+
+**Tool output is not rendered as Markdown**, deliberately. A stack trace, a log
+or a diff is literal text: Markdown would eat its `*`, turn a leading `#` into a
+heading and collapse its line breaks. The rule is *prose the model wrote is
+Markdown; output a program emitted is monospace.*
+
+- **markdown** turns rendering off if you want the raw text.
+- **thinking** hides reasoning blocks entirely.
+- The clipboard button on any message copies it — egui labels are not
+  selectable, so this is how you get text out.
+
+Only the most recent 150 events are drawn, with a **show earlier** button.
+Markdown is parsed per visible event per frame, so an unbounded transcript would
+tie the frame rate to how long the session has been running.
+
 ## The file list
 
 One line per file: `●` risk-coloured when unread, green `✓` when fully read,

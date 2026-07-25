@@ -12,6 +12,12 @@ Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
 Collision warning when two live sessions edit one file. Loop detection for an
 agent repeating itself. Jump to the session's Terminal tab.
 
+**Changed — transcript.** Agent replies render as Markdown via `egui_commonmark`
+— headings, lists, tables, inline and fenced code (`R-B16`). Tool *output* stays
+monospace on purpose: Markdown mangles logs and stack traces. Toggles for
+markdown and thinking blocks, a copy button per message, and only the last 150
+events are drawn with a "show earlier" control.
+
 **Changed — one executable.** `mogeung` now starts a daemon if none is watching
 and attaches to one if there is. A daemon it started stops with the window; one
 that was already running is left alone. The bind is the test, so two windows

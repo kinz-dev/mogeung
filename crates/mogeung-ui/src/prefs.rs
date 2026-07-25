@@ -84,6 +84,13 @@ pub struct Prefs {
     pub word_diff: bool,
     #[serde(default)]
     pub side_by_side: bool,
+
+    /// Render assistant and human messages as Markdown in the transcript.
+    #[serde(default = "yes")]
+    pub markdown: bool,
+    /// Show thinking blocks at all.
+    #[serde(default = "yes")]
+    pub show_thinking: bool,
 }
 
 fn yes() -> bool {
@@ -105,6 +112,8 @@ impl Default for Prefs {
             syntax: true,
             word_diff: true,
             side_by_side: false,
+            markdown: true,
+            show_thinking: true,
         }
     }
 }
@@ -215,6 +224,7 @@ mod tests {
         let p: Prefs = serde_json::from_str(r#"{ "hidden": ["a", "b"] }"#).unwrap();
         assert_eq!(p.hidden.len(), 2);
         assert!(p.preview_on_select, "missing fields must fall back, not default to false");
+        assert!(p.markdown);
         assert!(p.hide_noise);
         assert_eq!(p.scope, Scope::NeedsYou);
     }
