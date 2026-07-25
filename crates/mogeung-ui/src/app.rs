@@ -1002,6 +1002,11 @@ impl App {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    // Tight rows: the list is for finding a file, not reading
+                    // about one.
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    let width = ui.available_width();
+
                     for f in &change.files {
                         if self.hide_noise && f.risk() == RiskLevel::Noise {
                             continue;
@@ -1011,26 +1016,29 @@ impl App {
                         }
                         let selected = self.selected_file.as_deref() == Some(f.path.as_str());
                         let unread = f.hunks.len() - f.reviewed_hunks();
-                        let resp = ui.selectable_label(
-                            selected,
-                            RichText::new(format!(
-                                "{}{}",
-                                if unread == 0 { "✓ " } else { "" },
-                                f.path
-                            ))
-                            .size(12.5),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(badge(f.risk().label(), risk_color(f.risk())));
-                            ui.label(dim(format!("+{} -{}", f.insertions, f.deletions)));
-                            for fl in f.flags.iter().take(3) {
-                                ui.label(dim(fl.label()));
-                            }
-                        });
+
+                        let resp = ui
+                            .selectable_label(selected, file_row(f, width))
+                            .on_hover_ui(|ui| {
+                                // Everything the compact row dropped.
+                                ui.label(mono(&f.path));
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(badge(f.risk().label(), risk_color(f.risk())));
+                                    for fl in &f.flags {
+                                        ui.label(dim(fl.label()));
+                                    }
+                                });
+                                ui.label(dim(format!(
+                                    "+{} −{} · {} of {} hunk(s) unread",
+                                    f.insertions,
+                                    f.deletions,
+                                    unread,
+                                    f.hunks.len()
+                                )));
+                            });
                         if resp.clicked() {
                             self.selected_file = Some(f.path.clone());
                         }
-                        ui.add_space(2.0);
                     }
                 });
         });
@@ -1271,6 +1279,87 @@ impl App {
                 }
             });
     }
+}
+
+/// Shorten a path to its last directory plus filename.
+///
+/// `crates/mogeungd/src/state.rs` → `…/src/state.rs`. The tail is what
+/// identifies a file; the leading directories are the same for most of the
+/// list and just push the useful part off the edge. Full path is on hover.
+fn short_path(path: &str) -> (String, &str) {
+    let (dir, base) = match path.rfind('/') {
+        Some(i) => (&path[..i], &path[i + 1..]),
+        None => ("", path),
+    };
+    if dir.is_empty() {
+        return (String::new(), base);
+    }
+    let parts: Vec<&str> = dir.split('/').collect();
+    let shown = if parts.len() > 1 {
+        format!("…/{}/", parts[parts.len() - 1])
+    } else {
+        format!("{dir}/")
+    };
+    (shown, base)
+}
+
+/// One line per file: state, path, churn.
+///
+/// This was two lines plus padding, which meant a session touching a dozen
+/// files could not be taken in without scrolling — and the list exists to let
+/// you *find* a file, not to read about one. Risk level and flags moved to the
+/// hover, where they cost nothing.
+fn file_row(f: &mogeung_core::FileChange, max_width: f32) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+
+    let unread = f.hunks.len() - f.reviewed_hunks();
+    let read = unread == 0;
+    let risk = f.risk();
+
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = max_width;
+    // Never wrap: a row that grows to two lines defeats the whole point.
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('…');
+
+    let fmt = |size: f32, color: Color32| TextFormat {
+        font_id: egui::FontId::proportional(size),
+        color,
+        ..Default::default()
+    };
+    let mono_fmt = |size: f32, color: Color32| TextFormat {
+        font_id: egui::FontId::monospace(size),
+        color,
+        ..Default::default()
+    };
+
+    // Marker carries two facts at once: read or not, and how risky.
+    let (marker, marker_color) = if read {
+        ("✓ ", GREEN)
+    } else {
+        ("● ", risk_color(risk))
+    };
+    job.append(marker, 0.0, mono_fmt(11.0, marker_color));
+
+    let (dir, base) = short_path(&f.path);
+    let dim_text = if read { Color32::from_gray(0x60) } else { DIM };
+    let base_text = if read {
+        Color32::from_gray(0x7A)
+    } else {
+        Color32::from_gray(0xDC)
+    };
+    if !dir.is_empty() {
+        job.append(&dir, 0.0, fmt(12.0, dim_text));
+    }
+    job.append(base, 0.0, fmt(12.5, base_text));
+
+    // Churn last, so filenames stay left-aligned and scannable.
+    job.append(
+        &format!("  +{} −{}", f.insertions, f.deletions),
+        0.0,
+        mono_fmt(10.5, dim_text),
+    );
+    job
 }
 
 /// Colour for a syntax token, tuned to stay legible over the add/delete tints.
@@ -2057,5 +2146,50 @@ impl App {
         if !open {
             self.show_health = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_path;
+
+    #[test]
+    fn a_deep_path_keeps_the_part_that_identifies_it() {
+        // The leading directories are the same for most of a repo's files, so
+        // they are what gets dropped.
+        assert_eq!(
+            short_path("crates/mogeungd/src/state.rs"),
+            ("…/src/".to_string(), "state.rs")
+        );
+    }
+
+    #[test]
+    fn short_paths_are_left_alone() {
+        assert_eq!(short_path("README.md"), (String::new(), "README.md"));
+        assert_eq!(short_path("src/main.rs"), ("src/".to_string(), "main.rs"));
+    }
+
+    #[test]
+    fn the_filename_is_never_the_part_that_gets_dropped() {
+        // Truncation happens on the left, always: a row reading "crates/mog…"
+        // tells you nothing, and every file in a directory would look alike.
+        for p in [
+            "a/b/c/d/e/f/g/very_long_file_name.rs",
+            "one/two.rs",
+            "no-directory.txt",
+            "docs/design/cross-session-signals.md",
+        ] {
+            let (_, base) = short_path(p);
+            assert!(p.ends_with(base), "{p}: lost the filename, got {base:?}");
+            assert!(!base.contains('/'), "{p}: base should be one component");
+        }
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_produce_an_empty_name() {
+        // Defensive: git should never hand us one, but an empty row would be
+        // unclickable and invisible.
+        let (_, base) = short_path("some/dir/");
+        assert!(base.is_empty(), "documents current behaviour: {base:?}");
     }
 }

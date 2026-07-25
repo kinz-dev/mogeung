@@ -115,6 +115,14 @@ not, so every pair differed at position 0 and the whole line lit up, which is no
 better than having no word diff at all. Pinned by
 `the_marker_never_widens_the_highlight`.
 
+**The file list** is one line per file: a marker that is green `✓` when fully
+read and a risk-coloured `●` when not, the path elided from the *left*
+(`…/src/state.rs`), and the churn. Risk label and flags live on the hover.
+
+Eliding from the left is the point — leading directories are identical across
+most of a repo, so truncating from the right would leave a column of
+`crates/mog…` telling you nothing. Pinned by a test.
+
 **Side by side (`R-D6`)** zips equal-length runs of removals and additions so a
 modified line sits opposite the line it replaced, which is what makes the word
 diff meaningful. Lopsided runs get blanks. A test asserts no line is ever

@@ -104,7 +104,7 @@ read your transcripts. Do not expose it.
 ./scripts/start.sh          # build + run both; --fresh for a throwaway db
 mprocs                      # both side by side, plus test/docs on a keypress
 
-cargo test --workspace      # 105 tests, all free — nothing spawns an agent
+cargo test --workspace      # 109 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```

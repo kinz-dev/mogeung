@@ -56,6 +56,15 @@ your repo — review state lives only in mogeung's database.
 directory. Editing properly is not mogeung's job and is not planned to be.
 
 
+## The file list
+
+One line per file: `●` risk-coloured when unread, green `✓` when fully read,
+then the path and its churn. Hover any row for the full path, risk level, flags
+and how many hunks remain.
+
+Paths are shortened from the left (`…/src/state.rs`) because the filename is
+what tells files apart.
+
 ## Reading the diff
 
 **syntax** approximates highlighting with a tokenizer — no grammars, no language
