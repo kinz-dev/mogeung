@@ -187,6 +187,22 @@ That is the worst failure available to a keymap, because "this shortcut does
 nothing" is indistinguishable from "this action is broken". Caught by a test
 written to check the validator, which then failed on the validator itself.
 
+### Icons must be proven to render
+
+egui bundles four fonts (Ubuntu-Light, Hack, NotoEmoji, emoji-icon-font). A
+glyph outside their combined coverage draws as an **empty box, silently**:
+layout is unaffected, clicks still work, and nothing but a human looking at the
+window can tell.
+
+Four shipped that way before anyone noticed — `✎` on the flag button, `⌁` on
+blast radius, `⑂` beside the branch name, and `✓`, the read-marker in the file
+list added the same day.
+
+Icons therefore come from `ui::icon` and nowhere else, and a test parses the
+cmap tables of the actual vendored `.ttf` files to assert every one is covered.
+Reading the fonts rather than keeping a hand-written list means the check
+survives an egui upgrade that changes what is bundled.
+
 ### Why not an in-app terminal
 
 Asked and answered: embedding a *running* session is impossible, because its

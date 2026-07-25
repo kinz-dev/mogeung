@@ -362,27 +362,41 @@ impl App {
                     // the one control that must be present at all times — but
                     // it stays grey and small until there is something to say.
                     let urgent = self.health.urgent_alerts();
-                    let health_btn = if urgent > 0 {
-                        ui.button(
-                            RichText::new(format!("⚠ {urgent} unseen"))
-                                .color(AMBER)
-                                .strong(),
-                        )
+                    let (glyph, tint) = if urgent > 0 {
+                        (icon::WARN, Some(AMBER))
                     } else {
-                        ui.button(dim("health"))
+                        (icon::HEALTH, None)
                     };
-                    if health_btn
-                        .on_hover_text(self.health.headline())
-                        .clicked()
+                    if icon_button(
+                        ui,
+                        glyph,
+                        &format!(
+                            "{}  ({})",
+                            self.health.headline(),
+                            self.keymap.describe(crate::keymap::Action::ToggleHealth)
+                        ),
+                        self.show_health,
+                        tint,
+                    )
+                    .clicked()
                     {
-                        self.show_health = true;
-                        self.net.send(ClientMsg::FetchHealth);
+                        self.show_health = !self.show_health;
+                        if self.show_health {
+                            self.net.send(ClientMsg::FetchHealth);
+                        }
+                    }
+                    if urgent > 0 {
+                        ui.label(RichText::new(urgent.to_string()).color(AMBER).size(11.0));
                     }
 
-                    if ui
-                        .button("+ New session")
-                        .on_hover_text("opens a real interactive claude in your terminal")
-                        .clicked()
+                    if icon_button(
+                        ui,
+                        icon::NEW_SESSION,
+                        "New session — opens a real interactive claude in your terminal",
+                        false,
+                        None,
+                    )
+                    .clicked()
                     {
                         if self.launch_dir.is_empty() {
                             // Default to the repo of whatever you are looking at.
@@ -393,23 +407,45 @@ impl App {
                         }
                         self.show_launch = true;
                     }
-                    if ui.button("Rescan").clicked() {
+                    if icon_button(
+                        ui,
+                        icon::RESCAN,
+                        &format!(
+                            "Rescan sessions now  ({})",
+                            self.keymap.describe(crate::keymap::Action::Rescan)
+                        ),
+                        false,
+                        None,
+                    )
+                    .clicked()
+                    {
                         self.net.send(ClientMsg::Rescan);
                     }
-                    if ui
-                        .button(dim("⌨"))
-                        .on_hover_text(format!(
-                            "keyboard settings ({})",
+                    if icon_button(
+                        ui,
+                        icon::KEYBOARD,
+                        &format!(
+                            "Keyboard settings  ({})",
                             self.keymap.describe(crate::keymap::Action::OpenKeymap)
-                        ))
-                        .clicked()
+                        ),
+                        self.show_keymap,
+                        None,
+                    )
+                    .clicked()
                     {
-                        self.show_keymap = true;
+                        self.show_keymap = !self.show_keymap;
                     }
-                    if ui
-                        .selectable_label(self.ambient, "Ambient")
-                        .on_hover_text("big-text board for a second monitor")
-                        .clicked()
+                    if icon_button(
+                        ui,
+                        icon::AMBIENT,
+                        &format!(
+                            "Ambient board for a second monitor  ({})",
+                            self.keymap.describe(crate::keymap::Action::ToggleAmbient)
+                        ),
+                        self.ambient,
+                        None,
+                    )
+                    .clicked()
                     {
                         self.ambient = !self.ambient;
                     }
@@ -961,7 +997,7 @@ impl App {
                                                 ui.horizontal(|ui| {
                                                     if session.alive
                                                         && ui
-                                                            .small_button("→ terminal")
+                                                            .small_button(format!("{} terminal", icon::TERMINAL))
                                                             .on_hover_text(
                                                                 "focus the Terminal tab this session runs in",
                                                             )
@@ -1025,7 +1061,7 @@ fn queue_card(
     ui.horizontal(|ui| {
         ui.label(badge(item.reason.label(), reason_color(item.reason)));
         if s.is_snoozed(now) {
-            ui.label(badge("ZZZ", DIM));
+            ui.label(badge(icon::SNOOZE, DIM));
         }
         if s.alive {
             let (txt, col) = match s.live_status {
@@ -1045,7 +1081,7 @@ fn queue_card(
     ui.horizontal_wrapped(|ui| {
         ui.label(dim(s.repo_name()));
         if let Some(b) = &s.git_branch {
-            ui.label(dim(format!("⑂ {b}")));
+            ui.label(dim(format!("{} {b}", icon::BRANCH)));
         }
         if s.files_changed > 0 {
             ui.label(dim(format!(
@@ -1127,7 +1163,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.label(dim(s.repo_name()));
                 if let Some(b) = &s.git_branch {
-                    ui.label(dim(format!("· ⑂ {b}")));
+                    ui.label(dim(format!("· {} {b}", icon::BRANCH)));
                 }
                 ui.label(dim(format!("· {}", fmt_dur(s.duration_secs(now)))));
                 ui.label(dim(format!("· {} turns", s.turns)));
@@ -1213,7 +1249,7 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !self.flagged.is_empty()
                         && ui
-                            .button(RichText::new(format!("✎ {} flagged", self.flagged.len())).color(AMBER))
+                            .button(RichText::new(format!("{} {} flagged", icon::FLAG, self.flagged.len())).color(AMBER))
                             .on_hover_text("build a follow-up prompt from what you flagged")
                             .clicked()
                     {
@@ -1381,7 +1417,7 @@ impl App {
                 // this?" is about the file's symbols as a whole.
                 ui.horizontal(|ui| {
                     if ui
-                        .small_button("⌁ blast radius")
+                        .small_button(format!("{} blast radius", icon::BLAST))
                         .on_hover_text("what else mentions the symbols this diff changed")
                         .clicked()
                     {
@@ -1430,7 +1466,11 @@ impl App {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     // R-D1. Collect now, write the prompt later.
-                                    let label = if flagged { "✎ flagged" } else { "✎ flag" };
+                                    let label = if flagged {
+                                        format!("{} flagged", icon::FLAG)
+                                    } else {
+                                        format!("{} flag", icon::FLAG)
+                                    };
                                     let btn = if flagged {
                                         ui.small_button(RichText::new(label).color(AMBER))
                                     } else {
@@ -1654,11 +1694,11 @@ fn file_row(f: &mogeung_core::FileChange, max_width: f32) -> egui::text::LayoutJ
 
     // Marker carries two facts at once: read or not, and how risky.
     let (marker, marker_color) = if read {
-        ("✓ ", GREEN)
+        (icon::READ, GREEN)
     } else {
-        ("● ", risk_color(risk))
+        (icon::UNREAD, risk_color(risk))
     };
-    job.append(marker, 0.0, mono_fmt(11.0, marker_color));
+    job.append(&format!("{marker} "), 0.0, mono_fmt(11.0, marker_color));
 
     let (dir, base) = short_path(&f.path);
     let dim_text = if read { Color32::from_gray(0x60) } else { DIM };
@@ -1855,7 +1895,7 @@ fn blast_panel(ui: &mut egui::Ui, b: &BlastRadius) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("⌁ blast radius").strong().size(12.0));
+            ui.label(RichText::new(format!("{} blast radius", icon::BLAST)).strong().size(12.0));
             ui.label(dim(b.headline()));
         });
         ui.label(dim(
@@ -2203,7 +2243,7 @@ impl App {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Copy to clipboard").clicked() {
+                    if ui.button(format!("{} Copy to clipboard", icon::CLIPBOARD)).clicked() {
                         ui.ctx().copy_text(text.clone());
                     }
                     if ui.button("Clear flags").clicked() {
