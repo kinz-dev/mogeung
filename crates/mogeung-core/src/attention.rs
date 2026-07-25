@@ -1,11 +1,11 @@
-use crate::run::{Run, RunId, RunStatus};
+use crate::session::{LiveStatus, Session, SessionId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Why a run is asking for your attention, in priority order.
+/// Why a session is asking for your attention, in priority order.
 ///
-/// The ordering of this enum *is* the product decision (CONCEPT.md A2): with
-/// four agents running you should never have to decide where to look.
+/// The ordering of this enum *is* the product decision: with several agents
+/// running you should never have to decide where to look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionReason {
@@ -13,28 +13,28 @@ pub enum AttentionReason {
     Idle,
     /// Working normally.
     Running,
-    /// Spending money without producing a diff.
-    BurningNoProgress,
-    /// Running, but silent for a long time. Probably stuck or waiting on something.
+    /// Alive and busy, but silent long enough to be suspicious.
     Stalled,
-    /// Finished, diff not yet read by a human.
+    /// Exited, and left changes nobody has read.
     NeedsReview,
-    /// Exited badly.
+    /// Hit an API error or ended badly.
     Failed,
-    /// Tried to use tools it was not allowed to. It needs a decision from you.
-    Blocked,
+    /// Alive and idle: it is waiting for you to type something.
+    ///
+    /// Unlike v0.1's inferred "blocked", this comes straight from Claude Code's
+    /// own live registry, so it is fact rather than heuristic.
+    AwaitingInput,
 }
 
 impl AttentionReason {
-    /// Base score. Higher wins. Gaps are wide enough that within-tier tiebreakers
-    /// (age, cost) can never promote a run past a more urgent tier.
+    /// Higher wins. Gaps are wide enough that within-tier tiebreakers can never
+    /// promote a session past a more urgent tier.
     pub fn base_score(&self) -> i64 {
         match self {
-            AttentionReason::Blocked => 1000,
+            AttentionReason::AwaitingInput => 1000,
             AttentionReason::Failed => 900,
             AttentionReason::NeedsReview => 800,
             AttentionReason::Stalled => 700,
-            AttentionReason::BurningNoProgress => 600,
             AttentionReason::Running => 100,
             AttentionReason::Idle => 0,
         }
@@ -42,21 +42,19 @@ impl AttentionReason {
 
     pub fn label(&self) -> &'static str {
         match self {
-            AttentionReason::Blocked => "BLOCKED",
+            AttentionReason::AwaitingInput => "WAITING",
             AttentionReason::Failed => "FAILED",
             AttentionReason::NeedsReview => "REVIEW",
             AttentionReason::Stalled => "STALLED",
-            AttentionReason::BurningNoProgress => "BURNING",
             AttentionReason::Running => "running",
             AttentionReason::Idle => "idle",
         }
     }
 
-    /// Does this reason represent work the human must personally do?
     pub fn needs_human(&self) -> bool {
         matches!(
             self,
-            AttentionReason::Blocked
+            AttentionReason::AwaitingInput
                 | AttentionReason::Failed
                 | AttentionReason::NeedsReview
                 | AttentionReason::Stalled
@@ -66,125 +64,92 @@ impl AttentionReason {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttentionItem {
-    pub run_id: RunId,
+    pub session_id: SessionId,
     pub reason: AttentionReason,
     pub score: i64,
     /// One line explaining the ranking, so the heuristic is never a black box.
     pub detail: String,
 }
 
-/// Tunables for the ranking heuristics.
-///
-/// These are hand-written on purpose for v0.1. The right long-term answer is
-/// probably to learn them from which runs you actually open, but that needs
-/// data we do not have yet — and hand-written rules are debuggable.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AttentionConfig {
-    /// Silence (in seconds) after which a running run is considered stalled.
+    /// Silence (seconds) after which a busy session is considered stalled.
     pub stall_secs: i64,
-    /// Spend (USD) past which a run with no diff is considered to be burning.
-    pub burn_usd: f64,
-    /// Minimum runtime before the burn rule can fire, so short runs are exempt.
-    pub burn_min_secs: i64,
+    /// Sessions that exited without touching a file are not worth queueing.
+    pub review_needs_changes: bool,
 }
 
 impl Default for AttentionConfig {
     fn default() -> Self {
         Self {
-            stall_secs: 120,
-            burn_usd: 1.00,
-            burn_min_secs: 90,
+            stall_secs: 300,
+            review_needs_changes: true,
         }
     }
 }
 
-/// Classify a single run.
-pub fn classify(run: &Run, now: DateTime<Utc>, cfg: &AttentionConfig) -> AttentionItem {
-    let silent = run.seconds_since_activity(now);
-    let age = run.duration_secs(now);
+pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> AttentionItem {
+    let silent = s.seconds_since_activity(now);
 
-    let (reason, detail) = match run.status {
-        RunStatus::Failed => (
-            AttentionReason::Failed,
-            run.error
-                .clone()
-                .unwrap_or_else(|| "run failed".to_string()),
-        ),
-
-        RunStatus::AwaitingReview => {
-            // A completed run that hit permission denials is a decision for you,
-            // not just a diff to read — rank it above ordinary review.
-            if run.permission_denials > 0 {
+    let (reason, detail) = if let Some(err) = &s.error {
+        (AttentionReason::Failed, err.clone())
+    } else if s.alive {
+        match s.live_status {
+            Some(LiveStatus::Idle) => {
+                let waited = s.waiting_secs(now).unwrap_or(0);
                 (
-                    AttentionReason::Blocked,
-                    format!(
-                        "{} tool call(s) denied — needs a permission decision",
-                        run.permission_denials
-                    ),
-                )
-            } else if run.files_changed == 0 {
-                (
-                    AttentionReason::NeedsReview,
-                    "finished with no file changes — check whether that is right".to_string(),
-                )
-            } else {
-                (
-                    AttentionReason::NeedsReview,
-                    format!(
-                        "{} file(s), +{} -{} unread",
-                        run.files_changed, run.insertions, run.deletions
-                    ),
+                    AttentionReason::AwaitingInput,
+                    format!("waiting for you — {}", fmt_dur(waited)),
                 )
             }
+            _ if silent >= cfg.stall_secs => (
+                AttentionReason::Stalled,
+                format!("busy but silent for {}", fmt_dur(silent)),
+            ),
+            _ => (
+                AttentionReason::Running,
+                s.last_activity
+                    .clone()
+                    .unwrap_or_else(|| "working".to_string()),
+            ),
         }
-
-        RunStatus::Starting | RunStatus::Running => {
-            if silent >= cfg.stall_secs {
-                (
-                    AttentionReason::Stalled,
-                    format!("silent for {}", fmt_dur(silent)),
-                )
-            } else if run.cost_usd >= cfg.burn_usd && !run.has_diff() && age >= cfg.burn_min_secs {
-                (
-                    AttentionReason::BurningNoProgress,
-                    format!("${:.2} spent, still no diff", run.cost_usd),
-                )
-            } else {
-                (
-                    AttentionReason::Running,
-                    run.last_activity
-                        .clone()
-                        .unwrap_or_else(|| "working".to_string()),
-                )
-            }
-        }
-
-        RunStatus::Reviewed => (AttentionReason::Idle, "reviewed".to_string()),
-        RunStatus::Cancelled => (AttentionReason::Idle, "cancelled".to_string()),
-    };
-
-    // Within a tier, older waits first, then more expensive. Capped so it can
-    // never leak into the tier above.
-    let age_bonus = (age / 30).clamp(0, 60);
-    let cost_bonus = (run.cost_usd * 4.0) as i64;
-    let tiebreak = if reason.needs_human() {
-        (age_bonus + cost_bonus).clamp(0, 99)
+    } else if s.reviewed {
+        (AttentionReason::Idle, "reviewed".to_string())
+    } else if s.files_changed == 0 && cfg.review_needs_changes {
+        (AttentionReason::Idle, "ended with no changes".to_string())
     } else {
-        age_bonus.clamp(0, 99)
+        (
+            AttentionReason::NeedsReview,
+            format!(
+                "{} file(s), +{} -{} unread",
+                s.files_changed, s.insertions, s.deletions
+            ),
+        )
     };
+
+    // Within a tier, the longest wait goes first. Capped so it can never leak
+    // into the tier above.
+    let waited = match reason {
+        AttentionReason::AwaitingInput => s.waiting_secs(now).unwrap_or(0),
+        _ => s.duration_secs(now),
+    };
+    let tiebreak = (waited / 30).clamp(0, 99);
 
     AttentionItem {
-        run_id: run.id,
+        session_id: s.id.clone(),
         reason,
         score: reason.base_score() + tiebreak,
         detail,
     }
 }
 
-/// Rank every run into the single queue the UI shows.
-pub fn rank(runs: &[Run], now: DateTime<Utc>, cfg: &AttentionConfig) -> Vec<AttentionItem> {
-    let mut items: Vec<AttentionItem> = runs.iter().map(|r| classify(r, now, cfg)).collect();
-    items.sort_by(|a, b| b.score.cmp(&a.score).then(a.run_id.cmp(&b.run_id)));
+pub fn rank(sessions: &[Session], now: DateTime<Utc>, cfg: &AttentionConfig) -> Vec<AttentionItem> {
+    let mut items: Vec<AttentionItem> = sessions.iter().map(|s| classify(s, now, cfg)).collect();
+    items.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then(a.session_id.cmp(&b.session_id))
+    });
     items
 }
 
@@ -201,100 +166,110 @@ pub fn fmt_dur(secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::run::{AgentKind, PermissionMode, RunId};
 
-    fn run_at(status: RunStatus, secs_ago: i64, now: DateTime<Utc>) -> Run {
-        let id = RunId::new();
-        Run {
-            id,
-            root: id,
-            intent: "t".into(),
-            agent: AgentKind::ClaudeCode,
-            model: None,
-            permission_mode: PermissionMode::AcceptEdits,
-            repo_path: "/r".into(),
+    fn sess(alive: bool, status: Option<LiveStatus>, secs_ago: i64, now: DateTime<Utc>) -> Session {
+        Session {
+            id: format!("s{secs_ago}"),
+            title: None,
+            name: None,
+            last_prompt: None,
             cwd: "/r".into(),
-            worktree: false,
-            branch: None,
-            base_sha: None,
-            session_id: None,
-            status,
-            created_at: now - chrono::Duration::seconds(secs_ago),
-            ended_at: None,
+            repo_root: None,
+            git_branch: None,
+            pid: alive.then_some(1),
+            alive,
+            live_status: status,
+            version: None,
+            started_at: now - chrono::Duration::seconds(secs_ago),
             last_event_at: now - chrono::Duration::seconds(secs_ago),
-            last_activity: None,
-            cost_usd: 0.0,
-            num_turns: 0,
+            status_since: Some(now - chrono::Duration::seconds(secs_ago)),
+            turns: 0,
+            tool_calls: 0,
             tokens_in: 0,
             tokens_out: 0,
+            last_activity: None,
+            touched_files: vec![],
+            base_sha: None,
             files_changed: 0,
             insertions: 0,
             deletions: 0,
-            permission_denials: 0,
             error: None,
-            parent: None,
+            transcript_path: "/t".into(),
+            reviewed: false,
         }
     }
 
     #[test]
-    fn a_root_run_is_its_own_root() {
+    fn an_idle_live_session_is_waiting_for_you() {
         let now = Utc::now();
-        let r = run_at(RunStatus::Running, 1, now);
-        assert_eq!(r.id, r.root);
-    }
-
-    #[test]
-    fn urgent_tiers_outrank_everything_below() {
-        let now = Utc::now();
-        let cfg = AttentionConfig::default();
-
-        // A brand-new failure must still outrank a very old review.
-        let failed = run_at(RunStatus::Failed, 1, now);
-        let mut old_review = run_at(RunStatus::AwaitingReview, 100_000, now);
-        old_review.cost_usd = 500.0;
-        old_review.files_changed = 3;
-
-        let ranked = rank(&[old_review.clone(), failed.clone()], now, &cfg);
-        assert_eq!(ranked[0].run_id, failed.id);
-        assert_eq!(ranked[0].reason, AttentionReason::Failed);
-    }
-
-    #[test]
-    fn silence_promotes_a_running_run_to_stalled() {
-        let now = Utc::now();
-        let cfg = AttentionConfig::default();
-        let quiet = run_at(RunStatus::Running, cfg.stall_secs + 10, now);
-        let item = classify(&quiet, now, &cfg);
-        assert_eq!(item.reason, AttentionReason::Stalled);
-    }
-
-    #[test]
-    fn denied_tools_rank_as_blocked_not_review() {
-        let now = Utc::now();
-        let cfg = AttentionConfig::default();
-        let mut denied = run_at(RunStatus::AwaitingReview, 5, now);
-        denied.permission_denials = 2;
-        assert_eq!(classify(&denied, now, &cfg).reason, AttentionReason::Blocked);
-    }
-
-    #[test]
-    fn spend_without_a_diff_is_flagged() {
-        let now = Utc::now();
-        let cfg = AttentionConfig::default();
-        let mut burning = run_at(RunStatus::Running, cfg.burn_min_secs + 5, now);
-        burning.cost_usd = cfg.burn_usd + 0.5;
-        burning.last_event_at = now; // not stalled, just expensive
+        let s = sess(true, Some(LiveStatus::Idle), 30, now);
         assert_eq!(
-            classify(&burning, now, &cfg).reason,
-            AttentionReason::BurningNoProgress
+            classify(&s, now, &AttentionConfig::default()).reason,
+            AttentionReason::AwaitingInput
         );
     }
 
     #[test]
-    fn reviewed_runs_leave_the_queue() {
+    fn waiting_outranks_everything_else() {
         let now = Utc::now();
         let cfg = AttentionConfig::default();
-        let done = run_at(RunStatus::Reviewed, 10, now);
-        assert!(!classify(&done, now, &cfg).reason.needs_human());
+        let waiting = sess(true, Some(LiveStatus::Idle), 5, now);
+
+        let mut ancient_review = sess(false, None, 100_000, now);
+        ancient_review.files_changed = 40;
+        let mut failed = sess(false, None, 50_000, now);
+        failed.error = Some("api error".into());
+
+        let ranked = rank(&[ancient_review, failed, waiting.clone()], now, &cfg);
+        assert_eq!(ranked[0].session_id, waiting.id);
+        assert_eq!(ranked[0].reason, AttentionReason::AwaitingInput);
+    }
+
+    #[test]
+    fn a_busy_but_silent_session_is_stalled() {
+        let now = Utc::now();
+        let cfg = AttentionConfig::default();
+        let s = sess(true, Some(LiveStatus::Busy), cfg.stall_secs + 60, now);
+        assert_eq!(classify(&s, now, &cfg).reason, AttentionReason::Stalled);
+    }
+
+    #[test]
+    fn a_busy_recent_session_is_merely_running() {
+        let now = Utc::now();
+        let s = sess(true, Some(LiveStatus::Busy), 5, now);
+        let item = classify(&s, now, &AttentionConfig::default());
+        assert_eq!(item.reason, AttentionReason::Running);
+        assert!(!item.reason.needs_human());
+    }
+
+    #[test]
+    fn an_exited_session_with_changes_wants_review() {
+        let now = Utc::now();
+        let mut s = sess(false, None, 60, now);
+        s.files_changed = 3;
+        assert_eq!(
+            classify(&s, now, &AttentionConfig::default()).reason,
+            AttentionReason::NeedsReview
+        );
+    }
+
+    #[test]
+    fn an_exited_session_that_changed_nothing_stays_quiet() {
+        let now = Utc::now();
+        let s = sess(false, None, 60, now);
+        assert_eq!(
+            classify(&s, now, &AttentionConfig::default()).reason,
+            AttentionReason::Idle
+        );
+    }
+
+    #[test]
+    fn longer_waits_sort_first_within_a_tier() {
+        let now = Utc::now();
+        let cfg = AttentionConfig::default();
+        let brief = sess(true, Some(LiveStatus::Idle), 30, now);
+        let long = sess(true, Some(LiveStatus::Idle), 3600, now);
+        let ranked = rank(&[brief.clone(), long.clone()], now, &cfg);
+        assert_eq!(ranked[0].session_id, long.id);
     }
 }

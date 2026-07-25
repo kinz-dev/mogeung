@@ -3,7 +3,8 @@
 //! One WebSocket carries the whole live state: commands in, events out.
 //! Commands are fire-and-forget — their effect comes back on the same stream —
 //! which keeps clients a pure projection of daemon state. Bulk reads
-//! (transcripts, diffs) are plain GETs so a client can fetch them lazily.
+//! (transcripts, diffs) are plain GETs so a client can fetch them lazily, and
+//! so the daemon is curl-able without a UI.
 
 use crate::state::AppState;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -12,22 +13,21 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
-use mogeung_core::{ClientMsg, NewRunSpec, Run, RunId, ServerMsg};
+use mogeung_core::{ClientMsg, ServerMsg, Session};
 use serde::Deserialize;
-use std::str::FromStr;
 use std::sync::Arc;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/health", get(health))
-        .route("/api/runs", get(list_runs).post(start_run))
-        .route("/api/runs/{id}", get(get_run))
-        .route("/api/runs/{id}/events", get(get_events))
-        .route("/api/runs/{id}/change", get(get_change))
-        .route("/api/runs/{id}/follow_up", post(follow_up))
-        .route("/api/runs/{id}/review_all", post(review_all))
-        .route("/api/runs/{id}/review", post(review_hunk))
-        .route("/api/repos", get(list_repos))
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/{id}", get(get_session))
+        .route("/api/sessions/{id}/events", get(get_events))
+        .route("/api/sessions/{id}/change", get(get_change))
+        .route("/api/sessions/{id}/review_all", post(review_all))
+        .route("/api/sessions/{id}/review", post(review_hunk))
+        .route("/api/queue", get(get_queue))
+        .route("/api/rescan", post(rescan))
         .route("/ws", get(ws_upgrade))
         .with_state(state)
 }
@@ -36,58 +36,61 @@ async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
 }
 
-/// The REST surface below duplicates a few WebSocket commands on purpose: it
-/// makes the daemon scriptable from a shell, and debuggable with curl, without
-/// standing up a client.
-async fn list_runs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut runs: Vec<Run> = state.runs.read().await.values().cloned().collect();
-    runs.sort_by_key(|r| r.created_at);
-    Json(serde_json::to_value(runs).unwrap_or_default())
+async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut sessions: Vec<Session> = state.sessions.read().await.values().cloned().collect();
+    sessions.sort_by_key(|s| s.last_event_at);
+    sessions.reverse();
+    Json(serde_json::to_value(sessions).unwrap_or_default())
 }
 
-async fn get_run(
+async fn get_session(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    let Ok(run_id) = RunId::from_str(&id) else {
-        return Json(serde_json::json!({ "error": "bad run id" }));
-    };
-    match state.get_run(run_id).await {
-        Some(r) => Json(serde_json::to_value(r).unwrap_or_default()),
-        None => Json(serde_json::json!({ "error": "no such run" })),
+    match state.get(&id).await {
+        Some(s) => Json(serde_json::to_value(s).unwrap_or_default()),
+        None => Json(serde_json::json!({ "error": "no such session" })),
     }
 }
 
-async fn list_repos(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(serde_json::json!({ "repos": state.repos.read().await.clone() }))
+async fn get_queue(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let sessions: Vec<Session> = state.sessions.read().await.values().cloned().collect();
+    let queue = mogeung_core::attention::rank(&sessions, chrono::Utc::now(), &state.attention);
+    Json(serde_json::to_value(queue).unwrap_or_default())
 }
 
-async fn start_run(
-    State(state): State<Arc<AppState>>,
-    Json(spec): Json<NewRunSpec>,
-) -> impl IntoResponse {
-    match state.start_run(spec).await {
-        Ok(id) => Json(serde_json::json!({ "run_id": id.to_string() })),
-        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
-    }
+async fn rescan(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.scan().await;
+    Json(serde_json::json!({ "ok": true }))
 }
 
 #[derive(Deserialize)]
-struct PromptBody {
-    prompt: String,
+struct SinceQuery {
+    #[serde(default)]
+    since: u64,
 }
 
-async fn follow_up(
+async fn get_events(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
-    Json(body): Json<PromptBody>,
+    Query(q): Query<SinceQuery>,
 ) -> impl IntoResponse {
-    let Ok(run_id) = RunId::from_str(&id) else {
-        return Json(serde_json::json!({ "error": "bad run id" }));
-    };
-    match state.follow_up(run_id, body.prompt).await {
-        Ok(new_id) => Json(serde_json::json!({ "run_id": new_id.to_string() })),
+    match state.store.load_events(&id, q.since) {
+        Ok(evs) => Json(serde_json::to_value(evs).unwrap_or_default()),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_change(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    if let Some(c) = state.changes.read().await.get(&id).cloned() {
+        return Json(serde_json::to_value(c).unwrap_or_default());
+    }
+    match state.recompute_change(&id).await {
+        Some(c) => Json(serde_json::to_value(c).unwrap_or_default()),
+        None => Json(serde_json::json!({ "error": "no such session, or it has no working directory" })),
     }
 }
 
@@ -95,10 +98,7 @@ async fn review_all(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    let Ok(run_id) = RunId::from_str(&id) else {
-        return Json(serde_json::json!({ "error": "bad run id" }));
-    };
-    state.review_all(run_id).await;
+    state.review_all(&id).await;
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -118,56 +118,13 @@ async fn review_hunk(
     AxPath(id): AxPath<String>,
     Json(body): Json<ReviewBody>,
 ) -> impl IntoResponse {
-    let Ok(run_id) = RunId::from_str(&id) else {
-        return Json(serde_json::json!({ "error": "bad run id" }));
-    };
     state
-        .set_hunk_reviewed(run_id, &body.anchor, body.reviewed)
+        .set_hunk_reviewed(&id, &body.anchor, body.reviewed)
         .await;
     Json(serde_json::json!({ "ok": true }))
 }
 
-#[derive(Deserialize)]
-struct SinceQuery {
-    #[serde(default)]
-    since: u64,
-}
-
-async fn get_events(
-    State(state): State<Arc<AppState>>,
-    AxPath(id): AxPath<String>,
-    Query(q): Query<SinceQuery>,
-) -> impl IntoResponse {
-    let Ok(run_id) = RunId::from_str(&id) else {
-        return Json(serde_json::json!({ "error": "bad run id" }));
-    };
-    match state.store.load_events(run_id, q.since) {
-        Ok(evs) => Json(serde_json::to_value(evs).unwrap_or_default()),
-        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
-    }
-}
-
-async fn get_change(
-    State(state): State<Arc<AppState>>,
-    AxPath(id): AxPath<String>,
-) -> impl IntoResponse {
-    let Ok(run_id) = RunId::from_str(&id) else {
-        return Json(serde_json::json!({ "error": "bad run id" }));
-    };
-    // Serve the cached diff if we have one; otherwise compute on demand.
-    if let Some(c) = state.changes.read().await.get(&run_id).cloned() {
-        return Json(serde_json::to_value(c).unwrap_or_default());
-    }
-    match state.recompute_change(run_id).await {
-        Some(c) => Json(serde_json::to_value(c).unwrap_or_default()),
-        None => Json(serde_json::json!({ "error": "no such run" })),
-    }
-}
-
-async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| ws_conn(socket, state))
 }
 
@@ -194,8 +151,8 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
                         break;
                     }
                 }
-                // A slow client that fell behind gets dropped rather than
-                // wedging the broadcast channel for everyone else.
+                // A slow client that fell behind gets told to reconnect rather
+                // than wedging the broadcast channel for everyone else.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     let warn = ServerMsg::Error {
                         message: format!("client fell behind, dropped {n} messages — reconnect"),
@@ -233,48 +190,32 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             let snap = state.snapshot().await;
             state.broadcast(snap);
         }
-        ClientMsg::StartRun(spec) => {
-            if let Err(e) = state.start_run(spec).await {
-                err(e);
-            }
-        }
-        ClientMsg::FollowUp { run_id, prompt } => {
-            if let Err(e) = state.follow_up(run_id, prompt).await {
-                err(e);
-            }
-        }
-        ClientMsg::CancelRun { run_id } => state.cancel_run(run_id).await,
-        ClientMsg::DeleteRun {
-            run_id,
-            remove_worktree,
-        } => {
-            if let Err(e) = state.delete_run(run_id, remove_worktree).await {
-                err(e);
-            }
-        }
         ClientMsg::SetHunkReviewed {
-            run_id,
+            session_id,
             anchor,
             reviewed,
-        } => state.set_hunk_reviewed(run_id, &anchor, reviewed).await,
-        ClientMsg::ReviewAll { run_id } => state.review_all(run_id).await,
-        ClientMsg::RefreshChange { run_id } => {
-            state.recompute_change(run_id).await;
+        } => state.set_hunk_reviewed(&session_id, &anchor, reviewed).await,
+        ClientMsg::ReviewAll { session_id } => state.review_all(&session_id).await,
+        ClientMsg::RefreshChange { session_id } => {
+            state.recompute_change(&session_id).await;
         }
-        ClientMsg::FetchEvents { run_id, since } => match state.store.load_events(run_id, since) {
-            Ok(events) if !events.is_empty() => state.broadcast(ServerMsg::Events { events }),
-            Ok(_) => {}
-            Err(e) => err(anyhow::anyhow!(e)),
-        },
-        ClientMsg::AddRepo { path } => {
-            if let Err(e) = state.add_repo(&path).await {
+        ClientMsg::FetchEvents { session_id, since } => {
+            match state.store.load_events(&session_id, since) {
+                Ok(events) if !events.is_empty() => state.broadcast(ServerMsg::Events { events }),
+                Ok(_) => {}
+                Err(e) => err(anyhow::anyhow!(e)),
+            }
+        }
+        ClientMsg::ForgetSession { session_id } => {
+            if let Err(e) = state.forget(&session_id).await {
                 err(e);
             }
         }
-        ClientMsg::RemoveRepo { path } => {
-            if let Err(e) = state.remove_repo(&path).await {
+        ClientMsg::LaunchTerminal { dir, worktree } => {
+            if let Err(e) = state.launch_terminal(&dir, worktree).await {
                 err(e);
             }
         }
+        ClientMsg::Rescan => state.scan().await,
     }
 }

@@ -1,52 +1,45 @@
 use crate::attention::AttentionItem;
 use crate::change::Change;
-use crate::run::{PermissionMode, Run, RunId};
+use crate::session::{Session, SessionId};
 use crate::transcript::TranscriptEvent;
 use serde::{Deserialize, Serialize};
 
 /// What a client asks the daemon to do.
 ///
-/// Commands are fire-and-forget: the resulting state arrives on the event
-/// stream like any other change. That keeps the client a pure projection of
-/// daemon state and avoids a request/response correlation layer in v0.1.
+/// Note what is absent: nothing here starts, steers or stops an agent. mogeung
+/// observes sessions you run yourself. The only thing it launches is a real
+/// interactive `claude` in your own terminal, which is the opposite of wrapping
+/// it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum ClientMsg {
     /// Send the full current state. Sent by the client on (re)connect.
     Subscribe,
-    StartRun(NewRunSpec),
-    /// Continue an existing run's agent session with more instructions.
-    /// Creates a new child Run that resumes the parent's session.
-    FollowUp { run_id: RunId, prompt: String },
-    CancelRun { run_id: RunId },
-    /// Forget a run. Optionally remove its git worktree too.
-    DeleteRun { run_id: RunId, remove_worktree: bool },
     /// Mark or unmark one hunk as read.
     SetHunkReviewed {
-        run_id: RunId,
+        session_id: SessionId,
         anchor: String,
         reviewed: bool,
     },
     /// Mark every hunk currently in the diff as read.
-    ReviewAll { run_id: RunId },
-    /// Recompute the diff for a run from disk.
-    RefreshChange { run_id: RunId },
-    /// Replay stored transcript events. Lets a client that just connected fill
-    /// in history without a second transport.
-    FetchEvents { run_id: RunId, since: u64 },
-    /// Register a repository with the daemon.
-    AddRepo { path: String },
-    RemoveRepo { path: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewRunSpec {
-    pub repo_path: String,
-    pub intent: String,
-    pub model: Option<String>,
-    pub permission_mode: PermissionMode,
-    /// Create a dedicated git worktree instead of running in the main checkout.
-    pub worktree: bool,
+    ReviewAll { session_id: SessionId },
+    /// Recompute the diff for a session from disk.
+    RefreshChange { session_id: SessionId },
+    /// Replay stored transcript events so a fresh client can fill in history.
+    FetchEvents { session_id: SessionId, since: u64 },
+    /// Stop tracking a session and forget its review state.
+    ForgetSession { session_id: SessionId },
+    /// Open a terminal running a real interactive `claude` in `dir`.
+    ///
+    /// This is how mogeung helps you reach three or four parallel sessions
+    /// without owning the conversation loop.
+    LaunchTerminal {
+        dir: String,
+        /// Create a fresh git worktree first, so the new session is isolated.
+        worktree: bool,
+    },
+    /// Rescan for sessions immediately instead of waiting for the next poll.
+    Rescan,
 }
 
 /// What the daemon tells clients.
@@ -55,21 +48,18 @@ pub struct NewRunSpec {
 pub enum ServerMsg {
     /// Full state, sent on connect.
     Snapshot {
-        runs: Vec<Run>,
-        repos: Vec<String>,
+        sessions: Vec<Session>,
         queue: Vec<AttentionItem>,
     },
-    /// A run was created or changed.
-    RunUpdated { run: Run },
-    RunDeleted { run_id: RunId },
-    /// New transcript events for a run.
+    SessionUpdated { session: Box<Session> },
+    SessionRemoved { session_id: SessionId },
     Events { events: Vec<TranscriptEvent> },
-    /// The attention queue was recomputed. Sent whenever ranking could change,
-    /// including on a timer so that stall detection fires without new events.
+    /// Recomputed whenever ranking could change, including on a timer so that
+    /// "waiting for you" ages correctly with no new events.
     Queue { queue: Vec<AttentionItem> },
-    /// A recomputed diff, in response to RefreshChange or a run finishing.
-    ChangeUpdated { run_id: RunId, change: Change },
-    RepoList { repos: Vec<String> },
-    /// Something went wrong handling a command.
+    ChangeUpdated {
+        session_id: SessionId,
+        change: Change,
+    },
     Error { message: String },
 }

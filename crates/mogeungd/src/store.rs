@@ -5,7 +5,7 @@
 //! matters far less than being able to change `Run` without a migration.
 
 use anyhow::Result;
-use mogeung_core::{Run, RunId, TranscriptEvent};
+use mogeung_core::{Session, TranscriptEvent};
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
 use std::path::Path;
@@ -26,7 +26,7 @@ impl Store {
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
 
-            CREATE TABLE IF NOT EXISTS runs (
+            CREATE TABLE IF NOT EXISTS sessions (
                 id         TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
                 json       TEXT NOT NULL
@@ -45,9 +45,7 @@ impl Store {
                 PRIMARY KEY (run_id, anchor)
             );
 
-            CREATE TABLE IF NOT EXISTS repos (
-                path TEXT PRIMARY KEY
-            );
+            
             "#,
         )?;
         Ok(Store {
@@ -55,39 +53,38 @@ impl Store {
         })
     }
 
-    pub fn save_run(&self, run: &Run) -> Result<()> {
+    pub fn save_session(&self, run: &Session) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute(
-            "INSERT INTO runs (id, created_at, json) VALUES (?1, ?2, ?3)
+            "INSERT INTO sessions (id, created_at, json) VALUES (?1, ?2, ?3)
              ON CONFLICT(id) DO UPDATE SET json = excluded.json",
             params![
-                run.id.to_string(),
-                run.created_at.to_rfc3339(),
+                run.id.clone(),
+                run.started_at.to_rfc3339(),
                 serde_json::to_string(run)?
             ],
         )?;
         Ok(())
     }
 
-    pub fn load_runs(&self) -> Result<Vec<Run>> {
+    pub fn load_sessions(&self) -> Result<Vec<Session>> {
         let c = self.conn.lock().unwrap();
-        let mut stmt = c.prepare("SELECT json FROM runs ORDER BY created_at ASC")?;
+        let mut stmt = c.prepare("SELECT json FROM sessions ORDER BY created_at ASC")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
             // Tolerate rows written by an older schema rather than refusing to start.
-            match serde_json::from_str::<Run>(&r?) {
+            match serde_json::from_str::<Session>(&r?) {
                 Ok(run) => out.push(run),
-                Err(e) => tracing::warn!("skipping unreadable run row: {e}"),
+                Err(e) => tracing::warn!("skipping unreadable session row: {e}"),
             }
         }
         Ok(out)
     }
 
-    pub fn delete_run(&self, id: RunId) -> Result<()> {
+    pub fn delete_session(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
-        let id = id.to_string();
-        c.execute("DELETE FROM runs WHERE id = ?1", params![id])?;
+        c.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         c.execute("DELETE FROM events WHERE run_id = ?1", params![id])?;
         c.execute("DELETE FROM reviewed WHERE run_id = ?1", params![id])?;
         Ok(())
@@ -97,16 +94,16 @@ impl Store {
         let c = self.conn.lock().unwrap();
         c.execute(
             "INSERT OR REPLACE INTO events (run_id, seq, json) VALUES (?1, ?2, ?3)",
-            params![ev.run_id.to_string(), ev.seq, serde_json::to_string(ev)?],
+            params![ev.session_id.clone(), ev.seq, serde_json::to_string(ev)?],
         )?;
         Ok(())
     }
 
-    pub fn load_events(&self, run_id: RunId, since: u64) -> Result<Vec<TranscriptEvent>> {
+    pub fn load_events(&self, run_id: &str, since: u64) -> Result<Vec<TranscriptEvent>> {
         let c = self.conn.lock().unwrap();
         let mut stmt =
             c.prepare("SELECT json FROM events WHERE run_id = ?1 AND seq > ?2 ORDER BY seq ASC")?;
-        let rows = stmt.query_map(params![run_id.to_string(), since], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![run_id, since], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for r in rows {
             if let Ok(ev) = serde_json::from_str(&r?) {
@@ -116,36 +113,36 @@ impl Store {
         Ok(out)
     }
 
-    pub fn max_seq(&self, run_id: RunId) -> Result<u64> {
+    pub fn max_seq(&self, run_id: &str) -> Result<u64> {
         let c = self.conn.lock().unwrap();
         let v: Option<i64> = c.query_row(
             "SELECT MAX(seq) FROM events WHERE run_id = ?1",
-            params![run_id.to_string()],
+            params![run_id],
             |r| r.get(0),
         )?;
         Ok(v.unwrap_or(0) as u64)
     }
 
-    pub fn set_reviewed(&self, run_id: RunId, anchor: &str, reviewed: bool) -> Result<()> {
+    pub fn set_reviewed(&self, run_id: &str, anchor: &str, reviewed: bool) -> Result<()> {
         let c = self.conn.lock().unwrap();
         if reviewed {
             c.execute(
                 "INSERT OR IGNORE INTO reviewed (run_id, anchor) VALUES (?1, ?2)",
-                params![run_id.to_string(), anchor],
+                params![run_id, anchor],
             )?;
         } else {
             c.execute(
                 "DELETE FROM reviewed WHERE run_id = ?1 AND anchor = ?2",
-                params![run_id.to_string(), anchor],
+                params![run_id, anchor],
             )?;
         }
         Ok(())
     }
 
-    pub fn reviewed_anchors(&self, run_id: RunId) -> Result<HashSet<String>> {
+    pub fn reviewed_anchors(&self, run_id: &str) -> Result<HashSet<String>> {
         let c = self.conn.lock().unwrap();
         let mut stmt = c.prepare("SELECT anchor FROM reviewed WHERE run_id = ?1")?;
-        let rows = stmt.query_map(params![run_id.to_string()], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![run_id], |r| r.get::<_, String>(0))?;
         let mut out = HashSet::new();
         for r in rows {
             out.insert(r?);
@@ -153,26 +150,6 @@ impl Store {
         Ok(out)
     }
 
-    pub fn add_repo(&self, path: &str) -> Result<()> {
-        let c = self.conn.lock().unwrap();
-        c.execute("INSERT OR IGNORE INTO repos (path) VALUES (?1)", params![path])?;
-        Ok(())
-    }
 
-    pub fn remove_repo(&self, path: &str) -> Result<()> {
-        let c = self.conn.lock().unwrap();
-        c.execute("DELETE FROM repos WHERE path = ?1", params![path])?;
-        Ok(())
-    }
 
-    pub fn repos(&self) -> Result<Vec<String>> {
-        let c = self.conn.lock().unwrap();
-        let mut stmt = c.prepare("SELECT path FROM repos ORDER BY path")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
-    }
 }

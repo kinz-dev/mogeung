@@ -6,3 +6,4 @@ pub mod api;
 pub mod git;
 pub mod state;
 pub mod store;
+pub mod watcher;

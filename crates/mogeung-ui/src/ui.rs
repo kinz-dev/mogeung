@@ -4,7 +4,7 @@
 use egui::{Color32, RichText};
 use mogeung_core::attention::AttentionReason;
 use mogeung_core::change::RiskLevel;
-use mogeung_core::RunStatus;
+
 
 pub const RED: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4F);
 pub const AMBER: Color32 = Color32::from_rgb(0xE0, 0x9B, 0x24);
@@ -19,23 +19,12 @@ pub const DEL_BG: Color32 = Color32::from_rgb(0x45, 0x1A, 0x1D);
 
 pub fn reason_color(r: AttentionReason) -> Color32 {
     match r {
-        AttentionReason::Blocked => RED,
+        AttentionReason::AwaitingInput => RED,
         AttentionReason::Failed => RED,
         AttentionReason::NeedsReview => AMBER,
         AttentionReason::Stalled => PURPLE,
-        AttentionReason::BurningNoProgress => PURPLE,
         AttentionReason::Running => BLUE,
         AttentionReason::Idle => DIM,
-    }
-}
-
-pub fn status_color(s: RunStatus) -> Color32 {
-    match s {
-        RunStatus::Starting | RunStatus::Running => BLUE,
-        RunStatus::AwaitingReview => AMBER,
-        RunStatus::Reviewed => GREEN,
-        RunStatus::Failed => RED,
-        RunStatus::Cancelled => DIM,
     }
 }
 

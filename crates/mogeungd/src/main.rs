@@ -1,18 +1,18 @@
 //! mogeungd — the mogeung daemon.
 //!
-//! Owns repositories, agent processes, transcripts, diffs and review state.
-//! Every UI is a client of this process; the daemon keeps working with no
-//! window open (CONCEPT.md §7).
+//! Watches the Claude Code sessions you run yourself, ranks them by who needs
+//! you, diffs what they changed, and remembers what you have already read. It
+//! never starts, steers or stops an agent.
 
 use anyhow::Result;
 use clap::Parser;
 use mogeungd::state::AppState;
-use mogeungd::{api, store};
+use mogeungd::{api, store, watcher};
 use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "mogeungd", version, about = "mogeung daemon")]
+#[command(name = "mogeungd", version, about = "mogeung daemon — watches Claude Code sessions")]
 struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:7717")]
@@ -22,9 +22,9 @@ struct Args {
     #[arg(long)]
     db: Option<PathBuf>,
 
-    /// Repositories to register at startup (repeatable).
-    #[arg(long = "repo")]
-    repos: Vec<String>,
+    /// How often to poll for session changes, in milliseconds.
+    #[arg(long, default_value_t = 1500)]
+    poll_ms: u64,
 }
 
 fn default_db() -> PathBuf {
@@ -46,21 +46,31 @@ async fn main() -> Result<()> {
     let store = store::Store::open(&db)?;
     let state = AppState::new(store)?;
 
-    for r in &args.repos {
-        if let Err(e) = state.add_repo(r).await {
-            tracing::warn!("could not register {r}: {e}");
-        }
+    let home = watcher::default_home();
+    if !home.join("projects").exists() {
+        tracing::warn!(
+            "no session transcripts at {} — is Claude Code installed for this user?",
+            home.join("projects").display()
+        );
     }
 
-    // Stall detection is time-based, so the queue has to be recomputed even when
-    // nothing is happening. That is the whole point: silence is itself a signal.
+    // First pass before serving, so a client connecting immediately gets a
+    // populated snapshot rather than an empty board.
+    state.scan().await;
+    tracing::info!(
+        "watching {} — {} session(s) known",
+        home.display(),
+        state.sessions.read().await.len()
+    );
+
     {
         let s = state.clone();
+        let period = Duration::from_millis(args.poll_ms.max(250));
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            let mut tick = tokio::time::interval(period);
             loop {
                 tick.tick().await;
-                s.publish_queue().await;
+                s.scan().await;
             }
         });
     }

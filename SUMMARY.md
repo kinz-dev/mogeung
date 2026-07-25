@@ -1,161 +1,154 @@
-# mogeung v0.1 — build summary
+# mogeung — build summary
 
-Written 2026-07-25, at the end of the session that produced it.
-This is the "what happened and what to do next" document. [README.md](README.md)
-is how to run it; [CONCEPT.md](CONCEPT.md) is why it exists.
+Last updated 2026-07-25, covering v0.1 and the v0.2 pivot.
+[README.md](README.md) is how to run it; [CONCEPT.md](CONCEPT.md) is why it exists.
 
 ---
 
-## What was delivered
+## The pivot, and why
 
-A working, tested v0.1 of the wedge chosen in CONCEPT.md §8: **"where do I
-look?"**
+v0.1 spawned agents: you typed an intent into mogeung, it ran `claude -p` in a
+worktree and showed you the result. After using it, the verdict was **"a
+handicapped Claude Code with a single session"** — and that was correct.
+
+The diagnosis:
+
+1. **The attention router is worth zero at N=1.** A ranked queue of one item is
+   just a label. Everything the product was built around only pays at three or
+   four concurrent sessions.
+2. **To feed that queue, v0.1 took away the interactive loop** — no steering, no
+   permission prompts, no plan mode, no slash commands. Each individual session
+   became *worse* than just running `claude`.
+
+Together: strictly worse than a terminal until N≥3, while making N≥3 awkward.
+The wedge was the wrong shape. The novel part was the review layer, and v0.1
+gated it behind a worse front-end for something that already has a good one.
+
+**v0.2 inverts the relationship: observe, don't spawn.** mogeung reads the files
+Claude Code already writes and adds the cross-session layer on top. It is now
+purely additive — it cannot make a session worse because it does not touch it.
+
+Two things got *better*, not just less bad:
+
+- **Real "waiting for you" detection.** `~/.claude/sessions/<pid>.json` carries a
+  first-party `status: busy|idle`. v0.1 could only infer blockage after the fact
+  from permission denials; v0.2 knows it as fact. That was the largest
+  documented gap in v0.1, closed for free by the pivot.
+- **N≥3 is the natural state**, because opening a terminal tab is already what
+  you do.
+
+## What the pivot cost and kept
 
 | | |
 |---|---|
-| Rust | ~4,460 lines across 3 crates |
-| Tests | 21 (20 free + 1 real-agent, `#[ignore]`d) |
-| Release binaries | `mogeungd` 6.0 MB · `mogeung` 14 MB |
+| Kept unchanged | the git diff engine, risk scoring, hunk anchoring, review checkpointing, the daemon/client split, the egui shell |
+| Rewritten | `Run` → `Session`, attention reasons, wire protocol, the transcript parser (on-disk `.jsonl` instead of `stream-json`) |
+| Deleted | spawning, the supervisor, permission modes, model selection, follow-ups, cancel, the New Run dialog |
+| Added | `watcher.rs`, per-session file attribution, terminal launch |
+
+The ~$0.66 of v0.1 agent spend bought validation of the content-block parser,
+which survived the rewrite.
+
+## Current state
+
+| | |
+|---|---|
+| Rust | ~4,800 lines across 3 crates |
+| Tests | 36, all free — nothing spawns an agent any more |
+| Release binaries | `mogeungd` 6.2 MB · `mogeung` 14 MB |
 | Warnings | none |
-| Verified against | Claude Code 2.1.220, git 2.50.1, rustc 1.94, macOS |
+| Verified against | Claude Code 2.1.219/2.1.220, git 2.50.1, rustc 1.94, macOS |
 
-### Shipped
-
-- **Attention router** — one ranked queue across all repos, with wide tier
-  separation and a visible reason string per row. Recomputed on a timer so
-  silence registers as a signal.
-- **Claude Code adapter** — `stream-json` normalised into typed transcript
-  events; forgiving parser that degrades rather than dying on schema change.
-- **Worktree-per-run** — isolated branch per run, diffs against the run's base
-  commit, **including untracked files**.
-- **Risk-ordered diffs** — path + content heuristics, noise suppression, file
-  scored as its riskiest hunk.
-- **Review checkpointing** — content-hash hunk anchors, review marks keyed to
-  the session root so follow-ups never re-present read code.
-- **Follow-ups** — resume the agent's own session, child run, parent retired
-  from the queue.
-- **Structured transcript** — no terminal emulator, by design.
-- **Daemon + client split** — WebSocket state stream plus a curl-able REST
-  surface; UI reconnects on its own; agents survive the window closing.
-- **egui client** — queue, run detail, transcript, diff review with per-hunk
-  checkboxes, new-run dialog, open-in-IntelliJ/VS Code/Terminal/Finder.
-
-### Deliberately not built
-
-The claim ledger, the signal runner, and **the entire document layer** (doc
-inventory, staleness, GC, derived progress, agent-instruction hub). Also: no
-editor, no live interjection, no second agent adapter. Full list in the README's
-Limitations section, which is the honest roadmap.
+Verified live against 30 real sessions: it correctly identified an ib-adapter
+session waiting for input, a past session that died with `server_error`, a
+session with one unread file change, and the Claude Code session that was
+building mogeung at the time.
 
 ---
 
 ## Decisions taken during the build
 
-Judgement calls made without stopping to ask, and why.
+**1. Liveness comes from the OS, not the registry file.**
+`~/.claude/sessions/*.json` is not cleaned up on exit, so every session that ever
+ran would look alive. mogeung checks `kill(pid, 0)`. There is a test that pins
+this: a registry entry claiming `status: busy` with a dead pid must read as
+ended.
 
-**1. Review state is keyed to the session root, not the run.**
-This was found by testing, not designing. The first follow-up test showed the
-child run re-presenting code already read in the parent — which would have
-destroyed the feature's whole premise. Fix: runs carry a `root` id, review
-anchors hang off `root`, and a follow-up inherits the parent's base commit so
-its Change is the session's cumulative diff. A follow-up now shows everything
-you read still marked read, and only genuinely new work unread.
+**2. Poll, do not use filesystem events.**
+A few dozen files every 1.5 s is nothing, and polling sidesteps every
+rename/atomic-write edge case that makes FSEvents miserable. The tailer tracks a
+byte offset per file, restarts if a file shrinks, and never advances past the
+size it observed — so a line being written concurrently is re-read next tick
+rather than half-parsed.
 
-**2. A follow-up retires its parent from the queue.**
-Otherwise one session asks for review once per turn and the queue fills with
-stale entries.
+**3. Git for diffs, not `file-history/`.**
+Claude Code keeps pre-edit backups in `~/.claude/file-history/<session>/`, which
+would give perfect per-session attribution. But the filenames are opaque hashes
+with no reliable path mapping. Depending on it would have been fragile, so
+mogeung uses the tested git engine and attributes by *which files a session
+edited* instead.
 
-**3. No embedded terminal.**
-egui's weakest case is VT100 emulation — but the structured transcript is the
-better product anyway, because tool calls and results become searchable,
-linkable objects instead of scrollback. Concept doc F4 was revised accordingly.
+**4. Tokens, not dollars.**
+Auth here is OAuth subscription (`apiKeySource: none`), so the CLI's
+`total_cost_usd` is *equivalent API cost*, not money charged. Showing it would
+be misleading. The real constraint is the five-hour window — and with
+`overageStatus: rejected`, exhausting it fails runs rather than spilling into
+paid overage.
 
-**4. Shell out to `git`, do not link a library.**
-On worktrees the CLI is the definition of correct. Untracked files are handled
-with `ls-files --others` + `diff --no-index` rather than `add -N`, specifically
-so mogeung never mutates your index behind your back.
+**5. The watch root is injected, not read from the environment.**
+Found by a test failing only in parallel: five tests racing on a global
+`CLAUDE_CONFIG_DIR`. Rather than serialising them, `AppState::with_home` takes
+the path. Tests now run in parallel against synthetic homes and never touch real
+session data.
 
-**5. A curl-able REST surface alongside the WebSocket.**
-Added while debugging, kept because it makes the daemon scriptable without a UI
-and is how the e2e tests and any future shell workflow drive it.
-
-**6. Runs are stored as JSON blobs in SQLite.**
-The schema is still moving. At this scale, being able to change `Run` without a
-migration matters more than query planning.
-
-**7. egui 0.35 required a migration mid-build.**
-0.35 replaced `App::update(ctx)` with `App::ui(&mut Ui)` and collapsed
-`SidePanel`/`TopBottomPanel` into a unified `Panel`. Adapted rather than pinning
-to an older release, since this is meant to be a base to build on.
-
----
-
-## Spend
-
-**Directly measured — agent runs mogeung itself spawned:**
-
-| Purpose | Cost |
-|---|---|
-| CLI schema probes (2 sessions, before any code) | $0.153 |
-| Smoke run, first cycle | $0.143 |
-| Review-checkpointing test, run 1 | $0.146 |
-| Review-checkpointing test, follow-up run | $0.116 |
-| Real-agent e2e test | ~$0.10 |
-| **Total agent spend** | **≈ $0.66** |
-
-All on Sonnet, all against throwaway repos.
-
-**Not measured here:** the cost of the Claude Code session that *wrote* mogeung.
-That is not visible from inside the daemon — check `/usage` in the session that
-produced this. Expect it to dominate the figure above by a wide margin.
-
-**Cost note for real use:** the probe runs showed a trivial one-word prompt
-costing $0.068, almost entirely cache-creation tokens. Short runs are not cheap.
-The `BURNING` heuristic defaults to $1.00 with no diff, which is roughly "a few
-turns of real work with nothing to show" — tune `AttentionConfig` in
-`crates/mogeung-core/src/attention.rs` once you have a feel for your own runs.
+**6. mogeung launches exactly one thing: a real terminal.**
+"+ New session" opens interactive `claude` in a directory, optionally in a fresh
+worktree. It solves the "reaching N≥3 is awkward" half of the v0.1 failure
+without re-acquiring the "owns the conversation loop" half.
 
 ---
 
 ## Honest assessment
 
-**What is genuinely good.** The attention router and review checkpointing both
-work and both were proven against real agent sessions rather than fixtures. The
-checkpointing test is the one that matters: `auth.rs` stayed read while a
-rewritten `main.rs` came back unread, across a session boundary. The
-daemon/client split is right, and it is what makes a web client cheap later.
+**What is genuinely good.** The queue is now driven by first-party state rather
+than inference, so "waiting for you" is exact. Review checkpointing was proven
+against real agent sessions in v0.1 and survived the rewrite untouched. The tool
+is additive, which means the failure mode is "I ignored it", not "it got in my
+way".
 
-**What is thin.** Risk scoring is keyword matching over diff text. It works well
-enough to be a useful reading order and it will embarrass itself on any adversarial
-example. It is not analysis and must never be trusted as a safety check.
+**The biggest risk is the format.** Everything rests on two undocumented file
+layouts inside `~/.claude`. A CLI update can change them. The parser degrades
+rather than crashing, but the realistic bad day is mogeung quietly seeing less
+than it should. If this becomes load-bearing, it needs a canary: assert the
+board is non-empty when sessions are known to exist, and warn loudly otherwise.
 
-**The biggest real gap.** Non-interactive runs mean a tool needing permission is
-*denied* rather than *queued for your decision*. mogeung notices afterwards and
-ranks the run `BLOCKED`, which is a consolation prize. Live interjection via
-`--input-format stream-json` closes both this and the "steer a running agent"
-gap at once — it is the highest-value next increment by some distance.
+**What is still thin.** Risk scoring is keyword matching. Diff attribution
+cannot separate two sessions editing the same file. Sessions that predate
+mogeung have a meaningless diff base.
 
-**What might be wrong.** The adapter abstraction has only ever met one CLI, so
-it is a guess. Adding Codex is the test of whether the Run model generalises,
-and it may force changes to `Run` and `EventKind`.
+**What is unproven.** Whether a cross-session queue is worth having at all. That
+question was never actually tested — v0.1 failed before reaching it. v0.2 is the
+first version where the experiment is even possible.
 
 ---
 
 ## Suggested next steps, in order
 
-1. **Dogfood for a week.** The v0.1 success test from CONCEPT.md: do you stop
-   opening terminal tabs to check on agents? Nothing below matters until this is
-   answered.
-2. **Live interjection** (`--input-format stream-json`) — closes the permission
-   gap and the steering gap together.
-3. **Signal runner** — run tests/typecheck per worktree and attach results to the
-   run card. This is the cheapest large step toward "is it true?", and it is a
-   precondition for the claim ledger.
-4. **Second adapter (Codex)** — falsify or confirm the adapter abstraction while
-   the codebase is still small enough to change.
-5. **Thin web client** — the daemon already supports it; scope it to
-   review-and-unblock on a phone, nothing more.
-6. **Document layer** — only if a week of dogfooding says doc sprawl still hurts
+1. **Use it for a week with three or four terminals open.** The real test:
+   does the queue change where you look? Nothing below matters until that is
+   answered, and this time the tool is not in the way of finding out.
+2. **A format canary** — detect when parsing has silently degraded after a CLI
+   update.
+3. **Signal runner** — run tests/typecheck per repo and attach results to the
+   session. Cheapest large step toward "is it true?", and a precondition for the
+   claim ledger.
+4. **Thin web client** — the daemon already supports it; scope to
+   review-and-unblock on a phone.
+5. **Rate-limit surfacing** — the CLI emits `rate_limit_event` with five-hour
+   quota status. Currently unused. With overage disabled, exhausting the window
+   hard-fails sessions, so this is worth showing.
+6. **Document layer** — only if a week of real use says doc sprawl still hurts
    more than the above.
 
-Deliberately *not* next: the editor. Keep handing off to IntelliJ.
+Deliberately *not* next: the editor, and anything that re-acquires control of
+the conversation loop.

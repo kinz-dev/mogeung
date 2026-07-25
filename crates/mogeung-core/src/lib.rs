@@ -6,12 +6,12 @@
 
 pub mod attention;
 pub mod change;
-pub mod run;
+pub mod session;
 pub mod transcript;
 pub mod wire;
 
 pub use attention::{AttentionItem, AttentionReason};
 pub use change::{Change, FileChange, Hunk, RiskFlag, RiskLevel};
-pub use run::{AgentKind, PermissionMode, Run, RunId, RunStatus};
+pub use session::{LiveStatus, Session, SessionId};
 pub use transcript::{EventKind, TranscriptEvent};
-pub use wire::{ClientMsg, NewRunSpec, ServerMsg};
+pub use wire::{ClientMsg, ServerMsg};

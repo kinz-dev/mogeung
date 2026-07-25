@@ -268,13 +268,49 @@ Multi-agent adapters, race mode, architecture map and drift, timeline, mobile/no
 
 Rule for the whole roadmap: **dogfood from v0.1 on**, building mogeung with agents inside mogeung. If a feature does not change how the next day feels, cut it.
 
+## 8b. Course correction — the observer pivot (2026-07-25)
+
+v0.1 was built and rejected in use: *"a handicapped Claude Code with a single
+session."* The judgement was right, and the error was in this document, not in
+the implementation.
+
+**What §8 got wrong.** It picked the attention router as the v0.1 wedge, which
+was defensible — but then assumed mogeung had to *spawn* runs to populate it.
+That forced replacing the interactive loop, and the interactive loop is the part
+Claude Code is genuinely good at. The result was strictly worse than a terminal
+until three or four sessions were running, while making three or four sessions
+awkward to reach. A ranked queue of one item is just a label.
+
+**The correction.** mogeung observes the sessions you already run, by reading
+what Claude Code writes for itself:
+
+* `~/.claude/sessions/<pid>.json` — a live registry with a first-party
+  `status: busy|idle`
+* `~/.claude/projects/<slug>/<id>.jsonl` — the transcript
+
+This is purely additive, so it cannot degrade a session. It also *improves* the
+product: A2's hardest problem — knowing a session is blocked on a human — stops
+being an inference and becomes a fact published by the CLI.
+
+**What this changes in the pillars above.** A1–A2 stand, now over observed
+sessions. A3 (adapters) becomes "read other CLIs' on-disk formats", which is a
+smaller job than driving them. A4 (interject) and A6 (worktree manager) are
+**deleted** — you interject by typing in your own terminal. A7 (race mode) and
+A8 (cost ledger) are deferred. Everything in Pillars B, C, D and E is unaffected,
+because none of it ever depended on mogeung owning the agent.
+
+**The durable lesson.** The value was always in the review and attention layer.
+Owning the conversation loop was never a requirement for it — it was an
+assumption, and it was the expensive kind: it cost the whole product.
+
 ## 9. Decisions
 
 Settled 2026-07-25:
 
-1. **Stack** — Rust core (`mogeungd`) + native Rust UI (egui/eframe). Web UI later as a thin phone-shaped review client, not a second full client.
-2. **Wedge** — attention router leads v0.1. Parallel-agent chaos is the sharper pain and reaches usefulness fastest.
-3. **Agent scope** — Claude Code only for v0.1. Get the Run model right against the richest integration before generalizing.
+1. **Stack** — Rust core (`mogeungd`) + native Rust UI (egui/eframe). Web UI later as a thin phone-shaped review client, not a second full client. *(held up)*
+2. **Wedge** — attention router leads v0.1. *(right feature, wrong delivery — see §8b)*
+3. **Agent scope** — Claude Code only. *(held up)*
+3b. **Relationship to the agent** — observe, never spawn. Added v0.2 after §8b.
 4. **Editor** — light editor at v0.4, surgical fixes only. IntelliJ handoff stays a first-class action permanently.
 5. **Terminal** — none. Structured transcript instead (see F4).
 

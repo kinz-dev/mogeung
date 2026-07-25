@@ -1,4 +1,4 @@
-use crate::run::RunId;
+use crate::session::SessionId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// CONCEPT.md F4 for why there is no embedded terminal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptEvent {
-    pub run_id: RunId,
+    pub session_id: SessionId,
     /// Monotonic per run, assigned by the daemon on ingest.
     pub seq: u64,
     pub ts: DateTime<Utc>,
