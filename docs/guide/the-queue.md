@@ -55,9 +55,51 @@ inside `tmux` or `screen` cannot be picked out — the multiplexer owns the tty.
 When it cannot work, it says which terminal it found rather than failing
 silently.
 
+## Scope
+
+Three buttons above the filter decide what the queue is *for*:
+
+| | |
+|---|---|
+| **needs you** | waiting, blocked, failed, stalled, unreviewed. **The default** |
+| **live** | every session still running, busy or not |
+| **all** | everything, including finished and reviewed |
+
+The queue exists to answer *where do I look*, not *what exists*, so it starts
+narrow. If it looks emptier than expected the panel says how many sessions are
+outside the current scope.
+
+## Hiding and pinning
+
+`h` hides the selected session; `p` pins it to the top. Both survive a restart
+(`~/.mogeung/prefs.json`).
+
+**Hiding is not forgetting.** It is a view filter and nothing else — the daemon
+never hears about it, review marks are untouched, and it is reversible from the
+`N hidden` button at the top of the panel. "Forget session" in the Info tab is
+the destructive one.
+
+A pinned session ignores scope, because a pin that a scope could override would
+not be worth setting. Pinning something hidden reveals it; hiding something
+pinned drops the pin.
+
 ## Filter, group, follow
 
 **filter** (`/`) matches the label, repo, branch, cwd and current activity.
+Every word must match, so typing more always narrows.
+
+It also understands fields, which is how you find a session free text cannot
+describe:
+
+| | |
+|---|---|
+| `repo:mogeung` | or `r:` |
+| `branch:main` | or `b:` |
+| `file:state.rs` | or `f:` / `path:` — matches files the session **touched** |
+
+They combine: `repo:mogeung branch:main retry`. Clicking a repo name in any card
+filters to it. An unknown prefix (`todo:`) stays plain text rather than matching
+nothing.
 
 **group** collapses the queue by repository. Repos are ordered by their most
 urgent session, so the top of the panel is still the top of the queue. Click a

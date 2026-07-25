@@ -6,9 +6,11 @@
 
 mod app;
 mod diff;
+mod filter;
 mod hotkey;
 mod keymap;
 mod net;
+mod prefs;
 mod ui;
 
 struct Args {

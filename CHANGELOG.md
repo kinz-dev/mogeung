@@ -12,6 +12,13 @@ Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
 Collision warning when two live sessions edit one file. Loop detection for an
 agent repeating itself. Jump to the session's Terminal tab.
 
+**Added — finding a session.** Hide and pin sessions, both persisted across
+restarts (`R-B13`). A scope selector — needs-you / live / all — replacing the
+"quiet" checkbox (`R-B14`). Field filters `repo:` `branch:` `file:`, where
+`file:` matches what a session actually touched (`R-B15`). Clicking a repo name
+filters to it, and the panel says how many sessions the current filter or scope
+is excluding. View preferences now persist in `~/.mogeung/prefs.json`.
+
 **Changed — top bar.** The actions are icons with tooltips carrying their name
 and shortcut.
 

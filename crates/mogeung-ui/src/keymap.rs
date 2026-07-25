@@ -47,6 +47,8 @@ pub enum Action {
     Snooze,
     FilterFocus,
     ClearFilter,
+    HideSession,
+    PinSession,
     // -- review
     ToggleRead,
     NextUnread,
@@ -72,6 +74,8 @@ impl Action {
         Action::Snooze,
         Action::FilterFocus,
         Action::ClearFilter,
+        Action::HideSession,
+        Action::PinSession,
         Action::ToggleRead,
         Action::NextUnread,
         Action::FlagHunk,
@@ -89,7 +93,9 @@ impl Action {
             | Action::MarkAllRead
             | Action::Snooze
             | Action::FilterFocus
-            | Action::ClearFilter => "Queue",
+            | Action::ClearFilter
+            | Action::HideSession
+            | Action::PinSession => "Queue",
             Action::ToggleRead | Action::NextUnread | Action::FlagHunk => "Review",
             Action::ToggleAmbient
             | Action::ToggleHealth
@@ -112,6 +118,8 @@ impl Action {
             Action::Snooze => "Snooze or wake the session",
             Action::FilterFocus => "Focus the queue filter",
             Action::ClearFilter => "Clear the filter / close overlays",
+            Action::HideSession => "Hide the session from the queue (reversible)",
+            Action::PinSession => "Pin or unpin the session at the top",
             Action::ToggleRead => "Mark the selected hunk read or unread",
             Action::NextUnread => "Jump to the next unread hunk",
             Action::FlagHunk => "Flag the selected hunk for a follow-up prompt",
@@ -235,6 +243,8 @@ impl Default for Keymap {
         set(Action::Snooze, &["S"]);
         set(Action::FilterFocus, &["Slash"]);
         set(Action::ClearFilter, &["Escape"]);
+        set(Action::HideSession, &["H"]);
+        set(Action::PinSession, &["P"]);
 
         set(Action::ToggleRead, &["Space"]);
         set(Action::NextUnread, &["N"]);

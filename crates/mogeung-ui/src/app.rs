@@ -42,13 +42,6 @@ impl Pane {
     }
 }
 
-/// How a diff is laid out. `R-D6`.
-#[derive(PartialEq, Clone, Copy)]
-enum DiffView {
-    Unified,
-    SideBySide,
-}
-
 /// A hunk you marked while reading, to be turned into a follow-up prompt.
 ///
 /// `R-D1` is the observer-safe version of "send an instruction": mogeung builds
@@ -78,24 +71,18 @@ pub struct App {
     tab: Tab,
     selected_file: Option<String>,
 
-    hide_reviewed: bool,
-    hide_noise: bool,
-    show_quiet: bool,
-
     /// Queue text filter. `R-B9`.
     filter: String,
-    /// Group the queue by repository. `R-B6`.
-    group_by_repo: bool,
     collapsed_repos: HashSet<String>,
-    /// Follow the top of the queue as it changes. `R-B8`.
-    auto_select: bool,
+
+    /// Everything that survives a restart: hidden and pinned sessions, scope,
+    /// and the view toggles. See `prefs.rs`.
+    prefs: crate::prefs::Prefs,
+    /// Set when `prefs` changed this frame; written once at the end.
+    prefs_dirty: bool,
     /// Big-text board for a second monitor. `R-C5`.
     ambient: bool,
 
-    /// Diff presentation. `R-D4`, `R-D5`, `R-D6`.
-    diff_view: DiffView,
-    syntax: bool,
-    word_diff: bool,
 
     /// Hunks flagged for the follow-up prompt, and the note attached to each.
     /// `R-D1`.
@@ -129,10 +116,6 @@ pub struct App {
     capturing: Option<crate::keymap::Action>,
     keymap_io: String,
 
-    /// Update the diff as the file selection moves, rather than only on
-    /// Activate. On by default — the whole point of a file list is seeing what
-    /// is in them.
-    preview_on_select: bool,
     /// Highlighted file, which is the opened file when previewing is on.
     file_cursor: Option<String>,
 
@@ -152,6 +135,7 @@ impl App {
         }
         let net = Net::connect(url, cc.egui_ctx.clone());
         let (keymap, keymap_warning) = crate::keymap::Keymap::load();
+        let (prefs, prefs_warning) = crate::prefs::Prefs::load();
         App {
             net,
             hotkey,
@@ -163,17 +147,11 @@ impl App {
             selected: None,
             tab: Tab::Changes,
             selected_file: None,
-            hide_reviewed: false,
-            hide_noise: true,
-            show_quiet: false,
             filter: String::new(),
-            group_by_repo: false,
             collapsed_repos: HashSet::new(),
-            auto_select: false,
+            prefs,
+            prefs_dirty: false,
             ambient: false,
-            diff_view: DiffView::Unified,
-            syntax: true,
-            word_diff: true,
             flagged: Vec::new(),
             prompt_note: String::new(),
             show_prompt: false,
@@ -190,11 +168,14 @@ impl App {
             show_keymap: false,
             capturing: None,
             keymap_io: String::new(),
-            preview_on_select: true,
             file_cursor: None,
             // Surfaced in the window, not only on stderr: the terminal that
             // launched this is exactly what you are trying to stop looking at.
-            errors: hotkey_error.into_iter().chain(keymap_warning).collect(),
+            errors: hotkey_error
+                .into_iter()
+                .chain(keymap_warning)
+                .chain(prefs_warning)
+                .collect(),
         }
     }
 
@@ -299,6 +280,16 @@ impl eframe::App for App {
         self.prompt_window(ui);
         self.ambient_window(ui);
         self.keymap_window(ui);
+
+        // Written once per frame at most: preferences change on a click, and
+        // saving inside the widget would touch the disk every time a checkbox
+        // is merely *drawn*.
+        if self.prefs_dirty {
+            self.prefs_dirty = false;
+            if let Err(e) = self.prefs.save() {
+                self.errors.push(format!("could not save preferences: {e}"));
+            }
+        }
     }
 }
 
@@ -480,33 +471,77 @@ impl App {
     /// moves to the row you can actually see. Two separate notions of "the
     /// list" is how keyboard navigation ends up jumping to invisible items.
     fn visible_queue(&self) -> Vec<AttentionItem> {
-        let needle = self.filter.trim().to_lowercase();
-        self.queue
+        use crate::prefs::Scope;
+        let q = crate::filter::parse(&self.filter);
+
+        let mut out: Vec<AttentionItem> = self
+            .queue
             .iter()
             .filter(|item| {
                 let Some(s) = self.sessions.get(&item.session_id) else {
                     return false;
                 };
-                if item.reason == AttentionReason::Idle && !self.show_quiet {
+                // Hidden sessions are gone unless you are looking for them, and
+                // a filter never resurrects one — otherwise "hidden" would mean
+                // "hidden until you search", which is not what anyone means.
+                if self.prefs.is_hidden(&s.id) && !self.prefs.reveal_hidden {
                     return false;
                 }
-                if needle.is_empty() {
-                    return true;
+                // Pinned sessions ignore scope. Pinning is an explicit "keep
+                // this in front of me", and a scope that could override it
+                // would make the pin unreliable.
+                if !self.prefs.is_pinned(&s.id) {
+                    match self.prefs.scope {
+                        Scope::NeedsYou => {
+                            if !item.reason.needs_human() {
+                                return false;
+                            }
+                        }
+                        Scope::Live => {
+                            if !s.alive {
+                                return false;
+                            }
+                        }
+                        Scope::All => {}
+                    }
                 }
-                // Everything you might plausibly remember a session by.
-                let hay = format!(
-                    "{} {} {} {} {}",
-                    s.label(),
-                    s.repo_name(),
-                    s.cwd,
-                    s.git_branch.clone().unwrap_or_default(),
-                    s.last_activity.clone().unwrap_or_default()
-                )
-                .to_lowercase();
-                hay.contains(&needle)
+                crate::filter::matches(&q, s)
             })
             .cloned()
-            .collect()
+            .collect();
+
+        // Pinned first, otherwise the daemon's ranking stands. `sort_by_key` is
+        // stable, so this reorders nothing else.
+        out.sort_by_key(|i| !self.prefs.is_pinned(&i.session_id));
+        out
+    }
+
+    /// Sessions hidden right now, for the "N hidden" affordance.
+    fn hidden_count(&self) -> usize {
+        self.sessions
+            .keys()
+            .filter(|id| self.prefs.is_hidden(id))
+            .count()
+    }
+
+    fn hide_selected(&mut self) {
+        if let Some(id) = self.selected.clone() {
+            self.prefs.hide(&id);
+            self.prefs_dirty = true;
+            // Move on rather than leaving the pane pointing at something that
+            // is no longer in the list.
+            self.selected = self.visible_queue().first().map(|i| i.session_id.clone());
+            if let Some(next) = self.selected.clone() {
+                self.select(next);
+            }
+        }
+    }
+
+    fn pin_selected(&mut self) {
+        if let Some(id) = self.selected.clone() {
+            self.prefs.toggle_pin(&id);
+            self.prefs_dirty = true;
+        }
     }
 
     /// Move the selection by `delta` within the visible queue. `R-B1`.
@@ -542,8 +577,8 @@ impl App {
         change
             .files
             .iter()
-            .filter(|f| !(self.hide_noise && f.risk() == RiskLevel::Noise))
-            .filter(|f| !(self.hide_reviewed && f.fully_reviewed()))
+            .filter(|f| !(self.prefs.hide_noise && f.risk() == RiskLevel::Noise))
+            .filter(|f| !(self.prefs.hide_reviewed && f.fully_reviewed()))
             .map(|f| f.path.clone())
             .collect()
     }
@@ -574,7 +609,7 @@ impl App {
         self.file_cursor = Some(files[next].clone());
         // Previewing is what makes arrowing through a diff useful; with it off
         // the cursor moves and the pane waits for Activate.
-        if self.preview_on_select {
+        if self.prefs.preview_on_select {
             self.selected_file = self.file_cursor.clone();
             self.blast = None;
         }
@@ -726,6 +761,8 @@ impl App {
                 self.show_keymap = false;
                 self.capturing = None;
             }
+            A::HideSession => self.hide_selected(),
+            A::PinSession => self.pin_selected(),
             A::ToggleRead => self.toggle_first_unread(),
             A::NextUnread => self.jump_to_next_unread(),
             A::FlagHunk => self.flag_first_unread(),
@@ -862,11 +899,32 @@ impl App {
                     )
                     .on_hover_text("Alt+1");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(&mut self.show_quiet, "quiet");
-                        ui.checkbox(&mut self.group_by_repo, "group");
-                        ui.checkbox(&mut self.auto_select, "follow")
-                            .on_hover_text("keep the top of the queue selected as it changes");
+                        if ui.checkbox(&mut self.prefs.group_by_repo, "group").changed() {
+                            self.prefs_dirty = true;
+                        }
+                        if ui
+                            .checkbox(&mut self.prefs.auto_select, "follow")
+                            .on_hover_text("keep the top of the queue selected as it changes")
+                            .changed()
+                        {
+                            self.prefs_dirty = true;
+                        }
                     });
+                });
+
+                // Scope decides what the queue is *for*: the default answers
+                // "where do I look", not "what exists".
+                ui.horizontal(|ui| {
+                    for sc in crate::prefs::Scope::ALL {
+                        if ui
+                            .selectable_label(self.prefs.scope == sc, sc.label())
+                            .on_hover_text(sc.hint())
+                            .clicked()
+                        {
+                            self.prefs.scope = sc;
+                            self.prefs_dirty = true;
+                        }
+                    }
                 });
 
                 // R-B9. Filter first: with a dozen sessions this is faster than
@@ -875,11 +933,48 @@ impl App {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.filter)
                             .id(egui::Id::new("queue-filter"))
-                            .hint_text("filter  (/)")
+                            .hint_text("filter  (/)   repo: branch: file:")
                             .desired_width(ui.available_width() - 4.0),
                     );
                 });
-                ui.label(dim("j/k move · enter or o → terminal · r read · s snooze"));
+
+                // When a filter is narrowing things, say by how much — an empty
+                // queue should never be ambiguous between "nothing needs you"
+                // and "your filter excluded it".
+                let query = crate::filter::parse(&self.filter);
+                if !query.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label(dim(format!(
+                            "{} of {} session(s)",
+                            self.visible_queue().len(),
+                            self.sessions.len()
+                        )));
+                        if ui.small_button("clear").clicked() {
+                            self.filter.clear();
+                        }
+                    });
+                }
+
+                let hidden = self.hidden_count();
+                if hidden > 0 {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(
+                                self.prefs.reveal_hidden,
+                                dim(format!("{hidden} hidden")),
+                            )
+                            .on_hover_text("show them so you can unhide")
+                            .clicked()
+                        {
+                            self.prefs.reveal_hidden = !self.prefs.reveal_hidden;
+                        }
+                        if self.prefs.reveal_hidden && ui.small_button("unhide all").clicked() {
+                            self.prefs.hidden.clear();
+                            self.prefs_dirty = true;
+                        }
+                    });
+                }
+                ui.label(dim("j/k move · enter terminal · r read · s snooze · h hide · p pin"));
                 ui.separator();
 
                 let now = Utc::now();
@@ -888,10 +983,13 @@ impl App {
                 let mut to_select = None;
                 let mut to_snooze = None;
                 let mut to_focus = None;
+                let mut to_pin: Option<String> = None;
+                let mut to_hide: Option<String> = None;
+                let mut to_filter_repo: Option<String> = None;
 
                 // R-B8. Follow mode: the top of the queue is by definition the
                 // thing most worth looking at, so let it drive the pane.
-                if self.auto_select {
+                if self.prefs.auto_select {
                     if let Some(top) = vis.first() {
                         if self.selected.as_ref() != Some(&top.session_id) {
                             to_select = Some(top.session_id.clone());
@@ -905,11 +1003,22 @@ impl App {
                         if vis.is_empty() {
                             ui.add_space(20.0);
                             ui.vertical_centered(|ui| {
-                                if self.filter.trim().is_empty() {
+                                if !self.filter.trim().is_empty() {
+                                    ui.label(dim("nothing matches that filter"));
+                                } else if self.prefs.scope != crate::prefs::Scope::All
+                                    && !self.sessions.is_empty()
+                                {
+                                    // The commonest confusion: sessions exist,
+                                    // the scope is hiding them.
+                                    ui.label(dim("nothing needs you"));
+                                    ui.label(dim(format!(
+                                        "{} session(s) outside \"{}\" — try \"all\"",
+                                        self.sessions.len(),
+                                        self.prefs.scope.label()
+                                    )));
+                                } else {
                                     ui.label(dim("nothing needs you"));
                                     ui.label(dim("run claude in a terminal and it shows up here"));
-                                } else {
-                                    ui.label(dim("nothing matches that filter"));
                                 }
                             });
                         }
@@ -917,7 +1026,7 @@ impl App {
                         // R-B6. Grouping preserves rank *within* a repo, and
                         // orders repos by their most urgent session — so the
                         // top of the panel is still the top of the queue.
-                        let groups: Vec<(String, Vec<AttentionItem>)> = if self.group_by_repo {
+                        let groups: Vec<(String, Vec<AttentionItem>)> = if self.prefs.group_by_repo {
                             let mut order: Vec<String> = Vec::new();
                             let mut by: HashMap<String, Vec<AttentionItem>> = HashMap::new();
                             for item in &vis {
@@ -991,7 +1100,16 @@ impl App {
                                         })
                                         .show(ui, |ui| {
                                             ui.set_width(ui.available_width());
-                                            queue_card(ui, session, item, now);
+                                            if let Some(r) = queue_card(
+                                                ui,
+                                                session,
+                                                item,
+                                                now,
+                                                self.prefs.is_pinned(&item.session_id),
+                                                self.prefs.is_hidden(&item.session_id),
+                                            ) {
+                                                to_filter_repo = Some(r);
+                                            }
 
                                             if selected {
                                                 ui.horizontal(|ui| {
@@ -1018,6 +1136,27 @@ impl App {
                                                             item.session_id.clone(),
                                                             if snoozed { 0 } else { 30 },
                                                         ));
+                                                    }
+                                                    let pinned =
+                                                        self.prefs.is_pinned(&item.session_id);
+                                                    if ui
+                                                        .small_button(if pinned { "unpin" } else { "pin" })
+                                                        .on_hover_text("keep at the top of the queue (p)")
+                                                        .clicked()
+                                                    {
+                                                        to_pin = Some(item.session_id.clone());
+                                                    }
+                                                    let is_hidden =
+                                                        self.prefs.is_hidden(&item.session_id);
+                                                    if ui
+                                                        .small_button(if is_hidden { "unhide" } else { "hide" })
+                                                        .on_hover_text(
+                                                            "keep it out of the queue — reversible, and \
+                                                             nothing is forgotten (h)",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        to_hide = Some(item.session_id.clone());
                                                     }
                                                 });
                                             }
@@ -1048,6 +1187,21 @@ impl App {
                 if let Some(session_id) = to_focus {
                     self.net.send(ClientMsg::FocusTerminal { session_id });
                 }
+                if let Some(id) = to_pin {
+                    self.prefs.toggle_pin(&id);
+                    self.prefs_dirty = true;
+                }
+                if let Some(id) = to_hide {
+                    if self.prefs.is_hidden(&id) {
+                        self.prefs.unhide(&id);
+                    } else {
+                        self.prefs.hide(&id);
+                    }
+                    self.prefs_dirty = true;
+                }
+                if let Some(repo) = to_filter_repo {
+                    self.filter = format!("repo:{repo}");
+                }
             });
     }
 }
@@ -1057,8 +1211,18 @@ fn queue_card(
     s: &Session,
     item: &AttentionItem,
     now: chrono::DateTime<Utc>,
-) {
+    pinned: bool,
+    hidden: bool,
+) -> Option<String> {
+    // Set when the repo name is clicked, to filter down to it.
+    let mut filter_repo = None;
     ui.horizontal(|ui| {
+        if pinned {
+            ui.label(badge("PIN", BLUE));
+        }
+        if hidden {
+            ui.label(badge("HIDDEN", DIM));
+        }
         ui.label(badge(item.reason.label(), reason_color(item.reason)));
         if s.is_snoozed(now) {
             ui.label(badge(icon::SNOOZE, DIM));
@@ -1079,7 +1243,14 @@ fn queue_card(
     ui.label(RichText::new(truncate(&s.label(), 100)).size(13.0));
 
     ui.horizontal_wrapped(|ui| {
-        ui.label(dim(s.repo_name()));
+        // Clicking the repo is the fastest way to "just the ones near this".
+        if ui
+            .selectable_label(false, dim(s.repo_name()))
+            .on_hover_text("show only this repo")
+            .clicked()
+        {
+            filter_repo = Some(s.repo_name());
+        }
         if let Some(b) = &s.git_branch {
             ui.label(dim(format!("{} {b}", icon::BRANCH)));
         }
@@ -1129,6 +1300,7 @@ fn queue_card(
                 .color(PURPLE),
         );
     }
+    filter_repo
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,21 +1483,33 @@ impl App {
                     .desired_width(140.0)
                     .show_percentage(),
             );
-            ui.checkbox(&mut self.hide_reviewed, "hide read");
-            ui.checkbox(&mut self.hide_noise, "hide noise");
+            ui.checkbox(&mut self.prefs.hide_reviewed, "hide read");
+            ui.checkbox(&mut self.prefs.hide_noise, "hide noise");
             if ui.button("Mark all read").clicked() {
                 self.net.send(ClientMsg::ReviewAll {
                     session_id: s.id.clone(),
                 });
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.selectable_value(&mut self.diff_view, DiffView::SideBySide, "⇹")
-                    .on_hover_text("side by side (R-D6)");
-                ui.selectable_value(&mut self.diff_view, DiffView::Unified, "≡")
-                    .on_hover_text("unified");
-                ui.checkbox(&mut self.word_diff, "words")
+                if ui
+                    .selectable_label(self.prefs.side_by_side, "⇹")
+                    .on_hover_text("side by side (R-D6)")
+                    .clicked()
+                {
+                    self.prefs.side_by_side = true;
+                    self.prefs_dirty = true;
+                }
+                if ui
+                    .selectable_label(!self.prefs.side_by_side, "≡")
+                    .on_hover_text("unified")
+                    .clicked()
+                {
+                    self.prefs.side_by_side = false;
+                    self.prefs_dirty = true;
+                }
+                ui.checkbox(&mut self.prefs.word_diff, "words")
                     .on_hover_text("highlight only the part of a line that moved (R-D5)");
-                ui.checkbox(&mut self.syntax, "syntax")
+                ui.checkbox(&mut self.prefs.syntax, "syntax")
                     .on_hover_text("approximate highlighting — a tokenizer, not a parser (R-D4)");
             });
         });
@@ -1358,10 +1542,10 @@ impl App {
                     let width = ui.available_width();
 
                     for f in &change.files {
-                        if self.hide_noise && f.risk() == RiskLevel::Noise {
+                        if self.prefs.hide_noise && f.risk() == RiskLevel::Noise {
                             continue;
                         }
-                        if self.hide_reviewed && f.fully_reviewed() {
+                        if self.prefs.hide_reviewed && f.fully_reviewed() {
                             continue;
                         }
                         // With previewing off the cursor and the open file
@@ -1369,7 +1553,7 @@ impl App {
                         // through the list looks broken.
                         let open = self.selected_file.as_deref() == Some(f.path.as_str());
                         let at_cursor = self.file_cursor.as_deref() == Some(f.path.as_str());
-                        let selected = open || (!self.preview_on_select && at_cursor);
+                        let selected = open || (!self.prefs.preview_on_select && at_cursor);
                         let unread = f.hunks.len() - f.reviewed_hunks();
 
                         let resp = ui
@@ -1439,7 +1623,7 @@ impl App {
                 }
 
                 for hunk in &file.hunks {
-                    if self.hide_reviewed && hunk.reviewed {
+                    if self.prefs.hide_reviewed && hunk.reviewed {
                         continue;
                     }
                     let flagged = self
@@ -1511,13 +1695,10 @@ impl App {
 
                         let shown: Vec<String> =
                             hunk.lines.iter().take(500).cloned().collect();
-                        match self.diff_view {
-                            DiffView::Unified => {
-                                render_unified(ui, &shown, self.syntax, self.word_diff)
-                            }
-                            DiffView::SideBySide => {
-                                render_side_by_side(ui, &shown, self.syntax, self.word_diff)
-                            }
+                        if self.prefs.side_by_side {
+                            render_side_by_side(ui, &shown, self.prefs.syntax, self.prefs.word_diff)
+                        } else {
+                            render_unified(ui, &shown, self.prefs.syntax, self.prefs.word_diff)
                         }
                         if hunk.lines.len() > 500 {
                             ui.label(dim(format!(
@@ -2394,7 +2575,7 @@ impl App {
                      everywhere instead of three you have to remember.",
                 ));
                 ui.add_space(6.0);
-                ui.checkbox(&mut self.preview_on_select, "show a file as soon as it is selected")
+                ui.checkbox(&mut self.prefs.preview_on_select, "show a file as soon as it is selected")
                     .on_hover_text(
                         "off: moving the cursor only highlights, and the diff changes on Activate",
                     );

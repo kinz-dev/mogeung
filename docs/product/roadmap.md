@@ -82,6 +82,9 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B10 | **Global hotkey** to raise the window — the return half of `R-B2` | S | ✅ |
 | R-B11 | **Pane-aware navigation** — `Alt+1`/`Alt+2`/`Alt+3`, one set of keys per focused pane | S | ✅ |
 | R-B12 | **Editable keymap** — rebind, reset, import, export | M | ✅ |
+| R-B13 | **Hide and pin sessions**, persisted across restarts | S | ✅ |
+| R-B14 | **Scope** — needs-you / live / all | S | ✅ |
+| R-B15 | **Field filters** — `repo:` `branch:` `file:` | S | ✅ |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 
