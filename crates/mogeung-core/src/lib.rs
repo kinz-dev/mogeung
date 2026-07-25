@@ -6,12 +6,14 @@
 
 pub mod attention;
 pub mod change;
+pub mod health;
 pub mod session;
 pub mod transcript;
 pub mod wire;
 
 pub use attention::{AttentionItem, AttentionReason};
 pub use change::{Change, FileChange, Hunk, RiskFlag, RiskLevel};
+pub use health::{Alert, Health, LineClass};
 pub use session::{LiveStatus, Session, SessionId};
 pub use transcript::{EventKind, TranscriptEvent};
 pub use wire::{ClientMsg, ServerMsg};

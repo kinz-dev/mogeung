@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 36 passing |
-| Rust | 4499 lines |
-| Docs | 26 files, 6 ADRs |
+| Tests | 63 passing |
+| Rust | 6008 lines |
+| Docs | 29 files, 7 ADRs |
 
 ## Assumptions
 
@@ -19,5 +19,7 @@ Untested: **5** · At risk: **2** · Supported: 2 · Refuted: 1
 
 ## Features in flight
 
-None. Priority is unresolved — see [roadmap item 0](docs/product/roadmap.md).
+| Feature | Status | Depends on |
+|---|---|---|
+| [Trust the tool](docs/features/0001-trust-the-tool.md) | `shipped` | [A4] |
 

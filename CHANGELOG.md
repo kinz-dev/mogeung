@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — trust the tool (2026-07-25)
+
+Instrumentation so that "the board looks quiet" becomes a checkable claim rather
+than a guess. Roadmap `R-A1`–`R-A5`; see
+[docs/features/0001-trust-the-tool.md](docs/features/0001-trust-the-tool.md).
+
+**Added** — every transcript line is classified (read / ignored / yielded
+nothing / unknown type / unreadable), and anything unclassified raises a named
+alert; a health panel and `ServerMsg::Health` pushed after every scan; an
+enriched, curl-able `GET /api/health`; a Claude Code version watch; a golden
+corpus of anonymised line shapes.
+
+**Fixed** — three event types (`queue-operation`, `pr-link`, `frame-link`) were
+being discarded silently and are now classified. The oversized-transcript guard
+was unreachable, so multi-megabyte transcripts were parsed in full inside the
+scan loop; files over 4 MiB are now followed from a line boundary near their end
+and the skipped span is reported.
+
+**Changed** — `adapter::parse_line` returns `LineOutcome` instead of
+`Option<Parsed>`, so "deliberately skipped" and "never seen" can no longer be
+confused.
+
+36 tests → 63, all free.
+
 ## v0.2 — the observer pivot (2026-07-25)
 
 mogeung stopped spawning agents and started watching the ones you run yourself.

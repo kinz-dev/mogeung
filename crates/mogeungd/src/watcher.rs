@@ -220,6 +220,51 @@ impl Tailer {
         }
     }
 
+    /// Begin following a large file near its end, keeping roughly the last
+    /// `keep_bytes`. Returns how many bytes of history were skipped.
+    ///
+    /// The corpus on the author's machine has an 11 MB transcript, and reading
+    /// one of those whole — parsing every line, emitting every event — on first
+    /// sight blocks the scan loop for no benefit: nobody reviews the first
+    /// thousand turns of a fortnight-old session.
+    ///
+    /// Starts at the first line boundary at or after the cut, so the first line
+    /// read is never a fragment. A file with no newline after the cut is
+    /// followed from its end rather than re-read whole.
+    pub fn start_near_end(&mut self, path: &Path, keep_bytes: u64) -> u64 {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return 0;
+        };
+        let size = meta.len();
+        if size <= keep_bytes {
+            self.offsets.insert(path.to_path_buf(), 0);
+            return 0;
+        }
+        let cut = size - keep_bytes;
+
+        let start = match std::fs::File::open(path) {
+            Ok(mut f) => {
+                if f.seek(SeekFrom::Start(cut)).is_err() {
+                    size
+                } else {
+                    // Consume the remainder of the partial line at `cut`.
+                    let mut reader = BufReader::new(&mut f);
+                    let mut discard = Vec::new();
+                    match reader.read_until(b'\n', &mut discard) {
+                        Ok(0) => size,
+                        Ok(n) => cut + n as u64,
+                        Err(_) => size,
+                    }
+                }
+            }
+            Err(_) => size,
+        };
+
+        let start = start.min(size);
+        self.offsets.insert(path.to_path_buf(), start);
+        start
+    }
+
     pub fn forget(&mut self, path: &Path) {
         self.offsets.remove(path);
     }
@@ -261,6 +306,56 @@ mod tests {
 
         std::fs::write(&path, "x\n").unwrap();
         assert_eq!(t.read_new(&path).unwrap(), vec!["x"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// R-A5. A huge transcript must be followed from its tail, and the first
+    /// line handed back must be whole — a fragment would parse as malformed and
+    /// pollute the very health signal this feature exists to provide.
+    #[test]
+    fn a_large_file_is_followed_from_a_line_boundary() {
+        let dir = std::env::temp_dir().join(format!("mogeung-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.jsonl");
+
+        let mut body = String::new();
+        for i in 0..500 {
+            body.push_str(&format!(r#"{{"type":"user","n":{i}}}"#));
+            body.push('\n');
+        }
+        std::fs::write(&path, &body).unwrap();
+        let size = std::fs::metadata(&path).unwrap().len();
+
+        let mut t = Tailer::default();
+        let skipped = t.start_near_end(&path, 400);
+        assert!(skipped > 0, "nothing was skipped from a file over the cap");
+        assert!(skipped < size);
+
+        let lines = t.read_new(&path).unwrap();
+        assert!(!lines.is_empty());
+        for l in &lines {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(l).is_ok(),
+                "tail started mid-line: {l:?}"
+            );
+        }
+        // The last line of the file must still be among them.
+        assert!(lines.last().unwrap().contains(r#""n":499"#));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_small_file_is_read_whole_despite_the_cap() {
+        let dir = std::env::temp_dir().join(format!("mogeung-small-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("small.jsonl");
+        std::fs::write(&path, "a\nb\nc\n").unwrap();
+
+        let mut t = Tailer::default();
+        assert_eq!(t.start_near_end(&path, 1_000_000), 0);
+        assert_eq!(t.read_new(&path).unwrap(), vec!["a", "b", "c"]);
 
         std::fs::remove_dir_all(&dir).ok();
     }

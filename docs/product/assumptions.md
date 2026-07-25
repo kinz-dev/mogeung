@@ -37,7 +37,7 @@ assumption — not to build the feature.**
 | A1 | A cross-session attention queue changes where the user looks | `UNTESTED` | Never used in anger. v0.1 died before reaching the question | — |
 | A2 | mogeung must spawn agents to populate the queue | `REFUTED` | v0.1 use, 2026-07-25: "a handicapped Claude Code with a single session" | [ADR-0003](../decisions/0003-observe-do-not-spawn.md) |
 | A3 | Keyword heuristics over diff text are good enough for reading order | `UNTESTED` | Ranked `auth.rs` above a lockfile once, in a test | — |
-| A4 | Claude Code's on-disk formats are stable enough to depend on | `AT RISK` | Undocumented private files. Verified against 2.1.219/2.1.220 only | Canary planned (roadmap `R-A1`) |
+| A4 | Claude Code's on-disk formats are stable enough to depend on | `AT RISK` | Undocumented private files. 13 event types classified against a 20,648-line corpus; 3 had been silently swallowed. Canary reports 0 unknown, 0 unreadable | Canary shipped ([0001](../features/0001-trust-the-tool.md)); drift is now loud, not silent |
 | A5 | Content-hash hunk anchors keep review marks stable across rewrites | `SUPPORTED` | Verified live: `auth.rs` stayed read while a rewritten `main.rs` came back unread | — |
 | A6 | The user will run 3–4 concurrent sessions in normal work | `UNTESTED` | The whole product depends on this. Never measured | — |
 | A7 | Reviewing agent output is a distinct activity worth its own tool | `UNTESTED` | Stated in [concept.md](concept.md) §1, never validated | — |
@@ -56,6 +56,12 @@ speculation until they are resolved.
 layouts. The parser degrades rather than crashing, so the realistic failure is
 mogeung quietly seeing *less* than it should — the worst kind, because it looks
 like "nothing is happening" rather than an error.
+
+It stays `AT RISK` — instrumentation does not make a private format stable. What
+changed is that the failure is now *detectable*: every line is classified, and
+an unrecognised type raises a named alert. The instrumentation immediately
+earned its place by finding three event types that had been discarded silently
+for the whole of v0.2. Nobody had noticed, which is precisely the point.
 
 **A10 deserves scrutiny.** It was the opening complaint and remains untouched
 after two versions. Either it matters and we have been avoiding it, or it

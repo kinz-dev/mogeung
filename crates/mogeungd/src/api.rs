@@ -32,8 +32,21 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health() -> impl IntoResponse {
-    Json(serde_json::json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
+/// Liveness *and* honesty: whether the daemon is up, and whether it is still
+/// reading everything it should be. Curl-able without a UI, deliberately — the
+/// answer to "is the board empty because nothing is happening, or because
+/// mogeung went blind?" should not require a window.
+async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let h = state.health().await;
+    Json(serde_json::json!({
+        "ok": true,
+        "version": env!("CARGO_PKG_VERSION"),
+        "headline": h.headline(),
+        "blind_ratio": h.blind_ratio(),
+        "urgent_alerts": h.urgent_alerts(),
+        "alerts": h.alerts.iter().map(|a| a.message()).collect::<Vec<_>>(),
+        "detail": h,
+    }))
 }
 
 async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -217,5 +230,11 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }
         }
         ClientMsg::Rescan => state.scan().await,
+        ClientMsg::FetchHealth => {
+            let health = state.health().await;
+            state.broadcast(ServerMsg::Health {
+                health: Box::new(health),
+            });
+        }
     }
 }

@@ -1,5 +1,6 @@
 use crate::attention::AttentionItem;
 use crate::change::Change;
+use crate::health::Health;
 use crate::session::{Session, SessionId};
 use crate::transcript::TranscriptEvent;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,8 @@ pub enum ClientMsg {
     },
     /// Rescan for sessions immediately instead of waiting for the next poll.
     Rescan,
+    /// Ask what mogeung can and cannot currently see.
+    FetchHealth,
 }
 
 /// What the daemon tells clients.
@@ -61,5 +64,8 @@ pub enum ServerMsg {
         session_id: SessionId,
         change: Change,
     },
+    /// Sent after every scan. A client should never have to ask whether the
+    /// board it is showing is complete — the daemon volunteers it.
+    Health { health: Box<Health> },
     Error { message: String },
 }

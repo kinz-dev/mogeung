@@ -40,9 +40,38 @@ and undocumented; an update can change them, and the parser is built to ignore
 what it does not recognise rather than crash. So a format change looks like
 "quiet day", not like an error.
 
-Check the CLI version against
-[claude-code-formats.md](../design/claude-code-formats.md) — verified against
-2.1.219/2.1.220 only. Roadmap `R-A1` will make this loud instead of silent.
+**Ask the tool instead of guessing.** Click **health** in the top bar, or:
+
+```sh
+curl -s localhost:7717/api/health | python3 -m json.tool
+```
+
+`headline` gives the verdict in a sentence. What to look for:
+
+| Sign | Means |
+|---|---|
+| `unknown_types` is non-empty | Claude Code emits an event type mogeung has never seen — most likely a format change |
+| `lines_malformed` > 0 | Lines that were not readable JSON. Whatever they held is missing |
+| `blind_ratio` above 0 | The share of lines mogeung could not account for |
+| a `version_changed` alert | The CLI upgraded. Not a problem in itself, but it is when formats move |
+
+A high `lines_ignored` count is **not** a problem — that is classified
+bookkeeping being skipped on purpose, and it is normally the large majority of
+lines. Only `unknown` and `unreadable` mean data you wanted and did not get.
+
+If `unknown_types` names something, that is worth reporting: the type and its
+count are all that is needed to classify it. See
+[health-and-canary.md](../design/health-and-canary.md).
+
+## A session's early history is missing
+
+Transcripts over 4 MiB are followed from near their end instead of being read
+whole, so a very long session's early turns never reach the board. This is
+deliberate — reading an 11 MB transcript on sight stalls the scan loop to
+reconstruct history nobody reviews.
+
+The health panel states exactly how much was skipped, per session. The diff is
+unaffected: it comes from git, not from the transcript.
 
 ## Port already in use
 

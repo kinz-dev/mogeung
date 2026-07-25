@@ -46,24 +46,52 @@ test.
 Append-only, one JSON object per line. `<slug>` is the cwd with separators
 replaced.
 
-Event types observed, and what we do with each:
+Append-only, one JSON object per line. `<slug>` is the cwd with separators
+replaced.
 
-| `type` | Used for |
-|---|---|
-| `user` | Human turns and tool results. String content = a real prompt; an array may carry `tool_result` blocks instead |
-| `assistant` | `text`, `thinking`, `tool_use` blocks; `usage` token counts; `isApiErrorMessage` |
-| `ai-title` | Claude Code's generated conversation title — the best session label available |
-| `last-prompt` | Most recent human prompt |
-| `file-history-delta` | `trackingPath` — a file the session is tracking edits to |
-| `system` | `turn_duration` and similar; ignored |
-| `mode`, `permission-mode`, `attachment`, `file-history-snapshot` | Bookkeeping; ignored |
+**Every `type` is classified — there is no catch-all.** `adapter::HANDLED` and
+`adapter::KNOWN_IGNORED` between them must account for every type seen, and
+anything else raises an alert. Counts below are from the author's corpus on
+2026-07-25: 52 transcripts, 68 MB, 20,648 lines.
+
+| `type` | Seen | Disposition |
+|---|---|---|
+| `assistant` | 9,019 | `text`, `thinking`, `tool_use` blocks; `usage` token counts; `isApiErrorMessage` |
+| `user` | 5,292 | Human turns and tool results. String content = a real prompt; an array may carry `tool_result` blocks instead |
+| `last-prompt` | 1,143 | Most recent human prompt. 42 of these carry no `lastPrompt` field |
+| `ai-title` | 1,070 | Claude Code's generated title — the best session label available |
+| `file-history-delta` | 259 | `trackingPath` — a file the session is tracking edits to |
+| `mode` | 1,119 | Ignored — session settings chatter |
+| `attachment` | 876 | Ignored — already reflected in the message that used it |
+| `permission-mode` | 820 | Ignored |
+| `file-history-snapshot` | 445 | Ignored — see [ADR-0004](../decisions/0004-git-for-diffs-not-file-history.md) |
+| `system` | 406 | Ignored — `turn_duration`, `local_command` and similar |
+| `queue-operation` | 190 | Ignored — queued follow-ups, before they become turns |
+| `pr-link` | 6 | Ignored |
+| `frame-link` | 2 | Ignored |
+
+The last three were **found by the canary**. They existed in real transcripts
+throughout v0.2 and were swallowed by a catch-all arm; nothing recorded that
+they existed, so nobody could have known whether they mattered.
 
 Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
-`version`, `isSidechain`, `uuid`, `parentUuid`.
+`version`, `isSidechain`, `uuid`, `parentUuid`. Also seen: `effort`, `slug`,
+`agentId`, `promptId`, `requestId`, `toolUseResult`.
 
 - `gitBranch` is `"HEAD"` when detached — treated as absent.
 - `isSidechain: true` marks subagent messages. They count toward tool totals but
   never become the session's headline activity.
+- `tool_result` blocks sometimes omit `is_error`; absence means "not an error".
+- `version` is **per line**, and reflects the release that wrote it. A fortnight
+  of transcripts routinely spans a dozen releases, so version ordering must come
+  from each line's own `timestamp`, never from the order files are scanned.
+
+### Size
+
+The largest transcript in the corpus is 11.2 MB. Files over
+`MAX_TRANSCRIPT_BYTES` (4 MiB) are followed from a line boundary near their end
+rather than read whole, and the skipped span is reported as a
+`history_skipped` alert — see [health-and-canary.md](health-and-canary.md).
 
 ## `~/.claude/file-history/<session-id>/<hash>@v<n>`
 
@@ -82,4 +110,6 @@ Unknown event types and unexpected shapes are **ignored, never fatal**. The
 realistic failure mode is therefore a degraded board rather than a crash — which
 is also the dangerous one, because it looks like "nothing is happening".
 
-Roadmap `R-A1` (format canary) exists to make that failure loud.
+`parse_line` returns a `LineOutcome`, never a bare `Option`, precisely so that
+"we chose to skip this" and "we have never seen this" cannot be confused. Every
+outcome is counted: see [health-and-canary.md](health-and-canary.md).

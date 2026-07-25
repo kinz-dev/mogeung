@@ -4,6 +4,7 @@ use chrono::Utc;
 use egui::{Color32, RichText};
 use mogeung_core::attention::{fmt_dur, AttentionItem, AttentionReason};
 use mogeung_core::change::RiskLevel;
+use mogeung_core::health::{human_bytes, Health};
 use mogeung_core::session::LiveStatus;
 use mogeung_core::transcript::{EventKind, NoticeLevel};
 use mogeung_core::{Change, ClientMsg, ServerMsg, Session, SessionId, TranscriptEvent};
@@ -37,6 +38,10 @@ pub struct App {
     launch_worktree: bool,
     show_launch: bool,
 
+    /// What the daemon says it can and cannot see. Pushed after every scan.
+    health: Health,
+    show_health: bool,
+
     errors: Vec<String>,
 }
 
@@ -60,6 +65,8 @@ impl App {
             launch_dir: String::new(),
             launch_worktree: true,
             show_launch: false,
+            health: Health::default(),
+            show_health: false,
             errors: Vec::new(),
         }
     }
@@ -110,6 +117,7 @@ impl App {
                     }
                     self.changes.insert(session_id, change);
                 }
+                ServerMsg::Health { health } => self.health = *health,
                 ServerMsg::Error { message } => {
                     self.errors.push(message);
                     if self.errors.len() > 6 {
@@ -148,6 +156,7 @@ impl eframe::App for App {
         self.queue_panel(ui);
         self.detail_panel(ui);
         self.launch_window(ui);
+        self.health_window(ui);
     }
 }
 
@@ -198,6 +207,28 @@ impl App {
                 ui.label(dim(format!("· {} tokens out", tokens(out))));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // The blindness indicator. A board that has quietly stopped
+                    // seeing things looks exactly like a quiet day, so this is
+                    // the one control that must be present at all times — but
+                    // it stays grey and small until there is something to say.
+                    let urgent = self.health.urgent_alerts();
+                    let health_btn = if urgent > 0 {
+                        ui.button(
+                            RichText::new(format!("⚠ {urgent} unseen"))
+                                .color(AMBER)
+                                .strong(),
+                        )
+                    } else {
+                        ui.button(dim("health"))
+                    };
+                    if health_btn
+                        .on_hover_text(self.health.headline())
+                        .clicked()
+                    {
+                        self.show_health = true;
+                        self.net.send(ClientMsg::FetchHealth);
+                    }
+
                     if ui
                         .button("+ New session")
                         .on_hover_text("opens a real interactive claude in your terminal")
@@ -863,6 +894,156 @@ impl App {
         }
         if !open {
             self.show_launch = false;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Health — what mogeung cannot see
+// ---------------------------------------------------------------------------
+
+impl App {
+    fn health_window(&mut self, root: &mut egui::Ui) {
+        if !self.show_health {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let mut open = true;
+        let h = self.health.clone();
+
+        egui::Window::new("What mogeung can see")
+            .open(&mut open)
+            .default_width(560.0)
+            .collapsible(false)
+            .show(&ctx, |ui| {
+                ui.label(RichText::new(h.headline()).size(14.0).strong());
+                ui.label(dim(
+                    "Everything below is read from undocumented Claude Code files. \
+                     When they change, mogeung sees less rather than failing — \
+                     which is why this window exists.",
+                ));
+                ui.add_space(10.0);
+
+                // Alerts first. If something is wrong, it should not be below
+                // the fold under a table of healthy-looking numbers.
+                if h.alerts.is_empty() {
+                    ui.label(RichText::new("Nothing unaccounted for.").color(GREEN));
+                } else {
+                    for a in &h.alerts {
+                        let colour = if a.is_urgent() { AMBER } else { DIM };
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(if a.is_urgent() { "⚠" } else { "·" }).color(colour));
+                            ui.label(RichText::new(a.message()).color(colour).size(12.5));
+                        });
+                        ui.add_space(2.0);
+                    }
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                egui::Grid::new("health-grid")
+                    .num_columns(2)
+                    .spacing([18.0, 5.0])
+                    .show(ui, |ui| {
+                        let mut row = |k: &str, v: String| {
+                            ui.label(dim(k));
+                            ui.label(mono(v));
+                            ui.end_row();
+                        };
+                        row("scans", h.scans.to_string());
+                        row(
+                            "last scan",
+                            h.last_scan
+                                .map(|t| t.format("%H:%M:%S UTC").to_string())
+                                .unwrap_or_else(|| "never".into()),
+                        );
+                        row(
+                            "sessions",
+                            format!("{} known, {} live", h.sessions_known, h.sessions_live),
+                        );
+                        row("transcripts", h.transcripts_found.to_string());
+                    });
+
+                ui.add_space(10.0);
+                ui.label(RichText::new("Transcript lines").strong().size(12.5));
+                ui.label(dim(
+                    "\"ignored\" is bookkeeping we classified and chose to skip — \
+                     it is not blindness. \"unknown\" and \"unreadable\" are.",
+                ));
+                ui.add_space(4.0);
+
+                egui::Grid::new("health-lines")
+                    .num_columns(2)
+                    .spacing([18.0, 5.0])
+                    .show(ui, |ui| {
+                        let total = h.lines_seen.max(1);
+                        let mut row = |k: &str, n: u64, colour: Option<Color32>| {
+                            ui.label(dim(k));
+                            let txt = format!("{n}  ({:.1}%)", 100.0 * n as f64 / total as f64);
+                            match colour {
+                                Some(c) if n > 0 => ui.label(mono(txt).color(c)),
+                                _ => ui.label(mono(txt)),
+                            };
+                            ui.end_row();
+                        };
+                        row("read", h.lines_parsed, None);
+                        row("ignored", h.lines_ignored, None);
+                        row("yielded nothing", h.lines_barren, None);
+                        row("unknown type", h.lines_unknown, Some(AMBER));
+                        row("unreadable", h.lines_malformed, Some(RED));
+                        ui.label(dim("total seen"));
+                        ui.label(mono(h.lines_seen.to_string()));
+                        ui.end_row();
+                    });
+
+                if !h.unknown_types.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Types mogeung does not understand").color(AMBER).strong().size(12.5));
+                    for (ty, n) in &h.unknown_types {
+                        ui.label(mono(format!("  {ty}  ×{n}")).color(AMBER));
+                    }
+                }
+
+                ui.add_space(10.0);
+                ui.label(RichText::new("Claude Code").strong().size(12.5));
+                match &h.current_version {
+                    Some(v) => ui.label(mono(format!("  running {v}"))),
+                    None => ui.label(dim("  no version reported yet")),
+                };
+                if h.versions_seen.len() > 1 {
+                    ui.label(dim(format!(
+                        "  {} version(s) across the watched history: {}",
+                        h.versions_seen.len(),
+                        h.versions_seen.join(", ")
+                    )));
+                }
+
+                ui.add_space(10.0);
+                ui.label(RichText::new("History limits").strong().size(12.5));
+                ui.label(dim(format!(
+                    "  transcripts over {} are followed from their tail",
+                    human_bytes(h.max_transcript_bytes)
+                )));
+                if h.history_skipped_bytes > 0 {
+                    ui.label(mono(format!(
+                        "  {} of earlier history never read",
+                        human_bytes(h.history_skipped_bytes)
+                    )));
+                }
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Refresh").clicked() {
+                        self.net.send(ClientMsg::FetchHealth);
+                    }
+                    ui.label(dim("also at GET /api/health"));
+                });
+            });
+
+        if !open {
+            self.show_health = false;
         }
     }
 }

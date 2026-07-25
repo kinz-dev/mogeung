@@ -10,8 +10,86 @@
 //! rather than break the watcher.
 
 use chrono::{DateTime, Utc};
+use mogeung_core::health::LineClass;
 use mogeung_core::transcript::EventKind;
 use serde_json::Value;
+
+/// Transcript event types we have seen, understand the purpose of, and
+/// deliberately do not surface.
+///
+/// This list is the whole point of roadmap `R-A1`. Before it existed, an
+/// unrecognised type and a type we had chosen to skip were both `None`, so a
+/// format change was indistinguishable from normal operation. Adding an entry
+/// here is now a deliberate act: it says *we looked at this and decided it
+/// carries nothing we need*, and it silences an alert that would otherwise
+/// fire.
+///
+/// Verified against the 52-transcript corpus on the author's machine
+/// (2026-07-25, Claude Code 2.1.219/2.1.220). `queue-operation`, `pr-link` and
+/// `frame-link` were found only because the canary flagged them.
+pub const KNOWN_IGNORED: &[&str] = &[
+    // Session settings chatter.
+    "mode",
+    "permission-mode",
+    // Pre-edit backup bookkeeping. See ADR-0004 for why we do not read it.
+    "file-history-snapshot",
+    // Pasted/attached content, already reflected in the message that used it.
+    "attachment",
+    // Turn timing and meta notices.
+    "system",
+    // Queued follow-up prompts, before they become real turns.
+    "queue-operation",
+    // Links the CLI records after opening a PR or a frame.
+    "pr-link",
+    "frame-link",
+];
+
+/// Types this parser extracts data from.
+///
+/// Kept explicit so that a line of a handled type which yields nothing can be
+/// reported as [`LineClass::Barren`] rather than silently dropped — a spike
+/// there means a shape we depend on has moved.
+pub const HANDLED: &[&str] = &[
+    "assistant",
+    "user",
+    "ai-title",
+    "last-prompt",
+    "file-history-delta",
+];
+
+/// The outcome of reading one transcript line.
+#[derive(Debug)]
+pub enum LineOutcome {
+    /// Understood, and it produced something.
+    Parsed(Box<Parsed>),
+    /// A known type we deliberately skip.
+    Ignored,
+    /// A handled type that yielded nothing this time.
+    Barren { event_type: String },
+    /// A type we have never heard of. The canary.
+    Unknown { event_type: String },
+    /// Not JSON, or no `type` field.
+    Malformed,
+}
+
+impl LineOutcome {
+    pub fn class(&self) -> LineClass {
+        match self {
+            LineOutcome::Parsed(_) => LineClass::Parsed,
+            LineOutcome::Ignored => LineClass::Ignored,
+            LineOutcome::Barren { .. } => LineClass::Barren,
+            LineOutcome::Unknown { .. } => LineClass::Unknown,
+            LineOutcome::Malformed => LineClass::Malformed,
+        }
+    }
+
+    pub fn parsed(self) -> Option<Parsed> {
+        match self {
+            LineOutcome::Parsed(p) => Some(*p),
+            _ => None,
+        }
+    }
+}
 
 /// Everything one transcript line tells us.
 #[derive(Debug, Default)]
@@ -123,15 +201,50 @@ fn text_of(v: &Value) -> String {
     }
 }
 
-/// Parse one line of a `.jsonl` transcript.
-pub fn parse_line(line: &str) -> Option<Parsed> {
+/// Classify and read one line of a `.jsonl` transcript.
+///
+/// Never panics and never fails: an unreadable line becomes an outcome, because
+/// the formats are undocumented and a schema change must degrade the board
+/// rather than stop the watcher.
+pub fn parse_line(line: &str) -> LineOutcome {
     let line = line.trim();
-    if line.is_empty() || !line.starts_with('{') {
-        return None;
+    if line.is_empty() {
+        // The tailer already drops blank lines; this is belt and braces, and a
+        // blank line is not evidence of a format change.
+        return LineOutcome::Ignored;
     }
-    let v: Value = serde_json::from_str(line).ok()?;
-    let ty = str_at(&v, "type")?;
+    if !line.starts_with('{') {
+        return LineOutcome::Malformed;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return LineOutcome::Malformed;
+    };
+    let Some(ty) = str_at(&v, "type") else {
+        return LineOutcome::Malformed;
+    };
+    let ty = ty.to_string();
 
+    if KNOWN_IGNORED.contains(&ty.as_str()) {
+        return LineOutcome::Ignored;
+    }
+    if !HANDLED.contains(&ty.as_str()) {
+        // The canary. We have never seen this type, so we cannot know what we
+        // are missing — which is exactly why it must be said out loud.
+        return LineOutcome::Unknown { event_type: ty };
+    }
+
+    match extract(&v, &ty) {
+        Some(p) => LineOutcome::Parsed(Box::new(p)),
+        None => LineOutcome::Barren { event_type: ty },
+    }
+}
+
+/// Pull what we can out of a line whose type we handle.
+///
+/// `None` means the type is one we read but this line gave us nothing — a
+/// normal occurrence in small numbers (a `last-prompt` with no prompt), and a
+/// signal that a shape has moved if it becomes common.
+fn extract(v: &Value, ty: &str) -> Option<Parsed> {
     let mut out = Parsed {
         ts: str_at(&v, "timestamp")
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
@@ -288,8 +401,10 @@ pub fn parse_line(line: &str) -> Option<Parsed> {
             }
         }
 
-        // Bookkeeping we do not surface: mode, permission-mode, attachment,
-        // file-history-snapshot, system/turn_duration.
+        // Unreachable: `parse_line` has already sorted every type into
+        // handled, known-ignored or unknown. Kept so that adding a name to
+        // `HANDLED` without writing an arm degrades to "barren" rather than
+        // failing to compile into a silent lie.
         _ => return None,
     }
 
@@ -309,21 +424,79 @@ pub fn parse_line(line: &str) -> Option<Parsed> {
 mod tests {
     use super::*;
 
+    /// Unwrap a line we expect to yield data.
+    fn parsed(line: &str) -> Parsed {
+        match parse_line(line) {
+            LineOutcome::Parsed(p) => *p,
+            other => panic!("expected a parsed line, got {other:?}"),
+        }
+    }
+
+    fn class(line: &str) -> LineClass {
+        parse_line(line).class()
+    }
+
     #[test]
-    fn ignores_bookkeeping_and_unknown_types() {
-        assert!(parse_line("").is_none());
-        assert!(parse_line("not json").is_none());
-        assert!(parse_line(r#"{"type":"mode","mode":"normal"}"#).is_none());
-        assert!(parse_line(r#"{"type":"permission-mode","permissionMode":"auto"}"#).is_none());
-        assert!(parse_line(r#"{"type":"file-history-snapshot","snapshot":{}}"#).is_none());
-        // A future event type must not blow up the watcher.
-        assert!(parse_line(r#"{"type":"some_future_thing","x":1}"#).is_none());
+    fn known_bookkeeping_is_ignored_quietly() {
+        assert_eq!(class(""), LineClass::Ignored);
+        for ty in KNOWN_IGNORED {
+            let line = format!(r#"{{"type":"{ty}"}}"#);
+            assert_eq!(
+                class(&line),
+                LineClass::Ignored,
+                "{ty} is in KNOWN_IGNORED but did not classify as ignored"
+            );
+        }
+    }
+
+    /// The canary. This is the distinction the whole feature exists to draw:
+    /// an unclassified type must never look like ordinary skipped bookkeeping.
+    #[test]
+    fn an_unheard_of_type_is_not_confused_with_bookkeeping() {
+        match parse_line(r#"{"type":"warp-drive","x":1}"#) {
+            LineOutcome::Unknown { event_type } => assert_eq!(event_type, "warp-drive"),
+            other => panic!("a future event type must be flagged, got {other:?}"),
+        }
+    }
+
+    /// Regression: these three exist in the real corpus and were being
+    /// swallowed by a catch-all. They were found *by* the canary.
+    #[test]
+    fn types_found_in_the_real_corpus_are_all_classified() {
+        for ty in ["queue-operation", "pr-link", "frame-link"] {
+            let line = format!(r#"{{"type":"{ty}","sessionId":"s"}}"#);
+            assert_eq!(
+                class(&line),
+                LineClass::Ignored,
+                "{ty} occurs in real transcripts and must be classified, not unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn unreadable_lines_are_malformed_not_silently_dropped() {
+        assert_eq!(class("not json"), LineClass::Malformed);
+        assert_eq!(class("{ truncated"), LineClass::Malformed);
+        // Valid JSON, but nothing tells us what it is.
+        assert_eq!(class(r#"{"sessionId":"s"}"#), LineClass::Malformed);
+    }
+
+    /// A handled type that yields nothing is its own category: normal in small
+    /// numbers, and evidence a shape moved if it becomes common.
+    #[test]
+    fn a_handled_type_yielding_nothing_is_barren() {
+        // Seen 42× in the real corpus: a last-prompt with no lastPrompt.
+        match parse_line(r#"{"type":"last-prompt","leafUuid":"u","sessionId":"s"}"#) {
+            LineOutcome::Barren { event_type } => assert_eq!(event_type, "last-prompt"),
+            other => panic!("expected barren, got {other:?}"),
+        }
+        assert_eq!(class(r#"{"type":"assistant"}"#), LineClass::Barren);
     }
 
     #[test]
     fn multiline_commands_stay_on_one_line() {
         let l = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"python3 - <<'PY'\nimport os\nprint(1)\nPY"}}]}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         let activity = p.last_activity.unwrap();
         assert!(!activity.contains('\n'), "activity leaked a newline: {activity:?}");
         assert!(activity.starts_with("Bash: python3 - <<'PY' import os"));
@@ -331,14 +504,14 @@ mod tests {
 
     #[test]
     fn reads_the_generated_title() {
-        let p = parse_line(r#"{"type":"ai-title","aiTitle":"Fix the retry loop"}"#).unwrap();
+        let p = parsed(r#"{"type":"ai-title","aiTitle":"Fix the retry loop"}"#);
         assert_eq!(p.title.as_deref(), Some("Fix the retry loop"));
     }
 
     #[test]
     fn a_string_user_message_is_a_turn() {
         let l = r#"{"type":"user","timestamp":"2026-07-17T14:24:21.804Z","cwd":"/w","gitBranch":"main","message":{"role":"user","content":"do the thing"}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         assert!(p.is_turn);
         assert_eq!(p.cwd.as_deref(), Some("/w"));
         assert_eq!(p.git_branch.as_deref(), Some("main"));
@@ -348,7 +521,7 @@ mod tests {
     #[test]
     fn a_tool_result_carrier_is_not_a_turn() {
         let l = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         assert!(!p.is_turn, "tool results must not be counted as human turns");
         assert!(matches!(p.events[0], EventKind::ToolResult { .. }));
     }
@@ -356,13 +529,13 @@ mod tests {
     #[test]
     fn detached_head_is_not_treated_as_a_branch() {
         let l = r#"{"type":"user","gitBranch":"HEAD","message":{"role":"user","content":"x"}}"#;
-        assert!(parse_line(l).unwrap().git_branch.is_none());
+        assert!(parsed(l).git_branch.is_none());
     }
 
     #[test]
     fn write_and_edit_register_as_touched_files() {
         let l = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/w/src/a.rs"}}]}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         assert_eq!(p.touched, vec!["/w/src/a.rs"]);
         assert_eq!(p.tool_calls, 1);
         assert_eq!(p.last_activity.as_deref(), Some("Edit: /w/src/a.rs"));
@@ -371,13 +544,13 @@ mod tests {
     #[test]
     fn reads_but_does_not_count_as_a_file_change() {
         let l = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/w/src/a.rs"}}]}}"#;
-        assert!(parse_line(l).unwrap().touched.is_empty());
+        assert!(parsed(l).touched.is_empty());
     }
 
     #[test]
     fn subagent_activity_does_not_become_the_session_headline() {
         let l = r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         assert!(p.sidechain);
         assert!(p.last_activity.is_none());
     }
@@ -385,14 +558,14 @@ mod tests {
     #[test]
     fn api_errors_surface_as_errors() {
         let l = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"overloaded_error"}]}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         assert!(p.error.unwrap().contains("overloaded"));
     }
 
     #[test]
     fn usage_totals_are_read() {
         let l = r#"{"type":"assistant","message":{"content":[],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5}}}"#;
-        let p = parse_line(l).unwrap();
+        let p = parsed(l);
         assert_eq!(p.tokens_in, 15);
         assert_eq!(p.tokens_out, 20);
     }

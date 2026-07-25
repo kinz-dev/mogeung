@@ -4,13 +4,15 @@
 //! no child processes — the sessions belong to your terminals. The daemon's job
 //! is to notice them, rank them, diff them, and remember what you have read.
 
-use crate::adapter;
+use crate::adapter::{self, LineOutcome};
 use crate::git;
+use crate::health::HealthTracker;
 use crate::store::Store;
 use crate::watcher::{self, Tailer};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use mogeung_core::attention::{rank, AttentionConfig};
+use mogeung_core::health::Health;
 use mogeung_core::session::{Session, SessionId};
 use mogeung_core::{Change, EventKind, ServerMsg, TranscriptEvent};
 use std::collections::HashMap;
@@ -20,6 +22,22 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 
 /// How far back to look for sessions on startup.
 const HISTORY_DAYS: i64 = 14;
+
+/// Largest transcript we will read from the beginning on first sight.
+///
+/// Above this we follow the tail instead and say so — see roadmap `R-A5`. The
+/// corpus this was sized against has a 11.2 MB transcript; reading one whole
+/// parses tens of thousands of lines and emits every event, synchronously,
+/// inside the scan loop, to reconstruct history nobody is going to review.
+///
+/// The number is a judgement, not a measurement: big enough that a normal
+/// working session is never truncated, small enough that a pathological one
+/// cannot stall the board.
+const MAX_TRANSCRIPT_BYTES: u64 = 4 << 20; // 4 MiB
+
+/// How much of an oversized transcript to keep. Enough to show what the session
+/// was recently doing without paying for its whole history.
+const TAIL_BYTES: u64 = 1 << 20; // 1 MiB
 
 pub struct AppState {
     pub store: Store,
@@ -31,6 +49,8 @@ pub struct AppState {
     /// Root of the Claude Code state directory this daemon watches.
     pub claude_home: PathBuf,
     pub attention: AttentionConfig,
+    /// What we have and have not managed to read. See `health.rs`.
+    health: Mutex<HealthTracker>,
 }
 
 impl AppState {
@@ -61,7 +81,20 @@ impl AppState {
             seqs: Mutex::new(seqs),
             claude_home,
             attention: AttentionConfig::default(),
+            health: Mutex::new(HealthTracker::new(MAX_TRANSCRIPT_BYTES)),
         }))
+    }
+
+    /// What mogeung can currently see, and what it cannot.
+    pub async fn health(&self) -> Health {
+        self.health.lock().await.snapshot()
+    }
+
+    async fn publish_health(&self) {
+        let health = self.health().await;
+        self.broadcast(ServerMsg::Health {
+            health: Box::new(health),
+        });
     }
 
     pub fn broadcast(&self, msg: ServerMsg) {
@@ -199,12 +232,21 @@ impl AppState {
             // Keep diffs current for sessions that are actively changing files.
             self.recompute_change(&id).await;
         }
+
+        {
+            let sessions = self.sessions.read().await;
+            let live_count = sessions.values().filter(|s| s.alive).count() as u64;
+            self.health
+                .lock()
+                .await
+                .finish_scan(sessions.len() as u64, live_count, files.len() as u64);
+        }
         self.publish_queue().await;
+        self.publish_health().await;
     }
 
     /// Register a transcript we have not seen before.
     async fn ensure_session(&self, f: &watcher::TranscriptFile) {
-        let now = Utc::now();
         let s = Session {
             id: f.session_id.clone(),
             title: None,
@@ -235,9 +277,31 @@ impl AppState {
             reviewed: false,
         };
         self.sessions.write().await.insert(s.id.clone(), s);
-        if now.signed_duration_since(f.modified).num_days() > HISTORY_DAYS {
-            let mut t = self.tailer.lock().await;
-            t.skip_to_end(&f.path);
+
+        // Cap the first read. The previous guard here compared the file's age
+        // against HISTORY_DAYS, which `scan_transcripts` has already filtered
+        // on — so it could never fire, and the comment promising "only if it is
+        // not enormous" described a check that did not exist.
+        //
+        // Skipping history is a real loss, so it is recorded and surfaced
+        // rather than done quietly.
+        if f.size > MAX_TRANSCRIPT_BYTES {
+            let started_at = {
+                let mut t = self.tailer.lock().await;
+                t.start_near_end(&f.path, TAIL_BYTES)
+            };
+            if started_at > 0 {
+                tracing::warn!(
+                    "transcript {} is {} — following its tail, skipping {} of history",
+                    f.session_id,
+                    mogeung_core::health::human_bytes(f.size),
+                    mogeung_core::health::human_bytes(started_at),
+                );
+                self.health
+                    .lock()
+                    .await
+                    .record_skipped(&f.session_id, started_at);
+            }
         }
     }
 
@@ -253,9 +317,26 @@ impl AppState {
         let mut last_ts = None;
 
         for line in &lines {
-            let Some(p) = adapter::parse_line(line) else {
+            let outcome = adapter::parse_line(line);
+            {
+                // Every line is accounted for, including the ones we throw
+                // away. A line we cannot classify is the only early warning we
+                // get that a format moved.
+                let mut h = self.health.lock().await;
+                h.record_line(outcome.class());
+                if let LineOutcome::Unknown { event_type } = &outcome {
+                    h.record_unknown(event_type);
+                }
+            }
+            let Some(p) = outcome.parsed() else {
                 continue;
             };
+            if let Some(v) = &p.version {
+                // Pass the line's own timestamp: sessions are scanned
+                // newest-file-first and each reports the release it ran under,
+                // so read order says nothing about what is current.
+                self.health.lock().await.record_version(v, p.ts);
+            }
             if let Some(t) = p.ts {
                 last_ts = Some(t);
                 s.last_event_at = t;

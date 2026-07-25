@@ -45,13 +45,16 @@ later is a packaging decision rather than a rewrite.
 Every `--poll-ms` (default 1500):
 
 1. Read `~/.claude/sessions/*.json`; drop entries whose pid is not running.
-2. Scan `~/.claude/projects/**/*.jsonl` modified within 14 days.
-3. Tail each file from its recorded byte offset; parse and fold into its session.
+2. Scan `~/.claude/projects/**/*.jsonl` modified within 14 days. A file over
+   4 MiB is followed from near its end rather than read whole.
+3. Tail each file from its recorded byte offset; classify and fold every line
+   into its session. **Every line is accounted for**, including discarded ones —
+   see [health-and-canary.md](health-and-canary.md).
 4. Apply liveness to **every** known session, not only ones that moved — a
    session going busy→idle produces no transcript line, and that transition is
    the most important signal we have.
 5. Recompute diffs for sessions that changed, and for any that just exited.
-6. Rank and broadcast the queue.
+6. Rank and broadcast the queue, then broadcast health.
 
 Polling rather than filesystem events: a few dozen files every 1.5 s costs
 nothing, and it avoids every rename and atomic-write edge case that makes

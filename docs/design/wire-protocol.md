@@ -24,6 +24,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `ForgetSession` | Stop tracking; drop review state |
 | `LaunchTerminal` | Open a real interactive `claude`, optionally in a new worktree |
 | `Rescan` | Scan now instead of waiting for the next poll |
+| `FetchHealth` | Ask what mogeung can and cannot currently see |
 
 **Note what is absent:** nothing starts, steers or stops an agent
 ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
@@ -31,7 +32,11 @@ available as plain REST so the daemon is curl-able without a UI.
 ## Events (`ServerMsg`)
 
 `Snapshot` · `SessionUpdated` · `SessionRemoved` · `Events` · `Queue` ·
-`ChangeUpdated` · `Error`
+`ChangeUpdated` · `Health` · `Error`
+
+`Health` is pushed after **every** scan, unsolicited. A client should never have
+to ask whether the board it is showing is complete — see
+[health-and-canary.md](health-and-canary.md).
 
 ## Design rules
 
@@ -49,7 +54,7 @@ to reconnect rather than wedging the channel for everyone else.
 ## REST
 
 ```
-GET  /api/health
+GET  /api/health          # liveness *and* whether it is still seeing everything
 GET  /api/queue
 GET  /api/sessions
 GET  /api/sessions/{id}
@@ -59,6 +64,11 @@ POST /api/sessions/{id}/review_all
 POST /api/sessions/{id}/review     {"anchor": "...", "reviewed": true}
 POST /api/rescan
 ```
+
+`/api/health` returns a `headline`, `blind_ratio`, plain-language `alerts`, and
+the full `detail` object. It is deliberately curl-able: "is the board empty
+because nothing is happening, or because mogeung went blind?" should not require
+a window.
 
 ## Security
 

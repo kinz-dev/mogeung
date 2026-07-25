@@ -39,22 +39,28 @@ is speculation until this is done, and some will look obviously wrong
 afterwards.
 
 The only work that should precede it is whatever makes the tool trustworthy
-enough to judge — realistically `R-A1` and `R-A4` below.
+enough to judge — that was pillar `A`, and it is now **done**. Nothing else
+should go ahead of the week of use.
 
 ---
 
-## A. Trust the tool
+## A. Trust the tool — **shipped**
 
 Everything rests on two undocumented file formats ([A4](assumptions.md)). If
 mogeung silently stops seeing things, nobody would know.
 
-| # | Item | Effort |
-|---|---|---|
-| R-A1 | **Format canary** — count unparsed lines per scan, surface it, warn when the ratio jumps | S |
-| R-A2 | **CLI version watch** — record versions seen; warn on Claude Code updates, which is when formats move | S |
-| R-A3 | **Golden-corpus test** — snapshot-test the parser against anonymised real transcripts | M |
-| R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S |
-| R-A5 | **Huge-transcript handling** — the corpus is 67 MB; cap and stream rather than reading whole files | S |
+Delivered by [feature 0001](../features/0001-trust-the-tool.md) and
+[ADR-0007](../decisions/0007-classify-every-transcript-line.md). It found three
+event types that had been discarded silently, an unreachable size guard, and one
+alert of its own that was confidently wrong.
+
+| # | Item | Effort | |
+|---|---|---|---|
+| R-A1 | **Format canary** — classify every line; alert on any unclassified type | S | ✅ |
+| R-A2 | **CLI version watch** — record versions seen; warn on Claude Code updates, which is when formats move | S | ✅ |
+| R-A3 | **Golden-corpus test** — snapshot-test the parser against anonymised real transcripts | M | ✅ |
+| R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
+| R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
 ## B. Sharpen the queue
 

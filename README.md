@@ -10,6 +10,8 @@ Claude Code already writes and adds the layer that doesn't exist:
 - **one queue across every session**, ranked by who needs you
 - **a diff per session**, risk-ordered, with per-hunk read marks that survive
   the agent rewriting the file
+- **a health panel that says what it cannot see**, because the formats it reads
+  are undocumented and going quietly blind must not look like a quiet day
 
 Because it observes rather than wraps, it cannot make any individual session
 worse. That was the fatal flaw of the first version — see
@@ -74,7 +76,7 @@ read your transcripts. Do not expose it.
 ## Develop
 
 ```sh
-cargo test --workspace      # 36 tests, all free — nothing spawns an agent
+cargo test --workspace      # 63 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```
