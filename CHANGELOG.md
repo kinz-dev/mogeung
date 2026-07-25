@@ -12,6 +12,10 @@ Filter, group-by-repo, follow-the-top. Snooze, which beats even `FAILED`.
 Collision warning when two live sessions edit one file. Loop detection for an
 agent repeating itself. Jump to the session's Terminal tab.
 
+**Added — tab shortcuts.** `c`/`t`/`i`/`d` switch to Changes, Transcript, Info
+and Debt; `Ctrl+Tab` cycles. Rebindable like everything else, and each tab shows
+its key on hover.
+
 **Changed — transcript.** Agent replies render as Markdown via `egui_commonmark`
 — headings, lists, tables, inline and fenced code (`R-B16`). Tool *output* stays
 monospace on purpose: Markdown mangles logs and stack traces. Toggles for

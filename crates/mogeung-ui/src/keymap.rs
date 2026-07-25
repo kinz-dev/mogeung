@@ -36,6 +36,13 @@ pub enum Action {
     FocusQueue,
     FocusFiles,
     FocusDiff,
+    // -- tabs in the detail panel
+    TabChanges,
+    TabTranscript,
+    TabInfo,
+    TabDebt,
+    NextTab,
+    PrevTab,
     // -- navigation, relative to the focused pane
     Next,
     Prev,
@@ -65,6 +72,12 @@ impl Action {
         Action::FocusQueue,
         Action::FocusFiles,
         Action::FocusDiff,
+        Action::TabChanges,
+        Action::TabTranscript,
+        Action::TabInfo,
+        Action::TabDebt,
+        Action::NextTab,
+        Action::PrevTab,
         Action::Next,
         Action::Prev,
         Action::First,
@@ -88,6 +101,12 @@ impl Action {
     pub fn group(self) -> &'static str {
         match self {
             Action::FocusQueue | Action::FocusFiles | Action::FocusDiff => "Panes",
+            Action::TabChanges
+            | Action::TabTranscript
+            | Action::TabInfo
+            | Action::TabDebt
+            | Action::NextTab
+            | Action::PrevTab => "Tabs",
             Action::Next | Action::Prev | Action::First | Action::Activate => "Navigation",
             Action::JumpToTerminal
             | Action::MarkAllRead
@@ -109,6 +128,12 @@ impl Action {
             Action::FocusQueue => "Focus the session queue",
             Action::FocusFiles => "Focus the file list",
             Action::FocusDiff => "Focus the diff",
+            Action::TabChanges => "Show the Changes tab",
+            Action::TabTranscript => "Show the Transcript tab",
+            Action::TabInfo => "Show the Info tab",
+            Action::TabDebt => "Show the Debt tab",
+            Action::NextTab => "Next tab",
+            Action::PrevTab => "Previous tab",
             Action::Next => "Next item in the focused pane",
             Action::Prev => "Previous item in the focused pane",
             Action::First => "First item in the focused pane",
@@ -233,6 +258,15 @@ impl Default for Keymap {
 
         // Both vim keys and arrows, because muscle memory differs and there is
         // no reason to make anyone choose.
+        // Mnemonic single letters: the four tabs are the thing you switch
+        // between constantly, and c/t/i/d are unclaimed.
+        set(Action::TabChanges, &["C"]);
+        set(Action::TabTranscript, &["T"]);
+        set(Action::TabInfo, &["I"]);
+        set(Action::TabDebt, &["D"]);
+        set(Action::NextTab, &["Ctrl+Tab"]);
+        set(Action::PrevTab, &["Ctrl+Shift+Tab"]);
+
         set(Action::Next, &["J", "Down"]);
         set(Action::Prev, &["K", "Up"]);
         set(Action::First, &["G"]);

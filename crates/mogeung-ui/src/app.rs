@@ -11,7 +11,7 @@ use mogeung_core::transcript::{EventKind, NoticeLevel};
 use mogeung_core::{Change, ClientMsg, ServerMsg, Session, SessionId, TranscriptEvent};
 use std::collections::{HashMap, HashSet};
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Tab {
     Changes,
     Transcript,
@@ -736,6 +736,12 @@ impl App {
     fn run(&mut self, action: crate::keymap::Action, ui: &mut egui::Ui) {
         use crate::keymap::Action as A;
         match action {
+            A::TabChanges => self.set_tab(Tab::Changes),
+            A::TabTranscript => self.set_tab(Tab::Transcript),
+            A::TabInfo => self.set_tab(Tab::Info),
+            A::TabDebt => self.set_tab(Tab::Debt),
+            A::NextTab => self.cycle_tab(1),
+            A::PrevTab => self.cycle_tab(-1),
             A::FocusQueue => self.pane = Pane::Queue,
             A::FocusFiles => {
                 self.pane = Pane::Files;
@@ -901,6 +907,28 @@ impl App {
                 .collect(),
         });
         self.show_prompt = true;
+    }
+
+    /// Switch tab, running whatever that tab needs.
+    ///
+    /// One path for the keyboard and the mouse: the Debt tab has to ask the
+    /// daemon for its numbers, and a keyboard shortcut that skipped that would
+    /// show a permanently empty tab.
+    fn set_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        if tab == Tab::Debt {
+            if let Some(repo) = self.selected_session().and_then(|s| s.repo_root.clone()) {
+                self.net.send(ClientMsg::FetchReviewDebt { repo });
+            }
+        }
+        if tab == Tab::Changes && self.pane == Pane::Queue {
+            // Asking for the diff usually means you are about to read it.
+            self.pane = Pane::Files;
+        }
+    }
+
+    fn cycle_tab(&mut self, delta: i32) {
+        self.set_tab(next_tab(self.tab, delta));
     }
 
     fn focus_selected_terminal(&mut self) {
@@ -1441,17 +1469,33 @@ impl App {
                 } else {
                     "Changes".to_string()
                 };
-                ui.selectable_value(&mut self.tab, Tab::Changes, changes_label);
-                ui.selectable_value(&mut self.tab, Tab::Transcript, "Transcript");
-                ui.selectable_value(&mut self.tab, Tab::Info, "Info");
-                if ui
-                    .selectable_value(&mut self.tab, Tab::Debt, "Debt")
-                    .on_hover_text("how much of this repo's agent output nobody has read")
-                    .clicked()
-                {
-                    if let Some(repo) = s.repo_root.clone() {
-                        self.net.send(ClientMsg::FetchReviewDebt { repo });
+                let mut pick = None;
+                for (tab, label, hint) in [
+                    (Tab::Changes, changes_label.clone(), "the diff this session produced"),
+                    (Tab::Transcript, "Transcript".to_string(), "the conversation"),
+                    (Tab::Info, "Info".to_string(), "session details"),
+                    (
+                        Tab::Debt,
+                        "Debt".to_string(),
+                        "how much of this repo's agent output nobody has read",
+                    ),
+                ] {
+                    let action = match tab {
+                        Tab::Changes => crate::keymap::Action::TabChanges,
+                        Tab::Transcript => crate::keymap::Action::TabTranscript,
+                        Tab::Info => crate::keymap::Action::TabInfo,
+                        Tab::Debt => crate::keymap::Action::TabDebt,
+                    };
+                    if ui
+                        .selectable_label(self.tab == tab, label)
+                        .on_hover_text(format!("{hint}  ({})", self.keymap.describe(action)))
+                        .clicked()
+                    {
+                        pick = Some(tab);
                     }
+                }
+                if let Some(tab) = pick {
+                    self.set_tab(tab);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !self.flagged.is_empty()
@@ -1893,6 +1937,16 @@ impl App {
                 }
             });
     }
+}
+
+/// The tab `delta` steps from `from`, wrapping at both ends.
+///
+/// Wrapping rather than clamping: cycling that stops dead at the last tab makes
+/// you reverse direction to get back, which is not what a cycle is for.
+fn next_tab(from: Tab, delta: i32) -> Tab {
+    const ORDER: [Tab; 4] = [Tab::Changes, Tab::Transcript, Tab::Info, Tab::Debt];
+    let at = ORDER.iter().position(|t| *t == from).unwrap_or(0) as i32;
+    ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]
 }
 
 /// Shorten a path to its last directory plus filename.
@@ -2982,7 +3036,25 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::short_path;
+    use super::{next_tab, short_path, Tab};
+
+    #[test]
+    fn cycling_tabs_wraps_at_both_ends() {
+        assert_eq!(next_tab(Tab::Changes, 1), Tab::Transcript);
+        assert_eq!(next_tab(Tab::Debt, 1), Tab::Changes, "forward from the last");
+        assert_eq!(next_tab(Tab::Changes, -1), Tab::Debt, "back from the first");
+        assert_eq!(next_tab(Tab::Info, -1), Tab::Transcript);
+    }
+
+    #[test]
+    fn cycling_all_the_way_round_returns_to_the_start() {
+        let mut t = Tab::Changes;
+        for _ in 0..4 {
+            t = next_tab(t, 1);
+        }
+        assert_eq!(t, Tab::Changes, "four tabs, four steps");
+    }
+
 
     #[test]
     fn a_deep_path_keeps_the_part_that_identifies_it() {

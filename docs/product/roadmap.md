@@ -86,6 +86,7 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B14 | **Scope** — needs-you / live / all | S | ✅ |
 | R-B15 | **Field filters** — `repo:` `branch:` `file:` | S | ✅ |
 | R-B16 | **Markdown transcript** — render replies as prose, not one long string | S | ✅ |
+| R-B17 | **Tab shortcuts** — `c`/`t`/`i`/`d`, and cycling | S | ✅ |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 
