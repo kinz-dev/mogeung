@@ -65,7 +65,8 @@ quietly: if `A1` or `A6` turn out false, most of pillar `B` and all of pillar
 
 - Any path that sends text to a session — [ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md).
 - Real syntax parsing, or a real call graph. Both stay heuristics that say so.
-- Terminals other than Terminal.app for `R-B2`.
+- Terminals without AppleScript support for `R-B2` (Alacritty, Ghostty, kitty),
+  and panes inside `tmux`/`screen`.
 - Authentication, despite `R-C3` inviting a phone onto the network.
 
 ## Plan
@@ -128,6 +129,28 @@ banners turn out to be enough, a menu-bar item is dead weight. Left undone
 deliberately, and `R-C2` stays open on the roadmap. **Everything else in B, C
 and D shipped.**
 
+### Jump-to-terminal shipped broken for the only user
+
+`R-B2` assumed Terminal.app. The user runs iTerm2, so pressing `enter` produced
+*"no Terminal.app tab is attached to /dev/ttys003"* while the tab sat in plain
+view.
+
+Two mistakes, not one. Assuming a single terminal was the obvious error. The
+subtler one: the fix needed the process **ancestry**, not the parent —
+`claude → zsh → login → iTermServer → iTerm2` is four levels, and any
+implementation checking `getppid()` would have failed just as silently. iTerm2
+also nests the tty on the *session* inside a tab rather than on the tab, so
+porting the Terminal.app script shape verbatim would have found nothing.
+
+Now detected by walking ancestry, addressed by bundle id, with a fallback that
+tries every known terminal — and each script activates only *after* a match, so
+the fallback cannot shuffle windows on a miss.
+
+Worth recording because it is the third time in two features that **the first
+real run found what the suite did not**, and the first time a feature was
+outright broken on delivery. The suite could not have caught it: there is no
+terminal in CI.
+
 ### Two bugs I wrote, both found by running it
 
 **The word diff highlighted whole lines.** It compared the `-`/`+` marker as
@@ -170,4 +193,4 @@ Against the author's real corpus, live:
   references across the workspace, tests called out.
 - Web client served at `/`, 10.5 KB, self-contained.
 
-91 tests → 98, all free and offline.
+91 tests → 102, all free and offline.

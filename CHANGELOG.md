@@ -26,10 +26,16 @@ per repo. Blast radius via `git grep`.
 **Fixed.** The diff base is now the last commit *before* the session started, so
 work an agent committed before mogeung noticed it no longer vanishes.
 
+**Fixed.** Jump-to-terminal assumed Terminal.app and failed for iTerm2 users.
+The owning application is now found by walking the process ancestry
+(`claude → zsh → login → iTermServer → iTerm2` — four levels, so checking the
+parent is not enough), and iTerm2's tty lives on the session inside a tab rather
+than on the tab.
+
 **Not built.** `R-C2` (menu-bar item) needs a separate binary to outlive the
 window; left open deliberately.
 
-63 tests → 98.
+63 tests → 102.
 
 ## Unreleased — trust the tool (2026-07-25)
 

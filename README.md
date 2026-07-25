@@ -95,7 +95,7 @@ read your transcripts. Do not expose it.
 ## Develop
 
 ```sh
-cargo test --workspace      # 98 tests, all free — nothing spawns an agent
+cargo test --workspace      # 102 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```

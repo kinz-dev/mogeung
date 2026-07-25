@@ -93,13 +93,52 @@ banners the first time you run it has overstepped.
 
 ## Jump to terminal (`R-B2`)
 
-Resolves a session's pid to its controlling tty (`ps -o tty=`), then asks
-Terminal.app which tab owns that tty and focuses it.
+Resolves a session's pid to its controlling tty (`ps -o tty=`), works out which
+terminal application owns the process, and asks that application to focus the
+matching tab.
 
 This closes the loop the queue opens: `WAITING` tells you which session needs
 you, and this puts you in front of it. It moves **your** window and types
 nothing — the agent is untouched.
 
-Terminal.app only. iTerm, WezTerm, tmux and friends are not handled: there is no
-portable way to ask, and focusing the wrong window is worse than doing nothing.
-The failure is explicit rather than silent.
+### Detecting the terminal
+
+The first implementation assumed Terminal.app and told an iTerm2 user *"no tab
+is attached to /dev/ttys003"* while their tab sat in plain view. Assuming one
+terminal was simply wrong.
+
+The owner is now found by **walking the process ancestry** until something
+recognisable appears. The real shape is deeper than it looks:
+
+```
+claude → zsh → login → iTermServer → iTerm2
+```
+
+Four levels, so checking the immediate parent would also have failed. The walk
+stops at pid 1 or after 12 hops.
+
+Applications are addressed by **bundle id**, not name: iTerm2 has answered to
+both `iTerm` and `iTerm2` across versions, while
+`com.googlecode.iterm2` has not moved.
+
+### The two dialects
+
+| | tty lives on | Focus |
+|---|---|---|
+| Terminal.app | the **tab** | `set frontmost` + `set selected` |
+| iTerm2 | the **session** inside a tab | `select` window, tab, then session |
+
+iTerm2's extra level is split panes. Iterating only over tabs finds nothing,
+which is its own way to fail silently.
+
+Each script `activate`s **only after a match**. That matters because when
+ancestry detection fails, mogeung falls back to asking every terminal it knows —
+and a script that activated first would shuffle the user's windows on every
+miss. Pinned by `a_miss_does_not_raise_the_application`.
+
+### What still cannot work
+
+Terminals without AppleScript support — Alacritty, Ghostty, kitty — cannot be
+driven at all. Neither can a pane inside `tmux` or `screen`: the multiplexer
+owns the tty, so mogeung can focus the window but not the pane. The error names
+the terminal it detected rather than blaming the user's setup.

@@ -32,7 +32,7 @@ already done what you asked.
 | Key | Does |
 |---|---|
 | `j` / `k` | move down / up the queue |
-| `enter` or `o` | focus that session's Terminal tab |
+| `enter` or `o` | focus that session's terminal tab |
 | `r` | mark everything in its diff read |
 | `s` | snooze 30 minutes, or wake it |
 | `g` | jump to the top of the queue |
@@ -41,6 +41,12 @@ already done what you asked.
 
 Keys are ignored while a text box has focus, so typing in the filter does not
 trigger them.
+
+**Terminal.app and iTerm2** are supported for jump-to-terminal. Terminals without
+AppleScript support (Alacritty, Ghostty, kitty) cannot be focused, and a pane
+inside `tmux` or `screen` cannot be picked out — the multiplexer owns the tty.
+When it cannot work, it says which terminal it found rather than failing
+silently.
 
 ## Filter, group, follow
 

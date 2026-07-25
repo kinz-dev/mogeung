@@ -771,10 +771,9 @@ impl AppState {
     /// session needs you, and this puts you in front of it. It moves *your*
     /// window and types nothing — the agent is untouched.
     ///
-    /// Works by resolving the session's pid to its controlling tty and asking
-    /// Terminal.app which of its tabs owns that tty. iTerm and other terminals
-    /// are not handled; there is no portable way to ask, and guessing wrong
-    /// would focus the wrong window.
+    /// Resolves the session's pid to its controlling tty, works out which
+    /// terminal application owns that process by walking its ancestry, and asks
+    /// that application to focus the matching tab.
     pub async fn focus_terminal(&self, id: &str) -> Result<()> {
         let session = self
             .get(id)
@@ -785,41 +784,43 @@ impl AppState {
             .filter(|_| session.alive)
             .ok_or_else(|| anyhow!("session is not running, so it has no terminal"))?;
 
-        let tty = tty_of(pid).ok_or_else(|| {
-            anyhow!("could not find the terminal for pid {pid} — it may not be a Terminal.app tab")
-        })?;
-
-        // `tty` from ps is "ttys004"; Terminal reports "/dev/ttys004".
+        let tty = tty_of(pid)
+            .ok_or_else(|| anyhow!("pid {pid} has no controlling terminal"))?;
+        // `ps` prints "ttys004"; every terminal reports "/dev/ttys004".
         let dev = format!("/dev/{}", tty.trim_start_matches("/dev/"));
-        let script = format!(
-            r#"tell application "Terminal"
-  activate
-  repeat with w in windows
-    repeat with t in tabs of w
-      if tty of t is "{dev}" then
-        set frontmost of w to true
-        set selected of t to true
-        return "ok"
-      end if
-    end repeat
-  end repeat
-end tell
-return "not found""#
-        );
 
-        let out = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
-            .map_err(|e| anyhow!("osascript failed: {e}"))?;
-        let said = String::from_utf8_lossy(&out.stdout);
-        if said.trim() == "ok" {
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "no Terminal.app tab is attached to {dev} — the session may be running in a different terminal"
-            ))
+        // Ask the process tree rather than guessing. Trying every terminal in
+        // turn would work, but it raises applications that do not own the tab.
+        let detected = terminal_app_of(pid);
+        let candidates: Vec<TerminalApp> = match detected {
+            Some(app) => vec![app],
+            // Unknown ancestry (a multiplexer, a wrapper, an app we do not
+            // know). Fall back to asking the ones we can drive; the scripts
+            // only activate on a match, so a miss is silent.
+            None => TerminalApp::ALL.to_vec(),
+        };
+
+        for app in &candidates {
+            if app.focus(&dev)? {
+                return Ok(());
+            }
         }
+
+        Err(match detected {
+            Some(app) => anyhow!(
+                "{} is running this session on {dev}, but has no tab reporting that tty — \
+                 if it is inside tmux or screen, mogeung cannot see the individual pane",
+                app.name()
+            ),
+            None => anyhow!(
+                "could not work out which terminal owns {dev}. Supported: {}",
+                TerminalApp::ALL
+                    .iter()
+                    .map(|a| a.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        })
     }
 
     /// Open a terminal running interactive `claude` in `dir`.
@@ -931,6 +932,121 @@ fn detect_collisions(sessions: &[Session], now: chrono::DateTime<Utc>) -> HashMa
     out
 }
 
+/// A terminal application mogeung knows how to drive. `R-B2`.
+///
+/// Each exposes its panes' tty over AppleScript, which is the only reliable way
+/// to map a process back to the tab a human is looking at. Terminals without
+/// scripting support (Alacritty, Ghostty, kitty) cannot be handled at all; the
+/// error says so rather than focusing the wrong window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalApp {
+    AppleTerminal,
+    ITerm2,
+}
+
+impl TerminalApp {
+    const ALL: [TerminalApp; 2] = [TerminalApp::ITerm2, TerminalApp::AppleTerminal];
+
+    fn name(&self) -> &'static str {
+        match self {
+            TerminalApp::AppleTerminal => "Terminal.app",
+            TerminalApp::ITerm2 => "iTerm2",
+        }
+    }
+
+    /// Addressed by bundle id rather than name: iTerm2 has answered to both
+    /// "iTerm" and "iTerm2" across versions, and the bundle id has not moved.
+    fn script(&self, dev: &str) -> String {
+        match self {
+            // Terminal.app puts the tty on the tab.
+            TerminalApp::AppleTerminal => format!(
+                r#"tell application id "com.apple.Terminal"
+  repeat with w in windows
+    repeat with t in tabs of w
+      if tty of t is "{dev}" then
+        set frontmost of w to true
+        set selected of t to true
+        activate
+        return "ok"
+      end if
+    end repeat
+  end repeat
+end tell
+return "no""#
+            ),
+            // iTerm2 has a third level: a tab holds split-pane sessions, and
+            // the tty lives on the session.
+            TerminalApp::ITerm2 => format!(
+                r#"tell application id "com.googlecode.iterm2"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s is "{dev}" then
+          select w
+          select t
+          select s
+          activate
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end repeat
+end tell
+return "no""#
+            ),
+        }
+    }
+
+    /// Try to focus the tab owning `dev`. `Ok(false)` means "not mine" — the
+    /// script activates the application only on a match, so asking the wrong
+    /// one costs nothing visible.
+    fn focus(&self, dev: &str) -> Result<bool> {
+        let out = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(self.script(dev))
+            .output()
+            .map_err(|e| anyhow!("osascript failed: {e}"))?;
+        // A terminal that is not installed or not running errors; that is a
+        // "no", not a failure of the whole operation.
+        Ok(String::from_utf8_lossy(&out.stdout).trim() == "ok")
+    }
+}
+
+/// Which terminal application a process is running inside, by walking its
+/// ancestry until something recognisable turns up.
+///
+/// `claude` → `zsh` → `login` → `iTermServer` → `iTerm2` is the real shape on
+/// this machine, so a couple of levels is not enough.
+fn terminal_app_of(pid: u32) -> Option<TerminalApp> {
+    let mut current = pid;
+    for _ in 0..12 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "ppid=,command=", "-p", &current.to_string()])
+            .output()
+            .ok()?;
+        let line = String::from_utf8_lossy(&out.stdout);
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        let (ppid, command) = line.split_once(char::is_whitespace)?;
+
+        if command.contains("iTerm") {
+            return Some(TerminalApp::ITerm2);
+        }
+        if command.contains("Terminal.app") || command.ends_with("/Terminal") {
+            return Some(TerminalApp::AppleTerminal);
+        }
+
+        let parent: u32 = ppid.trim().parse().ok()?;
+        if parent <= 1 {
+            return None;
+        }
+        current = parent;
+    }
+    None
+}
+
 /// The controlling terminal of a process, e.g. `ttys004`.
 ///
 /// A session's own pid is the `claude` process, whose tty is the tab it runs
@@ -950,6 +1066,63 @@ fn tty_of(pid: u32) -> Option<String> {
 
 fn shell_quote(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+
+    /// Regression: the first version only spoke Terminal.app's dialect and
+    /// reported "no tab is attached to /dev/ttys003" to an iTerm2 user whose
+    /// tab was sitting right there. Both dialects must be present, and both
+    /// must be addressed by bundle id — iTerm2 has answered to "iTerm" and
+    /// "iTerm2" at different versions.
+    #[test]
+    fn both_terminals_are_addressed_by_bundle_id() {
+        let apple = TerminalApp::AppleTerminal.script("/dev/ttys003");
+        assert!(apple.contains("com.apple.Terminal"));
+        assert!(apple.contains("/dev/ttys003"));
+
+        let iterm = TerminalApp::ITerm2.script("/dev/ttys003");
+        assert!(iterm.contains("com.googlecode.iterm2"));
+        assert!(iterm.contains("/dev/ttys003"));
+        // iTerm2 nests sessions inside tabs; looking only at tabs finds nothing.
+        assert!(
+            iterm.contains("sessions of t"),
+            "iTerm2 keeps the tty on the session, not the tab"
+        );
+    }
+
+    /// Activation must come *after* the match, or asking a terminal that does
+    /// not own the tab raises it anyway — which, with the fallback that tries
+    /// every terminal, would shuffle the user's windows on every miss.
+    #[test]
+    fn a_miss_does_not_raise_the_application() {
+        for app in TerminalApp::ALL {
+            let s = app.script("/dev/ttys999");
+            let activate = s.find("activate").expect("script should activate on match");
+            let matched = s.find("if tty").expect("script should test the tty");
+            assert!(
+                activate > matched,
+                "{} activates before checking the tty",
+                app.name()
+            );
+        }
+    }
+
+    #[test]
+    fn launchd_has_no_terminal_and_the_walk_terminates() {
+        // pid 1 is launchd: no terminal ancestry, and its parent is itself, so
+        // a walk without a stop condition would spin forever.
+        assert_eq!(terminal_app_of(1), None);
+        assert_eq!(tty_of(1), None);
+    }
+
+    #[test]
+    fn a_nonexistent_pid_is_handled() {
+        assert_eq!(terminal_app_of(999_999), None);
+        assert_eq!(tty_of(999_999), None);
+    }
 }
 
 /// Minimal `~` expansion so paths typed into the UI behave as expected.
