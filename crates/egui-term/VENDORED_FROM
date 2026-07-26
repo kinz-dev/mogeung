@@ -1,0 +1,22 @@
+Vendored from https://github.com/Harzu/egui_term
+commit df910f2 (2026-05-06)
+MIT, Copyright (c) 2024 Ilia Shvyrialkin — see LICENSE.
+
+Why vendored rather than depended on:
+
+  The crates.io release (0.1.0) targets egui 0.31 and upstream master targets
+  0.34; mogeung is on 0.35. A git dependency would resolve egui from upstream's
+  own workspace, so two incompatible egui versions would end up in the tree and
+  the widget's types would not match ours.
+
+Local changes:
+
+  - the egui version, in Cargo.toml
+  - src/view.rs, TerminalView::process_input — upstream gates *all* input on
+    `layout.contains_pointer()`, so keyboard input dies whenever the mouse
+    moves off the pane, with nothing on screen to say why. Keyboard is now
+    gated on focus alone; mouse events still require the pointer inside.
+    Marked in the source with `LOCAL CHANGE (mogeung)`.
+
+To update: clone upstream, copy src/ over this one, re-apply the changes above
+(grep for `LOCAL CHANGE`), run the workspace tests.

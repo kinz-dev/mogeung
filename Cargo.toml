@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mogeung-core", "crates/mogeungd", "crates/mogeung-ui"]
+members = ["crates/mogeung-core", "crates/mogeungd", "crates/mogeung-ui", "crates/egui-term"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,12 @@ license = "MIT"
 [workspace.dependencies]
 mogeung-core = { path = "crates/mogeung-core" }
 mogeungd = { path = "crates/mogeungd" }
+egui-term = { path = "crates/egui-term" }
+
+# Shared so the vendored widget and the UI cannot drift onto two egui versions,
+# which is the exact failure that made vendoring necessary. See
+# crates/egui-term/VENDORED_FROM.
+egui = "0.35"
 
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

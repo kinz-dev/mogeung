@@ -234,16 +234,26 @@ impl AppState {
         // a session going from busy to idle produces no transcript line, and
         // that transition is the single most important signal we have.
         let ids: Vec<SessionId> = self.sessions.read().await.keys().cloned().collect();
+        // Resolved once for the whole pass rather than per session. Both are
+        // empty when tmux is absent, which makes the lookup below a no-op
+        // instead of a special case.
+        let panes = tmux_panes();
+        let parents = if panes.is_empty() {
+            HashMap::new()
+        } else {
+            process_parents()
+        };
         for id in ids {
             let Some(mut s) = self.get(&id).await else {
                 continue;
             };
-            let before = (s.alive, s.live_status);
+            let before = (s.alive, s.live_status, s.tmux_target.clone());
             match live_by_id.get(&id) {
                 Some(e) => {
                     s.alive = true;
                     s.pid = Some(e.pid);
                     s.live_status = Some(e.status);
+                    s.tmux_target = tmux_target_in(e.pid, &panes, &parents);
                     s.status_since = e.status_since.or(s.status_since);
                     if s.name.is_none() {
                         s.name = e.name.clone();
@@ -262,9 +272,12 @@ impl AppState {
                     s.alive = false;
                     s.pid = None;
                     s.live_status = None;
+                    // A dead session has no pane. Leaving a stale target would
+                    // offer a terminal tab that attaches to nothing.
+                    s.tmux_target = None;
                 }
             }
-            if before != (s.alive, s.live_status) {
+            if before != (s.alive, s.live_status, s.tmux_target.clone()) {
                 // A session that just exited is newly reviewable.
                 let just_exited = before.0 && !s.alive;
                 self.put(s).await;
@@ -374,6 +387,9 @@ impl AppState {
             loop_signal: None,
             recent_touches: Vec::new(),
             recent_tools: Vec::new(),
+            // Filled by the scan's liveness pass, which is where the pid it
+            // needs becomes known.
+            tmux_target: None,
         };
         self.sessions.write().await.insert(s.id.clone(), s);
 
@@ -1064,6 +1080,115 @@ fn tty_of(pid: u32) -> Option<String> {
     Some(tty)
 }
 
+/// Every process's parent, in one call.
+///
+/// The scan resolves a tmux pane for every live session, and doing that with a
+/// `ps` per ancestry step would be a subprocess storm on a machine running the
+/// four-plus sessions mogeung is built for. One table, walked in memory.
+pub fn process_parents() -> HashMap<u32, u32> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+    else {
+        return HashMap::new();
+    };
+    parse_process_parents(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_process_parents(stdout: &str) -> HashMap<u32, u32> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (pid, ppid) = line.trim().split_once(char::is_whitespace)?;
+            Some((pid.trim().parse().ok()?, ppid.trim().parse().ok()?))
+        })
+        .collect()
+}
+
+/// Parse `tmux list-panes` output into `(pane_pid, target)` pairs.
+///
+/// Split out from the command so it can be tested without a tmux server, which
+/// a test machine will not have running.
+fn parse_tmux_panes(stdout: &str) -> Vec<(u32, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (pid, target) = line.trim().split_once(char::is_whitespace)?;
+            // A target with no session name is useless for attaching, and a
+            // session name may itself contain spaces — so take the rest whole.
+            let target = target.trim();
+            if target.is_empty() {
+                return None;
+            }
+            Some((pid.trim().parse().ok()?, target.to_string()))
+        })
+        .collect()
+}
+
+/// Every tmux pane, as `(pane_pid, attach target)`.
+///
+/// Empty when tmux is not installed or no server is running — both ordinary,
+/// neither an error.
+pub fn tmux_panes() -> Vec<(u32, String)> {
+    let Ok(out) = std::process::Command::new("tmux")
+        .args([
+            "list-panes",
+            "-a",
+            "-F",
+            "#{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    // tmux exits non-zero with "no server running" when nothing is attached.
+    if !out.status.success() {
+        return Vec::new();
+    }
+    parse_tmux_panes(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The tmux pane running `pid`, as an attach target like `mogeung-app:0.0`.
+///
+/// tmux reports the pid of the process it spawned in each pane — usually a
+/// shell, with `claude` a child of it — so this walks the ancestry the same way
+/// [`terminal_app_of`] does rather than expecting a direct hit. When `yolomo`
+/// runs `claude` as the pane command with no shell between, the first check
+/// matches and the walk never runs.
+///
+/// `None` means "not under tmux", which is the ordinary case for a session
+/// started by hand. It is not an error and must not be reported as one: it is
+/// the difference between a session mogeung can host and one it can only point
+/// you at.
+pub fn tmux_target_in(
+    pid: u32,
+    panes: &[(u32, String)],
+    parents: &HashMap<u32, u32>,
+) -> Option<String> {
+    if panes.is_empty() {
+        return None;
+    }
+    let mut current = pid;
+    // Bounded because a corrupt table could contain a cycle, and a scan that
+    // spins is worse than one that misses a pane.
+    for _ in 0..24 {
+        if let Some((_, target)) = panes.iter().find(|(p, _)| *p == current) {
+            return Some(target.clone());
+        }
+        let parent = *parents.get(&current)?;
+        if parent <= 1 || parent == current {
+            return None;
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Convenience for a one-off lookup outside the scan loop.
+pub fn tmux_target_of(pid: u32) -> Option<String> {
+    tmux_target_in(pid, &tmux_panes(), &process_parents())
+}
+
 fn shell_quote(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -1122,6 +1247,104 @@ mod terminal_tests {
     fn a_nonexistent_pid_is_handled() {
         assert_eq!(terminal_app_of(999_999), None);
         assert_eq!(tty_of(999_999), None);
+    }
+
+    /// A session name may contain spaces — `yolomo` derives one from a
+    /// directory, and directories do. Splitting on whitespace and taking the
+    /// second field would truncate `my project:0.0` to `my`, producing a target
+    /// that attaches to the wrong session or to none at all.
+    #[test]
+    fn a_session_name_containing_spaces_survives_parsing() {
+        let panes = parse_tmux_panes("4210 my project:0.0\n");
+        assert_eq!(panes, vec![(4210, "my project:0.0".to_string())]);
+    }
+
+    #[test]
+    fn tmux_pane_lines_parse_and_junk_is_dropped() {
+        let panes = parse_tmux_panes(
+            "1234 mogeung-app:0.0\n\
+             5678 mogeung-api:1.2\n\
+             \n\
+             notanumber mogeung-x:0.0\n\
+             9999\n",
+        );
+        assert_eq!(
+            panes,
+            vec![
+                (1234, "mogeung-app:0.0".to_string()),
+                (5678, "mogeung-api:1.2".to_string()),
+            ],
+            "a malformed line must be skipped, not panic or poison the rest"
+        );
+    }
+
+    /// Not being under tmux is the ordinary case, not a failure. pid 1 is never
+    /// in a pane, and the walk must terminate rather than spin.
+    #[test]
+    fn a_process_outside_tmux_has_no_target() {
+        assert_eq!(tmux_target_of(1), None);
+    }
+
+    /// The real shape is `tmux pane → shell → claude`, and it is *claude's* pid
+    /// the live registry hands us — never the pane's. A lookup that only
+    /// compared against `pane_pid` would resolve nothing for every real
+    /// session while passing every unit test written against a flat pid.
+    ///
+    /// Costs a real tmux server, so it skips where tmux is absent rather than
+    /// failing. `cargo test --workspace` stays free: nothing here spawns an
+    /// agent.
+    #[test]
+    fn a_process_nested_under_a_pane_resolves_to_that_pane() {
+        if std::process::Command::new("tmux").arg("-V").output().is_err() {
+            eprintln!("skipping: tmux is not installed");
+            return;
+        }
+        let name = format!("mogeung-selftest-{}", std::process::id());
+        let target = format!("={name}");
+
+        // Two commands, so the shell cannot exec-optimise itself away — that
+        // optimisation is exactly what would collapse the nesting this test
+        // exists to cover.
+        let created = std::process::Command::new("tmux")
+            .args(["new-session", "-d", "-s", &name, "sleep 60; true"])
+            .status();
+        if !matches!(created, Ok(s) if s.success()) {
+            eprintln!("skipping: could not start a tmux server");
+            return;
+        }
+
+        // The shell needs a moment to fork the child.
+        let mut found = None;
+        for _ in 0..50 {
+            let panes = tmux_panes();
+            let Some((pane_pid, _)) = panes.iter().find(|(_, t)| t.starts_with(&name)) else {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                continue;
+            };
+            let kids = std::process::Command::new("pgrep")
+                .args(["-P", &pane_pid.to_string()])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            if let Some(child) = kids.lines().next().and_then(|l| l.trim().parse::<u32>().ok()) {
+                found = Some(tmux_target_in(child, &panes, &process_parents()));
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+
+        // Tear down before asserting, or a failure leaves a stray server behind.
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", &target])
+            .status();
+
+        let resolved = found.expect("the pane never produced a child process");
+        let resolved = resolved.expect("a process inside a pane must resolve to that pane");
+        assert!(
+            resolved.starts_with(&name),
+            "resolved to {resolved}, which is not the pane we created ({name})"
+        );
     }
 }
 

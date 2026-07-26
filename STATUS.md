@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 153 passing |
-| Rust | 12539 lines |
-| Docs | 34 files, 9 ADRs |
+| Tests | 167 passing |
+| Rust | 15395 lines |
+| Docs | 37 files, 10 ADRs |
 
 ## Assumptions
 
-Untested: **5** · At risk: **2** · Supported: 2 · Refuted: 1
+Untested: **6** · At risk: **2** · Supported: 3 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -23,4 +23,6 @@ Untested: **5** · At risk: **2** · Supported: 2 · Refuted: 1
 |---|---|---|
 | [Trust the tool](docs/features/0001-trust-the-tool.md) | `shipped` | [A4] |
 | [Sharpen triage, reach and review](docs/features/0002-sharpen-triage-and-review.md) | `shipped` | [A1, A3, A6, A8] |
+| [Attached terminal](docs/features/0003-attached-terminal.md) | `shipped` | [A11, A12] |
+| [A queue that answers the click](docs/features/0004-a-queue-that-answers-the-click.md) | `shipped` | [A1, A6] |
 

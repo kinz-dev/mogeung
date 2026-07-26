@@ -18,7 +18,8 @@ serde_json.workspace = true
 tracing-subscriber.workspace = true
 
 eframe = "0.35"
-egui = "0.35"
+egui.workspace = true
+egui-term.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"

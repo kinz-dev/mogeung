@@ -136,6 +136,7 @@ mod tests {
             loop_signal: None,
             recent_touches: vec![],
             recent_tools: vec![],
+            tmux_target: None,
         }
     }
 

@@ -148,6 +148,15 @@ pub struct Session {
     #[serde(default)]
     pub recent_touches: Vec<Touch>,
 
+    /// The tmux pane this session runs in, e.g. `mogeung-app:0.0`, when it was
+    /// started under tmux — which `yolomo` does and a bare `claude` does not.
+    ///
+    /// `None` is the ordinary case, not a failure: it means mogeung can point
+    /// you at the session but cannot host it. Resolved by the daemon so a client
+    /// never has to work out the mapping for itself. `R-B18`.
+    #[serde(default)]
+    pub tmux_target: Option<String>,
+
     /// Recent `tool:path` keys, newest last, capped. Feeds loop detection.
     #[serde(default)]
     pub recent_tools: Vec<String>,

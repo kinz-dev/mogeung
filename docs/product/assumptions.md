@@ -1,7 +1,7 @@
 ---
 title: Assumption ledger
 status: active
-updated: 2026-07-25
+updated: 2026-07-26
 ---
 
 # Assumption ledger
@@ -44,6 +44,8 @@ assumption — not to build the feature.**
 | A8 | Per-session diff attribution by edited files is accurate enough | `AT RISK` | Cannot separate two sessions editing the same file | — |
 | A9 | Git is the right diff base for observed sessions | `SUPPORTED` | Works, but the base is HEAD-when-first-seen; sessions predating mogeung diff meaninglessly | — |
 | A10 | Doc sprawl is a real and painful problem worth tooling | `UNTESTED` | Stated as the opening complaint; two versions shipped without touching it | — |
+| A11 | An egui terminal widget can render Claude Code's TUI well enough to answer a prompt | `SUPPORTED` | Live use, 2026-07-26: the pane renders a real session and takes typed **and dictated** text. Three acceptance items remain unchecked — arrows-and-Enter on a menu, `Shift+Tab` plan mode, `Ctrl+C` — and the three defects that made the pane unusable on first open were all in focus handling, not rendering, so the widget itself is doing better than feared | Attached terminal shipped ([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)); see the acceptance list in [feature 0003](../features/0003-attached-terminal.md) |
+| A12 | Starting sessions with `yolomo` is a change the user will actually adopt | `UNTESTED` | First real use 2026-07-26, which is a start and not yet a habit. tmux cannot be retrofitted onto a running session, so the whole feature is worth nothing if the habit does not stick. Answerable only by looking, in a week, at how many live sessions have a `tmux_target` | — |
 
 ## Notes on the most dangerous ones
 

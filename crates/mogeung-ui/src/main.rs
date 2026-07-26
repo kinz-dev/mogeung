@@ -17,6 +17,7 @@ mod hotkey;
 mod keymap;
 mod net;
 mod prefs;
+mod term;
 mod ui;
 
 use std::path::PathBuf;

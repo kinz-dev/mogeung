@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Start `claude` inside a tmux session that mogeung can host in a pane.
+#
+#   yolomo                  start (or re-attach to) the session for this directory
+#   yolomo -r               anything after the name is passed through to claude
+#
+# This is `yolo` — `claude --dangerously-skip-permissions` — with one change:
+# the session runs under tmux. That matters because a pty has exactly one
+# master. A `claude` started in a bare terminal is owned by that terminal and
+# nothing else can ever attach to it, which is why mogeung can only *point at*
+# such a session. tmux owns the pty instead, and is built for several clients at
+# once, so the same live session can be in a mogeung pane and in your terminal
+# simultaneously. See ADR-0010.
+#
+# Nothing here traps the session. Detach and it keeps running; attach from any
+# terminal with `tmux attach -t <name>`; kill mogeung and nothing happens to it.
+#
+# bash 3.2, which is what macOS ships.
+
+set -uo pipefail
+
+# Already inside tmux. Nesting gains nothing and would make the pane mapping
+# ambiguous, so just be `yolo`.
+if [ -n "${TMUX:-}" ]; then
+  exec claude --dangerously-skip-permissions ${1+"$@"}
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "yolomo: tmux is not installed — falling back to a plain session." >&2
+  echo "        mogeung will be able to see it but not host it." >&2
+  exec claude --dangerously-skip-permissions ${1+"$@"}
+fi
+
+dir=$(pwd)
+# tmux parses ':' and '.' as target separators, so a session named after a
+# directory containing them would be unaddressable. Everything outside a safe
+# set becomes a dash rather than being dropped, so two different directories
+# cannot collapse onto one name.
+safe=$(basename "$dir" | sed 's/[^A-Za-z0-9_-]/-/g')
+name="mogeung-${safe}"
+
+# `=` is tmux's exact-match prefix. Without it `has-session -t foo` also matches
+# `foobar`, and you would silently attach to the wrong project.
+if ! tmux has-session -t "=${name}" 2>/dev/null; then
+  tmux new-session -d -s "$name" -c "$dir" \
+    claude --dangerously-skip-permissions ${1+"$@"} || {
+      echo "yolomo: could not create the tmux session" >&2
+      exit 1
+    }
+
+  # Size to whichever client is being used, rather than to the smallest one.
+  # The default is `smallest`, which would let a narrow mogeung pane shrink a
+  # full-screen terminal attached to the same session — silent, and baffling
+  # when it happens to you.
+  tmux set-option -t "=${name}" window-size latest >/dev/null
+fi
+
+exec tmux attach-session -t "=${name}"

@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-07-25
+updated: 2026-07-26
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -70,7 +70,15 @@ a missing default would silently lose sessions rather than fail loudly.
 | `loop_signal: Option<String>` | Thrashing advisory (`R-B7`) |
 | `recent_touches: Vec<Touch>` | Timestamped edits, capped at 200, feeding collisions |
 | `recent_tools: Vec<String>` | Last 12 `tool:target` keys, feeding loop detection |
+| `tmux_target: Option<String>` | The pane this session can be attached in (`R-B18`) |
 
 `recent_touches` exists because `touched_files` is cumulative: "we both edited
 this file at some point today" is not a collision, and answering the question
 needs *when*, not just *what*.
+
+`tmux_target` is derived, not stored in any meaningful sense — it is re-resolved
+from the OS on every scan alongside `alive`/`pid`, and cleared when a session
+dies. A stale one would offer a terminal tab that attaches to nothing. It lives
+on `Session` rather than behind its own endpoint so a client can decide whether
+to *offer* the tab without asking a second question
+([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)).

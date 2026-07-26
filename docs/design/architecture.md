@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-25
+updated: 2026-07-26
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -40,6 +40,13 @@ Every UI is a client. That buys three things: mogeung keeps working with no
 window open, reach from another device is free, and a native shell or web client
 later is a packaging decision rather than a rewrite.
 
+The attached terminal (`R-B18`) is the one place a client holds an OS resource
+of its own — a pty running `tmux attach`. It stays inside the rule because the
+client is told *which* pane by the daemon and decides nothing itself, and
+because what it holds is a view rather than the session: the pty belongs to
+tmux, and closing the window leaves the session untouched. See
+[ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md).
+
 ## The scan loop
 
 Every `--poll-ms` (default 1500):
@@ -52,7 +59,9 @@ Every `--poll-ms` (default 1500):
    see [health-and-canary.md](health-and-canary.md).
 4. Apply liveness to **every** known session, not only ones that moved — a
    session going busy→idle produces no transcript line, and that transition is
-   the most important signal we have.
+   the most important signal we have. The same pass resolves each live session's
+   tmux pane (`R-B18`), using one `tmux list-panes` and one `ps` for the whole
+   scan rather than a subprocess per session.
 5. Recompute diffs for sessions that changed, and for any that just exited.
 6. Rank and broadcast the queue, then broadcast health.
 

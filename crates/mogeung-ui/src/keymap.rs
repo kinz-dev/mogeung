@@ -41,8 +41,16 @@ pub enum Action {
     TabTranscript,
     TabInfo,
     TabDebt,
+    TabTerminal,
     NextTab,
     PrevTab,
+    /// Hand the keyboard back to mogeung from the embedded terminal.
+    ///
+    /// Needs its own action because the obvious key cannot be used: Escape
+    /// belongs to Claude Code, where it interrupts a turn. A binding that stole
+    /// it would make the agent uninterruptible from the pane that exists to
+    /// interrupt it.
+    LeaveTerminal,
     // -- scrolling the content pane
     PageDown,
     PageUp,
@@ -81,8 +89,10 @@ impl Action {
         Action::TabTranscript,
         Action::TabInfo,
         Action::TabDebt,
+        Action::TabTerminal,
         Action::NextTab,
         Action::PrevTab,
+        Action::LeaveTerminal,
         Action::PageDown,
         Action::PageUp,
         Action::ScrollTop,
@@ -114,8 +124,10 @@ impl Action {
             | Action::TabTranscript
             | Action::TabInfo
             | Action::TabDebt
+            | Action::TabTerminal
             | Action::NextTab
-            | Action::PrevTab => "Tabs",
+            | Action::PrevTab
+            | Action::LeaveTerminal => "Tabs",
             Action::PageDown
             | Action::PageUp
             | Action::ScrollTop
@@ -145,8 +157,10 @@ impl Action {
             Action::TabTranscript => "Show the Transcript tab",
             Action::TabInfo => "Show the Info tab",
             Action::TabDebt => "Show the Debt tab",
+            Action::TabTerminal => "Show the Terminal tab",
             Action::NextTab => "Next tab",
             Action::PrevTab => "Previous tab",
+            Action::LeaveTerminal => "Give the keyboard back to mogeung",
             Action::PageDown => "Scroll the transcript or diff down a page",
             Action::PageUp => "Scroll the transcript or diff up a page",
             Action::ScrollTop => "Jump to the top",
@@ -281,8 +295,14 @@ impl Default for Keymap {
         set(Action::TabTranscript, &["T"]);
         set(Action::TabInfo, &["I"]);
         set(Action::TabDebt, &["D"]);
+        set(Action::TabTerminal, &["E"]);
         set(Action::NextTab, &["Ctrl+Tab"]);
         set(Action::PrevTab, &["Ctrl+Shift+Tab"]);
+
+        // Read while the terminal holds the keyboard, so it must be a chord
+        // Claude Code will never want. Escape, Ctrl+C and Ctrl+D all belong to
+        // the agent; Alt+Cmd+M does not belong to anyone.
+        set(Action::LeaveTerminal, &["Alt+Cmd+M"]);
 
         set(Action::PageDown, &["PageDown"]);
         set(Action::PageUp, &["PageUp"]);

@@ -1,8 +1,9 @@
 ---
 title: Structured transcript instead of an embedded terminal
-status: active
-updated: 2026-07-25
+status: superseded
+updated: 2026-07-26
 decided: 2026-07-25
+superseded_by: ADR-0010
 ---
 
 # ADR-0002 — Structured transcript instead of an embedded terminal

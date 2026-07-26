@@ -66,6 +66,8 @@ pub mod icon {
     pub const CLIPBOARD: &str = "📋";
     pub const SNOOZE: &str = "🕐";
     pub const TERMINAL: &str = "→";
+    /// Dismiss a finished session from the queue.
+    pub const HIDE: &str = "✕";
 
     /// Every icon, for the test that proves they render.
     ///
@@ -87,6 +89,7 @@ pub mod icon {
         ("CLIPBOARD", CLIPBOARD),
         ("SNOOZE", SNOOZE),
         ("TERMINAL", TERMINAL),
+        ("HIDE", HIDE),
     ];
 }
 

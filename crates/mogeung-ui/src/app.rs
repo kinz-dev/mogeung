@@ -10,6 +10,7 @@ use mogeung_core::session::LiveStatus;
 use mogeung_core::transcript::{EventKind, NoticeLevel};
 use mogeung_core::{Change, ClientMsg, ServerMsg, Session, SessionId, TranscriptEvent};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Tab {
@@ -18,6 +19,8 @@ enum Tab {
     Info,
     /// Review debt for the selected session's repo. `R-D8`.
     Debt,
+    /// The session's own terminal, attached through tmux. `R-B18`.
+    Terminal,
 }
 
 /// Which pane the keyboard is driving.
@@ -102,10 +105,18 @@ struct FlaggedHunk {
 pub struct App {
     net: Net,
 
-    sessions: HashMap<SessionId, Session>,
+    sessions: HashMap<SessionId, Rc<Session>>,
     queue: Vec<AttentionItem>,
-    changes: HashMap<SessionId, Change>,
-    events: HashMap<SessionId, Vec<TranscriptEvent>>,
+    /// `Rc` because rendering needs a copy that outlives the borrow of `self`,
+    /// and these are the two biggest things we own: a `Change` carries every
+    /// hunk of every file, and a transcript carries every message.
+    ///
+    /// Cloning them per frame — which is what this used to do — put the frame
+    /// rate on a curve against how long a session had been running, so the app
+    /// got measurably less responsive the more there was to look at. A refcount
+    /// bump is O(1) and the data is treated as immutable once received.
+    changes: HashMap<SessionId, Rc<Change>>,
+    events: HashMap<SessionId, Rc<Vec<TranscriptEvent>>>,
     hydrated: HashSet<SessionId>,
 
     selected: Option<SessionId>,
@@ -172,6 +183,13 @@ pub struct App {
     /// Highlighted file, which is the opened file when previewing is on.
     file_cursor: Option<String>,
 
+    /// The attached terminal, when the Terminal tab has been opened for a
+    /// session that runs under tmux. One at a time: a second attach costs a
+    /// pty and a tmux client for a pane nobody is looking at.
+    term: Option<crate::term::Term>,
+    /// Whether keystrokes belong to the agent or to mogeung. See `handle_keys`.
+    term_focused: bool,
+
     errors: Vec<String>,
 }
 
@@ -229,6 +247,8 @@ impl App {
             capturing: None,
             keymap_io: String::new(),
             file_cursor: None,
+            term: None,
+            term_focused: false,
             // Surfaced in the window, not only on stderr: the terminal that
             // launched this is exactly what you are trying to stop looking at.
             errors: hotkey_error
@@ -243,13 +263,16 @@ impl App {
         for msg in self.net.drain() {
             match msg {
                 ServerMsg::Snapshot { sessions, queue } => {
-                    self.sessions = sessions.into_iter().map(|s| (s.id.clone(), s)).collect();
+                    self.sessions = sessions
+                        .into_iter()
+                        .map(|s| (s.id.clone(), Rc::new(s)))
+                        .collect();
                     self.queue = queue;
                     // A reconnect invalidates our transcript cache.
                     self.hydrated.clear();
                 }
                 ServerMsg::SessionUpdated { session } => {
-                    self.sessions.insert(session.id.clone(), *session);
+                    self.sessions.insert(session.id.clone(), Rc::from(session));
                 }
                 ServerMsg::SessionRemoved { session_id } => {
                     self.sessions.remove(&session_id);
@@ -262,7 +285,8 @@ impl App {
                 }
                 ServerMsg::Events { events } => {
                     for ev in events {
-                        let list = self.events.entry(ev.session_id.clone()).or_default();
+                        let list =
+                            Rc::make_mut(self.events.entry(ev.session_id.clone()).or_default());
                         if list.last().map(|l| l.seq).unwrap_or(0) < ev.seq {
                             list.push(ev);
                         } else if !list.iter().any(|e| e.seq == ev.seq) {
@@ -283,7 +307,7 @@ impl App {
                             self.selected_file = change.files.first().map(|f| f.path.clone());
                         }
                     }
-                    self.changes.insert(session_id, change);
+                    self.changes.insert(session_id, Rc::from(change));
                 }
                 ServerMsg::Health { health } => self.health = *health,
                 ServerMsg::ReviewDebt { debt } => self.debt = Some(*debt),
@@ -313,7 +337,9 @@ impl App {
         self.net.send(ClientMsg::RefreshChange { session_id: id });
     }
 
-    fn selected_session(&self) -> Option<&Session> {
+    /// Returns the `Rc`, not a `&Session`, so `detail_panel` can take an owned
+    /// handle for the frame without copying the session out of the map.
+    fn selected_session(&self) -> Option<&Rc<Session>> {
         self.selected.as_ref().and_then(|id| self.sessions.get(id))
     }
 }
@@ -602,6 +628,15 @@ impl App {
 
     fn hide_selected(&mut self) {
         if let Some(id) = self.selected.clone() {
+            // Same rule the card enforces: a live session cannot be dismissed.
+            // Enforced here as well as in the widget, because `h` reaches
+            // sessions the pointer never touches.
+            let alive = self.sessions.get(&id).map(|s| s.alive).unwrap_or(false);
+            if !may_toggle_hidden(alive, self.prefs.is_hidden(&id)) {
+                self.errors
+                    .push("that session is still live — it cannot be hidden".into());
+                return;
+            }
             self.prefs.hide(&id);
             self.prefs_dirty = true;
             // Move on rather than leaving the pane pointing at something that
@@ -748,6 +783,30 @@ impl App {
             return;
         }
 
+        // The terminal takes egui focus while it has the keyboard, so the guard
+        // below would swallow every chord — including the one that gives the
+        // keyboard back. Read that one first, or the pane is a roach motel.
+        if self.term_focused {
+            let leave = ui.input(|i| {
+                i.events.iter().any(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        self.keymap.action_for(*modifiers, *key)
+                            == Some(crate::keymap::Action::LeaveTerminal)
+                    }
+                    _ => false,
+                })
+            });
+            if leave {
+                self.term_focused = false;
+            }
+            return;
+        }
+
         if ui.memory(|m| m.focused().is_some()) {
             return;
         }
@@ -785,6 +844,10 @@ impl App {
             A::TabTranscript => self.set_tab(Tab::Transcript),
             A::TabInfo => self.set_tab(Tab::Info),
             A::TabDebt => self.set_tab(Tab::Debt),
+            A::TabTerminal => self.set_tab(Tab::Terminal),
+            // Only reachable while the terminal does *not* hold the keyboard,
+            // where it is a no-op. The live path is in `handle_keys`.
+            A::LeaveTerminal => self.term_focused = false,
             A::NextTab => self.cycle_tab(1),
             A::PrevTab => self.cycle_tab(-1),
             A::FocusQueue => self.pane = Pane::Queue,
@@ -1094,6 +1157,11 @@ impl App {
                 let mut to_pin: Option<String> = None;
                 let mut to_hide: Option<String> = None;
                 let mut to_filter_repo: Option<String> = None;
+                // Set only by a click on a card, never by follow mode or by
+                // `j`/`k` — moving the cursor is not the same gesture as
+                // choosing a session, and a tab that changed under the keyboard
+                // would be unusable.
+                let mut open_terminal = false;
 
                 // R-B8. Follow mode: the top of the queue is by definition the
                 // thing most worth looking at, so let it drive the pane.
@@ -1108,6 +1176,23 @@ impl App {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // **This is what made cards feel unclickable.** egui's
+                        // `selectable_labels` defaults to on, which gives every
+                        // label `Sense::click_and_drag()` so text can be
+                        // selected. A card's own click target is registered
+                        // before its children — deliberately, so a container
+                        // sits behind what it contains — and among widgets tied
+                        // at distance zero egui takes the topmost. So every
+                        // label in the card beat the card, and only the gaps
+                        // between labels ever selected a session.
+                        //
+                        // Nothing about it looked wrong: the click was
+                        // received, it just started a text selection of one
+                        // word instead. Turned off for the queue only; the
+                        // detail pane keeps selectable text, where copying a
+                        // path or an error message is the point.
+                        ui.style_mut().interaction.selectable_labels = false;
+
                         if vis.is_empty() {
                             ui.add_space(20.0);
                             ui.vertical_centered(|ui| {
@@ -1195,10 +1280,13 @@ impl App {
                             }
 
                             for item in &items {
-                                let Some(session) = self.sessions.get(&item.session_id) else {
+                                let Some(session) = self.sessions.get(&item.session_id).cloned()
+                                else {
                                     continue;
                                 };
                                 let selected = self.selected.as_ref() == Some(&item.session_id);
+                                let is_hidden = self.prefs.is_hidden(&item.session_id);
+                                let hideable = may_toggle_hidden(session.alive, is_hidden);
                                 let resp = ui.push_id(&item.session_id, |ui| {
                                     egui::Frame::group(ui.style())
                                         .fill(if selected {
@@ -1208,15 +1296,20 @@ impl App {
                                         })
                                         .show(ui, |ui| {
                                             ui.set_width(ui.available_width());
-                                            if let Some(r) = queue_card(
+                                            let hit = queue_card(
                                                 ui,
-                                                session,
+                                                &session,
                                                 item,
                                                 now,
                                                 self.prefs.is_pinned(&item.session_id),
-                                                self.prefs.is_hidden(&item.session_id),
-                                            ) {
+                                                is_hidden,
+                                                hideable,
+                                            );
+                                            if let Some(r) = hit.filter_repo {
                                                 to_filter_repo = Some(r);
+                                            }
+                                            if hit.hide {
+                                                to_hide = Some(item.session_id.clone());
                                             }
 
                                             if selected {
@@ -1254,15 +1347,14 @@ impl App {
                                                     {
                                                         to_pin = Some(item.session_id.clone());
                                                     }
-                                                    let is_hidden =
-                                                        self.prefs.is_hidden(&item.session_id);
-                                                    if ui
-                                                        .small_button(if is_hidden { "unhide" } else { "hide" })
-                                                        .on_hover_text(
-                                                            "keep it out of the queue — reversible, and \
-                                                             nothing is forgotten (h)",
-                                                        )
-                                                        .clicked()
+                                                    if hideable
+                                                        && ui
+                                                            .small_button(if is_hidden { "unhide" } else { "hide" })
+                                                            .on_hover_text(
+                                                                "keep it out of the queue — reversible, and \
+                                                                 nothing is forgotten (h)",
+                                                            )
+                                                            .clicked()
                                                     {
                                                         to_hide = Some(item.session_id.clone());
                                                     }
@@ -1270,9 +1362,81 @@ impl App {
                                             }
                                         })
                                 });
-                                if resp.response.interact(egui::Sense::click()).clicked() {
+                                // `Response::interact` on the scope's own
+                                // response, never `ui.interact` with a fresh
+                                // id: a Ui registers its widget rect *before*
+                                // its children so that it sits behind them, and
+                                // reusing that id keeps it there. A new id
+                                // registers last, lands on top, and swallows
+                                // every button inside the card.
+                                let card = resp
+                                    .response
+                                    .interact(egui::Sense::click())
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if card.clicked() {
                                     to_select = Some(item.session_id.clone());
+                                    // Clicking a session means "take me to it",
+                                    // and where it is is the terminal. Only when
+                                    // there is one to show: for a session not
+                                    // under tmux the Terminal tab is an
+                                    // explanation, and landing on an
+                                    // explanation every time you click is worse
+                                    // than staying where you were.
+                                    open_terminal = session.tmux_target.is_some();
                                 }
+                                // Hovering has to be visible, or a card that is
+                                // entirely clickable looks like one where only
+                                // the text is.
+                                if card.hovered() && !selected {
+                                    ui.painter().rect_stroke(
+                                        card.rect,
+                                        4.0,
+                                        egui::Stroke::new(1.0, DIM),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                // The menu itself is always available — pinning
+                                // and snoozing apply to a live session. Only
+                                // the hide entry is withheld, and withheld by
+                                // being absent rather than greyed out: an item
+                                // you can see but not press invites the
+                                // question "why not", every time.
+                                card.context_menu(|ui| {
+                                    if hideable
+                                        && ui
+                                            .button(if is_hidden {
+                                                "Unhide"
+                                            } else {
+                                                "Hide from the queue"
+                                            })
+                                            .clicked()
+                                    {
+                                        to_hide = Some(item.session_id.clone());
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .button(if self.prefs.is_pinned(&item.session_id) {
+                                            "Unpin"
+                                        } else {
+                                            "Pin to the top"
+                                        })
+                                        .clicked()
+                                    {
+                                        to_pin = Some(item.session_id.clone());
+                                        ui.close();
+                                    }
+                                    let snoozed = session.is_snoozed(now);
+                                    if ui
+                                        .button(if snoozed { "Wake" } else { "Snooze 30m" })
+                                        .clicked()
+                                    {
+                                        to_snooze = Some((
+                                            item.session_id.clone(),
+                                            if snoozed { 0 } else { 30 },
+                                        ));
+                                        ui.close();
+                                    }
+                                });
                                 ui.add_space(2.0);
                             }
                         }
@@ -1285,6 +1449,9 @@ impl App {
 
                 if let Some(id) = to_select {
                     self.select(id);
+                    if open_terminal {
+                        self.set_tab(Tab::Terminal);
+                    }
                 }
                 if let Some((session_id, minutes)) = to_snooze {
                     self.net.send(ClientMsg::Snooze {
@@ -1314,6 +1481,32 @@ impl App {
     }
 }
 
+/// Whether the hidden flag may be changed at all.
+///
+/// **A live session cannot be hidden.** The queue exists to tell you about
+/// running agents, so one you could dismiss by accident is one you could miss
+/// entirely — and unlike a finished session it is still changing under you.
+///
+/// Already-hidden stays changeable regardless, or a session hidden while dead
+/// that came back would be stuck out of sight with no way to recover it.
+///
+/// One function rather than the same condition written at each of the four
+/// places that offer the action, because a rule spelled out four times is a
+/// rule that will eventually be spelled three ways.
+fn may_toggle_hidden(alive: bool, hidden: bool) -> bool {
+    hidden || !alive
+}
+
+/// What the user asked for by clicking inside a card, as opposed to clicking
+/// the card itself.
+#[derive(Default)]
+struct CardHit {
+    /// The repo name was clicked: narrow the queue to it.
+    filter_repo: Option<String>,
+    /// The corner `✕` was clicked.
+    hide: bool,
+}
+
 fn queue_card(
     ui: &mut egui::Ui,
     s: &Session,
@@ -1321,9 +1514,9 @@ fn queue_card(
     now: chrono::DateTime<Utc>,
     pinned: bool,
     hidden: bool,
-) -> Option<String> {
-    // Set when the repo name is clicked, to filter down to it.
-    let mut filter_repo = None;
+    hideable: bool,
+) -> CardHit {
+    let mut hit = CardHit::default();
     ui.horizontal(|ui| {
         if pinned {
             ui.label(badge("PIN", BLUE));
@@ -1344,6 +1537,21 @@ fn queue_card(
             ui.label(RichText::new(txt).size(10.5).color(col));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Only for a session that is over, and only when it is not already
+            // hidden — the corner of a card is the wrong place to *undo*
+            // something, and a live session must not be dismissable at all.
+            if hideable && !hidden {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(icon::HIDE).size(11.0).color(DIM))
+                            .frame(false),
+                    )
+                    .on_hover_text("hide it from the queue — reversible (h)")
+                    .clicked()
+                {
+                    hit.hide = true;
+                }
+            }
             ui.label(dim(fmt_dur(s.duration_secs(now))));
         });
     });
@@ -1357,7 +1565,7 @@ fn queue_card(
             .on_hover_text("show only this repo")
             .clicked()
         {
-            filter_repo = Some(s.repo_name());
+            hit.filter_repo = Some(s.repo_name());
         }
         if let Some(b) = &s.git_branch {
             ui.label(dim(format!("{} {b}", icon::BRANCH)));
@@ -1408,7 +1616,7 @@ fn queue_card(
                 .color(PURPLE),
         );
     }
-    filter_repo
+    hit
 }
 
 // ---------------------------------------------------------------------------
@@ -1524,12 +1732,18 @@ impl App {
                         "Debt".to_string(),
                         "how much of this repo's agent output nobody has read",
                     ),
+                    (
+                        Tab::Terminal,
+                        "Terminal".to_string(),
+                        "talk to this session, if it runs under tmux",
+                    ),
                 ] {
                     let action = match tab {
                         Tab::Changes => crate::keymap::Action::TabChanges,
                         Tab::Transcript => crate::keymap::Action::TabTranscript,
                         Tab::Info => crate::keymap::Action::TabInfo,
                         Tab::Debt => crate::keymap::Action::TabDebt,
+                        Tab::Terminal => crate::keymap::Action::TabTerminal,
                     };
                     if ui
                         .selectable_label(self.tab == tab, label)
@@ -1560,8 +1774,111 @@ impl App {
                 Tab::Transcript => self.transcript_tab(ui, &s),
                 Tab::Info => self.info_tab(ui, &s),
                 Tab::Debt => self.debt_tab(ui, &s),
+                Tab::Terminal => self.terminal_tab(ui, &s),
             }
         });
+    }
+
+    /// The session's own terminal, attached through tmux. `R-B18`.
+    ///
+    /// Only possible for a session started under tmux — see `scripts/yolomo`.
+    /// A session started with a bare `claude` is owned by the terminal that
+    /// spawned it and can never be attached to, so this says so plainly and
+    /// points at the fix rather than showing a broken pane.
+    fn terminal_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let Some(target) = s.tmux_target.clone() else {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("This session is not running under tmux.").strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                "A terminal owns the pty of whatever it started, and nothing else can \
+                 attach to it. mogeung can point you at this session, but cannot host it.",
+            );
+            ui.add_space(8.0);
+            ui.label("Start sessions with `yolomo` instead of `yolo` and this tab becomes live.");
+            ui.add_space(8.0);
+            if ui
+                .button(format!("{} Jump to its terminal instead", icon::TERMINAL))
+                .clicked()
+            {
+                self.net.send(ClientMsg::FocusTerminal {
+                    session_id: s.id.clone(),
+                });
+            }
+            return;
+        };
+
+        // Re-attach when the selection moves to a different session. Comparing
+        // targets rather than session ids is deliberate: a session that is
+        // restarted keeps its id but gets a new pane.
+        let stale = self
+            .term
+            .as_ref()
+            .map(|t| t.target() != target || t.exited())
+            .unwrap_or(true);
+        if stale {
+            self.term_focused = false;
+            match crate::term::Term::attach(ui.ctx(), &target) {
+                Ok(t) => self.term = Some(t),
+                Err(e) => {
+                    self.term = None;
+                    ui.colored_label(RED, format!("could not attach to {target}: {e}"));
+                    return;
+                }
+            }
+        }
+
+        let Some(term) = self.term.as_mut() else {
+            return;
+        };
+        term.poll();
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{} {target}", icon::TERMINAL)).weak());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let hint = if self.term_focused {
+                    format!(
+                        "keyboard goes to the agent — {} returns it",
+                        self.keymap.describe(crate::keymap::Action::LeaveTerminal)
+                    )
+                } else {
+                    "click the terminal to type into this session".to_string()
+                };
+                ui.label(RichText::new(hint).weak());
+            });
+        });
+        ui.separator();
+
+        let before = ui.available_size();
+        // `.inner`, not `.response`: `allocate_ui`'s own response senses hover
+        // only, so `clicked()` on it is always false. The first version tested
+        // that one, and the pane could never be typed into.
+        let area = ui
+            .allocate_ui(before, |ui| term.ui(ui, self.term_focused))
+            .inner;
+
+        // Clicking in takes the keyboard; the chord in the hint gives it back,
+        // and so does clicking anything else — a pane you can only escape by
+        // remembering a chord is a trap.
+        if area.clicked() {
+            self.term_focused = true;
+        } else if self.term_focused
+            && ui.input(|i| i.pointer.any_pressed())
+            && !area.contains_pointer()
+        {
+            self.term_focused = false;
+        }
+
+        if self.term_focused {
+            ui.painter().rect_stroke(
+                area.rect,
+                2.0,
+                egui::Stroke::new(1.0, ui.visuals().selection.bg_fill),
+                egui::StrokeKind::Inside,
+            );
+        }
     }
 
     fn transcript_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
@@ -1996,10 +2313,17 @@ impl App {
 ///
 /// Wrapping rather than clamping: cycling that stops dead at the last tab makes
 /// you reverse direction to get back, which is not what a cycle is for.
+const TAB_ORDER: [Tab; 5] = [
+    Tab::Changes,
+    Tab::Transcript,
+    Tab::Info,
+    Tab::Debt,
+    Tab::Terminal,
+];
+
 fn next_tab(from: Tab, delta: i32) -> Tab {
-    const ORDER: [Tab; 4] = [Tab::Changes, Tab::Transcript, Tab::Info, Tab::Debt];
-    let at = ORDER.iter().position(|t| *t == from).unwrap_or(0) as i32;
-    ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]
+    let at = TAB_ORDER.iter().position(|t| *t == from).unwrap_or(0) as i32;
+    TAB_ORDER[(at + delta).rem_euclid(TAB_ORDER.len() as i32) as usize]
 }
 
 /// Shorten a path to its last directory plus filename.
@@ -3089,9 +3413,28 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_tab, short_path, Tab};
+    use super::{may_toggle_hidden, next_tab, short_path, TAB_ORDER};
 
     use super::ScrollRequest;
+
+    /// The point of the rule: you cannot dismiss an agent that is still
+    /// running. Everything else about hiding is a preference; this one is a
+    /// safety property, because a hidden live session is a session you stop
+    /// being told about while it is still doing things.
+    #[test]
+    fn a_live_session_cannot_be_hidden() {
+        assert!(!may_toggle_hidden(true, false), "live and visible: refuse");
+        assert!(may_toggle_hidden(false, false), "finished: allow");
+    }
+
+    /// ...but unhiding must always work. A session hidden while it was dead
+    /// and then seen alive again would otherwise be permanently out of sight,
+    /// with the rule meant to protect it doing the trapping.
+    #[test]
+    fn a_hidden_session_can_always_be_unhidden() {
+        assert!(may_toggle_hidden(true, true));
+        assert!(may_toggle_hidden(false, true));
+    }
 
     /// The sign is the whole trick and it is inverted: `ScrollArea` applies
     /// `offset -= delta`, so moving *down* the content needs a *negative* y.
@@ -3134,21 +3477,27 @@ mod tests {
         assert!(ScrollRequest::Bottom.delta(800.0).y.abs() > 1.0e5);
     }
 
+    /// Written against the *ends of `TAB_ORDER`* rather than named tabs. The
+    /// first version hardcoded `Debt` as the last tab, so adding the Terminal
+    /// tab failed a test that was not about the Terminal tab at all — noise
+    /// that teaches you to edit tests instead of reading them.
     #[test]
     fn cycling_tabs_wraps_at_both_ends() {
-        assert_eq!(next_tab(Tab::Changes, 1), Tab::Transcript);
-        assert_eq!(next_tab(Tab::Debt, 1), Tab::Changes, "forward from the last");
-        assert_eq!(next_tab(Tab::Changes, -1), Tab::Debt, "back from the first");
-        assert_eq!(next_tab(Tab::Info, -1), Tab::Transcript);
+        let first = TAB_ORDER[0];
+        let last = TAB_ORDER[TAB_ORDER.len() - 1];
+        assert_eq!(next_tab(first, 1), TAB_ORDER[1]);
+        assert_eq!(next_tab(last, 1), first, "forward from the last");
+        assert_eq!(next_tab(first, -1), last, "back from the first");
+        assert_eq!(next_tab(TAB_ORDER[2], -1), TAB_ORDER[1]);
     }
 
     #[test]
     fn cycling_all_the_way_round_returns_to_the_start() {
-        let mut t = Tab::Changes;
-        for _ in 0..4 {
+        let mut t = TAB_ORDER[0];
+        for _ in 0..TAB_ORDER.len() {
             t = next_tab(t, 1);
         }
-        assert_eq!(t, Tab::Changes, "four tabs, four steps");
+        assert_eq!(t, TAB_ORDER[0], "one step per tab returns to the start");
     }
 
 

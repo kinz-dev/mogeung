@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-07-25
+updated: 2026-07-26
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -205,15 +205,34 @@ survives an egui upgrade that changes what is bundled.
 
 ### Why not an in-app terminal
 
-Asked and answered: embedding a *running* session is impossible, because its
-PTY master belongs to the terminal that created it and there is no way to hand
-that off. Spawning our own sessions into an embedded emulator is possible but
-means writing a worse iTerm2 inside mogeung — the same trade that made v0.1 a
-worse Claude Code. The hotkey costs two keys and nothing else.
+The premise here was right and the conclusion was too broad — `R-B18` now ships
+one. Worth reading the correction, because the mistake is instructive.
+
+Still true: embedding a *running* session is impossible, because its pty master
+belongs to the terminal that created it and there is no way to hand that off.
+Still true: spawning our own sessions into an embedded emulator means writing a
+worse iTerm2 inside mogeung, the same trade that made v0.1 a worse Claude Code.
+
+What was missed is one line further down this page. "The multiplexer owns the
+tty" was filed as a *limitation* — the reason a tmux pane could not be focused.
+It is the whole solution. Because tmux owns the pty, and is built for several
+clients at once, mogeung can attach as one more client and the session stays
+reachable from every terminal it was already reachable from. The property listed
+as the blocker was the mechanism.
+
+The trade that made v0.1 bad is avoided for a specific, checkable reason: an
+attached session is **never trapped in mogeung**. See
+[ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md), and
+`crates/mogeung-ui/src/term.rs`.
 
 ### What still cannot work
 
-Terminals without AppleScript support — Alacritty, Ghostty, kitty — cannot be
-driven at all. Neither can a pane inside `tmux` or `screen`: the multiplexer
-owns the tty, so mogeung can focus the window but not the pane. The error names
-the terminal it detected rather than blaming the user's setup.
+Jump-to-terminal (`R-B2`) drives terminals over AppleScript, so terminals
+without it — Alacritty, Ghostty, kitty — cannot be driven at all, and neither
+can an individual pane inside `tmux` or `screen`. The error names the terminal
+it detected rather than blaming the user's setup.
+
+For a tmux session that limitation no longer bites, because attaching (`R-B18`)
+replaces focusing rather than depending on it. A session started with a bare
+`claude` in an unscriptable terminal remains genuinely unreachable, and mogeung
+says so.
