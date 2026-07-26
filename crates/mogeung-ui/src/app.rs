@@ -134,6 +134,14 @@ pub struct App {
     prefs_dirty: bool,
     /// Big-text board for a second monitor. `R-C5`.
     ambient: bool,
+    /// Run anything by name. `R-B21`.
+    palette: crate::palette::Palette,
+    /// Cursor and filter for the keyboard settings window. `R-B22`.
+    ///
+    /// The cursor indexes the *filtered* rows, not `Action::ALL`, so it always
+    /// points at something on screen.
+    keymap_cursor: usize,
+    keymap_filter: String,
 
 
     /// Hunks flagged for the follow-up prompt, and the note attached to each.
@@ -202,7 +210,7 @@ impl App {
         daemon_mode: crate::daemon::Mode,
         daemon_addr: String,
     ) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        ui::apply_theme(&cc.egui_ctx);
         if let Some(h) = &hotkey {
             h.start_waker(cc.egui_ctx.clone());
         }
@@ -225,6 +233,9 @@ impl App {
             prefs,
             prefs_dirty: false,
             ambient: false,
+            palette: crate::palette::Palette::default(),
+            keymap_cursor: 0,
+            keymap_filter: String::new(),
             flagged: Vec::new(),
             prompt_note: String::new(),
             show_prompt: false,
@@ -339,6 +350,76 @@ impl App {
 
     /// Returns the `Rc`, not a `&Session`, so `detail_panel` can take an owned
     /// handle for the frame without copying the session out of the map.
+    /// The rows the keyboard settings window is showing, in order.
+    ///
+    /// One definition shared by rendering and the keyboard, for the same reason
+    /// `visible_files` exists: a cursor that indexes a different list from the
+    /// one on screen lands on rows that are not there.
+    ///
+    /// Filtering reuses the palette's scorer rather than a substring test, so
+    /// the two search boxes in the app behave identically.
+    fn keymap_rows(&self) -> Vec<crate::keymap::Action> {
+        let q = self.keymap_filter.trim();
+        let mut rows: Vec<(crate::keymap::Action, i32)> = crate::keymap::Action::ALL
+            .iter()
+            .filter_map(|a| {
+                let hay = format!("{} {} {}", a.label(), a.group(), self.keymap.describe(*a));
+                crate::palette::score(q, &hay).map(|s| (*a, s))
+            })
+            .collect();
+        if !q.is_empty() {
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+        }
+        rows.into_iter().map(|(a, _)| a).collect()
+    }
+
+    /// Navigation for the keyboard settings window.
+    ///
+    /// Returns whether the key was consumed, so anything it does not claim
+    /// still reaches the ordinary bindings — the window is not modal and
+    /// swallowing every key while it happens to be open would be worse than
+    /// the mouse-only version it replaces.
+    fn keymap_window_keys(&mut self, ui: &egui::Ui) -> bool {
+        let rows = self.keymap_rows();
+        if self.keymap_cursor >= rows.len() {
+            self.keymap_cursor = rows.len().saturating_sub(1);
+        }
+        let (down, up, enter, reset, filter) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::J),
+                i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::K),
+                i.key_pressed(egui::Key::Enter),
+                i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete),
+                i.key_pressed(egui::Key::Slash),
+            )
+        });
+        if rows.is_empty() && !filter {
+            return false;
+        }
+        if down {
+            self.keymap_cursor = (self.keymap_cursor + 1) % rows.len();
+        } else if up {
+            self.keymap_cursor = (self.keymap_cursor + rows.len() - 1) % rows.len();
+        } else if enter {
+            self.capturing = rows.get(self.keymap_cursor).copied();
+        } else if reset {
+            if let Some(a) = rows.get(self.keymap_cursor).copied() {
+                self.keymap.reset(a);
+                if let Err(e) = self.keymap.save() {
+                    self.errors.push(format!("could not save keymap: {e}"));
+                }
+            }
+        } else if filter {
+            ui.memory_mut(|m| m.request_focus(keymap_filter_id()));
+            // Same trap as the queue filter: the `/` would otherwise be typed
+            // into the box it just opened.
+            ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+        } else {
+            return false;
+        }
+        true
+    }
+
     fn selected_session(&self) -> Option<&Rc<Session>> {
         self.selected.as_ref().and_then(|id| self.sessions.get(id))
     }
@@ -366,6 +447,8 @@ impl eframe::App for App {
         self.prompt_window(ui);
         self.ambient_window(ui);
         self.keymap_window(ui);
+        // Last, so it draws above every window it can open.
+        self.palette_window(ui);
 
         // Written once per frame at most: preferences change on a click, and
         // saving inside the widget would touch the disk every time a checkbox
@@ -783,6 +866,57 @@ impl App {
             return;
         }
 
+        // The palette is modal and owns the keyboard while it is up. Read
+        // before the terminal and before the focus guard, because its text
+        // field holds egui focus and both would otherwise swallow it.
+        //
+        // Escape is handled here rather than left to the `ClearFilter`
+        // binding, which also wipes the queue filter — closing a palette you
+        // opened by accident should not throw away what you had typed into
+        // something else.
+        if self.palette.open {
+            let len = self.palette.matches(&self.keymap).len();
+            let (escape, enter, down, up, tab) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Escape),
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::ArrowUp),
+                    i.key_pressed(egui::Key::Tab),
+                )
+            });
+            if escape {
+                self.palette.close();
+            } else if enter {
+                let chosen = self
+                    .palette
+                    .matches(&self.keymap)
+                    .get(self.palette.cursor)
+                    .map(|m| m.action);
+                self.palette.close();
+                if let Some(a) = chosen {
+                    // Closed *before* running, so an action that opens a window
+                    // is not immediately hidden behind the palette that ran it.
+                    self.run(a, ui);
+                }
+            } else if down || tab {
+                self.palette.move_cursor(1, len);
+            } else if up {
+                self.palette.move_cursor(-1, len);
+            }
+            return;
+        }
+
+        // The keyboard settings window drives its own cursor while it is up
+        // and nothing in it is being typed into. It claims only the keys it
+        // uses, so the rest still reach their ordinary bindings.
+        if self.show_keymap
+            && !ui.memory(|m| m.focused().is_some())
+            && self.keymap_window_keys(ui)
+        {
+            return;
+        }
+
         // The terminal takes egui focus while it has the keyboard, so the guard
         // below would swallow every chord — including the one that gives the
         // keyboard back. Read that one first, or the pane is a roach motel.
@@ -803,6 +937,33 @@ impl App {
             });
             if leave {
                 self.term_focused = false;
+            }
+            return;
+        }
+
+        // The filter is a text field, so the blanket "something has focus, stay
+        // out of the way" guard below would apply to it — leaving a search box
+        // you can type in and nothing else. A list filter should be drivable
+        // end to end without the hands moving: type to narrow, arrow to choose,
+        // Enter to accept, Escape to abandon.
+        //
+        // Escape is not handled here and does not need to be: egui releases
+        // focus on Escape before this runs, so the ordinary `ClearFilter`
+        // binding fires on the same press.
+        if ui.memory(|m| m.has_focus(filter_id())) {
+            let (enter, down, up) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::ArrowUp),
+                )
+            });
+            if enter {
+                ui.memory_mut(|m| m.surrender_focus(filter_id()));
+            } else if down {
+                self.move_selection(1);
+            } else if up {
+                self.move_selection(-1);
             }
             return;
         }
@@ -902,7 +1063,13 @@ impl App {
             }
             A::FilterFocus => {
                 self.pane = Pane::Queue;
-                ui.memory_mut(|m| m.request_focus(egui::Id::new("queue-filter")));
+                ui.memory_mut(|m| m.request_focus(filter_id()));
+                // **The keystroke that opens the filter must not also be typed
+                // into it.** egui delivers a `Key` and a `Text` event for the
+                // same press, and the field is drawn later in this same frame
+                // with focus already granted — so it consumed the `Text` and
+                // every `/` left a literal slash in the box to delete.
+                ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
             }
             A::ClearFilter => {
                 self.filter.clear();
@@ -920,6 +1087,13 @@ impl App {
                 self.show_health = !self.show_health;
                 if self.show_health {
                     self.net.send(ClientMsg::FetchHealth);
+                }
+            }
+            A::CommandPalette => {
+                if self.palette.open {
+                    self.palette.close();
+                } else {
+                    self.palette.open();
                 }
             }
             A::OpenKeymap => self.show_keymap = !self.show_keymap,
@@ -1100,13 +1274,30 @@ impl App {
 
                 // R-B9. Filter first: with a dozen sessions this is faster than
                 // reading the list.
+                let filtering = ui.memory(|m| m.has_focus(filter_id()));
                 ui.horizontal(|ui| {
-                    ui.add(
+                    let field = ui.add(
                         egui::TextEdit::singleline(&mut self.filter)
-                            .id(egui::Id::new("queue-filter"))
-                            .hint_text("filter  (/)   repo: branch: file:")
+                            .id(filter_id())
+                            .hint_text(if filtering {
+                                "type to narrow  ·  ↑↓ choose  ·  ⏎ accept  ·  esc clear"
+                            } else {
+                                "filter  (/)   repo: branch: file:"
+                            })
                             .desired_width(ui.available_width() - 4.0),
                     );
+                    // A focused text field is a mode: while it has the
+                    // keyboard, every other shortcut is suspended. Say so with
+                    // a border rather than leaving the user to discover it by
+                    // pressing `j` and watching a `j` appear.
+                    if filtering {
+                        ui.painter().rect_stroke(
+                            field.rect.expand(1.0),
+                            4.0,
+                            egui::Stroke::new(1.0, BLUE),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
                 });
 
                 // When a filter is narrowing things, say by how much — an empty
@@ -1145,7 +1336,39 @@ impl App {
                         }
                     });
                 }
-                ui.label(dim("j/k move · enter terminal · r read · s snooze · h hide · p pin"));
+                // One line, and it points at the palette rather than trying to
+                // list thirty bindings four at a time. The old version named
+                // six of them and was wrong about which six mattered.
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("j/k move   ⏎ open   / filter")
+                            .size(10.5)
+                            .color(DIM),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(format!(
+                                        "{}  everything",
+                                        self.keymap
+                                            .bindings_for(crate::keymap::Action::CommandPalette)
+                                            .first()
+                                            .map(|b| b.0.clone())
+                                            .unwrap_or_else(|| "palette".into())
+                                    ))
+                                    .size(10.5)
+                                    .color(BLUE),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("every command, by name")
+                            .clicked()
+                        {
+                            self.palette.open();
+                        }
+                    });
+                });
                 ui.separator();
 
                 let now = Utc::now();
@@ -1479,6 +1702,149 @@ impl App {
                 }
             });
     }
+}
+
+/// What was clicked in one row of the keyboard settings list.
+struct KeymapRowHit {
+    response: egui::Response,
+    row_clicked: bool,
+    binding_clicked: bool,
+    reset_clicked: bool,
+}
+
+/// One row of the keyboard settings list.
+///
+/// The cursor highlight is the same treatment the palette uses, because they
+/// are the same idea — a keyboard-moved selection in a list — and two different
+/// looks for one concept is how an interface stops feeling designed.
+fn keymap_row(
+    ui: &mut egui::Ui,
+    action: crate::keymap::Action,
+    binding: &str,
+    picked: bool,
+    capturing: bool,
+    differs: bool,
+) -> KeymapRowHit {
+    let mut row_clicked = false;
+    let mut binding_clicked = false;
+    let mut reset_clicked = false;
+
+    let frame = egui::Frame::NONE
+        .fill(if picked {
+            ui.visuals().selection.bg_fill.linear_multiply(0.45)
+        } else {
+            Color32::TRANSPARENT
+        })
+        .corner_radius(5.0)
+        .inner_margin(egui::Margin::symmetric(6, 3));
+
+    let inner = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let btn = ui.add_sized(
+                [140.0, 20.0],
+                egui::Button::new(
+                    RichText::new(binding)
+                        .monospace()
+                        .size(11.5)
+                        .color(if capturing { AMBER } else { BLUE }),
+                ),
+            );
+            if btn.clicked() {
+                binding_clicked = true;
+            }
+            ui.label(RichText::new(action.label()).size(12.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if differs && ui.small_button("reset").on_hover_text("back to the default").clicked() {
+                    reset_clicked = true;
+                }
+            });
+        });
+    });
+
+    let response = inner.response.interact(egui::Sense::click());
+    if response.clicked() {
+        row_clicked = true;
+    }
+    KeymapRowHit {
+        response,
+        row_clicked,
+        binding_clicked,
+        reset_clicked,
+    }
+}
+
+/// One palette row: what it does, where it lives, and the key that would have
+/// done it without opening the palette at all.
+///
+/// The binding is shown on every row deliberately. The palette's real job is to
+/// make itself unnecessary — you look something up twice and the third time you
+/// press the key.
+fn palette_row(
+    ui: &mut egui::Ui,
+    action: crate::keymap::Action,
+    binding: &str,
+    picked: bool,
+) -> egui::Response {
+    let height = 22.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    if picked {
+        ui.painter().rect_filled(
+            rect,
+            5.0,
+            ui.visuals().selection.bg_fill.linear_multiply(0.55),
+        );
+    } else if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, 5.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+
+    let pad = 8.0;
+    let painter = ui.painter();
+    painter.text(
+        egui::pos2(rect.left() + pad, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        action.label(),
+        egui::FontId::proportional(13.0),
+        if picked {
+            ui.visuals().strong_text_color()
+        } else {
+            ui.visuals().text_color()
+        },
+    );
+    // Right to left: the key first, then the group behind it.
+    let key_width = painter
+        .text(
+            egui::pos2(rect.right() - pad, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            binding,
+            egui::FontId::monospace(11.0),
+            if binding == "unbound" { DIM } else { BLUE },
+        )
+        .width();
+    painter.text(
+        egui::pos2(rect.right() - pad - key_width - 12.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        action.group(),
+        egui::FontId::proportional(10.5),
+        DIM,
+    );
+    resp
+}
+
+/// The queue filter's widget id, named once so the keyboard handler and the
+/// widget itself cannot drift onto two different ids — a bug that would look
+/// exactly like "the shortcut does nothing".
+fn filter_id() -> egui::Id {
+    egui::Id::new("queue-filter")
+}
+
+/// The keyboard settings window's own action filter.
+fn keymap_filter_id() -> egui::Id {
+    egui::Id::new("keymap-filter")
 }
 
 /// Whether the hidden flag may be changed at all.
@@ -3085,6 +3451,132 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
+    /// Every action by name. `R-B21`.
+    ///
+    /// Drawn last and in the foreground layer so it sits above every window it
+    /// can open — a palette that can be occluded by its own result is worse
+    /// than no palette.
+    fn palette_window(&mut self, root: &mut egui::Ui) {
+        if !self.palette.open {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let screen = ctx.content_rect();
+        let width = (screen.width() * 0.62).clamp(420.0, 680.0);
+        let matches = self.palette.matches(&self.keymap);
+        self.palette.clamp(matches.len());
+
+        let mut chosen: Option<crate::keymap::Action> = None;
+        let mut dismiss = false;
+
+        let area = egui::Area::new(egui::Id::new("command-palette"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(
+                screen.center().x - width / 2.0,
+                screen.top() + (screen.height() * 0.13).min(140.0),
+            ))
+            .show(&ctx, |ui| {
+                ui.set_width(width);
+                egui::Frame::popup(ui.style())
+                    .inner_margin(egui::Margin::same(10))
+                    .corner_radius(10.0)
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        // The field is re-focused every frame: the palette is
+                        // modal, and a click on the list must not leave the
+                        // user typing into nothing.
+                        let field = ui.add(
+                            egui::TextEdit::singleline(&mut self.palette.query)
+                                .id(egui::Id::new("palette-query"))
+                                .hint_text("run anything…")
+                                .font(egui::TextStyle::Heading)
+                                .desired_width(f32::INFINITY)
+                                .frame(egui::Frame::NONE),
+                        );
+                        field.request_focus();
+                        ui.add_space(2.0);
+                        ui.separator();
+
+                        if matches.is_empty() {
+                            ui.add_space(10.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(dim("nothing matches that"));
+                            });
+                            ui.add_space(10.0);
+                        }
+
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.style_mut().interaction.selectable_labels = false;
+                                for (i, m) in matches.iter().enumerate() {
+                                    let picked = i == self.palette.cursor;
+                                    let row = palette_row(
+                                        ui,
+                                        m.action,
+                                        &self.keymap.describe(m.action),
+                                        picked,
+                                    );
+                                    if picked {
+                                        // Keep the cursor on screen when it is
+                                        // moved by key rather than by mouse.
+                                        row.scroll_to_me(None);
+                                    }
+                                    if row.clicked() {
+                                        chosen = Some(m.action);
+                                    }
+                                }
+                            });
+
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("↑↓ move   ⏎ run   esc close")
+                                    .size(10.5)
+                                    .color(DIM),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        RichText::new(format!("{} of {}",
+                                            if matches.is_empty() { 0 } else { self.palette.cursor + 1 },
+                                            matches.len()))
+                                            .size(10.5)
+                                            .color(DIM),
+                                    );
+                                },
+                            );
+                        });
+                    });
+            });
+
+        // Clicking away closes it, the same as Escape.
+        //
+        // Tested against the area's *own* rect. The first version asked egui
+        // whether the pointer was over the palette's layer within the whole
+        // screen rect, which is true wherever the pointer is — so it could
+        // never fire, and clicking outside did nothing at all.
+        let palette_rect = area.response.rect;
+        if ctx.input(|i| i.pointer.any_pressed())
+            && !ctx
+                .pointer_interact_pos()
+                .map(|p| palette_rect.contains(p))
+                .unwrap_or(false)
+        {
+            dismiss = true;
+        }
+
+        if let Some(a) = chosen {
+            self.palette.close();
+            self.run(a, root);
+        } else if dismiss {
+            self.palette.close();
+        }
+    }
+
     fn keymap_window(&mut self, root: &mut egui::Ui) {
         if !self.show_keymap {
             return;
@@ -3122,60 +3614,93 @@ impl App {
                     );
 
                 ui.add_space(8.0);
-                if self.capturing.is_some() {
-                    ui.label(
-                        RichText::new("Press the key combination…  (Escape cancels)")
-                            .color(AMBER)
-                            .strong(),
+                ui.horizontal(|ui| {
+                    let searching = ui.memory(|m| m.has_focus(keymap_filter_id()));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.keymap_filter)
+                            .id(keymap_filter_id())
+                            .hint_text(if searching {
+                                "type to narrow  ·  esc to leave the box"
+                            } else {
+                                "search actions  (/)"
+                            })
+                            .desired_width(260.0),
                     );
-                } else {
-                    ui.label(dim("Click a shortcut to rebind it."));
-                }
+                    if !self.keymap_filter.is_empty() && ui.small_button("clear").clicked() {
+                        self.keymap_filter.clear();
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.capturing.is_some() {
+                            ui.label(
+                                RichText::new("press the combination…  esc cancels")
+                                    .color(AMBER)
+                                    .strong(),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new("↑↓ move   ⏎ rebind   ⌫ reset   / search")
+                                    .size(11.0)
+                                    .color(DIM),
+                            );
+                        }
+                    });
+                });
                 ui.separator();
+
+                let rows = self.keymap_rows();
+                if self.keymap_cursor >= rows.len() {
+                    self.keymap_cursor = rows.len().saturating_sub(1);
+                }
 
                 egui::ScrollArea::vertical()
                     .max_height(360.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.style_mut().interaction.selectable_labels = false;
+                        if rows.is_empty() {
+                            ui.add_space(12.0);
+                            ui.vertical_centered(|ui| ui.label(dim("no action matches that")));
+                            return;
+                        }
+                        // Groups are headings only when the list is in its
+                        // natural order. Under a search the order is by
+                        // relevance, and headings over a re-sorted list would
+                        // claim a structure that is no longer there.
+                        let grouped = self.keymap_filter.trim().is_empty();
                         let mut group = "";
-                        for action in Action::ALL {
-                            if action.group() != group {
+                        for (i, action) in rows.iter().enumerate() {
+                            if grouped && action.group() != group {
                                 group = action.group();
                                 ui.add_space(6.0);
                                 ui.label(RichText::new(group).strong().size(12.0));
                             }
-                            ui.horizontal(|ui| {
-                                let capturing = self.capturing == Some(*action);
-                                let label = if capturing {
+                            let capturing = self.capturing == Some(*action);
+                            let differs = self.keymap.bindings_for(*action)
+                                != Keymap::default().bindings_for(*action);
+                            let row = keymap_row(
+                                ui,
+                                *action,
+                                &if capturing {
                                     "press…".to_string()
                                 } else {
                                     self.keymap.describe(*action)
-                                };
-                                let btn = ui.add_sized(
-                                    [130.0, 20.0],
-                                    egui::Button::new(
-                                        RichText::new(label)
-                                            .monospace()
-                                            .size(11.5)
-                                            .color(if capturing { AMBER } else { Color32::from_gray(0xDC) }),
-                                    ),
-                                );
-                                if btn.clicked() {
-                                    to_capture = Some(*action);
-                                }
-                                ui.label(RichText::new(action.label()).size(12.0));
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let differs = self.keymap.bindings_for(*action)
-                                            != Keymap::default().bindings_for(*action);
-                                        if differs && ui.small_button("reset").clicked() {
-                                            to_reset = Some(*action);
-                                        }
-                                    },
-                                );
-                            });
+                                },
+                                i == self.keymap_cursor,
+                                capturing,
+                                differs,
+                            );
+                            if row.binding_clicked {
+                                to_capture = Some(*action);
+                            }
+                            if row.reset_clicked {
+                                to_reset = Some(*action);
+                            }
+                            if row.row_clicked {
+                                self.keymap_cursor = i;
+                            }
+                            if i == self.keymap_cursor {
+                                row.response.scroll_to_me(None);
+                            }
                         }
                     });
 

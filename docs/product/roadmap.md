@@ -90,6 +90,8 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B18 | **Attached terminal** — host a tmux-backed session in a pane, so a TUI prompt can be answered without leaving mogeung. See [ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md) | L | ✅ |
 | R-B19 | **Dismiss a session from the card** — corner `✕` and a right-click menu, never for a live one | S | ✅ |
 | R-B20 | **Dockable panes** — arrange the detail tabs freely, two side by side | L | ⬜ |
+| R-B21 | **Command palette** — every action by name, with its binding shown | M | ✅ |
+| R-B22 | **Keyboard-driven keyboard settings** — cursor, search and rebind without a mouse | S | ✅ |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 

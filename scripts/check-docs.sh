@@ -69,9 +69,20 @@ for doc in docs/design/*.md; do
             err "$doc — covers '$path' which no longer exists"
             continue
         fi
-        # Any commit touching this path strictly after the doc's updated date?
-        newer=$(git log --since="$updated 23:59:59" --format=%h -1 -- "$path" 2>/dev/null)
-        [ -n "$newer" ] && drifted="$drifted $path"
+        # Was this path last *written* after the doc's updated date?
+        #
+        # Compared on the AUTHOR date, not the committer date. `git log --since`
+        # filters on the committer date, which every rebase, cherry-pick and
+        # amend resets to now — so pushing to a new remote once reported five
+        # design docs as stale when not a line of the code they cover had
+        # changed. A staleness check that cries wolf after a rebase teaches you
+        # to ignore it, which costs more than it ever caught.
+        #
+        # ISO dates compare correctly as strings, so no date arithmetic.
+        last=$(git log -1 --format=%ad --date=short -- "$path" 2>/dev/null)
+        if [ -n "$last" ] && [ "$last" \> "$updated" ]; then
+            drifted="$drifted $path"
+        fi
     done <<< "$covers"
 
     if [ -n "$drifted" ]; then

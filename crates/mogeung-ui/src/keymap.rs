@@ -74,6 +74,11 @@ pub enum Action {
     NextUnread,
     FlagHunk,
     // -- windows
+    /// Every action, by name, without knowing its key first.
+    ///
+    /// The one binding worth memorising, because it is the one that means you
+    /// never have to memorise another.
+    CommandPalette,
     ToggleAmbient,
     ToggleHealth,
     OpenKeymap,
@@ -111,6 +116,7 @@ impl Action {
         Action::ToggleRead,
         Action::NextUnread,
         Action::FlagHunk,
+        Action::CommandPalette,
         Action::ToggleAmbient,
         Action::ToggleHealth,
         Action::OpenKeymap,
@@ -141,7 +147,8 @@ impl Action {
             | Action::HideSession
             | Action::PinSession => "Queue",
             Action::ToggleRead | Action::NextUnread | Action::FlagHunk => "Review",
-            Action::ToggleAmbient
+            Action::CommandPalette
+            | Action::ToggleAmbient
             | Action::ToggleHealth
             | Action::OpenKeymap
             | Action::Rescan => "Windows",
@@ -179,6 +186,7 @@ impl Action {
             Action::ToggleRead => "Mark the selected hunk read or unread",
             Action::NextUnread => "Jump to the next unread hunk",
             Action::FlagHunk => "Flag the selected hunk for a follow-up prompt",
+            Action::CommandPalette => "Command palette — run anything by name",
             Action::ToggleAmbient => "Show or hide the ambient board",
             Action::ToggleHealth => "Show or hide the health panel",
             Action::OpenKeymap => "Open this keyboard settings window",
@@ -325,6 +333,11 @@ impl Default for Keymap {
         set(Action::ToggleRead, &["Space"]);
         set(Action::NextUnread, &["N"]);
         set(Action::FlagHunk, &["F"]);
+
+        // Two bindings on purpose: `Cmd+K` is the palette everywhere on this
+        // platform, and `Ctrl+K` is the same reflex for anyone arriving from
+        // Linux. Neither is claimed by anything else.
+        set(Action::CommandPalette, &["Cmd+K", "Ctrl+K"]);
 
         set(Action::ToggleAmbient, &["Alt+A"]);
         set(Action::ToggleHealth, &["Alt+H"]);

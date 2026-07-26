@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-07-25
+updated: 2026-07-26
 covers:
   - crates/mogeung-core/src/attention.rs
 ---

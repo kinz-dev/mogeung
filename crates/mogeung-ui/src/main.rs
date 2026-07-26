@@ -16,6 +16,7 @@ mod filter;
 mod hotkey;
 mod keymap;
 mod net;
+mod palette;
 mod prefs;
 mod term;
 mod ui;

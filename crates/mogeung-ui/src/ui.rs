@@ -6,6 +6,34 @@ use mogeung_core::attention::AttentionReason;
 use mogeung_core::change::RiskLevel;
 
 
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+//
+// One place that decides what the app looks like.
+//
+// Before this, the window was egui's stock dark theme with our own colours
+// sprinkled on top, which is why it read as "a Rust GUI" rather than as a
+// designed thing: stock radii, stock spacing, stock type sizes, and greys that
+// had no relationship to the accent colours sitting on them.
+//
+// The surfaces are a deliberate three-step ladder — window, panel, raised —
+// so depth comes from value rather than from borders. Borders are then free to
+// mean something (focus, selection) instead of merely drawing boxes.
+
+/// Behind everything.
+pub const BG: Color32 = Color32::from_rgb(0x14, 0x15, 0x18);
+/// Panels and the top bar.
+pub const BG_PANEL: Color32 = Color32::from_rgb(0x1A, 0x1C, 0x20);
+/// Cards and popups: the layer that sits *on* a panel.
+pub const BG_RAISED: Color32 = Color32::from_rgb(0x22, 0x25, 0x2A);
+/// Hover, and zebra striping.
+pub const BG_FAINT: Color32 = Color32::from_rgb(0x2A, 0x2D, 0x33);
+/// Body text.
+pub const TEXT: Color32 = Color32::from_rgb(0xD4, 0xD7, 0xDD);
+/// Headings and anything that must win the eye.
+pub const TEXT_STRONG: Color32 = Color32::from_rgb(0xF0, 0xF2, 0xF6);
+
 pub const RED: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4F);
 pub const AMBER: Color32 = Color32::from_rgb(0xE0, 0x9B, 0x24);
 pub const BLUE: Color32 = Color32::from_rgb(0x4C, 0x8E, 0xDA);
@@ -16,6 +44,106 @@ pub const PURPLE: Color32 = Color32::from_rgb(0x9A, 0x6F, 0xD0);
 /// Diff line tints, kept dark enough to read white text on in the default theme.
 pub const ADD_BG: Color32 = Color32::from_rgb(0x14, 0x3A, 0x21);
 pub const DEL_BG: Color32 = Color32::from_rgb(0x45, 0x1A, 0x1D);
+
+/// Install the theme. Called once, at start-up.
+///
+/// Everything here is a decision, not a default:
+///
+/// * **Type scale.** Five sizes with real gaps between them (10.5 / 12 / 13 /
+///   15 / 19). egui's defaults sit too close together to establish hierarchy,
+///   so everything looked equally important — which in a triage tool is the
+///   opposite of the point.
+/// * **Radius.** One value, 5px, on everything except windows (9px). Mixed
+///   radii are the fastest way to make an interface look assembled rather than
+///   designed.
+/// * **Borders.** Nearly invisible at rest. A visible outline means focus or
+///   selection and nothing else, so those states read instantly.
+/// * **Spacing.** Slightly roomier than stock, because this is a reading tool.
+pub fn apply_theme(ctx: &egui::Context) {
+    use egui::{CornerRadius, FontFamily, FontId, Stroke, TextStyle};
+
+    let mut visuals = egui::Visuals::dark();
+    let radius = CornerRadius::same(5);
+
+    visuals.panel_fill = BG_PANEL;
+    visuals.window_fill = BG_RAISED;
+    visuals.extreme_bg_color = BG;
+    visuals.faint_bg_color = BG_FAINT;
+    visuals.code_bg_color = BG;
+    visuals.override_text_color = None;
+    visuals.window_corner_radius = CornerRadius::same(9);
+    visuals.window_stroke = Stroke::new(1.0, Color32::from_rgb(0x33, 0x37, 0x3E));
+    visuals.hyperlink_color = BLUE;
+    visuals.warn_fg_color = AMBER;
+    visuals.error_fg_color = RED;
+
+    // Selection is the accent, and the only saturated thing in the chrome.
+    visuals.selection.bg_fill = BLUE.linear_multiply(0.55);
+    visuals.selection.stroke = Stroke::new(1.0, TEXT_STRONG);
+
+    let w = &mut visuals.widgets;
+    w.noninteractive.bg_fill = BG_PANEL;
+    w.noninteractive.weak_bg_fill = BG_PANEL;
+    w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x2C, 0x2F, 0x35));
+    w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+    w.noninteractive.corner_radius = radius;
+
+    w.inactive.bg_fill = BG_RAISED;
+    w.inactive.weak_bg_fill = BG_RAISED;
+    w.inactive.bg_stroke = Stroke::NONE;
+    w.inactive.fg_stroke = Stroke::new(1.0, TEXT);
+    w.inactive.corner_radius = radius;
+
+    w.hovered.bg_fill = BG_FAINT;
+    w.hovered.weak_bg_fill = BG_FAINT;
+    w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x43, 0x48, 0x52));
+    w.hovered.fg_stroke = Stroke::new(1.0, TEXT_STRONG);
+    w.hovered.corner_radius = radius;
+    // Stock egui grows a widget on hover. It reads as the layout twitching.
+    w.hovered.expansion = 0.0;
+
+    w.active.bg_fill = BLUE.linear_multiply(0.45);
+    w.active.weak_bg_fill = BLUE.linear_multiply(0.45);
+    w.active.bg_stroke = Stroke::new(1.0, BLUE);
+    w.active.fg_stroke = Stroke::new(1.0, TEXT_STRONG);
+    w.active.corner_radius = radius;
+    w.active.expansion = 0.0;
+
+    w.open.bg_fill = BG_FAINT;
+    w.open.weak_bg_fill = BG_FAINT;
+    w.open.corner_radius = radius;
+
+    // Pinned to dark rather than following the system: the diff tints, the
+    // reason badges and the risk colours are all chosen against a dark ground,
+    // and a light theme would need its own set rather than the same values
+    // reused.
+    ctx.set_theme(egui::ThemePreference::Dark);
+    ctx.set_visuals_of(egui::Theme::Dark, visuals);
+
+    ctx.all_styles_mut(|style| {
+        style.text_styles = [
+            (TextStyle::Heading, FontId::new(19.0, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(12.5, FontFamily::Proportional)),
+            (TextStyle::Small, FontId::new(10.5, FontFamily::Proportional)),
+            (TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace)),
+        ]
+        .into();
+
+        style.spacing.item_spacing = egui::vec2(7.0, 5.0);
+        style.spacing.button_padding = egui::vec2(8.0, 3.0);
+        style.spacing.menu_margin = egui::Margin::same(6);
+        style.spacing.indent = 16.0;
+        style.spacing.scroll.bar_width = 8.0;
+        // A scrollbar that is only there while you are using it. The queue is
+        // the permanent furniture; its scrollbar is not.
+        style.spacing.scroll.floating = true;
+
+        // Tooltips carry the keyboard hints, so they should appear promptly
+        // rather than after the pause that reads as "nothing here".
+        style.interaction.tooltip_delay = 0.25;
+    });
+}
 
 pub fn reason_color(r: AttentionReason) -> Color32 {
     match r {
