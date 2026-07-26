@@ -12,8 +12,12 @@ use mogeung_core::{Change, ClientMsg, ServerMsg, Session, SessionId, TranscriptE
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum Tab {
+/// One view in the detail pane, and the unit the layout tree arranges.
+///
+/// `Copy` and comparable by value because `egui_tiles` identifies a pane by its
+/// value, and serialisable because the arrangement is saved.
+#[derive(PartialEq, Eq, Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Tab {
     Changes,
     Transcript,
     Info,
@@ -21,6 +25,31 @@ enum Tab {
     Debt,
     /// The session's own terminal, attached through tmux. `R-B18`.
     Terminal,
+}
+
+impl Tab {
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Changes => "Changes",
+            Tab::Transcript => "Transcript",
+            Tab::Info => "Info",
+            Tab::Debt => "Debt",
+            Tab::Terminal => "Terminal",
+        }
+    }
+
+    /// The action that brings this pane forward. Paired here so a new pane
+    /// cannot be added without deciding how the keyboard reaches it.
+    pub fn action(self) -> crate::keymap::Action {
+        use crate::keymap::Action;
+        match self {
+            Tab::Changes => Action::TabChanges,
+            Tab::Transcript => Action::TabTranscript,
+            Tab::Info => Action::TabInfo,
+            Tab::Debt => Action::TabDebt,
+            Tab::Terminal => Action::TabTerminal,
+        }
+    }
 }
 
 /// Which pane the keyboard is driving.
@@ -136,6 +165,16 @@ pub struct App {
     ambient: bool,
     /// Run anything by name. `R-B21`.
     palette: crate::palette::Palette,
+    /// How the detail panes are arranged. `R-B20`.
+    ///
+    /// `Option` only so it can be taken out while rendering — see
+    /// `detail_panel`. It is `Some` at every other point in the frame.
+    tree: Option<crate::layout::Tree>,
+    /// Set when the arrangement changed; written once at the end of the frame,
+    /// for the same reason `prefs_dirty` exists — dragging a splitter would
+    /// otherwise write the file on every frame of the drag.
+    layout_dirty: bool,
+
     /// Cursor and filter for the keyboard settings window. `R-B22`.
     ///
     /// The cursor indexes the *filtered* rows, not `Action::ALL`, so it always
@@ -217,6 +256,7 @@ impl App {
         let net = Net::connect(url, cc.egui_ctx.clone());
         let (keymap, keymap_warning) = crate::keymap::Keymap::load();
         let (prefs, prefs_warning) = crate::prefs::Prefs::load();
+        let (tree, layout_warning) = crate::layout::load();
         App {
             net,
             hotkey,
@@ -234,6 +274,8 @@ impl App {
             prefs_dirty: false,
             ambient: false,
             palette: crate::palette::Palette::default(),
+            tree: Some(tree),
+            layout_dirty: false,
             keymap_cursor: 0,
             keymap_filter: String::new(),
             flagged: Vec::new(),
@@ -266,6 +308,7 @@ impl App {
                 .into_iter()
                 .chain(keymap_warning)
                 .chain(prefs_warning)
+                .chain(layout_warning)
                 .collect(),
         }
     }
@@ -464,6 +507,18 @@ impl eframe::App for App {
             self.prefs_dirty = false;
             if let Err(e) = self.prefs.save() {
                 self.errors.push(format!("could not save preferences: {e}"));
+            }
+        }
+
+        // Written only while the pointer is up, so dragging a splitter does not
+        // write the file on every frame of the drag. The flag survives until
+        // then, so nothing is lost by waiting.
+        if self.layout_dirty && !ui.input(|i| i.pointer.any_down()) {
+            self.layout_dirty = false;
+            if let Some(tree) = &self.tree {
+                if let Err(e) = crate::layout::save(tree) {
+                    self.errors.push(format!("could not save the layout: {e}"));
+                }
             }
         }
     }
@@ -1108,6 +1163,10 @@ impl App {
                     self.palette.open();
                 }
             }
+            A::ResetLayout => {
+                self.tree = Some(crate::layout::default_tree());
+                self.layout_dirty = true;
+            }
             A::OpenKeymap => self.show_keymap = !self.show_keymap,
             A::Rescan => self.net.send(ClientMsg::Rescan),
         }
@@ -1210,6 +1269,13 @@ impl App {
     /// show a permanently empty tab.
     fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
+        // Bring the pane forward wherever it sits, and put it back if it was
+        // closed. With one visible pane this was implicit; with a tree it is
+        // the whole of what "show the Changes tab" means.
+        if let Some(tree) = &mut self.tree {
+            crate::layout::focus(tree, tab);
+            self.layout_dirty = true;
+        }
         if tab == Tab::Debt {
             if let Some(repo) = self.selected_session().and_then(|s| s.repo_root.clone()) {
                 self.net.send(ClientMsg::FetchReviewDebt { repo });
@@ -1222,7 +1288,11 @@ impl App {
     }
 
     fn cycle_tab(&mut self, delta: i32) {
-        self.set_tab(next_tab(self.tab, delta));
+        let next = match &self.tree {
+            Some(tree) => crate::layout::cycle(tree, self.tab, delta),
+            None => self.tab,
+        };
+        self.set_tab(next);
     }
 
     fn focus_selected_terminal(&mut self) {
@@ -1716,6 +1786,143 @@ impl App {
     }
 }
 
+/// Renders the detail panes into the layout tree. `R-B20`.
+///
+/// Holds `&mut App` for the duration of one `Tree::ui` call. The tree itself is
+/// taken out of `App` first, so this is a plain sequential borrow rather than
+/// anything clever.
+struct DetailPanes<'a> {
+    app: &'a mut App,
+    /// Cloned once rather than looked up per pane: five panes would otherwise
+    /// be five map lookups plus five `Rc` bumps for a value that cannot change
+    /// mid-frame.
+    session: Rc<Session>,
+    /// Set when a click landed inside a pane, to aim the keyboard at it.
+    clicked_pane: Option<Tab>,
+    /// Set when the arrangement changed — dragged, resized, or a tab closed —
+    /// so the caller knows to persist it.
+    edited: bool,
+}
+
+impl egui_tiles::Behavior<Tab> for DetailPanes<'_> {
+    fn pane_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        _tile_id: egui_tiles::TileId,
+        pane: &mut Tab,
+    ) -> egui_tiles::UiResponse {
+        // A click anywhere in a pane aims the keyboard at it. With one pane
+        // visible there was nothing to decide; with several, scrolling and the
+        // review keys need to know which one you mean.
+        let focused = self.app.tab == *pane;
+        let rect = ui.max_rect();
+        if focused {
+            ui.painter().rect_stroke(
+                rect.shrink(1.0),
+                5.0,
+                egui::Stroke::new(1.0, BLUE.linear_multiply(0.5)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if ui.rect_contains_pointer(rect) && ui.input(|i| i.pointer.any_pressed()) {
+            self.clicked_pane = Some(*pane);
+        }
+
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                let session = self.session.clone();
+                self.app.pane_ui(ui, *pane, &session);
+            });
+
+        // Never `UiResponse::DragStarted` from the body: dragging a pane by its
+        // content would fight every scroll area and text selection inside it.
+        // The tab is the handle.
+        egui_tiles::UiResponse::None
+    }
+
+    fn tab_title_for_pane(&mut self, pane: &Tab) -> egui::WidgetText {
+        // The unread count rides on the Changes tab, which is the one number
+        // worth carrying in furniture that is always on screen.
+        let unread = if *pane == Tab::Changes {
+            self.app
+                .changes
+                .get(&self.session.id)
+                .map(|c| c.unreviewed_hunks())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let key = self
+            .app
+            .keymap
+            .bindings_for(pane.action())
+            .first()
+            .map(|b| b.0.clone())
+            .unwrap_or_default();
+        let title = if unread > 0 {
+            format!("{} ({unread})", pane.label())
+        } else {
+            pane.label().to_string()
+        };
+        // The binding sits in the tab itself, the same argument as the palette:
+        // the surface you look at anyway is the cheapest place to learn a key.
+        if key.is_empty() {
+            title.into()
+        } else {
+            egui::RichText::new(format!("{title}  {key}")).into()
+        }
+    }
+
+    fn is_tab_closable(&self, _tiles: &egui_tiles::Tiles<Tab>, _tile_id: egui_tiles::TileId) -> bool {
+        true
+    }
+
+    fn on_tab_close(
+        &mut self,
+        _tiles: &mut egui_tiles::Tiles<Tab>,
+        _tile_id: egui_tiles::TileId,
+    ) -> bool {
+        // Safe to allow because closing is reversible: the pane's own shortcut
+        // puts it back. See `layout::focus`.
+        self.edited = true;
+        true
+    }
+
+    /// Every drag, resize and split reports here, which is the only reliable
+    /// signal that the arrangement moved — comparing trees frame to frame
+    /// would be both slower and easy to get subtly wrong.
+    fn on_edit(&mut self, _edit_action: egui_tiles::EditAction) {
+        self.edited = true;
+    }
+
+    fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
+        26.0
+    }
+
+    fn gap_width(&self, _style: &egui::Style) -> f32 {
+        3.0
+    }
+
+    fn tab_bar_color(&self, _visuals: &egui::Visuals) -> Color32 {
+        BG
+    }
+
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        egui_tiles::SimplificationOptions {
+            // Without this a container left holding one pane stays a container,
+            // and the layout accumulates invisible nesting every time you drag
+            // something out and back.
+            prune_empty_tabs: true,
+            prune_empty_containers: true,
+            prune_single_child_tabs: false,
+            prune_single_child_containers: true,
+            all_panes_must_have_tabs: true,
+            ..Default::default()
+        }
+    }
+}
+
 /// One `icon value` pair in the status bar.
 ///
 /// The icon is tinted and the value is not, so a row of these reads as a row of
@@ -1929,17 +2136,17 @@ fn queue_card(
             // Only for a session that is over, and only when it is not already
             // hidden — the corner of a card is the wrong place to *undo*
             // something, and a live session must not be dismissable at all.
-            if hideable && !hidden {
-                if ui
+            if hideable
+                && !hidden
+                && ui
                     .add(
                         egui::Button::new(RichText::new(icon::HIDE).size(11.0).color(DIM))
                             .frame(false),
                     )
                     .on_hover_text("hide it from the queue — reversible (h)")
                     .clicked()
-                {
-                    hit.hide = true;
-                }
+            {
+                hit.hide = true;
             }
             ui.label(dim(fmt_dur(s.duration_secs(now))));
         });
@@ -2136,6 +2343,18 @@ impl App {
                         }
                         ui.separator();
                         if ui
+                            .button(format!(
+                                "Reset the pane layout  ({})",
+                                self.keymap.describe(crate::keymap::Action::ResetLayout)
+                            ))
+                            .clicked()
+                        {
+                            self.tree = Some(crate::layout::default_tree());
+                            self.layout_dirty = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
                             .button("Forget this session")
                             .on_hover_text(
                                 "stop tracking it and drop its review marks",
@@ -2169,50 +2388,16 @@ impl App {
 
             ui.separator();
 
-            let unread = self
-                .changes
-                .get(&s.id)
-                .map(|c| c.unreviewed_hunks())
-                .unwrap_or(0);
+            // Anything that used to live beside the tab bar and is not a tab.
             ui.horizontal(|ui| {
-                let changes_label = if unread > 0 {
-                    format!("Changes ({unread} unread)")
-                } else {
-                    "Changes".to_string()
-                };
-                let mut pick = None;
-                for (tab, label, hint) in [
-                    (Tab::Changes, changes_label.clone(), "the diff this session produced"),
-                    (Tab::Transcript, "Transcript".to_string(), "the conversation"),
-                    (Tab::Info, "Info".to_string(), "session details"),
-                    (
-                        Tab::Debt,
-                        "Debt".to_string(),
-                        "how much of this repo's agent output nobody has read",
-                    ),
-                    (
-                        Tab::Terminal,
-                        "Terminal".to_string(),
-                        "talk to this session, if it runs under tmux",
-                    ),
-                ] {
-                    let action = match tab {
-                        Tab::Changes => crate::keymap::Action::TabChanges,
-                        Tab::Transcript => crate::keymap::Action::TabTranscript,
-                        Tab::Info => crate::keymap::Action::TabInfo,
-                        Tab::Debt => crate::keymap::Action::TabDebt,
-                        Tab::Terminal => crate::keymap::Action::TabTerminal,
-                    };
-                    if ui
-                        .selectable_label(self.tab == tab, label)
-                        .on_hover_text(format!("{hint}  ({})", self.keymap.describe(action)))
-                        .clicked()
-                    {
-                        pick = Some(tab);
-                    }
-                }
-                if let Some(tab) = pick {
-                    self.set_tab(tab);
+                // Retires itself the moment anything is split — see
+                // `layout::is_unsplit`.
+                if self.tree.as_ref().map(crate::layout::is_unsplit).unwrap_or(false) {
+                    ui.label(
+                        RichText::new("drag a tab out to split the pane")
+                            .size(10.5)
+                            .color(DIM),
+                    );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !self.flagged.is_empty()
@@ -2225,16 +2410,39 @@ impl App {
                     }
                 });
             });
-            ui.separator();
 
-            match self.tab {
-                Tab::Changes => self.changes_tab(ui, &s),
-                Tab::Transcript => self.transcript_tab(ui, &s),
-                Tab::Info => self.info_tab(ui, &s),
-                Tab::Debt => self.debt_tab(ui, &s),
-                Tab::Terminal => self.terminal_tab(ui, &s),
+            // The tree is taken out of `self` for the duration, because the
+            // behaviour that renders each pane needs `&mut App` and the tree
+            // lives on App. Taking it first makes the two borrows sequential
+            // rather than overlapping.
+            let mut tree = self.tree.take();
+            if let Some(tree) = &mut tree {
+                let mut behavior = DetailPanes {
+                    app: self,
+                    session: s.clone(),
+                    clicked_pane: None,
+                    edited: false,
+                };
+                tree.ui(&mut behavior, ui);
+                let (focus, edited) = (behavior.clicked_pane, behavior.edited);
+                if let Some(t) = focus {
+                    self.tab = t;
+                }
+                self.layout_dirty |= edited;
             }
+            self.tree = tree;
         });
+    }
+
+    /// Render one pane. Dispatch only — every arm existed before the tree did.
+    fn pane_ui(&mut self, ui: &mut egui::Ui, tab: Tab, s: &Session) {
+        match tab {
+            Tab::Changes => self.changes_tab(ui, s),
+            Tab::Transcript => self.transcript_tab(ui, s),
+            Tab::Info => self.info_tab(ui, s),
+            Tab::Debt => self.debt_tab(ui, s),
+            Tab::Terminal => self.terminal_tab(ui, s),
+        }
     }
 
     /// The session's own terminal, attached through tmux. `R-B18`.
@@ -2765,23 +2973,6 @@ impl App {
                 }
             });
     }
-}
-
-/// The tab `delta` steps from `from`, wrapping at both ends.
-///
-/// Wrapping rather than clamping: cycling that stops dead at the last tab makes
-/// you reverse direction to get back, which is not what a cycle is for.
-const TAB_ORDER: [Tab; 5] = [
-    Tab::Changes,
-    Tab::Transcript,
-    Tab::Info,
-    Tab::Debt,
-    Tab::Terminal,
-];
-
-fn next_tab(from: Tab, delta: i32) -> Tab {
-    let at = TAB_ORDER.iter().position(|t| *t == from).unwrap_or(0) as i32;
-    TAB_ORDER[(at + delta).rem_euclid(TAB_ORDER.len() as i32) as usize]
 }
 
 /// Shorten a path to its last directory plus filename.
@@ -4030,7 +4221,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{may_toggle_hidden, next_tab, short_path, TAB_ORDER};
+    use super::{may_toggle_hidden, short_path};
 
     use super::ScrollRequest;
 
@@ -4094,28 +4285,6 @@ mod tests {
         assert!(ScrollRequest::Bottom.delta(800.0).y.abs() > 1.0e5);
     }
 
-    /// Written against the *ends of `TAB_ORDER`* rather than named tabs. The
-    /// first version hardcoded `Debt` as the last tab, so adding the Terminal
-    /// tab failed a test that was not about the Terminal tab at all — noise
-    /// that teaches you to edit tests instead of reading them.
-    #[test]
-    fn cycling_tabs_wraps_at_both_ends() {
-        let first = TAB_ORDER[0];
-        let last = TAB_ORDER[TAB_ORDER.len() - 1];
-        assert_eq!(next_tab(first, 1), TAB_ORDER[1]);
-        assert_eq!(next_tab(last, 1), first, "forward from the last");
-        assert_eq!(next_tab(first, -1), last, "back from the first");
-        assert_eq!(next_tab(TAB_ORDER[2], -1), TAB_ORDER[1]);
-    }
-
-    #[test]
-    fn cycling_all_the_way_round_returns_to_the_start() {
-        let mut t = TAB_ORDER[0];
-        for _ in 0..TAB_ORDER.len() {
-            t = next_tab(t, 1);
-        }
-        assert_eq!(t, TAB_ORDER[0], "one step per tab returns to the start");
-    }
 
 
     #[test]

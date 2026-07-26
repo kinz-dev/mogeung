@@ -15,6 +15,7 @@ mod diff;
 mod filter;
 mod hotkey;
 mod keymap;
+mod layout;
 mod net;
 mod palette;
 mod prefs;

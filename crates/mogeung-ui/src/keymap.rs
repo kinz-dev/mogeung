@@ -79,6 +79,11 @@ pub enum Action {
     /// The one binding worth memorising, because it is the one that means you
     /// never have to memorise another.
     CommandPalette,
+    /// Put the detail panes back to the single tab container they start as.
+    ///
+    /// The escape hatch a docking system cannot ship without: an arrangement
+    /// you cannot undo by hand is one bad drag away from unusable.
+    ResetLayout,
     ToggleAmbient,
     ToggleHealth,
     OpenKeymap,
@@ -117,6 +122,7 @@ impl Action {
         Action::NextUnread,
         Action::FlagHunk,
         Action::CommandPalette,
+        Action::ResetLayout,
         Action::ToggleAmbient,
         Action::ToggleHealth,
         Action::OpenKeymap,
@@ -148,6 +154,7 @@ impl Action {
             | Action::PinSession => "Queue",
             Action::ToggleRead | Action::NextUnread | Action::FlagHunk => "Review",
             Action::CommandPalette
+            | Action::ResetLayout
             | Action::ToggleAmbient
             | Action::ToggleHealth
             | Action::OpenKeymap
@@ -187,6 +194,7 @@ impl Action {
             Action::NextUnread => "Jump to the next unread hunk",
             Action::FlagHunk => "Flag the selected hunk for a follow-up prompt",
             Action::CommandPalette => "Command palette — run anything by name",
+            Action::ResetLayout => "Reset the pane layout",
             Action::ToggleAmbient => "Show or hide the ambient board",
             Action::ToggleHealth => "Show or hide the health panel",
             Action::OpenKeymap => "Open this keyboard settings window",
@@ -338,6 +346,11 @@ impl Default for Keymap {
         // platform, and `Ctrl+K` is the same reflex for anyone arriving from
         // Linux. Neither is claimed by anything else.
         set(Action::CommandPalette, &["Cmd+K", "Ctrl+K"]);
+
+        // Deliberately awkward. Resetting the layout throws away an
+        // arrangement you may have spent a while on, so it should be reachable
+        // and not adjacent to anything you press often.
+        set(Action::ResetLayout, &["Alt+0"]);
 
         set(Action::ToggleAmbient, &["Alt+A"]);
         set(Action::ToggleHealth, &["Alt+H"]);
