@@ -197,6 +197,19 @@ pub mod icon {
     /// Dismiss a finished session from the queue.
     pub const HIDE: &str = "✕";
 
+    // -- status bar. Short, unambiguous, and each one earns its place by
+    // replacing a word that was being repeated on every session.
+    /// How long the session has been going.
+    pub const CLOCK: &str = "🕐";
+    /// Conversation turns.
+    pub const TURNS: &str = "⇄";
+    /// Tool calls.
+    pub const TOOLS: &str = "⚙";
+    /// Tokens out.
+    pub const TOKENS: &str = "◆";
+    /// Working directory.
+    pub const FOLDER: &str = "🗀";
+
     /// Every icon, for the test that proves they render.
     ///
     /// Unused outside tests by design — it exists so the check cannot drift
@@ -218,6 +231,11 @@ pub mod icon {
         ("SNOOZE", SNOOZE),
         ("TERMINAL", TERMINAL),
         ("HIDE", HIDE),
+        ("CLOCK", CLOCK),
+        ("TURNS", TURNS),
+        ("TOOLS", TOOLS),
+        ("TOKENS", TOKENS),
+        ("FOLDER", FOLDER),
     ];
 }
 

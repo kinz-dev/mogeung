@@ -441,6 +441,9 @@ impl eframe::App for App {
         self.handle_keys(ui);
         self.top_bar(ui);
         self.queue_panel(ui);
+        // Before the detail pane: a `CentralPanel` claims whatever is left, so
+        // every other panel has to be declared first.
+        self.status_bar(ui);
         self.detail_panel(ui);
         self.launch_window(ui);
         self.health_window(ui);
@@ -472,9 +475,18 @@ impl eframe::App for App {
 
 impl App {
     fn top_bar(&mut self, root: &mut egui::Ui) {
-        egui::Panel::top("top").show(root, |ui| {
+        // Tighter than the default panel margin. This bar is chrome: it should
+        // cost the least vertical space that still reads comfortably, because
+        // every pixel it takes is one the transcript does not get.
+        egui::Panel::top("top")
+            .frame(
+                egui::Frame::NONE
+                    .fill(BG)
+                    .inner_margin(egui::Margin::symmetric(10, 5)),
+            )
+            .show(root, |ui| {
             ui.horizontal(|ui| {
-                let title = ui.label(RichText::new("mogeung").strong().size(17.0));
+                let title = ui.label(RichText::new("mogeung").strong().size(15.0).color(TEXT_STRONG));
                 match &self.hotkey {
                     Some(h) => {
                         title.on_hover_text(format!("{} brings this window forward", h.accel));
@@ -1704,6 +1716,17 @@ impl App {
     }
 }
 
+/// One `icon value` pair in the status bar.
+///
+/// The icon is tinted and the value is not, so a row of these reads as a row of
+/// values with coloured markers rather than as coloured text — which at this
+/// size would be a lot of shouting for facts that are mostly reference.
+fn stat(ui: &mut egui::Ui, glyph: &str, value: &str, tint: Color32) {
+    ui.label(RichText::new(glyph).size(11.0).color(tint));
+    ui.label(RichText::new(value).size(11.5).color(TEXT));
+    ui.add_space(4.0);
+}
+
 /// What was clicked in one row of the keyboard settings list.
 struct KeymapRowHit {
     response: egui::Response,
@@ -1990,6 +2013,75 @@ fn queue_card(
 // ---------------------------------------------------------------------------
 
 impl App {
+    /// The bottom status bar.
+    ///
+    /// Everything here used to be a line of `·`-separated grey text wedged
+    /// under the session title, pushing the content that matters further down
+    /// on every screen. It is reference material — branch, elapsed, turns,
+    /// tool calls, tokens, path — consulted occasionally and read constantly by
+    /// nobody. A status bar is exactly where that belongs: always available,
+    /// never in the way, and costing one row for the whole window instead of
+    /// three at the top of the pane.
+    ///
+    /// The icons are tinted so the row can be scanned rather than read, and one
+    /// of the tints carries information: the clock turns amber once a session
+    /// has been waiting on you, which is the single fact this whole app exists
+    /// to surface.
+    fn status_bar(&mut self, root: &mut egui::Ui) {
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::NONE
+                    .fill(BG)
+                    .inner_margin(egui::Margin::symmetric(10, 4)),
+            )
+            .show(root, |ui| {
+            ui.horizontal(|ui| {
+                ui.style_mut().interaction.selectable_labels = false;
+                let now = Utc::now();
+                let Some(s) = self.selected_session().cloned() else {
+                    // Never blank: with nothing selected it still answers "is
+                    // anything running".
+                    let live = self.sessions.values().filter(|s| s.alive).count();
+                    ui.label(dim(format!(
+                        "{live} live session(s) · {} known",
+                        self.sessions.len()
+                    )));
+                    return;
+                };
+
+                stat(ui, icon::FOLDER, &s.repo_name(), BLUE);
+                if let Some(b) = &s.git_branch {
+                    stat(ui, icon::BRANCH, b, BLUE);
+                }
+                // Amber once it has been waiting on you: the one tint here
+                // that means something rather than merely separating.
+                let waiting = s.waiting_secs(now).is_some();
+                stat(
+                    ui,
+                    icon::CLOCK,
+                    &fmt_dur(s.duration_secs(now)),
+                    if waiting { AMBER } else { DIM },
+                );
+                stat(ui, icon::TURNS, &s.turns.to_string(), PURPLE);
+                stat(ui, icon::TOOLS, &s.tool_calls.to_string(), GREEN);
+                stat(ui, icon::TOKENS, &tokens(s.tokens_out), DIM);
+                if let Some(pid) = s.pid {
+                    stat(ui, "#", &pid.to_string(), DIM);
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // The path is the widest thing here and the least urgent,
+                    // so it goes last and gives up its space first.
+                    let (dir, base) = short_path(&s.cwd);
+                    ui.add(
+                        egui::Label::new(mono(format!("{dir}{base}")).size(11.0)).truncate(),
+                    )
+                    .on_hover_text(&s.cwd);
+                });
+            });
+        });
+    }
+
     fn detail_panel(&mut self, root: &mut egui::Ui) {
         egui::CentralPanel::default().show(root, |ui| {
             let Some(s) = self.selected_session().cloned() else {
@@ -2000,7 +2092,11 @@ impl App {
             };
             let now = Utc::now();
 
-            ui.horizontal_wrapped(|ui| {
+            // One row: state, title, and everything you can *do* folded into a
+            // menu on the right. The metadata that used to sit under this has
+            // moved to the status bar — it was three rows of reference material
+            // between you and the diff.
+            ui.horizontal(|ui| {
                 if s.alive {
                     let (txt, col) = match s.live_status {
                         Some(LiveStatus::Idle) => ("WAITING FOR YOU", RED),
@@ -2011,21 +2107,50 @@ impl App {
                 } else {
                     ui.label(badge("ended", DIM));
                 }
-                ui.label(RichText::new(truncate(&s.label(), 120)).size(14.0).strong());
-            });
+                ui.add(
+                    egui::Label::new(RichText::new(s.label()).size(14.0).strong()).truncate(),
+                )
+                .on_hover_text(s.label());
 
-            ui.horizontal_wrapped(|ui| {
-                ui.label(dim(s.repo_name()));
-                if let Some(b) = &s.git_branch {
-                    ui.label(dim(format!("· {} {b}", icon::BRANCH)));
-                }
-                ui.label(dim(format!("· {}", fmt_dur(s.duration_secs(now)))));
-                ui.label(dim(format!("· {} turns", s.turns)));
-                ui.label(dim(format!("· {} tool calls", s.tool_calls)));
-                ui.label(dim(format!("· {} tokens out", tokens(s.tokens_out))));
-                if let Some(pid) = s.pid {
-                    ui.label(dim(format!("· pid {pid}")));
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button("⋯", |ui| {
+                        if ui.button("Refresh diff").clicked() {
+                            self.net.send(ClientMsg::RefreshChange {
+                                session_id: s.id.clone(),
+                            });
+                            ui.close();
+                        }
+                        ui.separator();
+                        for t in [
+                            OpenTarget::Terminal,
+                            OpenTarget::Intellij,
+                            OpenTarget::VsCode,
+                            OpenTarget::Finder,
+                        ] {
+                            if ui.button(format!("Open in {}", t.label())).clicked() {
+                                if let Err(e) = ui::open_in(t, &s.cwd) {
+                                    self.errors.push(e);
+                                }
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui
+                            .button("Forget this session")
+                            .on_hover_text(
+                                "stop tracking it and drop its review marks",
+                            )
+                            .clicked()
+                        {
+                            self.net.send(ClientMsg::ForgetSession {
+                                session_id: s.id.clone(),
+                            });
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("refresh, open elsewhere, forget");
+                });
             });
 
             if let Some(err) = &s.error {
@@ -2042,39 +2167,6 @@ impl App {
                 );
             }
 
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Refresh diff").clicked() {
-                    self.net.send(ClientMsg::RefreshChange {
-                        session_id: s.id.clone(),
-                    });
-                }
-                ui.separator();
-                ui.label(dim("open in"));
-                for t in [
-                    OpenTarget::Terminal,
-                    OpenTarget::Intellij,
-                    OpenTarget::VsCode,
-                    OpenTarget::Finder,
-                ] {
-                    if ui.button(t.label()).clicked() {
-                        if let Err(e) = ui::open_in(t, &s.cwd) {
-                            self.errors.push(e);
-                        }
-                    }
-                }
-                ui.separator();
-                if ui
-                    .button("Forget")
-                    .on_hover_text("stop tracking this session and drop its review marks")
-                    .clicked()
-                {
-                    self.net.send(ClientMsg::ForgetSession {
-                        session_id: s.id.clone(),
-                    });
-                }
-            });
-
-            ui.label(mono(&s.cwd).color(DIM));
             ui.separator();
 
             let unread = self

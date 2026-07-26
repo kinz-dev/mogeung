@@ -2,14 +2,15 @@
 title: Reachable by keyboard
 status: shipped
 updated: 2026-07-26
-roadmap: [R-B21, R-B22]
+roadmap: [R-B21, R-B22, R-B23]
 depends_on: [A1, A13]
 ---
 
 # 0005 — Reachable by keyboard
 
-A command palette, a keyboard-driven settings window, a filter that behaves,
-and one theme instead of egui's defaults with our colours on top.
+A command palette, a keyboard-driven settings window, a filter that behaves, a
+status bar that takes the reference facts out of the way, and one theme instead
+of egui's defaults with our colours on top.
 
 ## Spec
 
@@ -46,6 +47,8 @@ Three concrete failures behind the general one:
 - [x] `/` focuses the filter without typing a `/` into it
 - [x] The filter can be driven end to end: type, arrow, Enter, Escape
 - [x] Surfaces, type sizes and radii come from one place
+- [x] The detail header is one row, not six, and the reference facts it carried
+      live in a status bar along the bottom
 
 ### Explicitly out of scope
 
@@ -70,8 +73,8 @@ so the two search boxes in the app cannot behave differently.
 
 - `crates/mogeung-ui/src/palette.rs` — new; matching, cursor, tests
 - `crates/mogeung-ui/src/app.rs` — palette window and rows, keymap window
-  cursor/search, filter key handling, theme call
-- `crates/mogeung-ui/src/ui.rs` — `apply_theme`, surface colours
+  cursor/search, filter key handling, theme call, status bar, compact header
+- `crates/mogeung-ui/src/ui.rs` — `apply_theme`, surface colours, status icons
 - `crates/mogeung-ui/src/keymap.rs` — `Action::CommandPalette`
 
 ### Risks and unknowns
@@ -106,6 +109,24 @@ delivers `Key` and `Text` for one press, and the field is drawn later in the
 same frame with focus already granted. The fix is to drop pending `Text` events
 when the shortcut fires. It now happens in two places, which is a hint that a
 third will need it.
+
+**Six rows of chrome stood between the session title and its diff.** State and
+title, then a `·`-separated grey strip of branch / elapsed / turns / tool calls
+/ tokens / pid, then a row of six buttons, then the working directory — on every
+screen, for every session. None of it was wrong; all of it was reference
+material placed where attention lands.
+
+It is now one row. The strip became a status bar along the bottom, which is
+what a status bar is for: always available, never in the way, one row for the
+whole window rather than three at the top of a pane. The six buttons became a
+`⋯` menu, since "refresh, open elsewhere, forget" is a thing you do
+occasionally and never in a hurry.
+
+The status bar's icon tints are mostly there to make the row scannable rather
+than readable, but one carries information: the clock turns amber once a
+session has been waiting on you. Colour that means something, next to colour
+that merely separates, is a compromise worth naming — the alternative was
+either a monochrome row nobody scans or five tints that all claim to matter.
 
 **Click-outside-to-dismiss did not work as first written.** It asked egui
 whether the pointer was over the palette's layer within the whole screen rect —

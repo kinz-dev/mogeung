@@ -92,6 +92,7 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B20 | **Dockable panes** — arrange the detail tabs freely, two side by side | L | ⬜ |
 | R-B21 | **Command palette** — every action by name, with its binding shown | M | ✅ |
 | R-B22 | **Keyboard-driven keyboard settings** — cursor, search and rebind without a mouse | S | ✅ |
+| R-B23 | **Status bar** — session reference facts out of the header and along the bottom | S | ✅ |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 
