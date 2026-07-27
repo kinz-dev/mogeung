@@ -67,6 +67,11 @@ pub struct Prefs {
     #[serde(skip)]
     pub reveal_hidden: bool,
 
+    /// Queue collapsed to a strip. Persisted, because a collapsed panel that
+    /// came back on every launch would be a setting that does not stick.
+    #[serde(default)]
+    pub queue_collapsed: bool,
+
     #[serde(default)]
     pub group_by_repo: bool,
     #[serde(default)]
@@ -104,6 +109,7 @@ impl Default for Prefs {
             pinned: BTreeSet::new(),
             scope: Scope::default(),
             reveal_hidden: false,
+            queue_collapsed: false,
             group_by_repo: false,
             auto_select: false,
             preview_on_select: true,

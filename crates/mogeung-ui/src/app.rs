@@ -1163,6 +1163,17 @@ impl App {
                     self.palette.open();
                 }
             }
+            A::ToggleQueuePanel => {
+                self.prefs.queue_collapsed = !self.prefs.queue_collapsed;
+                self.prefs_dirty = true;
+                // Coming back from collapsed means you want the queue, and
+                // leaving it means you want the room — so the keyboard follows.
+                self.pane = if self.prefs.queue_collapsed {
+                    Pane::Diff
+                } else {
+                    Pane::Queue
+                };
+            }
             A::ResetLayout => {
                 self.tree = Some(crate::layout::default_tree());
                 self.layout_dirty = true;
@@ -1311,6 +1322,46 @@ impl App {
     }
 
     fn queue_panel(&mut self, root: &mut egui::Ui) {
+        // Collapsed is a strip, not nothing. The queue is the reason this app
+        // exists, so it must never be possible to lose it entirely — and a
+        // count you can still see is what makes taking the room back a
+        // decision rather than a rediscovery.
+        if self.prefs.queue_collapsed {
+            let needing = self.queue.iter().filter(|i| i.reason.needs_human()).count();
+            let key = self.keymap.describe(crate::keymap::Action::ToggleQueuePanel);
+            let mut expand = false;
+            egui::Panel::left("queue-strip")
+                .resizable(false)
+                .exact_size(30.0)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(BG)
+                        .inner_margin(egui::Margin::symmetric(4, 8)),
+                )
+                .show(root, |ui| {
+                    ui.vertical_centered(|ui| {
+                        if ui
+                            .add(egui::Button::new(RichText::new("»").size(14.0).color(DIM)).frame(false))
+                            .on_hover_text(format!("show the queue  ({key})"))
+                            .clicked()
+                        {
+                            expand = true;
+                        }
+                        ui.add_space(6.0);
+                        if needing > 0 {
+                            ui.label(RichText::new(needing.to_string()).size(13.0).color(AMBER).strong())
+                                .on_hover_text(format!("{needing} session(s) need you"));
+                        }
+                    });
+                });
+            if expand {
+                self.prefs.queue_collapsed = false;
+                self.prefs_dirty = true;
+                self.pane = Pane::Queue;
+            }
+            return;
+        }
+
         egui::Panel::left("queue")
             .default_size(380.0)
             .size_range(300.0..=560.0)
@@ -1326,6 +1377,18 @@ impl App {
                     )
                     .on_hover_text("Alt+1");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(egui::Button::new(RichText::new("«").size(13.0).color(DIM)).frame(false))
+                            .on_hover_text(format!(
+                                "collapse the queue  ({})",
+                                self.keymap.describe(crate::keymap::Action::ToggleQueuePanel)
+                            ))
+                            .clicked()
+                        {
+                            self.prefs.queue_collapsed = true;
+                            self.prefs_dirty = true;
+                            self.pane = Pane::Diff;
+                        }
                         if ui.checkbox(&mut self.prefs.group_by_repo, "group").changed() {
                             self.prefs_dirty = true;
                         }
@@ -1853,25 +1916,35 @@ impl egui_tiles::Behavior<Tab> for DetailPanes<'_> {
         } else {
             0
         };
-        let key = self
-            .app
-            .keymap
-            .bindings_for(pane.action())
-            .first()
-            .map(|b| b.0.clone())
-            .unwrap_or_default();
-        let title = if unread > 0 {
-            format!("{} ({unread})", pane.label())
+        // No binding in the tab. It was there on the palette's argument — the
+        // surface you look at anyway is the cheapest place to learn a key — but
+        // a tab bar is furniture you read a hundred times a day, and a hint you
+        // have already absorbed is just noise in it. The palette and the
+        // settings window teach the keys; the tab bar names the pane.
+        if unread > 0 {
+            format!("{} ({unread})", pane.label()).into()
         } else {
-            pane.label().to_string()
-        };
-        // The binding sits in the tab itself, the same argument as the palette:
-        // the surface you look at anyway is the cheapest place to learn a key.
-        if key.is_empty() {
-            title.into()
-        } else {
-            egui::RichText::new(format!("{title}  {key}")).into()
+            pane.label().into()
         }
+    }
+
+    /// The binding moved off the tab face and onto its tooltip.
+    ///
+    /// Printing the key in the tab was the palette's argument applied one place
+    /// too far: a tab bar is furniture you read a hundred times a day, and a
+    /// hint you have already absorbed is noise in it. On hover it costs nothing
+    /// and is still there the day you have forgotten.
+    fn on_tab_button(
+        &mut self,
+        tiles: &mut egui_tiles::Tiles<Tab>,
+        tile_id: egui_tiles::TileId,
+        button_response: egui::Response,
+    ) -> egui::Response {
+        let Some(pane) = tiles.get_pane(&tile_id) else {
+            return button_response;
+        };
+        let key = self.app.keymap.describe(pane.action());
+        button_response.on_hover_text(format!("{}  ({key})", pane.label()))
     }
 
     fn is_tab_closable(&self, _tiles: &egui_tiles::Tiles<Tab>, _tile_id: egui_tiles::TileId) -> bool {

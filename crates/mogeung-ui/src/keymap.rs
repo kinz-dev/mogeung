@@ -33,6 +33,12 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     // -- panes
+    /// Collapse the queue down to a strip, and back.
+    ///
+    /// The queue is the permanent furniture of this app, so it cannot be
+    /// *closed* — but a wide diff sometimes wants the room, and giving it back
+    /// should not mean dragging a splitter twice.
+    ToggleQueuePanel,
     FocusQueue,
     FocusFiles,
     FocusDiff,
@@ -92,6 +98,7 @@ pub enum Action {
 
 impl Action {
     pub const ALL: &'static [Action] = &[
+        Action::ToggleQueuePanel,
         Action::FocusQueue,
         Action::FocusFiles,
         Action::FocusDiff,
@@ -131,7 +138,10 @@ impl Action {
 
     pub fn group(self) -> &'static str {
         match self {
-            Action::FocusQueue | Action::FocusFiles | Action::FocusDiff => "Panes",
+            Action::ToggleQueuePanel
+            | Action::FocusQueue
+            | Action::FocusFiles
+            | Action::FocusDiff => "Panes",
             Action::TabChanges
             | Action::TabTranscript
             | Action::TabInfo
@@ -164,6 +174,7 @@ impl Action {
 
     pub fn label(self) -> &'static str {
         match self {
+            Action::ToggleQueuePanel => "Collapse or expand the queue",
             Action::FocusQueue => "Focus the session queue",
             Action::FocusFiles => "Focus the file list",
             Action::FocusDiff => "Focus the diff",
@@ -299,6 +310,7 @@ impl Default for Keymap {
             b.insert(a, keys.iter().map(|k| Binding(k.to_string())).collect());
         };
 
+        set(Action::ToggleQueuePanel, &["OpenBracket"]);
         set(Action::FocusQueue, &["Alt+1"]);
         set(Action::FocusFiles, &["Alt+2"]);
         set(Action::FocusDiff, &["Alt+3"]);
