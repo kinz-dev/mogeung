@@ -3539,7 +3539,10 @@ impl App {
                     }
                 });
             });
-            egui::ScrollArea::vertical()
+            // Both axes: inside a horizontal scroll area the rows get
+            // unlimited width, so a deep path scrolls instead of wrapping —
+            // a tree whose rows fold onto two lines stops reading as a tree.
+            egui::ScrollArea::both()
                 .id_salt("explorer-tree-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -3677,7 +3680,10 @@ impl App {
         let content = view.content.clone();
         let truncated = view.truncated;
         ui.horizontal(|ui| {
-            ui.label(mono(&path));
+            // Truncated, never wrapped: a header that folds onto two lines
+            // pushes the file down and reads as two files.
+            ui.add(egui::Label::new(mono(&path)).truncate())
+                .on_hover_text(&path);
             if truncated {
                 ui.label(
                     RichText::new("cut short — the file goes on past the size cap")
