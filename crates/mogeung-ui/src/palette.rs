@@ -25,23 +25,50 @@ pub struct Match {
     pub score: i32,
 }
 
+/// What the palette is searching. One surface, three corpora (`R-B25`) — the
+/// muscle memory of opening it and typing is identical either way, which is
+/// why file search did not get its own window.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Actions by name — the original palette.
+    #[default]
+    Actions,
+    /// Worktree files by fuzzy name; an empty query lists open tabs, MRU
+    /// first, which is what makes this double as the recent-files switcher.
+    Files,
+    /// Lines across the worktree, by literal query, answered by the daemon.
+    Search,
+}
+
 #[derive(Default)]
 pub struct Palette {
     pub open: bool,
+    pub mode: Mode,
     pub query: String,
     /// Index into the *current* match list, not into `Action::ALL`.
     pub cursor: usize,
+    /// Scroll the cursor row into view this frame. Armed by keyboard moves
+    /// only — an unconditional scroll pins the list to the cursor row and
+    /// makes rows below the fold unreachable by mouse.
+    pub scroll: bool,
 }
 
 impl Palette {
     pub fn open(&mut self) {
+        self.open_as(Mode::Actions);
+    }
+
+    pub fn open_as(&mut self, mode: Mode) {
         self.open = true;
+        self.mode = mode;
         self.query.clear();
         self.cursor = 0;
+        self.scroll = true;
     }
 
     pub fn close(&mut self) {
         self.open = false;
+        self.mode = Mode::Actions;
         self.query.clear();
         self.cursor = 0;
     }
@@ -94,6 +121,7 @@ impl Palette {
         } else {
             next as usize
         };
+        self.scroll = true;
     }
 }
 
@@ -204,6 +232,20 @@ mod tests {
         assert!(score("tab", "Show the Changes TAB").is_some());
     }
 
+    /// Scrolling to the cursor is armed by a keyboard move, not left on — an
+    /// always-on scroll pins the list to the cursor row, which made every row
+    /// below the fold unreachable by mouse (reported on Ubuntu, true anywhere).
+    #[test]
+    fn scroll_is_armed_by_keyboard_moves_not_left_on() {
+        let mut p = Palette::default();
+        assert!(!p.scroll, "an idle palette must not pin the scroll position");
+        p.move_cursor(1, 3);
+        assert!(p.scroll, "a keyboard move must pull the cursor into view");
+        p.scroll = false;
+        p.move_cursor(0, 0);
+        assert!(!p.scroll, "a move that goes nowhere must not re-arm it");
+    }
+
     #[test]
     fn the_cursor_wraps_at_both_ends() {
         let mut p = Palette::default();
@@ -246,7 +288,7 @@ mod tests {
             let p = Palette {
                 open: true,
                 query: action.label().to_string(),
-                cursor: 0,
+                ..Default::default()
             };
             let found = p.matches(&keymap);
             assert_eq!(

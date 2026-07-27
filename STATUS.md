@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 181 passing |
-| Rust | 16853 lines |
-| Docs | 39 files, 10 ADRs |
+| Tests | 230 passing |
+| Rust | 21436 lines |
+| Docs | 43 files, 10 ADRs |
 
 ## Assumptions
 
-Untested: **6** · At risk: **2** · Supported: 5 · Refuted: 1
+Untested: **6** · At risk: **2** · Supported: 9 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -27,4 +27,8 @@ Untested: **6** · At risk: **2** · Supported: 5 · Refuted: 1
 | [A queue that answers the click](docs/features/0004-a-queue-that-answers-the-click.md) | `shipped` | [A1, A6] |
 | [Reachable by keyboard](docs/features/0005-reachable-by-keyboard.md) | `shipped` | [A1, A13] |
 | [Dockable panes](docs/features/0006-dockable-panes.md) | `shipped` | [A14] |
+| [File explorer](docs/features/0007-file-explorer.md) | `in-progress` | [A13, A15] |
+| [Explorer workbench](docs/features/0008-explorer-workbench.md) | `in-progress` | [A13, A15, A16] |
+| [Session labels](docs/features/0009-session-labels.md) | `in-progress` | [A13, A17] |
+| [Git view](docs/features/0010-git-view.md) | `in-progress` | [A13, A18] |
 

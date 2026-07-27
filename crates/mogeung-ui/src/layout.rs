@@ -34,12 +34,14 @@ pub type Tree = egui_tiles::Tree<Tab>;
 /// Also the order focus cycling walks, so `next` means the same thing however
 /// the panes have been dragged around. Cycling in *layout* order would change
 /// meaning every time you moved something.
-pub const ALL_PANES: [Tab; 5] = [
+pub const ALL_PANES: [Tab; 7] = [
     Tab::Changes,
     Tab::Transcript,
     Tab::Info,
     Tab::Debt,
     Tab::Terminal,
+    Tab::Explorer,
+    Tab::Git,
 ];
 
 /// The id is fixed rather than generated: `egui_tiles` keys its per-tile

@@ -1,7 +1,7 @@
 ---
 title: Assumption ledger
 status: active
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 # Assumption ledger
@@ -48,6 +48,10 @@ assumption — not to build the feature.**
 | A12 | Starting sessions with `yolomo` is a change the user will actually adopt | `UNTESTED` | First real use 2026-07-26, which is a start and not yet a habit. tmux cannot be retrofitted onto a running session, so the whole feature is worth nothing if the habit does not stick. Answerable only by looking, in a week, at how many live sessions have a `tmux_target` | — |
 | A13 | The user drives by keyboard and will reach for a palette before a menu | `SUPPORTED` | Stated directly — *"ppl using this is often a pro-level user who love to use keyboard to navigate"* — and the keymap system exists because of it. What is still unchecked is whether the palette gets used *after* the bindings are learnt, or is abandoned once it has taught them. Either outcome is a success for the feature | [feature 0005](../features/0005-reachable-by-keyboard.md) |
 | A14 | The user wants two detail views at once and will arrange them rather than leaving the default | `SUPPORTED` | Asked for directly: *"put info and debt side by side"*. Wanting a layout is weaker evidence than keeping one, so what is still open is whether the default tab container is ever actually dragged apart in a week of use | [feature 0006](../features/0006-dockable-panes.md) |
+| A15 | Reading worktree files inside mogeung — read-only, never editing — is worth a pane | `SUPPORTED` | Asked for directly, 2026-07-27: *"a file explorer tab that will show the file tree at the left and the editor pane at the main screen"*. The ask said "editor"; the roadmap says an editor is permanently out of scope, so what shipped is a viewer — whether reading without editing satisfies the want is exactly what a week of use will show | [feature 0007](../features/0007-file-explorer.md) |
+| A16 | The explorer earns enough use to deserve workbench affordances — tabs, search, remembered state | `SUPPORTED` | Asked for twice in one day, 2026-07-27: the enhancement list itself, then — offered a staged plan that would gate the expensive parts on observed use — an explicit *"make it a single pass"*. A deliberate commitment is stronger than a wish, and weaker than use; A15's caveat stands, and the dogfooding week now judges the whole workbench at once rather than in instalments | [feature 0008](../features/0008-explorer-workbench.md) |
+| A17 | Hand-applied session labels beat derived titles for triage, and will keep being applied | `SUPPORTED` | Asked for directly, 2026-07-27, badge design included — a specific ask is stronger than a vague one. The failure mode is not week one but week two: labels are cheap to add and cost a hand-edit each to *maintain*, so the honest test is whether any label applied in the dogfooding week is still accurate at the end of it | [feature 0009](../features/0009-session-labels.md) |
+| A18 | Commit history, per-commit diffs and blame are worth a pane beyond the Changes tab's session diff | `SUPPORTED` | Asked for directly, 2026-07-27, with features named and IntelliJ's changelist given as the reference — though the presentation was explicitly left open (*"I don't have a good idea how should we show it"*), so the spec carries open questions rather than answers. Weaker than the other asks in exactly that way | [feature 0010](../features/0010-git-view.md) |
 
 ## Notes on the most dangerous ones
 

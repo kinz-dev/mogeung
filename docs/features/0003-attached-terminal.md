@@ -1,7 +1,7 @@
 ---
 title: Attached terminal
 status: shipped
-updated: 2026-07-26
+updated: 2026-07-27
 roadmap: [R-B18]
 depends_on: [A11, A12]
 ---
@@ -115,6 +115,17 @@ the bug that matters. It skips where tmux is absent and tears down its server
 even on failure. Nothing spawns an agent.
 
 ## Notes
+
+**The wheel used to page the agent's prompt history** (reported on Ubuntu,
+2026-07-27, but tmux-config-specific rather than platform-specific): with
+tmux's `mouse` option off, a fullscreen app leaves the wheel in "alternate
+scroll", which the emulator converts to arrow keys — and Claude Code reads
+Up/Down as history navigation. Fixed twice over. The vendored widget now
+speaks the wheel half of the mouse protocol, so `mouse on` setups scroll
+natively (see `egui-term/VENDORED_FROM`); and for `mouse off`, the pane
+consumes wheel events itself and drives `tmux copy-mode` / `send-keys -X
+scroll-up` — tmux's *view* changes and the agent's stdin sees nothing, which
+keeps it inside ADR-0010's line.
 
 **The pty wall was the whole design.** Four plausible mechanisms were tried
 before tmux: a text box (cannot answer a menu), IPC into `claude` (no listening

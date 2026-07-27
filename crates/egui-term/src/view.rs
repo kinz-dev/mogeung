@@ -171,13 +171,16 @@ impl<'a> TerminalView<'a> {
                         modifiers,
                     ))
                 },
-                egui::Event::MouseWheel { unit, delta, .. } if pointer_inside => input_actions
-                    .push(process_mouse_wheel(
+                egui::Event::MouseWheel { unit, delta, modifiers, .. } if pointer_inside => {
+                    input_actions.extend(process_mouse_wheel(
                         state,
+                        self.backend,
                         self.font.font_type().size,
                         unit,
                         delta,
-                    )),
+                        &modifiers,
+                    ))
+                },
                 egui::Event::PointerButton {
                     button,
                     pressed,
@@ -464,29 +467,55 @@ fn process_keyboard_key(
     }
 }
 
+/// LOCAL CHANGE (mogeung): when the application has enabled mouse reporting,
+/// the wheel is reported as mouse buttons 64/65 at the pointer's cell — the
+/// way every terminal emulator does it, and what upstream alacritty does.
+/// Upstream egui_term unconditionally emitted `Scroll`, which in an alt-screen
+/// application degrades to arrow keys — so a tmux pane with `mouse on` could
+/// never scroll its own scrollback. Shift bypasses reporting, per convention.
 fn process_mouse_wheel(
     state: &mut TerminalViewState,
+    backend: &TerminalBackend,
     font_size: f32,
     unit: MouseWheelUnit,
     delta: Vec2,
-) -> InputAction {
-    match unit {
-        MouseWheelUnit::Line => {
-            let lines = delta.y.signum() * delta.y.abs().ceil();
-            InputAction::BackendCall(BackendCommand::Scroll(lines as i32))
-        },
+    modifiers: &Modifiers,
+) -> Vec<InputAction> {
+    // Positive means towards history, matching `BackendCommand::Scroll`.
+    let lines: i32 = match unit {
+        MouseWheelUnit::Line => (delta.y.signum() * delta.y.abs().ceil()) as i32,
         MouseWheelUnit::Point => {
             state.scroll_pixels -= delta.y;
-            let lines = (state.scroll_pixels / font_size).trunc();
+            let l = (state.scroll_pixels / font_size).trunc();
             state.scroll_pixels %= font_size;
-            if lines != 0.0 {
-                InputAction::BackendCall(BackendCommand::Scroll(-lines as i32))
-            } else {
-                InputAction::Ignore
-            }
+            (-l) as i32
         },
-        MouseWheelUnit::Page => InputAction::Ignore,
+        MouseWheelUnit::Page => 0,
+    };
+    if lines == 0 {
+        return vec![];
     }
+
+    let terminal_mode = backend.last_content().terminal_mode;
+    if terminal_mode.intersects(TermMode::MOUSE_MODE) && !modifiers.shift {
+        let button = if lines > 0 {
+            MouseButton::ScrollUp
+        } else {
+            MouseButton::ScrollDown
+        };
+        // One report per line, press-only — buttons 64/65 have no release.
+        return (0..lines.abs())
+            .map(|_| {
+                InputAction::BackendCall(BackendCommand::MouseReport(
+                    button.clone(),
+                    *modifiers,
+                    state.current_mouse_position_on_grid,
+                    true,
+                ))
+            })
+            .collect();
+    }
+    vec![InputAction::BackendCall(BackendCommand::Scroll(lines))]
 }
 
 fn process_button_click(

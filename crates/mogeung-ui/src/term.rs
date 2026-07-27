@@ -56,6 +56,8 @@ pub struct Term {
     events: Receiver<(u64, PtyEvent)>,
     /// Set once tmux exits — detached, or the session ended.
     exited: bool,
+    /// Sub-line wheel remainder for the scrollback interception below.
+    scroll_pixels: f32,
 }
 
 /// A stable widget id per target, so switching between two sessions does not
@@ -93,6 +95,7 @@ impl Term {
             backend,
             events,
             exited: false,
+            scroll_pixels: 0.0,
         })
     }
 
@@ -122,6 +125,7 @@ impl Term {
     /// `allocate_ui` senses hover only, so testing `clicked()` on it silently
     /// never fires and the pane can never be typed into.
     pub fn ui(&mut self, ui: &mut egui::Ui, focused: bool) -> egui::Response {
+        self.wheel_scrolls_tmux_history(ui);
         let view = TerminalView::new(ui, &mut self.backend)
             .set_focus(focused)
             .set_size(ui.available_size())
@@ -151,6 +155,100 @@ impl Term {
         }
         response
     }
+
+    /// Make the wheel scroll tmux's scrollback instead of the agent's history.
+    ///
+    /// A fullscreen app with tmux's `mouse` option **off** leaves the wheel in
+    /// "alternate scroll": the emulator converts it to arrow keys, which Claude
+    /// Code reads as prompt-history navigation — the one thing a wheel over a
+    /// transcript should never do. Not platform behaviour, tmux configuration;
+    /// a Mac with `set -g mouse on` in `~/.tmux.conf` never sees it, the same
+    /// machine without that line does.
+    ///
+    /// We know this pane is tmux, so when the pane has *not* asked for mouse
+    /// reporting (`mouse on` handles itself — the widget speaks the mouse
+    /// protocol), wheel events over it are consumed and turned into tmux
+    /// copy-mode scrolling. Still observer-safe: `send-keys -X` drives tmux's
+    /// *view* of the pane and writes nothing to the process inside — the agent
+    /// sees no input at all, which is the entire point.
+    fn wheel_scrolls_tmux_history(&mut self, ui: &egui::Ui) {
+        if self.exited {
+            return;
+        }
+        let mode = self.backend.last_content().terminal_mode;
+        if mode.intersects(TerminalMode::MOUSE_MODE) || !mode.contains(TerminalMode::ALT_SCREEN) {
+            self.scroll_pixels = 0.0;
+            return;
+        }
+
+        let rect = ui.available_rect_before_wrap();
+        let row = ui.text_style_height(&egui::TextStyle::Monospace).max(1.0);
+        let mut lines = 0i32;
+        ui.input_mut(|i| {
+            if !i.pointer.hover_pos().is_some_and(|p| rect.contains(p)) {
+                return;
+            }
+            i.events.retain(|e| match e {
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    lines += wheel_lines(*unit, delta.y, row, &mut self.scroll_pixels);
+                    false // consumed — or it becomes arrow keys downstream
+                }
+                _ => true,
+            });
+        });
+        if lines != 0 {
+            run_tmux(scroll_args(&self.target, lines));
+        }
+    }
+}
+
+/// Wheel movement → whole lines, carrying the sub-line remainder in `accum`.
+/// Positive is towards history, matching the terminal's own convention.
+fn wheel_lines(unit: egui::MouseWheelUnit, dy: f32, row: f32, accum: &mut f32) -> i32 {
+    match unit {
+        egui::MouseWheelUnit::Line => (dy.signum() * dy.abs().ceil()) as i32,
+        egui::MouseWheelUnit::Point => {
+            *accum += dy;
+            let l = (*accum / row).trunc();
+            *accum %= row;
+            l as i32
+        }
+        egui::MouseWheelUnit::Page => 0,
+    }
+}
+
+/// The tmux command for one batch of wheel movement.
+///
+/// Up enters copy-mode first — a no-op when already there — with `-e` so
+/// scrolling back to the bottom leaves it again. Down deliberately does *not*
+/// enter copy-mode: at the live view there is nothing below to scroll to, and
+/// `send-keys -X` outside copy-mode is a harmless error.
+fn scroll_args(target: &str, lines: i32) -> Vec<String> {
+    let t = format!("={target}");
+    let n = lines.unsigned_abs().to_string();
+    let mut args: Vec<String> = Vec::new();
+    if lines > 0 {
+        for a in ["copy-mode", "-e", "-t", &t, ";"] {
+            args.push(a.to_string());
+        }
+    }
+    let dir = if lines > 0 { "scroll-up" } else { "scroll-down" };
+    for a in ["send-keys", "-X", "-N", &n, "-t", &t, dir] {
+        args.push(a.to_string());
+    }
+    args
+}
+
+/// Fire and forget, reaped off-frame: `.spawn()` alone would leak zombies and
+/// `.status()` inline would block the frame on a subprocess.
+fn run_tmux(args: Vec<String>) {
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("tmux")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
 }
 
 #[cfg(test)]
@@ -176,5 +274,47 @@ mod tests {
     fn each_target_gets_its_own_widget_id() {
         assert_ne!(id_for("mogeung-app:0.0"), id_for("mogeung-api:0.0"));
         assert_eq!(id_for("mogeung-app:0.0"), id_for("mogeung-app:0.0"));
+    }
+
+    /// Scrolling up must enter copy-mode (with `-e`, so the bottom exits it);
+    /// scrolling down must not — at the live view, entering copy-mode on a
+    /// down-tick would flash the mode in and out for nothing.
+    #[test]
+    fn only_an_upward_scroll_enters_copy_mode() {
+        let up = scroll_args("mog:0.0", 3);
+        assert_eq!(up[..5], ["copy-mode", "-e", "-t", "=mog:0.0", ";"]);
+        assert!(up.contains(&"scroll-up".to_string()));
+        assert!(up.contains(&"3".to_string()), "repeat count carried: {up:?}");
+
+        let down = scroll_args("mog:0.0", -2);
+        assert!(!down.contains(&"copy-mode".to_string()));
+        assert!(down.contains(&"scroll-down".to_string()));
+        assert!(down.contains(&"2".to_string()));
+    }
+
+    /// The exact-match `=` prefix matters here as much as in attach: scrolling
+    /// the wrong session's pane would be silent and bizarre.
+    #[test]
+    fn scroll_targets_use_the_exact_match_prefix() {
+        for args in [scroll_args("mog", 1), scroll_args("mog", -1)] {
+            assert!(args.contains(&"=mog".to_string()), "{args:?}");
+        }
+    }
+
+    /// Pixel-unit wheels accumulate into whole lines, keeping the remainder —
+    /// three 6px ticks over a 14px row must scroll one line, not zero.
+    #[test]
+    fn pixel_scrolls_accumulate_across_events() {
+        let mut accum = 0.0;
+        let row = 14.0;
+        let mut total = 0;
+        for _ in 0..3 {
+            total += wheel_lines(egui::MouseWheelUnit::Point, 6.0, row, &mut accum);
+        }
+        assert_eq!(total, 1, "18px over a 14px row is one whole line");
+        assert!((accum - 4.0).abs() < 0.001, "remainder kept: {accum}");
+        // And the sign convention: up is positive, towards history.
+        assert!(wheel_lines(egui::MouseWheelUnit::Line, 2.0, row, &mut accum) > 0);
+        assert!(wheel_lines(egui::MouseWheelUnit::Line, -2.0, row, &mut accum) < 0);
     }
 }

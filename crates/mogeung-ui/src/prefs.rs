@@ -15,7 +15,7 @@
 //! I have read" must not be one button.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// Which sessions the queue shows at all.
@@ -60,6 +60,10 @@ pub struct Prefs {
     /// Sessions to keep at the top regardless of rank.
     #[serde(default)]
     pub pinned: BTreeSet<String>,
+    /// Session → the name the user gave it. `R-B26`. One label per session —
+    /// it is a name, not a tag system.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
     #[serde(default)]
     pub scope: Scope,
     /// Temporarily reveal hidden sessions, so unhiding is possible.
@@ -107,6 +111,7 @@ impl Default for Prefs {
         Prefs {
             hidden: BTreeSet::new(),
             pinned: BTreeSet::new(),
+            labels: BTreeMap::new(),
             scope: Scope::default(),
             reveal_hidden: false,
             queue_collapsed: false,
@@ -182,6 +187,22 @@ impl Prefs {
             self.pinned.insert(id.to_string());
             // Pinning something hidden means you want to see it.
             self.hidden.remove(id);
+        }
+    }
+
+    pub fn label(&self, id: &str) -> Option<&str> {
+        self.labels.get(id).map(String::as_str)
+    }
+
+    /// Set or clear in one door: saving an empty label removes it, so the
+    /// editor needs no separate delete affordance and the file never holds a
+    /// label that renders as nothing.
+    pub fn set_label(&mut self, id: &str, label: &str) {
+        let label = label.trim();
+        if label.is_empty() {
+            self.labels.remove(id);
+        } else {
+            self.labels.insert(id.to_string(), label.to_string());
         }
     }
 }
@@ -261,6 +282,23 @@ mod tests {
         assert!(!json.contains("reveal"), "reveal_hidden leaked into the file");
         let back: Prefs = serde_json::from_str(&json).unwrap();
         assert!(!back.reveal_hidden);
+    }
+
+    #[test]
+    fn labels_set_replace_remove_and_round_trip() {
+        let mut p = Prefs::default();
+        p.set_label("a", "risky one");
+        assert_eq!(p.label("a"), Some("risky one"));
+        p.set_label("a", "  safe now  ");
+        assert_eq!(p.label("a"), Some("safe now"), "replacing trims and overwrites");
+
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Prefs = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.label("a"), Some("safe now"));
+
+        p.set_label("a", "   ");
+        assert_eq!(p.label("a"), None, "an empty label is a removal");
+        assert!(p.labels.is_empty(), "removal must not leave an empty entry behind");
     }
 
     #[test]

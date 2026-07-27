@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-07-25
+updated: 2026-07-27
 ---
 
 # Roadmap
@@ -93,6 +93,9 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B21 | **Command palette** — every action by name, with its binding shown | M | ✅ |
 | R-B22 | **Keyboard-driven keyboard settings** — cursor, search and rebind without a mouse | S | ✅ |
 | R-B23 | **Status bar** — session reference facts out of the header and along the bottom | S | ✅ |
+| R-B24 | **File explorer pane** — the session's worktree as a tree, with a read-only syntax-highlighted viewer. Deliberately not an editor — see [pillar K](#k-explicitly-not) and [feature 0007](../features/0007-file-explorer.md) | M |  |
+| R-B25 | **Explorer workbench** — remember and reveal, multi-file tabs, go-to-file, content search, in one pass ([A16](assumptions.md)). Still a viewer, never an editor. See [feature 0008](../features/0008-explorer-workbench.md) | L |  |
+| R-B26 | **Session labels** — name a session yourself; colour badge on the card, `label:` in the filter. Client view-state like pins ([A17](assumptions.md)). See [feature 0009](../features/0009-session-labels.md) | S |  |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 
@@ -126,6 +129,7 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-D7 | **Commit-aware diffing** — committed work currently vanishes as the base moves with HEAD ([A9](assumptions.md)) | M | ✅ |
 | R-D8 | **Review debt across HEAD** — what fraction of the repo no human has read | L | ✅ |
 | R-D9 | **Blast radius** — callers and tests affected by a changed symbol | L | ✅ |
+| R-D10 | **Git view** — recent commits, uncommitted changes, per-commit diffs, blame in the Editor gutter. Read-only, permanently ([A18](assumptions.md)). See [feature 0010](../features/0010-git-view.md) | L |  |
 
 ## E. Verification
 
@@ -197,7 +201,9 @@ subcommands wrapping the REST API.
 
 ## K. Explicitly not
 
-- **An editor.** Handoff to IntelliJ/VS Code, permanently.
+- **An editor.** Handoff to IntelliJ/VS Code, permanently. `R-B24` reads files
+  and nothing more — a viewer with no write path is the line this bullet
+  draws, not an exception to it.
 - **Anything that re-acquires the conversation loop.** See
   [ADR-0003](../decisions/0003-observe-do-not-spawn.md).
 - **Cloud or multiplayer.**

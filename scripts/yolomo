@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Start `claude` inside a tmux session that mogeung can host in a pane.
 #
-#   yolomo                  start (or re-attach to) the session for this directory
+#   yolomo                  start a NEW session for this directory
 #   yolomo -r               anything after the name is passed through to claude
+#
+# Every run starts a fresh agent: two runs in one directory are two sessions
+# (mogeung-api, mogeung-api-2, …), not two clients of one agent. To re-attach
+# to a session you detached from, use tmux directly:
+#
+#   tmux attach -t mogeung-<dir>
 #
 # This is `yolo` — `claude --dangerously-skip-permissions` — with one change:
 # the session runs under tmux. That matters because a pty has exactly one
@@ -37,22 +43,32 @@ dir=$(pwd)
 # set becomes a dash rather than being dropped, so two different directories
 # cannot collapse onto one name.
 safe=$(basename "$dir" | sed 's/[^A-Za-z0-9_-]/-/g')
-name="mogeung-${safe}"
+base="mogeung-${safe}"
 
-# `=` is tmux's exact-match prefix. Without it `has-session -t foo` also matches
-# `foobar`, and you would silently attach to the wrong project.
-if ! tmux has-session -t "=${name}" 2>/dev/null; then
-  tmux new-session -d -s "$name" -c "$dir" \
-    claude --dangerously-skip-permissions ${1+"$@"} || {
-      echo "yolomo: could not create the tmux session" >&2
-      exit 1
-    }
+# Each run gets its own session — running yolomo twice in one directory means
+# two agents working in parallel, not a second window onto the first one
+# (which is what silently happened before, and looks exactly like "my second
+# agent never started"). First free suffix wins, so names stay predictable.
+#
+# `=` is tmux's exact-match prefix. Without it `has-session -t foo` also
+# matches `foobar`, and the count would include the wrong project's sessions.
+name="$base"
+n=2
+while tmux has-session -t "=${name}" 2>/dev/null; do
+  name="${base}-${n}"
+  n=$((n + 1))
+done
 
-  # Size to whichever client is being used, rather than to the smallest one.
-  # The default is `smallest`, which would let a narrow mogeung pane shrink a
-  # full-screen terminal attached to the same session — silent, and baffling
-  # when it happens to you.
-  tmux set-option -t "=${name}" window-size latest >/dev/null
-fi
+tmux new-session -d -s "$name" -c "$dir" \
+  claude --dangerously-skip-permissions ${1+"$@"} || {
+    echo "yolomo: could not create the tmux session" >&2
+    exit 1
+  }
+
+# Size to whichever client is being used, rather than to the smallest one.
+# The default is `smallest`, which would let a narrow mogeung pane shrink a
+# full-screen terminal attached to the same session — silent, and baffling
+# when it happens to you.
+tmux set-option -t "=${name}" window-size latest >/dev/null
 
 exec tmux attach-session -t "=${name}"

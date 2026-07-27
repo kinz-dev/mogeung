@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-26
+updated: 2026-07-27
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -46,6 +46,23 @@ client is told *which* pane by the daemon and decides nothing itself, and
 because what it holds is a view rather than the session: the pty belongs to
 tmux, and closing the window leaves the session untouched. See
 [ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md).
+
+The file explorer (`R-B24`) gives the daemon a second read surface: on request
+it lists and reads files under a session's *own* root — repo when known, cwd
+otherwise. Same shape as everything else: the client asks over the wire and
+renders what comes back, never touching the worktree itself. The daemon
+canonicalises every path and refuses one that escapes the session root,
+symlinks included, because an unauthenticated localhost port must not become
+"read any file by asking politely". There is no write path — the roadmap's
+"an editor — explicitly not" is a property of the protocol, not just the UI.
+
+The workbench (`R-B25`) widened that surface, not the rule: the daemon also
+walks the whole tree (for go-to-file) and greps it (for content search), both
+under the same containment, both on the blocking pool so a monorepo cannot
+wedge the event loop. What the client keeps — open tabs, pins, expanded
+directories, per session in `~/.mogeung/explorer.json` — is view state, not
+authority, the same standing as the keymap and the layout: file *bodies* are
+never persisted, and every restore re-asks the daemon.
 
 ## The scan loop
 

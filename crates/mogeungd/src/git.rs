@@ -541,6 +541,185 @@ fn compute_change_inner(
 }
 
 // ---------------------------------------------------------------------------
+// The Git view (R-D10) — read-only, permanently
+// ---------------------------------------------------------------------------
+//
+// Nothing below mutates a repository, and nothing may be added below that
+// does. Staging, committing, checkout — all of it stays in the terminal;
+// mogeung driving the repo is the observer trap one layer down.
+
+use mogeung_core::wire::{BlameLine, CommitInfo, StatusEntry};
+
+/// Blame stops here; past this a "who wrote this line" gutter is a memory
+/// test. The truncated flag says so.
+const MAX_BLAME_LINES: usize = 20_000;
+
+/// A sha as an argument must look like a sha. The daemon is unauthenticated,
+/// and `git show <client-supplied-string>` where the string may start with
+/// `-` is how "read-only" quietly stops being true.
+fn valid_sha(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// One page of the log, newest first. Asks for one row past `limit`, so
+/// "was that the end of history" costs no second call.
+pub fn log_page(cwd: &Path, skip: u32, limit: u32) -> Result<(Vec<CommitInfo>, bool)> {
+    let limit = limit.clamp(1, 200);
+    // \x1f between fields, \x1e between records: subjects contain anything.
+    let out = run_git(
+        cwd,
+        &[
+            "log",
+            &format!("--skip={skip}"),
+            &format!("-n{}", limit + 1),
+            "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s%x1e",
+        ],
+    )?;
+    let mut commits = parse_log(&out);
+    let done = commits.len() as u32 <= limit;
+    commits.truncate(limit as usize);
+    Ok((commits, done))
+}
+
+fn parse_log(out: &str) -> Vec<CommitInfo> {
+    out.split('\x1e')
+        .filter_map(|rec| {
+            let mut f = rec.trim_start_matches(['\n', '\r']).split('\x1f');
+            let sha = f.next()?.trim().to_string();
+            if sha.is_empty() {
+                return None;
+            }
+            Some(CommitInfo {
+                sha,
+                short: f.next()?.to_string(),
+                author: f.next()?.to_string(),
+                epoch: f.next()?.parse().unwrap_or(0),
+                summary: f.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect()
+}
+
+/// One commit's patch, in the same shapes the Changes tab renders — which is
+/// what lets the Git pane reuse the entire diff pipeline for free.
+pub fn show_commit(cwd: &Path, sha: &str) -> Result<Vec<FileChange>> {
+    if !valid_sha(sha) {
+        bail!("that is not a commit sha");
+    }
+    let out = run_git_diff(
+        cwd,
+        &[
+            "show", "--no-color", "--no-ext-diff", "-M", "--unified=3", "--format=", sha, "--",
+        ],
+    )?;
+    Ok(parse_unified(&out, &HashSet::new()))
+}
+
+/// The repo's uncommitted state, porcelain v1 parsed leniently — a code we
+/// do not recognise still lists, it just wears its raw `XY`.
+pub fn status(cwd: &Path) -> Result<Vec<StatusEntry>> {
+    let out = run_git(cwd, &["status", "--porcelain"])?;
+    Ok(parse_status(&out))
+}
+
+fn parse_status(out: &str) -> Vec<StatusEntry> {
+    out.lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let (code, rest) = line.split_at(2);
+            let path = rest.trim_start();
+            // "old -> new" for renames; the new name is the one you can open.
+            let path = path.rsplit(" -> ").next().unwrap_or(path);
+            let x = code.chars().next().unwrap_or(' ');
+            let y = code.chars().nth(1).unwrap_or(' ');
+            Some(StatusEntry {
+                path: path.trim_matches('"').to_string(),
+                staged: x != ' ' && x != '?',
+                unstaged: y != ' ',
+                state: code.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// One uncommitted file against `HEAD` — or against nothing, when it is
+/// untracked and `HEAD` has never heard of it.
+pub fn diff_file(cwd: &Path, rel: &str) -> Result<Vec<FileChange>> {
+    let tracked = run_git(cwd, &["ls-files", "--error-unmatch", "--", rel]).is_ok();
+    let out = if tracked {
+        run_git_diff(
+            cwd,
+            &["diff", "--no-color", "--no-ext-diff", "-M", "--unified=3", "HEAD", "--", rel],
+        )?
+    } else {
+        run_git_diff(cwd, &["diff", "--no-color", "--no-index", "--", "/dev/null", rel])
+            .unwrap_or_default()
+    };
+    let mut files = parse_unified(&out, &HashSet::new());
+    if !tracked {
+        for f in &mut files {
+            f.path = rel.to_string();
+            f.status = FileStatus::Added;
+        }
+    }
+    Ok(files)
+}
+
+/// Per-line authorship of the worktree file. Uncommitted lines come back
+/// with git's all-zeros sha and its "Not Committed Yet" author, unchanged —
+/// renaming them is the client's editorial decision, not the daemon's.
+pub fn blame(cwd: &Path, rel: &str) -> Result<(Vec<BlameLine>, bool)> {
+    let out = run_git(cwd, &["blame", "--porcelain", "--", rel])?;
+    Ok(parse_blame(&out))
+}
+
+fn parse_blame(out: &str) -> (Vec<BlameLine>, bool) {
+    // Porcelain prints full commit details once per commit; later lines of
+    // the same commit carry only the header. Remember what each sha said.
+    let mut known: std::collections::HashMap<String, (String, i64)> =
+        std::collections::HashMap::new();
+    let mut lines: Vec<BlameLine> = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut truncated = false;
+
+    for line in out.lines() {
+        if line.starts_with('\t') {
+            // The content line ends one blamed line.
+            if let Some(sha) = cur.take() {
+                if lines.len() >= MAX_BLAME_LINES {
+                    truncated = true;
+                    break;
+                }
+                let (author, epoch) = known.get(&sha).cloned().unwrap_or_default();
+                lines.push(BlameLine {
+                    sha: sha.chars().take(8).collect(),
+                    author,
+                    epoch,
+                });
+            }
+            continue;
+        }
+        // "<40-hex> orig final [count]" opens a line's record.
+        let first = line.split(' ').next().unwrap_or("");
+        if first.len() == 40 && first.chars().all(|c| c.is_ascii_hexdigit()) {
+            cur = Some(first.to_string());
+            known.entry(first.to_string()).or_default();
+        } else if let Some(a) = line.strip_prefix("author ") {
+            if let Some(sha) = &cur {
+                known.entry(sha.clone()).or_default().0 = a.to_string();
+            }
+        } else if let Some(t) = line.strip_prefix("author-time ") {
+            if let Some(sha) = &cur {
+                known.entry(sha.clone()).or_default().1 = t.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    (lines, truncated)
+}
+
+// ---------------------------------------------------------------------------
 // Blast radius (R-D9)
 // ---------------------------------------------------------------------------
 
@@ -762,6 +941,78 @@ index 333..444 100644
         assert!(got.contains(&"Session".to_string()));
         assert!(!got.contains(&"untouched_context".to_string()));
         assert!(!got.contains(&"ab".to_string()));
+    }
+
+    /// Field separators over format guessing: a subject line can contain
+    /// anything printable, so only the \x1f/\x1e framing is trustworthy.
+    #[test]
+    fn log_parsing_survives_hostile_subjects() {
+        let out = "aaa111\x1faaa\x1fkeith\x1f1722000000\x1ffix: a \"quoted\" thing\x1e\n\
+                   bbb222\x1fbbb\x1fclaude\x1f1722000100\x1fsubject with \x7f and spaces\x1e";
+        let commits = parse_log(out);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].short, "aaa");
+        assert_eq!(commits[0].epoch, 1722000000);
+        assert!(commits[0].summary.contains("quoted"));
+        assert!(parse_log("").is_empty());
+        assert!(parse_log("garbage with no separators").len() <= 1);
+    }
+
+    /// The porcelain codes that actually occur, including the rename arrow
+    /// and the quoted-path case.
+    #[test]
+    fn status_parsing_reads_the_common_codes() {
+        let out = " M crates/a.rs\nM  crates/b.rs\nMM crates/c.rs\n?? new.txt\nR  old.rs -> new.rs\n";
+        let entries = parse_status(out);
+        assert_eq!(entries.len(), 5);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
+        assert!(!by("crates/a.rs").staged);
+        assert!(by("crates/a.rs").unstaged);
+        assert!(by("crates/b.rs").staged);
+        assert!(!by("crates/b.rs").unstaged);
+        assert!(by("crates/c.rs").staged && by("crates/c.rs").unstaged);
+        assert!(!by("new.txt").staged, "untracked is not staged");
+        assert!(by("new.txt").unstaged);
+        assert_eq!(by("new.rs").state, "R ", "a rename lists under its new name");
+    }
+
+    /// Porcelain blame repeats a commit's details only once; every later
+    /// line of the same commit must still get the remembered author.
+    #[test]
+    fn blame_parsing_fills_in_repeated_commits() {
+        let out = "\
+aaaa111122223333aaaa111122223333aaaa1111 1 1 2
+author keith
+author-time 1722000000
+\tfn one() {}
+aaaa111122223333aaaa111122223333aaaa1111 2 2
+\tfn two() {}
+0000000000000000000000000000000000000000 3 3 1
+author Not Committed Yet
+author-time 1722000200
+\tfn three() {}
+";
+        let (lines, truncated) = parse_blame(out);
+        assert!(!truncated);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].author, "keith");
+        assert_eq!(lines[1].author, "keith", "the repeat must inherit the details");
+        assert_eq!(lines[1].sha, lines[0].sha);
+        assert_eq!(lines[2].author, "Not Committed Yet");
+        assert!(lines[2].sha.chars().all(|c| c == '0'));
+        assert_eq!(parse_blame("").0.len(), 0, "an empty file blames to nothing");
+    }
+
+    /// The read-only guarantee starts at argument hygiene: a "sha" that
+    /// could be parsed as a flag must be refused before git ever sees it.
+    #[test]
+    fn shas_that_are_not_shas_are_refused() {
+        assert!(valid_sha("aaa111"));
+        assert!(valid_sha(&"a".repeat(40)));
+        assert!(!valid_sha(""));
+        assert!(!valid_sha("--output=/tmp/x"));
+        assert!(!valid_sha("HEAD"));
+        assert!(!valid_sha(&"a".repeat(41)));
     }
 
     #[test]

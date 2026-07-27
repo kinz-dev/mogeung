@@ -17,6 +17,12 @@ Local changes:
     moves off the pane, with nothing on screen to say why. Keyboard is now
     gated on focus alone; mouse events still require the pointer inside.
     Marked in the source with `LOCAL CHANGE (mogeung)`.
+  - src/view.rs, process_mouse_wheel — upstream always emitted `Scroll`, so an
+    application that enabled mouse reporting (tmux with `mouse on`) never
+    received the wheel and an alt-screen app got arrow keys instead. The wheel
+    is now reported as mouse buttons 64/65 when MOUSE_MODE is active, one
+    press-only report per line, with Shift bypassing reporting per convention.
+    Marked with `LOCAL CHANGE (mogeung)`.
 
 To update: clone upstream, copy src/ over this one, re-apply the changes above
 (grep for `LOCAL CHANGE`), run the workspace tests.

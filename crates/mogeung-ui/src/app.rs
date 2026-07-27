@@ -25,6 +25,13 @@ pub enum Tab {
     Debt,
     /// The session's own terminal, attached through tmux. `R-B18`.
     Terminal,
+    /// The session's worktree: tree on the left, read-only viewer on the
+    /// right. `R-B24`. A viewer and never an editor — the roadmap's
+    /// "explicitly not" list is why there is no write path here.
+    Explorer,
+    /// The session repo's commits, uncommitted changes and diffs. `R-D10`.
+    /// Read-only, permanently — the observer rule, one layer down.
+    Git,
 }
 
 impl Tab {
@@ -35,6 +42,11 @@ impl Tab {
             Tab::Info => "Info",
             Tab::Debt => "Debt",
             Tab::Terminal => "Terminal",
+            // Display name only. The variant stays `Explorer` because it is
+            // serialized into saved layouts; and the pane stays read-only —
+            // "Editor" is what the user calls it, not a write path.
+            Tab::Explorer => "Editor",
+            Tab::Git => "Git",
         }
     }
 
@@ -48,6 +60,8 @@ impl Tab {
             Tab::Info => Action::TabInfo,
             Tab::Debt => Action::TabDebt,
             Tab::Terminal => Action::TabTerminal,
+            Tab::Explorer => Action::TabExplorer,
+            Tab::Git => Action::TabGit,
         }
     }
 }
@@ -181,6 +195,10 @@ pub struct App {
     /// points at something on screen.
     keymap_cursor: usize,
     keymap_filter: String,
+    /// Scroll the cursor row into view this frame. Armed by keyboard moves
+    /// only — doing it every frame pins the scroll area to the cursor row,
+    /// which makes anything below the fold unreachable by mouse.
+    keymap_scroll: bool,
 
 
     /// Hunks flagged for the follow-up prompt, and the note attached to each.
@@ -230,12 +248,31 @@ pub struct App {
     /// Highlighted file, which is the opened file when previewing is on.
     file_cursor: Option<String>,
 
+    /// The label editor, when open: which session, and the text as typed.
+    /// `R-B26`.
+    label_edit: Option<(SessionId, String)>,
+
+    /// Ctrl+F inside the explorer's viewer: the bar, its query, which match
+    /// the cursor is on, and a one-frame "grab the keyboard" flag.
+    explorer_find_open: bool,
+    explorer_find: String,
+    explorer_find_cursor: usize,
+    explorer_find_focus: bool,
+
     /// The attached terminal, when the Terminal tab has been opened for a
     /// session that runs under tmux. One at a time: a second attach costs a
     /// pty and a tmux client for a pane nobody is looking at.
     term: Option<crate::term::Term>,
     /// Whether keystrokes belong to the agent or to mogeung. See `handle_keys`.
     term_focused: bool,
+
+    /// The file explorer pane's cache. `R-B24`.
+    explorer: crate::explorer::Explorer,
+
+    /// The Git pane's cache. `R-D10`.
+    gitview: crate::gitview::GitView,
+    /// Blame gutter on in the Editor's viewers.
+    annotate: bool,
 
     errors: Vec<String>,
 }
@@ -257,6 +294,7 @@ impl App {
         let (keymap, keymap_warning) = crate::keymap::Keymap::load();
         let (prefs, prefs_warning) = crate::prefs::Prefs::load();
         let (tree, layout_warning) = crate::layout::load();
+        let (explorer, explorer_warning) = crate::explorer::Explorer::load();
         App {
             net,
             hotkey,
@@ -278,6 +316,7 @@ impl App {
             layout_dirty: false,
             keymap_cursor: 0,
             keymap_filter: String::new(),
+            keymap_scroll: false,
             flagged: Vec::new(),
             prompt_note: String::new(),
             show_prompt: false,
@@ -300,8 +339,16 @@ impl App {
             capturing: None,
             keymap_io: String::new(),
             file_cursor: None,
+            label_edit: None,
+            explorer_find_open: false,
+            explorer_find: String::new(),
+            explorer_find_cursor: 0,
+            explorer_find_focus: false,
             term: None,
             term_focused: false,
+            explorer,
+            gitview: Default::default(),
+            annotate: false,
             // Surfaced in the window, not only on stderr: the terminal that
             // launched this is exactly what you are trying to stop looking at.
             errors: hotkey_error
@@ -309,6 +356,7 @@ impl App {
                 .chain(keymap_warning)
                 .chain(prefs_warning)
                 .chain(layout_warning)
+                .chain(explorer_warning)
                 .collect(),
         }
     }
@@ -369,6 +417,58 @@ impl App {
                     self.blast_pending = false;
                     self.blast = Some(*radius);
                 }
+                ServerMsg::DirListing {
+                    session_id,
+                    path,
+                    entries,
+                } => self.explorer.ingest_dir(&session_id, path, entries),
+                ServerMsg::FileContent {
+                    session_id,
+                    path,
+                    content,
+                    truncated,
+                } => self
+                    .explorer
+                    .ingest_file(&session_id, path, content, truncated),
+                ServerMsg::TreeListing {
+                    session_id,
+                    paths,
+                    truncated,
+                } => self.explorer.ingest_tree(&session_id, paths, truncated),
+                ServerMsg::ContentMatches {
+                    session_id,
+                    query,
+                    matches,
+                    truncated,
+                } => self
+                    .explorer
+                    .ingest_matches(&session_id, &query, matches, truncated),
+                ServerMsg::GitCommits {
+                    session_id,
+                    skip,
+                    commits,
+                    done,
+                } => self.gitview.ingest_commits(&session_id, skip, commits, done),
+                ServerMsg::GitCommitDiff {
+                    session_id,
+                    sha,
+                    files,
+                } => self.gitview.ingest_commit_diff(&session_id, sha, files),
+                ServerMsg::GitLocalChanges {
+                    session_id,
+                    entries,
+                } => self.gitview.ingest_status(&session_id, entries),
+                ServerMsg::GitFileDiff {
+                    session_id,
+                    path,
+                    files,
+                } => self.gitview.ingest_file_diff(&session_id, path, files),
+                ServerMsg::GitAnnotation {
+                    session_id,
+                    path,
+                    lines,
+                    truncated,
+                } => self.gitview.ingest_blame(&session_id, path, lines, truncated),
                 ServerMsg::Error { message } => {
                     self.errors.push(message);
                     if self.errors.len() > 6 {
@@ -441,8 +541,10 @@ impl App {
         }
         if down {
             self.keymap_cursor = (self.keymap_cursor + 1) % rows.len();
+            self.keymap_scroll = true;
         } else if up {
             self.keymap_cursor = (self.keymap_cursor + rows.len() - 1) % rows.len();
+            self.keymap_scroll = true;
         } else if enter {
             self.capturing = rows.get(self.keymap_cursor).copied();
         } else if reset {
@@ -493,6 +595,7 @@ impl eframe::App for App {
         self.prompt_window(ui);
         self.ambient_window(ui);
         self.keymap_window(ui);
+        self.label_window(ui);
         // Last, so it draws above every window it can open.
         self.palette_window(ui);
 
@@ -507,6 +610,15 @@ impl eframe::App for App {
             self.prefs_dirty = false;
             if let Err(e) = self.prefs.save() {
                 self.errors.push(format!("could not save preferences: {e}"));
+            }
+        }
+
+        // Same discipline as the preferences: the explorer's shape (tabs,
+        // pins, expanded dirs) is written at most once a frame, never inside
+        // the widget that changed it.
+        if self.explorer.dirty {
+            if let Err(e) = self.explorer.save() {
+                self.errors.push(format!("could not save the explorer state: {e}"));
             }
         }
 
@@ -677,6 +789,12 @@ impl App {
                     .clicked()
                     {
                         self.show_keymap = !self.show_keymap;
+                        self.keymap_scroll = self.show_keymap;
+                        if self.show_keymap {
+                            // Editing bindings and typing into the agent are
+                            // mutually exclusive intents.
+                            self.term_focused = false;
+                        }
                     }
                     if icon_button(
                         ui,
@@ -757,7 +875,7 @@ impl App {
                         Scope::All => {}
                     }
                 }
-                crate::filter::matches(&q, s)
+                crate::filter::matches(&q, s, self.prefs.label(&s.id))
             })
             .cloned()
             .collect();
@@ -896,17 +1014,7 @@ impl App {
         // is dispatched — otherwise pressing `J` to bind it would also move the
         // selection.
         if let Some(action) = self.capturing {
-            let captured = ui.input(|i| {
-                i.events.iter().find_map(|e| match e {
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => Some(crate::keymap::Binding::new(*modifiers, *key)),
-                    _ => None,
-                })
-            });
+            let captured = ui.input(|i| captured_binding(&i.events));
             if let Some(b) = captured {
                 // Escape cancels rather than becoming the new binding, or you
                 // could never back out of a mis-click.
@@ -942,7 +1050,7 @@ impl App {
         // opened by accident should not throw away what you had typed into
         // something else.
         if self.palette.open {
-            let len = self.palette.matches(&self.keymap).len();
+            let len = self.palette_len();
             let (escape, enter, down, up, tab) = ui.input(|i| {
                 (
                     i.key_pressed(egui::Key::Escape),
@@ -955,17 +1063,7 @@ impl App {
             if escape {
                 self.palette.close();
             } else if enter {
-                let chosen = self
-                    .palette
-                    .matches(&self.keymap)
-                    .get(self.palette.cursor)
-                    .map(|m| m.action);
-                self.palette.close();
-                if let Some(a) = chosen {
-                    // Closed *before* running, so an action that opens a window
-                    // is not immediately hidden behind the palette that ran it.
-                    self.run(a, ui);
-                }
+                self.palette_enter(ui);
             } else if down || tab {
                 self.palette.move_cursor(1, len);
             } else if up {
@@ -974,14 +1072,41 @@ impl App {
             return;
         }
 
-        // The keyboard settings window drives its own cursor while it is up
-        // and nothing in it is being typed into. It claims only the keys it
-        // uses, so the rest still reach their ordinary bindings.
-        if self.show_keymap
-            && !ui.memory(|m| m.focused().is_some())
-            && self.keymap_window_keys(ui)
-        {
-            return;
+        // The keyboard settings window drives its own cursor while it is up.
+        //
+        // It used to stand down whenever *anything* held egui focus, which
+        // sounded cautious and was in practice the bug: the embedded terminal,
+        // the window's own search box, and whatever a click last landed on all
+        // count as "something", and each of those states left the window
+        // looking keyboard-dead while keys fell through to the main window
+        // (reported twice, on Ubuntu). It now yields only to real text boxes —
+        // and its own search box keeps the list drivable, the same contract as
+        // the queue filter below.
+        if self.show_keymap && !self.term_focused {
+            if ui.memory(|m| m.has_focus(keymap_filter_id())) {
+                let (enter, down, up) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::Enter),
+                        i.key_pressed(egui::Key::ArrowDown),
+                        i.key_pressed(egui::Key::ArrowUp),
+                    )
+                });
+                let rows = self.keymap_rows().len();
+                if enter {
+                    ui.memory_mut(|m| m.surrender_focus(keymap_filter_id()));
+                } else if down && rows > 0 {
+                    self.keymap_cursor = (self.keymap_cursor + 1) % rows;
+                    self.keymap_scroll = true;
+                } else if up && rows > 0 {
+                    self.keymap_cursor = (self.keymap_cursor + rows - 1) % rows;
+                    self.keymap_scroll = true;
+                }
+                // Everything else is typing, and belongs to the box.
+                return;
+            }
+            if !text_input_focused(ui) && self.keymap_window_keys(ui) {
+                return;
+            }
         }
 
         // The terminal takes egui focus while it has the keyboard, so the guard
@@ -1073,9 +1198,34 @@ impl App {
             A::TabInfo => self.set_tab(Tab::Info),
             A::TabDebt => self.set_tab(Tab::Debt),
             A::TabTerminal => self.set_tab(Tab::Terminal),
+            A::TabExplorer => self.set_tab(Tab::Explorer),
+            A::TabGit => self.set_tab(Tab::Git),
+            A::ToggleAnnotate => {
+                self.annotate = !self.annotate;
+                if self.annotate {
+                    self.set_tab(Tab::Explorer);
+                }
+            }
             // Only reachable while the terminal does *not* hold the keyboard,
             // where it is a no-op. The live path is in `handle_keys`.
-            A::LeaveTerminal => self.term_focused = false,
+            // A toggle, not just an exit: reaching the terminal should not
+            // need a mouse when leaving it does not (asked for directly).
+            A::LeaveTerminal => {
+                if self.term_focused {
+                    self.term_focused = false;
+                } else {
+                    let attachable = self
+                        .selected_session()
+                        .map(|s| s.tmux_target.is_some())
+                        .unwrap_or(false);
+                    if attachable {
+                        self.set_tab(Tab::Terminal);
+                        self.term_focused = true;
+                    }
+                    // No session, or not under tmux: nothing to focus, and
+                    // setting the flag anyway would swallow every key.
+                }
+            }
             A::NextTab => self.cycle_tab(1),
             A::PrevTab => self.cycle_tab(-1),
             A::FocusQueue => self.pane = Pane::Queue,
@@ -1146,6 +1296,11 @@ impl App {
             }
             A::HideSession => self.hide_selected(),
             A::PinSession => self.pin_selected(),
+            A::LabelSession => {
+                if let Some(id) = self.selected.clone() {
+                    self.open_label_editor(id);
+                }
+            }
             A::ToggleRead => self.toggle_first_unread(),
             A::NextUnread => self.jump_to_next_unread(),
             A::FlagHunk => self.flag_first_unread(),
@@ -1178,8 +1333,212 @@ impl App {
                 self.tree = Some(crate::layout::default_tree());
                 self.layout_dirty = true;
             }
-            A::OpenKeymap => self.show_keymap = !self.show_keymap,
+            A::OpenKeymap => {
+                self.show_keymap = !self.show_keymap;
+                self.keymap_scroll = self.show_keymap;
+                if self.show_keymap {
+                    self.term_focused = false;
+                }
+            }
             A::Rescan => self.net.send(ClientMsg::Rescan),
+            A::GoToFile | A::RecentFiles => self.open_file_palette(),
+            A::SearchInFiles => {
+                if let Some(id) = self.selected.clone() {
+                    self.explorer.ensure_session(&id);
+                    self.palette.open_as(crate::palette::Mode::Search);
+                }
+            }
+            A::NextFileTab => self.with_explorer(|app| app.explorer.cycle_tab(1)),
+            A::PrevFileTab => self.with_explorer(|app| app.explorer.cycle_tab(-1)),
+            A::CloseFileTab => self.with_explorer(|app| {
+                let focus = app.explorer.current().focus;
+                if let Some(i) = app.explorer.current().active_of(focus) {
+                    app.explorer.close_tab(i);
+                }
+            }),
+            A::PinFileTab => self.with_explorer(|app| app.explorer.toggle_pin_active()),
+            A::FindInFile => self.with_explorer(|app| {
+                app.explorer_find_open = true;
+                app.explorer_find_focus = true;
+            }),
+            A::MoveFileTabSplit => self.with_explorer(|app| {
+                let focus = app.explorer.current().focus;
+                if let Some(i) = app.explorer.current().active_of(focus) {
+                    app.explorer.move_tab_to_other_side(i);
+                }
+            }),
+            A::OpenInExplorer => {
+                if let Some(path) = self.file_cursor.clone().or(self.selected_file.clone()) {
+                    self.open_in_explorer(&path, None);
+                }
+            }
+        }
+    }
+
+    /// Run an explorer tab action with the pane raised and the session
+    /// ensured — cycling tabs nobody can see would just be confusing.
+    fn with_explorer(&mut self, f: impl FnOnce(&mut Self)) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        self.explorer.ensure_session(&id);
+        self.set_tab(Tab::Explorer);
+        f(self);
+    }
+
+    /// The Changes → Explorer bridge, and where every search result lands:
+    /// the file opens *pinned* (it was asked for by name, not browsed past),
+    /// revealed in the tree, with the pane raised.
+    ///
+    /// Diff paths are repo-relative and the explorer root is the repo root
+    /// when one is known, so the two speak the same currency; when they do
+    /// not, the daemon refuses the path and the pane says so — degrade, not
+    /// error.
+    fn open_in_explorer(&mut self, path: &str, line: Option<u64>) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        self.explorer.ensure_session(&id);
+        self.explorer.open_file(path, true, line);
+        self.explorer.reveal(path);
+        self.set_tab(Tab::Explorer);
+    }
+
+    /// Go-to-file (`Ctrl+P`): the palette over the worktree's file list. The
+    /// list is re-requested on every open — worktrees move under live
+    /// sessions, and a walk is cheap next to showing stale files.
+    fn open_file_palette(&mut self) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        self.explorer.ensure_session(&id);
+        let st = self.explorer.current_mut();
+        if !st.tree_pending {
+            st.tree_pending = true;
+            self.net.send(ClientMsg::ListTree { session_id: id });
+        }
+        self.palette.open_as(crate::palette::Mode::Files);
+    }
+
+    /// Worktree files ranked against the palette query. An empty query is the
+    /// recent-files switcher: the open tabs, most recently used first.
+    fn file_matches(&self) -> Vec<String> {
+        let Some(st) = self.explorer.try_current() else {
+            return Vec::new();
+        };
+        let q = self.palette.query.trim();
+        if q.is_empty() {
+            return st.mru().into_iter().map(|i| st.open[i].path.clone()).collect();
+        }
+        let Some((paths, _)) = &st.tree_paths else {
+            return Vec::new();
+        };
+        let mut out: Vec<(i32, &String)> = paths
+            .iter()
+            .filter_map(|p| crate::palette::score(q, p).map(|s| (s, p)))
+            .collect();
+        out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+        // The palette shows a dozen rows; ranking thousands is work, hauling
+        // them all into the UI is waste.
+        out.truncate(100);
+        out.into_iter().map(|(_, p)| p.clone()).collect()
+    }
+
+    /// Send the content search the palette is showing. One in flight per
+    /// session; the echoed query is what lets a stale answer be dropped.
+    fn issue_search(&mut self) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        let query = self.palette.query.trim().to_string();
+        if query.is_empty() {
+            return;
+        }
+        self.explorer.ensure_session(&id);
+        self.explorer.current_mut().search = Some(crate::explorer::SearchState {
+            query: query.clone(),
+            matches: Vec::new(),
+            truncated: false,
+            in_flight: true,
+        });
+        self.net.send(ClientMsg::SearchContent {
+            session_id: id,
+            query,
+        });
+    }
+
+    /// Enter in the palette, whatever it is currently searching.
+    fn palette_enter(&mut self, ui: &mut egui::Ui) {
+        use crate::palette::Mode;
+        match self.palette.mode {
+            Mode::Actions => {
+                let chosen = self
+                    .palette
+                    .matches(&self.keymap)
+                    .get(self.palette.cursor)
+                    .map(|m| m.action);
+                self.palette.close();
+                if let Some(a) = chosen {
+                    // Closed *before* running, so an action that opens a window
+                    // is not immediately hidden behind the palette that ran it.
+                    self.run(a, ui);
+                }
+            }
+            Mode::Files => {
+                let chosen = self.file_matches().get(self.palette.cursor).cloned();
+                self.palette.close();
+                if let Some(p) = chosen {
+                    self.open_in_explorer(&p, None);
+                }
+            }
+            Mode::Search => {
+                // Enter is two things in sequence, the way every IDE does it:
+                // run the query, then — once its answer is the one on screen —
+                // open the picked hit.
+                let query = self.palette.query.trim().to_string();
+                let chosen = {
+                    let answered = self
+                        .explorer
+                        .try_current()
+                        .and_then(|st| st.search.as_ref())
+                        .filter(|s| s.query == query && !s.in_flight);
+                    match answered {
+                        None => None,
+                        Some(s) => match s.matches.get(self.palette.cursor) {
+                            Some(m) => Some(Some((m.path.clone(), m.line))),
+                            // Answered and empty: nothing to open, nothing to
+                            // re-send. Stay up so the emptiness is readable.
+                            None => Some(None),
+                        },
+                    }
+                };
+                match chosen {
+                    None => {
+                        self.issue_search();
+                        self.palette.cursor = 0;
+                    }
+                    Some(None) => {}
+                    Some(Some((path, line))) => {
+                        self.palette.close();
+                        self.open_in_explorer(&path, Some(line));
+                    }
+                }
+            }
+        }
+    }
+
+    /// How many rows the palette's current mode has — the keyboard handler
+    /// needs it for cursor movement before the window has drawn.
+    fn palette_len(&self) -> usize {
+        match self.palette.mode {
+            crate::palette::Mode::Actions => self.palette.matches(&self.keymap).len(),
+            crate::palette::Mode::Files => self.file_matches().len(),
+            crate::palette::Mode::Search => self
+                .explorer
+                .try_current()
+                .and_then(|st| st.search.as_ref())
+                .map(|s| s.matches.len())
+                .unwrap_or(0),
         }
     }
 
@@ -1329,7 +1688,9 @@ impl App {
         if self.prefs.queue_collapsed {
             let needing = self.queue.iter().filter(|i| i.reason.needs_human()).count();
             let key = self.keymap.describe(crate::keymap::Action::ToggleQueuePanel);
+            let vis = self.visible_queue();
             let mut expand = false;
+            let mut pick: Option<SessionId> = None;
             egui::Panel::left("queue-strip")
                 .resizable(false)
                 .exact_size(30.0)
@@ -1352,12 +1713,55 @@ impl App {
                             ui.label(RichText::new(needing.to_string()).size(13.0).color(AMBER).strong())
                                 .on_hover_text(format!("{needing} session(s) need you"));
                         }
+                        ui.add_space(6.0);
+
+                        // One chip per session, Lens-fashion: the collapsed
+                        // strip keeps answering "which sessions, and which
+                        // need me" instead of only "how many". The letter and
+                        // colour come from the user's label when there is one
+                        // (`R-B26`), else from the repo — both stable, so a
+                        // chip means the same thing tomorrow.
+                        egui::ScrollArea::vertical()
+                            .id_salt("queue-strip-chips")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                for item in &vis {
+                                    let Some(s) = self.sessions.get(&item.session_id) else {
+                                        continue;
+                                    };
+                                    let label = self.prefs.label(&item.session_id);
+                                    let name =
+                                        label.map(str::to_string).unwrap_or_else(|| s.repo_name());
+                                    let selected =
+                                        self.selected.as_ref() == Some(&item.session_id);
+                                    let chip = session_chip(
+                                        ui,
+                                        ui::chip_char(&name),
+                                        label_color(&name),
+                                        selected,
+                                        item.reason.needs_human(),
+                                    )
+                                    .on_hover_text(format!(
+                                        "{}\n{} · {}",
+                                        label.unwrap_or(&s.label()),
+                                        s.repo_name(),
+                                        item.reason.label()
+                                    ));
+                                    if chip.clicked() {
+                                        pick = Some(item.session_id.clone());
+                                    }
+                                }
+                            });
                     });
                 });
             if expand {
                 self.prefs.queue_collapsed = false;
                 self.prefs_dirty = true;
                 self.pane = Pane::Queue;
+            }
+            if let Some(id) = pick {
+                self.select(id);
             }
             return;
         }
@@ -1427,7 +1831,7 @@ impl App {
                             .hint_text(if filtering {
                                 "type to narrow  ·  ↑↓ choose  ·  ⏎ accept  ·  esc clear"
                             } else {
-                                "filter  (/)   repo: branch: file:"
+                                "filter  (/)   repo: branch: file: label:"
                             })
                             .desired_width(ui.available_width() - 4.0),
                     );
@@ -1525,6 +1929,8 @@ impl App {
                 let mut to_pin: Option<String> = None;
                 let mut to_hide: Option<String> = None;
                 let mut to_filter_repo: Option<String> = None;
+                let mut to_filter_label: Option<String> = None;
+                let mut to_label: Option<SessionId> = None;
                 // Set only by a click on a card, never by follow mode or by
                 // `j`/`k` — moving the cursor is not the same gesture as
                 // choosing a session, and a tab that changed under the keyboard
@@ -1672,9 +2078,13 @@ impl App {
                                                 self.prefs.is_pinned(&item.session_id),
                                                 is_hidden,
                                                 hideable,
+                                                self.prefs.label(&item.session_id),
                                             );
                                             if let Some(r) = hit.filter_repo {
                                                 to_filter_repo = Some(r);
+                                            }
+                                            if let Some(l) = hit.filter_label {
+                                                to_filter_label = Some(l);
                                             }
                                             if hit.hide {
                                                 to_hide = Some(item.session_id.clone());
@@ -1804,6 +2214,15 @@ impl App {
                                         ));
                                         ui.close();
                                     }
+                                    let labelled =
+                                        self.prefs.label(&item.session_id).is_some();
+                                    if ui
+                                        .button(if labelled { "Edit label…" } else { "Label…" })
+                                        .clicked()
+                                    {
+                                        to_label = Some(item.session_id.clone());
+                                        ui.close();
+                                    }
                                 });
                                 ui.add_space(2.0);
                             }
@@ -1845,7 +2264,78 @@ impl App {
                 if let Some(repo) = to_filter_repo {
                     self.filter = format!("repo:{repo}");
                 }
+                if let Some(label) = to_filter_label {
+                    self.filter = format!("label:{}", label.to_lowercase());
+                }
+                if let Some(id) = to_label {
+                    self.open_label_editor(id);
+                }
             });
+    }
+
+    /// Open the label editor pre-filled with what the session is called now,
+    /// so editing is the same gesture as naming.
+    fn open_label_editor(&mut self, id: SessionId) {
+        let current = self.prefs.label(&id).unwrap_or_default().to_string();
+        self.label_edit = Some((id, current));
+    }
+
+    /// One text field in a small window: Enter saves, empty removes, Escape
+    /// cancels. `R-B26`.
+    fn label_window(&mut self, root: &mut egui::Ui) {
+        let Some((id, mut text)) = self.label_edit.clone() else {
+            return;
+        };
+        let ctx = root.ctx().clone();
+        let session_name = self
+            .sessions
+            .get(&id)
+            .map(|s| s.label())
+            .unwrap_or_else(|| id.clone());
+        let mut open = true;
+        let mut done = false;
+        egui::Window::new("Label")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, -80.0])
+            .open(&mut open)
+            .show(&ctx, |ui| {
+                ui.label(dim(truncate(&session_name, 70)));
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut text)
+                        .id(egui::Id::new("label-edit"))
+                        .hint_text("a name you will recognise it by…")
+                        .desired_width(280.0),
+                );
+                // Re-focused every frame, like the palette: the window is
+                // modal in spirit and a click must not strand the keyboard.
+                field.request_focus();
+                ui.horizontal(|ui| {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        ui.label(dim("⏎ removes the label · esc cancels"));
+                    } else {
+                        // The badge exactly as the card will wear it, colour
+                        // included — the preview is the promise.
+                        ui.label(badge(&truncate(trimmed, 24), label_color(trimmed)));
+                        ui.label(dim("⏎ saves · esc cancels"));
+                    }
+                });
+                let (enter, escape) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::Enter),
+                        i.key_pressed(egui::Key::Escape),
+                    )
+                });
+                if enter {
+                    self.prefs.set_label(&id, &text);
+                    self.prefs_dirty = true;
+                    done = true;
+                } else if escape {
+                    done = true;
+                }
+            });
+        self.label_edit = if done || !open { None } else { Some((id, text)) };
     }
 }
 
@@ -2065,8 +2555,18 @@ fn keymap_row(
         });
     });
 
-    let response = inner.response.interact(egui::Sense::click());
-    if response.clicked() {
+    // NOT `inner.response.interact(Sense::click())`: that registers a
+    // click-sensing widget covering the whole row *after* the buttons inside
+    // it, and egui resolves a tied hit to the last-registered widget — so the
+    // row ate every click meant for the binding and reset buttons, and
+    // rebinding by mouse silently never worked. The row's click is instead
+    // derived from "a click landed here and no button claimed it".
+    let response = inner.response;
+    if !binding_clicked
+        && !reset_clicked
+        && response.contains_pointer()
+        && ui.input(|i| i.pointer.primary_clicked())
+    {
         row_clicked = true;
     }
     KeymapRowHit {
@@ -2138,6 +2638,143 @@ fn palette_row(
     resp
 }
 
+/// One chip of the collapsed queue strip: a single letter on its stable
+/// colour, a red dot when the session needs a human, a ring when it is the
+/// selected one. The Lens-style avatar, for sessions.
+fn session_chip(
+    ui: &mut egui::Ui,
+    ch: char,
+    color: Color32,
+    selected: bool,
+    needs_human: bool,
+) -> egui::Response {
+    let size = 20.0;
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 5.0, color);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        ch,
+        egui::FontId::monospace(12.5),
+        Color32::WHITE,
+    );
+    // The dot outranks the letter: the strip's first job is still "which
+    // ones need me", and colour alone must not be asked to carry it.
+    if needs_human {
+        painter.circle_filled(rect.right_top() + egui::vec2(-2.0, 2.0), 3.0, RED);
+    }
+    if selected {
+        painter.rect_stroke(
+            rect.expand(1.5),
+            6.0,
+            egui::Stroke::new(1.5, TEXT_STRONG),
+            egui::StrokeKind::Outside,
+        );
+    } else if resp.hovered() {
+        painter.rect_stroke(
+            rect.expand(1.5),
+            6.0,
+            egui::Stroke::new(1.0, DIM),
+            egui::StrokeKind::Outside,
+        );
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// One go-to-file row: the file name where the eye lands, the directory
+/// behind it — the order IntelliJ taught everyone to read.
+fn file_palette_row(ui: &mut egui::Ui, path: &str, picked: bool) -> egui::Response {
+    let height = 22.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    if picked {
+        ui.painter().rect_filled(
+            rect,
+            5.0,
+            ui.visuals().selection.bg_fill.linear_multiply(0.55),
+        );
+    } else if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, 5.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    let pad = 8.0;
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let painter = ui.painter();
+    let name_width = painter
+        .text(
+            egui::pos2(rect.left() + pad, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::proportional(13.0),
+            if picked {
+                ui.visuals().strong_text_color()
+            } else {
+                ui.visuals().text_color()
+            },
+        )
+        .width();
+    if !dir.is_empty() {
+        painter.text(
+            egui::pos2(rect.left() + pad + name_width + 10.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            dir,
+            egui::FontId::proportional(11.0),
+            DIM,
+        );
+    }
+    resp
+}
+
+/// One content-search row: `path:line` in wire spelling, then the line.
+fn search_palette_row(
+    ui: &mut egui::Ui,
+    m: &mogeung_core::wire::ContentMatch,
+    picked: bool,
+) -> egui::Response {
+    let height = 22.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    if picked {
+        ui.painter().rect_filled(
+            rect,
+            5.0,
+            ui.visuals().selection.bg_fill.linear_multiply(0.55),
+        );
+    } else if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, 5.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    let pad = 8.0;
+    let painter = ui.painter();
+    let loc_width = painter
+        .text(
+            egui::pos2(rect.left() + pad, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            format!("{}:{}", m.path, m.line),
+            egui::FontId::monospace(11.5),
+            BLUE,
+        )
+        .width();
+    painter.text(
+        egui::pos2(rect.left() + pad + loc_width + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        m.text.trim(),
+        egui::FontId::monospace(11.5),
+        if picked {
+            ui.visuals().strong_text_color()
+        } else {
+            ui.visuals().text_color()
+        },
+    );
+    resp
+}
+
 /// The queue filter's widget id, named once so the keyboard handler and the
 /// widget itself cannot drift onto two different ids — a bug that would look
 /// exactly like "the shortcut does nothing".
@@ -2148,6 +2785,40 @@ fn filter_id() -> egui::Id {
 /// The keyboard settings window's own action filter.
 fn keymap_filter_id() -> egui::Id {
     egui::Id::new("keymap-filter")
+}
+
+/// The chord a rebind should capture from this frame's events, if any.
+///
+/// egui 0.35 reports modifier presses as keys of their own (`AltLeft` …), so
+/// "press Alt+9" arrives as AltLeft first — and the capture used to end
+/// there, saving the bare modifier for every chord rebind. Caught live on
+/// Ubuntu by pressing the chord and reading the file back. The modifier
+/// presses are skipped; the chord's modifiers ride along with the real key.
+fn captured_binding(events: &[egui::Event]) -> Option<crate::keymap::Binding> {
+    events.iter().find_map(|e| match e {
+        egui::Event::Key {
+            key,
+            pressed: true,
+            modifiers,
+            ..
+        } if !crate::keymap::is_modifier_key(*key) => {
+            Some(crate::keymap::Binding::new(*modifiers, *key))
+        }
+        _ => None,
+    })
+}
+
+/// Whether the widget holding egui focus is a text box.
+///
+/// "Does *anything* have focus" is the wrong question for deciding whether a
+/// window may claim keys: the embedded terminal, and any widget a click
+/// happened to land on, all count as "something" — and each of those states
+/// made the keyboard settings window look completely dead. What actually
+/// matters is whether typed characters belong to a text input, which is
+/// exactly the widgets that keep a `TextEdit` state.
+fn text_input_focused(ui: &egui::Ui) -> bool {
+    ui.memory(|m| m.focused())
+        .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some())
 }
 
 /// Whether the hidden flag may be changed at all.
@@ -2172,6 +2843,8 @@ fn may_toggle_hidden(alive: bool, hidden: bool) -> bool {
 struct CardHit {
     /// The repo name was clicked: narrow the queue to it.
     filter_repo: Option<String>,
+    /// The label badge was clicked: narrow the queue to that label.
+    filter_label: Option<String>,
     /// The corner `✕` was clicked.
     hide: bool,
 }
@@ -2184,9 +2857,21 @@ fn queue_card(
     pinned: bool,
     hidden: bool,
     hideable: bool,
+    label: Option<&str>,
 ) -> CardHit {
     let mut hit = CardHit::default();
     ui.horizontal(|ui| {
+        // The user's own name for the session leads the row — it is the badge
+        // they wrote, so it is the one they scan for. `R-B26`.
+        if let Some(l) = label {
+            if ui
+                .add(egui::Button::new(badge(&truncate(l, 24), label_color(l))).frame(false))
+                .on_hover_text("show only this label — right-click the card to edit it")
+                .clicked()
+            {
+                hit.filter_label = Some(l.to_string());
+            }
+        }
         if pinned {
             ui.label(badge("PIN", BLUE));
         }
@@ -2401,20 +3086,6 @@ impl App {
                             ui.close();
                         }
                         ui.separator();
-                        for t in [
-                            OpenTarget::Terminal,
-                            OpenTarget::Intellij,
-                            OpenTarget::VsCode,
-                            OpenTarget::Finder,
-                        ] {
-                            if ui.button(format!("Open in {}", t.label())).clicked() {
-                                if let Err(e) = ui::open_in(t, &s.cwd) {
-                                    self.errors.push(e);
-                                }
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
                         if ui
                             .button(format!(
                                 "Reset the pane layout  ({})",
@@ -2441,7 +3112,33 @@ impl App {
                         }
                     })
                     .response
-                    .on_hover_text("refresh, open elsewhere, forget");
+                    .on_hover_text("refresh, reset layout, forget");
+
+                    // The editor handoffs, visible again. They lived in the ⋯
+                    // menu for one release and earned their way back out: the
+                    // handoff to a real editor is the roadmap's own answer to
+                    // "not an editor", and an answer behind a menu costs two
+                    // clicks every time. Right-to-left, so the *last* one here
+                    // is the leftmost on screen.
+                    for t in [
+                        OpenTarget::Terminal,
+                        OpenTarget::Finder,
+                        OpenTarget::VsCode,
+                        OpenTarget::Intellij,
+                    ] {
+                        if ui
+                            .small_button(dim(t.label()))
+                            .on_hover_text(format!(
+                                "open this session's directory in {}",
+                                t.label()
+                            ))
+                            .clicked()
+                        {
+                            if let Err(e) = ui::open_in(t, &s.cwd) {
+                                self.errors.push(e);
+                            }
+                        }
+                    }
                 });
             });
 
@@ -2515,6 +3212,797 @@ impl App {
             Tab::Info => self.info_tab(ui, s),
             Tab::Debt => self.debt_tab(ui, s),
             Tab::Terminal => self.terminal_tab(ui, s),
+            Tab::Explorer => self.explorer_tab(ui, s),
+            Tab::Git => self.git_tab(ui, s),
+        }
+    }
+
+    /// The session repo's git state: local changes and log on the left, the
+    /// selected diff on the right. `R-D10`. Read-only from end to end — the
+    /// daemon offers nothing that writes, so neither can this.
+    fn git_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        self.gitview.ensure_session(&s.id);
+
+        // Same one-door fetch rule as the Editor: ask for whatever the state
+        // wants and lacks, in the paint, so a docked pane works unswitched.
+        {
+            let gv = &mut self.gitview;
+            if !gv.status_loaded && !gv.status_pending {
+                gv.status_pending = true;
+                self.net.send(ClientMsg::GitStatus {
+                    session_id: s.id.clone(),
+                });
+            }
+            if gv.commits.is_empty() && !gv.log_done && !gv.log_pending {
+                gv.log_pending = true;
+                self.net.send(ClientMsg::GitLog {
+                    session_id: s.id.clone(),
+                    skip: 0,
+                    limit: 50,
+                });
+            }
+            match gv.selection.clone() {
+                crate::gitview::Selection::Commit(sha)
+                    if !gv.commit_diffs.contains_key(&sha)
+                        && gv.pending_shows.insert(sha.clone()) =>
+                {
+                    self.net.send(ClientMsg::GitShow {
+                        session_id: s.id.clone(),
+                        sha,
+                    });
+                }
+                crate::gitview::Selection::Local(path)
+                    if !gv.local_diffs.contains_key(&path)
+                        && gv.pending_file_diffs.insert(path.clone()) =>
+                {
+                    self.net.send(ClientMsg::GitDiffFile {
+                        session_id: s.id.clone(),
+                        path,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        egui::Panel::left("git-left").default_size(320.0).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("LOCAL CHANGES").size(11.0).color(DIM).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("re-read the log and the working tree")
+                        .clicked()
+                    {
+                        self.gitview.refresh();
+                    }
+                    let mut only = self.gitview.session_only;
+                    if ui
+                        .checkbox(&mut only, "this session")
+                        .on_hover_text("only files this session is believed to have touched")
+                        .changed()
+                    {
+                        self.gitview.session_only = only;
+                    }
+                });
+            });
+            egui::ScrollArea::vertical()
+                .id_salt("git-local-scroll")
+                .max_height(ui.available_height() * 0.45)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    self.git_local_list(ui, s);
+                });
+            ui.separator();
+            ui.label(RichText::new("LOG").size(11.0).color(DIM).strong());
+            egui::ScrollArea::vertical()
+                .id_salt("git-log-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    self.git_log_list(ui, s);
+                });
+        });
+
+        self.git_diff_panel(ui);
+    }
+
+    /// The uncommitted files, staged and unstaged distinguished by colour.
+    fn git_local_list(&mut self, ui: &mut egui::Ui, s: &Session) {
+        if !self.gitview.status_loaded {
+            ui.label(dim("reading the working tree…"));
+            return;
+        }
+        let entries: Vec<mogeung_core::wire::StatusEntry> = self
+            .gitview
+            .status
+            .iter()
+            .filter(|e| {
+                if !self.gitview.session_only {
+                    return true;
+                }
+                // Repo-relative entry vs the session's absolute touched
+                // paths, joined through the repo root when we know it.
+                match &s.repo_root {
+                    Some(root) => {
+                        let abs = format!("{}/{}", root.trim_end_matches('/'), e.path);
+                        s.touched_files.iter().any(|t| *t == abs)
+                    }
+                    None => true,
+                }
+            })
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            ui.label(dim(if self.gitview.session_only {
+                "nothing uncommitted from this session"
+            } else {
+                "working tree clean"
+            }));
+            return;
+        }
+        for e in entries {
+            let picked =
+                self.gitview.selection == crate::gitview::Selection::Local(e.path.clone());
+            let color = if e.staged && !e.unstaged {
+                GREEN
+            } else if e.staged {
+                AMBER
+            } else if e.state == "??" {
+                DIM
+            } else {
+                BLUE
+            };
+            let row = ui
+                .selectable_label(
+                    picked,
+                    RichText::new(format!("{} {}", e.state, e.path))
+                        .monospace()
+                        .size(12.0)
+                        .color(color),
+                )
+                .on_hover_text(match (e.staged, e.unstaged) {
+                    (true, true) => "staged, with further unstaged edits",
+                    (true, false) => "staged",
+                    (false, _) if e.state == "??" => "untracked",
+                    _ => "unstaged",
+                });
+            if row.clicked() {
+                self.gitview.selection = crate::gitview::Selection::Local(e.path.clone());
+            }
+        }
+    }
+
+    /// Recent commits, newest first, paging on demand.
+    fn git_log_list(&mut self, ui: &mut egui::Ui, s: &Session) {
+        if self.gitview.commits.is_empty() {
+            ui.label(dim(if self.gitview.log_done {
+                "no commits yet"
+            } else {
+                "reading the log…"
+            }));
+            return;
+        }
+        let now = Utc::now().timestamp();
+        let commits = self.gitview.commits.clone();
+        for c in &commits {
+            let picked = self.gitview.selection == crate::gitview::Selection::Commit(c.sha.clone());
+            let row = ui
+                .selectable_label(
+                    picked,
+                    RichText::new(format!(
+                        "{} {}",
+                        c.short,
+                        truncate(&c.summary, 46)
+                    ))
+                    .monospace()
+                    .size(12.0),
+                )
+                .on_hover_text(format!(
+                    "{}\n{} · {} · {}",
+                    c.summary,
+                    c.author,
+                    crate::gitview::age(now, c.epoch),
+                    c.sha
+                ));
+            if row.clicked() {
+                self.gitview.selection = crate::gitview::Selection::Commit(c.sha.clone());
+            }
+        }
+        if !self.gitview.log_done {
+            if ui.button(dim("show more")).clicked() && !self.gitview.log_pending {
+                self.gitview.log_pending = true;
+                self.net.send(ClientMsg::GitLog {
+                    session_id: s.id.clone(),
+                    skip: self.gitview.commits.len() as u32,
+                    limit: 50,
+                });
+            }
+        }
+    }
+
+    /// The right side: the selected diff, rendered by the same pipeline as
+    /// the Changes tab.
+    fn git_diff_panel(&mut self, ui: &mut egui::Ui) {
+        let (title, files) = match &self.gitview.selection {
+            crate::gitview::Selection::None => {
+                ui.add_space(12.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(dim("pick a commit or an uncommitted file to see its diff"));
+                });
+                return;
+            }
+            crate::gitview::Selection::Commit(sha) => {
+                (sha.chars().take(10).collect::<String>(), self.gitview.commit_diffs.get(sha))
+            }
+            crate::gitview::Selection::Local(path) => {
+                (path.clone(), self.gitview.local_diffs.get(path))
+            }
+        };
+        let Some(files) = files else {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                ui.label(dim(format!("loading the diff of {title}…")));
+            });
+            return;
+        };
+        let files = files.clone();
+        let (syntax, words) = (self.prefs.syntax, self.prefs.word_diff);
+        egui::ScrollArea::both()
+            .id_salt(("git-diff-scroll", &title))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if files.is_empty() {
+                    ui.label(dim("no textual diff — empty, binary, or a merge with no changes"));
+                    return;
+                }
+                for f in &files {
+                    ui.horizontal(|ui| {
+                        ui.label(mono(&f.path));
+                        ui.label(dim(format!("+{} −{}", f.insertions, f.deletions)));
+                        for fl in &f.flags {
+                            ui.label(dim(fl.label()));
+                        }
+                        if f.truncated {
+                            ui.label(RichText::new("binary or too large").size(11.0).color(AMBER));
+                        }
+                    });
+                    for h in &f.hunks {
+                        ui.label(dim(&h.header));
+                        render_unified(ui, &h.lines, syntax, words);
+                        ui.add_space(4.0);
+                    }
+                    ui.separator();
+                }
+            });
+    }
+
+    /// The session's worktree: tree on the left, tabs and a read-only viewer
+    /// on the right. `R-B24`, workbench behaviour by `R-B25`.
+    ///
+    /// Everything shown here came over the wire — the UI never touches the
+    /// worktree itself ([ADR-0001]), and nothing in this pane can write.
+    fn explorer_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        self.explorer.ensure_session(&s.id);
+
+        // Ask the daemon for whatever the state wants and lacks: the root,
+        // every expanded directory without a listing, the active tab without
+        // a body. One door for all fetching, which is what makes restore from
+        // disk, reveal, refresh and a plain click all re-fetch the same way —
+        // and it lives in the paint rather than `set_tab`, so a pane that is
+        // *docked* visible works without ever having been switched to.
+        {
+            let st = self.explorer.current_mut();
+            let wants: Vec<String> = std::iter::once(String::new())
+                .chain(st.expanded.iter().cloned())
+                .filter(|d| !st.dirs.contains_key(d) && !st.pending.contains(d))
+                .collect();
+            for path in wants {
+                st.pending.insert(path.clone());
+                self.net.send(ClientMsg::ListDir {
+                    session_id: s.id.clone(),
+                    path,
+                });
+            }
+            // Both splits read at once, so both actives want bodies.
+            let body_wants: Vec<String> = [0u8, 1]
+                .into_iter()
+                .filter_map(|g| st.active_of(g).and_then(|i| st.open.get(i)))
+                .filter(|t| t.view.is_none() && !st.pending_files.contains(&t.path))
+                .map(|t| t.path.clone())
+                .collect();
+            for path in body_wants {
+                st.pending_files.insert(path.clone());
+                self.net.send(ClientMsg::FetchFile {
+                    session_id: s.id.clone(),
+                    path,
+                });
+            }
+        }
+
+        let root_label = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
+        egui::Panel::left("explorer-tree").default_size(280.0).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("WORKTREE").size(11.0).color(DIM).strong())
+                    .on_hover_text(&root_label);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("↻")
+                        .on_hover_text("re-list the directories that are open")
+                        .clicked()
+                    {
+                        // Dropping the listings is enough: the fetch block
+                        // above re-requests the root and everything expanded.
+                        let st = self.explorer.current_mut();
+                        st.dirs.clear();
+                        st.pending.clear();
+                    }
+                });
+            });
+            egui::ScrollArea::vertical()
+                .id_salt("explorer-tree-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    if !self.explorer.current().dirs.contains_key("") {
+                        ui.add_space(8.0);
+                        ui.label(dim("listing…"));
+                        return;
+                    }
+                    self.explorer_dir(ui, "", 0);
+                });
+        });
+
+        // Side by side when any tab lives on the right; the split is created
+        // by sending a tab over ("open on the other side") and collapses
+        // when the last right-hand tab leaves.
+        if self.explorer.current().split() {
+            let half = ui.available_width() * 0.5;
+            egui::Panel::right("editor-split")
+                .default_size(half)
+                .show(ui, |ui| {
+                    self.editor_group(ui, 1);
+                });
+        }
+        self.editor_group(ui, 0);
+    }
+
+    /// One side of the editor: its tab strip and its viewer.
+    fn editor_group(&mut self, ui: &mut egui::Ui, group: u8) {
+        self.explorer_tab_strip(ui, group);
+        self.explorer_viewer(ui, group);
+    }
+
+    /// The open-file tabs of one side, IntelliJ-fashion: click activates,
+    /// middle-click closes, double-click pins, and the one unpinned tab per
+    /// side is the preview that single-click opens reuse.
+    fn explorer_tab_strip(&mut self, ui: &mut egui::Ui, group: u8) {
+        let tabs: Vec<(usize, String, bool)> = self
+            .explorer
+            .current()
+            .open
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.group == group)
+            .map(|(i, t)| (i, t.path.clone(), t.pinned))
+            .collect();
+        if tabs.is_empty() {
+            return;
+        }
+        let active = self.explorer.current().active_of(group);
+        egui::ScrollArea::horizontal()
+            .id_salt(("explorer-tab-strip", group))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, path, pinned) in &tabs {
+                        let name = path.rsplit('/').next().unwrap_or(path);
+                        let mut text = RichText::new(name.to_string()).size(12.0);
+                        if !pinned {
+                            // The preview tab announces its impermanence the
+                            // way every editor does: italics.
+                            text = text.italics();
+                        }
+                        let row = ui.selectable_label(active == Some(*i), text).on_hover_text(
+                            format!(
+                                "{path}\n{}",
+                                if *pinned {
+                                    "pinned — double-click to unpin"
+                                } else {
+                                    "preview — double-click to pin"
+                                }
+                            ),
+                        );
+                        row.context_menu(|ui| {
+                            if ui
+                                .button(if group == 0 {
+                                    "Open on the right"
+                                } else {
+                                    "Move back left"
+                                })
+                                .clicked()
+                            {
+                                self.explorer.move_tab_to_other_side(*i);
+                                ui.close();
+                            }
+                        });
+                        if row.double_clicked() {
+                            self.explorer.activate(*i);
+                            self.explorer.toggle_pin_active();
+                        } else if row.middle_clicked() {
+                            self.explorer.close_tab(*i);
+                        } else if row.clicked() {
+                            self.explorer.activate(*i);
+                        }
+                        if ui
+                            .small_button(RichText::new("✕").size(10.0).color(DIM))
+                            .on_hover_text("close (middle-click the tab also works)")
+                            .clicked()
+                        {
+                            self.explorer.close_tab(*i);
+                        }
+                    }
+                });
+            });
+        ui.separator();
+    }
+
+    /// The read-only body of one side's active tab, line-numbered, scrolled
+    /// to a search hit when one asked for it.
+    fn explorer_viewer(&mut self, ui: &mut egui::Ui, group: u8) {
+        // Taken, not borrowed: the goto is consumed by the one paint that
+        // honours it, or every later frame would drag the scroll back.
+        let mut goto_line = {
+            let st = self.explorer.current_mut();
+            st.active_of(group)
+                .and_then(|i| st.open.get_mut(i))
+                .and_then(|t| t.goto_line.take())
+        };
+        let focused = self.explorer.current().focus == group;
+        let st = self.explorer.current();
+        let Some(tab) = st.active_of(group).and_then(|i| st.open.get(i)) else {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                ui.label(dim("pick a file to read it — read-only, always"));
+            });
+            return;
+        };
+        let path = tab.path.clone();
+        let Some(view) = &tab.view else {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                ui.label(dim(format!("loading {path}…")));
+            });
+            return;
+        };
+        let content = view.content.clone();
+        let truncated = view.truncated;
+        ui.horizontal(|ui| {
+            ui.label(mono(&path));
+            if truncated {
+                ui.label(
+                    RichText::new("cut short — the file goes on past the size cap")
+                        .size(11.0)
+                        .color(AMBER),
+                );
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .selectable_label(self.annotate, "blame")
+                    .on_hover_text(format!(
+                        "per-line authorship in the gutter — click a line for its commit  ({})",
+                        self.keymap.describe(crate::keymap::Action::ToggleAnnotate)
+                    ))
+                    .clicked()
+                {
+                    self.annotate = !self.annotate;
+                }
+            });
+        });
+
+        // Ctrl+F. Entirely client-side: the body is already here, so a match
+        // list is a scan, and jumping reuses the goto machinery search
+        // results already ride. One bar, on the focused side only — two bars
+        // would fight over one widget id and one set of keystrokes.
+        let mut find_bands: Option<(Vec<u64>, usize)> = None;
+        if self.explorer_find_open && focused {
+            let matches = crate::explorer::find_lines(&content, &self.explorer_find);
+            if self.explorer_find_cursor >= matches.len() {
+                self.explorer_find_cursor = matches.len().saturating_sub(1);
+            }
+            let mut jump: Option<i64> = None;
+            ui.horizontal(|ui| {
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut self.explorer_find)
+                        .id(egui::Id::new("explorer-find"))
+                        .hint_text("find in this file…")
+                        .desired_width(220.0),
+                );
+                if self.explorer_find_focus {
+                    field.request_focus();
+                    self.explorer_find_focus = false;
+                }
+                if field.changed() {
+                    // A fresh query starts at its first hit — the editor
+                    // reflex this bar is imitating.
+                    self.explorer_find_cursor = 0;
+                    jump = Some(0);
+                }
+                if !self.explorer_find.is_empty() {
+                    ui.label(dim(if matches.is_empty() {
+                        "no matches".to_string()
+                    } else {
+                        format!("{} of {}", self.explorer_find_cursor + 1, matches.len())
+                    }));
+                }
+                if ui.small_button("‹").on_hover_text("previous match (Shift+⏎)").clicked() {
+                    jump = Some(-1);
+                }
+                if ui.small_button("›").on_hover_text("next match (⏎)").clicked() {
+                    jump = Some(1);
+                }
+                ui.label(dim("esc closes"));
+
+                let (enter, shift, escape) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::Enter),
+                        i.modifiers.shift,
+                        i.key_pressed(egui::Key::Escape),
+                    )
+                });
+                if escape {
+                    self.explorer_find_open = false;
+                } else if enter {
+                    jump = Some(if shift { -1 } else { 1 });
+                }
+            });
+            if !matches.is_empty() {
+                if let Some(delta) = jump {
+                    let len = matches.len() as i64;
+                    let next =
+                        (self.explorer_find_cursor as i64 + delta).rem_euclid(len) as usize;
+                    self.explorer_find_cursor = next;
+                    goto_line = Some(matches[next]);
+                }
+            }
+            if self.explorer_find_open {
+                find_bands = Some((matches, self.explorer_find_cursor));
+            }
+        }
+        ui.separator();
+
+        let language = crate::explorer::language_of(&path).to_string();
+        let theme =
+            egui_extras::syntax_highlighting::CodeTheme::from_memory(ui.ctx(), ui.style());
+        // The same memoised highlight `code_view_ui` uses — unrolled here so
+        // the gutter and the code can sit side by side on identical rows.
+        let job = egui_extras::syntax_highlighting::highlight(
+            ui.ctx(),
+            ui.style(),
+            &theme,
+            &content,
+            &language,
+        );
+        // Laid out here and read for geometry: the galley's own row
+        // positions are the only honest source of line coordinates. The
+        // first version multiplied a guessed row height instead, and the
+        // find bands crept away from their lines — syntect's real line
+        // height is not `text_style_height` (found live). The layout is
+        // cached per frame, so the Label below pays nothing extra.
+        let galley = ui.ctx().fonts_mut(|f| f.layout_job(job.clone()));
+        let line_y = |line: u64| -> f32 {
+            galley
+                .rows
+                .get(line.saturating_sub(1) as usize)
+                .map(|r| r.pos.y)
+                .unwrap_or(0.0)
+        };
+        let rows = content.lines().count().max(1);
+        let width = rows.to_string().len();
+        let gutter_text = (1..=rows)
+            .map(|n| format!("{n:>width$}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The gutter wears the code's own font, so its rows *cannot*
+        // disagree with the code's — the other half of the same drift.
+        let code_font = job
+            .sections
+            .first()
+            .map(|s| s.format.font_id.clone())
+            .unwrap_or_else(|| egui::FontId::monospace(12.0));
+        let mut gutter_job = egui::text::LayoutJob::default();
+        gutter_job.append(
+            &gutter_text,
+            0.0,
+            egui::TextFormat {
+                font_id: code_font.clone(),
+                color: DIM,
+                ..Default::default()
+            },
+        );
+
+        // The annotate gutter (`R-D10`): per-line authorship, same font as
+        // the code so the rows cannot drift, clickable through the galley's
+        // row geometry. Blame is of the worktree file, so uncommitted lines
+        // arrive as git's zero sha and render as a quiet dot.
+        let mut blame_col: Option<(egui::text::LayoutJob, Vec<String>)> = None;
+        if self.annotate {
+            if let Some(sid) = self.explorer.session.clone() {
+                self.gitview.ensure_session(&sid);
+                if !self.gitview.blame.contains_key(&path)
+                    && self.gitview.pending_blame.insert(path.clone())
+                {
+                    self.net.send(ClientMsg::GitBlame {
+                        session_id: sid,
+                        path: path.clone(),
+                    });
+                }
+            }
+            if let Some((lines, _)) = self.gitview.blame.get(&path) {
+                let mut text = String::new();
+                let mut shas: Vec<String> = Vec::with_capacity(lines.len());
+                for l in lines {
+                    let uncommitted = l.sha.chars().all(|c| c == '0');
+                    if uncommitted {
+                        text.push_str(&format!("{:>8} {:<10}", "·", ""));
+                        shas.push(String::new());
+                    } else {
+                        let author: String = l.author.chars().take(10).collect();
+                        text.push_str(&format!("{} {:<10}", l.sha, author));
+                        shas.push(l.sha.clone());
+                    }
+                    text.push('\n');
+                }
+                let mut bj = egui::text::LayoutJob::default();
+                bj.append(
+                    &text,
+                    0.0,
+                    egui::TextFormat {
+                        font_id: code_font.clone(),
+                        color: DIM,
+                        ..Default::default()
+                    },
+                );
+                blame_col = Some((bj, shas));
+            }
+        }
+        let mut open_commit: Option<String> = None;
+
+        let mut area = egui::ScrollArea::both()
+            .id_salt(("explorer-file-scroll", &path, group))
+            .auto_shrink([false, false]);
+        if let Some(line) = goto_line {
+            // Aim the hit at the upper third — centred enough to have context
+            // above it, high enough to read downward from.
+            area = area
+                .vertical_scroll_offset((line_y(line) - ui.available_height() / 3.0).max(0.0));
+        }
+        area.show(ui, |ui| {
+            // Match bands go down first so the text paints over them. Whole
+            // lines, not columns: row geometry is exact, column arithmetic
+            // lies the moment a tab or a wide glyph appears.
+            if let Some((lines, cursor)) = &find_bands {
+                let origin = ui.cursor().min;
+                let band_w = ui.available_width().clamp(0.0, 4000.0);
+                let current = lines.get(*cursor).copied();
+                let painter = ui.painter();
+                let mut seen = HashSet::new();
+                for l in lines {
+                    if !seen.insert(*l) {
+                        continue;
+                    }
+                    let Some(row) = galley.rows.get((*l - 1) as usize) else {
+                        continue;
+                    };
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(origin.x, origin.y + row.pos.y),
+                            egui::vec2(band_w, row.rect().height()),
+                        ),
+                        0.0,
+                        AMBER.linear_multiply(if current == Some(*l) { 0.28 } else { 0.10 }),
+                    );
+                }
+            }
+            ui.horizontal_top(|ui| {
+                if let Some((bj, shas)) = blame_col {
+                    let resp = ui.add(
+                        egui::Label::new(bj)
+                            .selectable(false)
+                            .sense(egui::Sense::click()),
+                    );
+                    if resp.clicked() {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            // Which row was hit, by the code galley's real
+                            // geometry — the same rows the bands use.
+                            let rel = pos.y - resp.rect.top();
+                            let row = galley
+                                .rows
+                                .partition_point(|r| r.pos.y <= rel)
+                                .saturating_sub(1);
+                            if let Some(sha) = shas.get(row).filter(|s| !s.is_empty()) {
+                                open_commit = Some(sha.clone());
+                            }
+                        }
+                    }
+                }
+                ui.add(egui::Label::new(gutter_job).selectable(false));
+                // Selectable and highlighted, and structurally unable to
+                // edit: a `Label` has no writable buffer.
+                ui.add(egui::Label::new(job).selectable(true));
+            });
+        });
+        // An annotated line names a commit; clicking it is "show me that
+        // commit", which is the Git pane's job.
+        if let Some(sha) = open_commit {
+            self.gitview.selection = crate::gitview::Selection::Commit(sha);
+            self.set_tab(Tab::Git);
+        }
+    }
+
+    /// One directory level of the explorer tree, recursively.
+    ///
+    /// Iterates a clone of the listing: rows mutate the expanded set and the
+    /// tabs, which cannot happen under a borrow of the cache. The listings
+    /// are small; the diff pane clones far more per frame.
+    fn explorer_dir(&mut self, ui: &mut egui::Ui, dir: &str, depth: usize) {
+        let Some(entries) = self.explorer.current().dirs.get(dir).cloned() else {
+            return;
+        };
+        if entries.is_empty() && depth == 0 {
+            ui.label(dim("nothing here"));
+            return;
+        }
+        let active_path = self
+            .explorer
+            .current()
+            .active_tab()
+            .map(|t| t.path.clone());
+        for e in entries {
+            let path = crate::explorer::join(dir, &e.name);
+            let open = self.explorer.current().expanded.contains(&path);
+            let glyph = if !e.is_dir {
+                "  "
+            } else if open {
+                "▾ "
+            } else {
+                "▸ "
+            };
+            let picked = !e.is_dir && active_path.as_deref() == Some(path.as_str());
+            let row = ui.selectable_label(
+                picked,
+                RichText::new(format!("{glyph}{}", e.name))
+                    .monospace()
+                    .size(12.0)
+                    .color(if e.is_dir { TEXT } else { BLUE }),
+            );
+            // The row reveal asked to be scrolled to, honoured the frame it
+            // finally exists — its listing may have been in flight for a while.
+            if self.explorer.current().reveal.as_deref() == Some(path.as_str()) {
+                row.scroll_to_me(Some(egui::Align::Center));
+                self.explorer.current_mut().reveal = None;
+            }
+            if row.double_clicked() && !e.is_dir {
+                self.explorer.open_file(&path, true, None);
+            } else if row.clicked() {
+                if e.is_dir {
+                    // Toggling is all a click does; the fetch block in
+                    // `explorer_tab` notices an expanded dir with no listing.
+                    let st = self.explorer.current_mut();
+                    if open {
+                        st.expanded.remove(&path);
+                    } else {
+                        st.expanded.insert(path.clone());
+                    }
+                    self.explorer.dirty = true;
+                } else {
+                    self.explorer.open_file(&path, false, None);
+                }
+            }
+            if e.is_dir && open {
+                ui.indent(egui::Id::new(("explorer-indent", &path)), |ui| {
+                    self.explorer_dir(ui, &path, depth + 1);
+                });
+            }
         }
     }
 
@@ -2583,7 +4071,10 @@ impl App {
                         self.keymap.describe(crate::keymap::Action::LeaveTerminal)
                     )
                 } else {
-                    "click the terminal to type into this session".to_string()
+                    format!(
+                        "click the terminal — or press {} — to type into this session",
+                        self.keymap.describe(crate::keymap::Action::LeaveTerminal)
+                    )
                 };
                 ui.label(RichText::new(hint).weak());
             });
@@ -2742,6 +4233,9 @@ impl App {
             self.selected_file = change.files.first().map(|f| f.path.clone());
         }
 
+        // Deferred out of the row loop: opening mutates the explorer and the
+        // tab layout, which must not happen under the borrow of `change`.
+        let mut open_in_explorer: Option<String> = None;
         egui::Panel::left("files").default_size(300.0).show(ui, |ui| {
             let focused = self.pane == Pane::Files || self.pane == Pane::Diff;
             ui.horizontal(|ui| {
@@ -2798,12 +4292,30 @@ impl App {
                                     f.hunks.len()
                                 )));
                             });
+                        // The Changes → Explorer bridge (`R-B25`): judging an
+                        // edit often means reading the whole file, and that
+                        // must not cost leaving mogeung.
+                        resp.context_menu(|ui| {
+                            if ui
+                                .button(format!(
+                                    "Open in Editor ({})",
+                                    self.keymap.describe(crate::keymap::Action::OpenInExplorer)
+                                ))
+                                .clicked()
+                            {
+                                open_in_explorer = Some(f.path.clone());
+                                ui.close();
+                            }
+                        });
                         if resp.clicked() {
                             self.selected_file = Some(f.path.clone());
                         }
                     }
                 });
         });
+        if let Some(path) = open_in_explorer {
+            self.open_in_explorer(&path, None);
+        }
 
         let file = change
             .files
@@ -3816,13 +5328,39 @@ impl App {
         if !self.palette.open {
             return;
         }
+        use crate::palette::Mode;
         let ctx = root.ctx().clone();
         let screen = ctx.content_rect();
         let width = (screen.width() * 0.62).clamp(420.0, 680.0);
-        let matches = self.palette.matches(&self.keymap);
-        self.palette.clamp(matches.len());
+        let mode = self.palette.mode;
+        // One corpus per mode, gathered before the borrow of the window.
+        let matches = match mode {
+            Mode::Actions => self.palette.matches(&self.keymap),
+            _ => Vec::new(),
+        };
+        let files = match mode {
+            Mode::Files => self.file_matches(),
+            _ => Vec::new(),
+        };
+        // (matches, truncated, in_flight, answered-query)
+        let search = match mode {
+            Mode::Search => self
+                .explorer
+                .try_current()
+                .and_then(|st| st.search.as_ref())
+                .map(|s| (s.matches.clone(), s.truncated, s.in_flight, s.query.clone())),
+            _ => None,
+        };
+        let len = match mode {
+            Mode::Actions => matches.len(),
+            Mode::Files => files.len(),
+            Mode::Search => search.as_ref().map(|s| s.0.len()).unwrap_or(0),
+        };
+        self.palette.clamp(len);
 
         let mut chosen: Option<crate::keymap::Action> = None;
+        let mut chosen_file: Option<String> = None;
+        let mut chosen_line: Option<(String, u64)> = None;
         let mut dismiss = false;
 
         let area = egui::Area::new(egui::Id::new("command-palette"))
@@ -3844,7 +5382,11 @@ impl App {
                         let field = ui.add(
                             egui::TextEdit::singleline(&mut self.palette.query)
                                 .id(egui::Id::new("palette-query"))
-                                .hint_text("run anything…")
+                                .hint_text(match mode {
+                                    Mode::Actions => "run anything…",
+                                    Mode::Files => "go to file…",
+                                    Mode::Search => "search in files — ⏎ runs it…",
+                                })
                                 .font(egui::TextStyle::Heading)
                                 .desired_width(f32::INFINITY)
                                 .frame(egui::Frame::NONE),
@@ -3853,12 +5395,41 @@ impl App {
                         ui.add_space(2.0);
                         ui.separator();
 
-                        if matches.is_empty() {
+                        let empty_hint = match mode {
+                            _ if len > 0 => None,
+                            Mode::Actions => Some("nothing matches that"),
+                            Mode::Files if self.palette.query.trim().is_empty() => {
+                                Some("no files open yet — type to search the worktree")
+                            }
+                            Mode::Files => Some("no file matches that"),
+                            Mode::Search => match &search {
+                                Some((_, _, true, _)) => Some("searching…"),
+                                Some((_, _, false, _)) => Some("no lines match that"),
+                                None => Some("type a query and press ⏎"),
+                            },
+                        };
+                        if let Some(hint) = empty_hint {
                             ui.add_space(10.0);
                             ui.vertical_centered(|ui| {
-                                ui.label(dim("nothing matches that"));
+                                ui.label(dim(hint));
                             });
                             ui.add_space(10.0);
+                        }
+                        // A stale result list under a changed query reads as
+                        // an answer to what is typed — say which query the
+                        // rows below actually answer.
+                        if let Some((m, truncated, in_flight, answered)) = &search {
+                            if !in_flight && answered.trim() != self.palette.query.trim() && !m.is_empty()
+                            {
+                                ui.label(dim(format!("showing \"{answered}\" — ⏎ searches again")));
+                            }
+                            if *truncated {
+                                ui.label(
+                                    RichText::new("cut short at the match cap — narrow the query")
+                                        .size(11.0)
+                                        .color(AMBER),
+                                );
+                            }
                         }
 
                         egui::ScrollArea::vertical()
@@ -3866,40 +5437,78 @@ impl App {
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 ui.style_mut().interaction.selectable_labels = false;
-                                for (i, m) in matches.iter().enumerate() {
-                                    let picked = i == self.palette.cursor;
-                                    let row = palette_row(
-                                        ui,
-                                        m.action,
-                                        &self.keymap.describe(m.action),
-                                        picked,
-                                    );
-                                    if picked {
-                                        // Keep the cursor on screen when it is
-                                        // moved by key rather than by mouse.
-                                        row.scroll_to_me(None);
+                                let cursor = self.palette.cursor;
+                                let scroll = self.palette.scroll;
+                                match mode {
+                                    Mode::Actions => {
+                                        for (i, m) in matches.iter().enumerate() {
+                                            let picked = i == cursor;
+                                            let row = palette_row(
+                                                ui,
+                                                m.action,
+                                                &self.keymap.describe(m.action),
+                                                picked,
+                                            );
+                                            if picked && scroll {
+                                                // Keep the cursor on screen when
+                                                // moved by key, not by mouse.
+                                                row.scroll_to_me(None);
+                                            }
+                                            if row.clicked() {
+                                                chosen = Some(m.action);
+                                            }
+                                        }
                                     }
-                                    if row.clicked() {
-                                        chosen = Some(m.action);
+                                    Mode::Files => {
+                                        for (i, path) in files.iter().enumerate() {
+                                            let picked = i == cursor;
+                                            let row = file_palette_row(ui, path, picked);
+                                            if picked && scroll {
+                                                row.scroll_to_me(None);
+                                            }
+                                            if row.clicked() {
+                                                chosen_file = Some(path.clone());
+                                            }
+                                        }
+                                    }
+                                    Mode::Search => {
+                                        if let Some((results, ..)) = &search {
+                                            for (i, m) in results.iter().enumerate() {
+                                                let picked = i == cursor;
+                                                let row = search_palette_row(ui, m, picked);
+                                                if picked && scroll {
+                                                    row.scroll_to_me(None);
+                                                }
+                                                if row.clicked() {
+                                                    chosen_line =
+                                                        Some((m.path.clone(), m.line));
+                                                }
+                                            }
+                                        }
                                     }
                                 }
+                                self.palette.scroll = false;
                             });
 
                         ui.add_space(4.0);
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new("↑↓ move   ⏎ run   esc close")
-                                    .size(10.5)
-                                    .color(DIM),
+                                RichText::new(match mode {
+                                    Mode::Actions => "↑↓ move   ⏎ run   esc close",
+                                    Mode::Files => "↑↓ move   ⏎ open   esc close",
+                                    Mode::Search => "↑↓ move   ⏎ search / open   esc close",
+                                })
+                                .size(10.5)
+                                .color(DIM),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.label(
                                         RichText::new(format!("{} of {}",
-                                            if matches.is_empty() { 0 } else { self.palette.cursor + 1 },
-                                            matches.len()))
+                                            if len == 0 { 0 } else { self.palette.cursor + 1 },
+                                            len))
                                             .size(10.5)
                                             .color(DIM),
                                     );
@@ -3928,6 +5537,12 @@ impl App {
         if let Some(a) = chosen {
             self.palette.close();
             self.run(a, root);
+        } else if let Some(path) = chosen_file {
+            self.palette.close();
+            self.open_in_explorer(&path, None);
+        } else if let Some((path, line)) = chosen_line {
+            self.palette.close();
+            self.open_in_explorer(&path, Some(line));
         } else if dismiss {
             self.palette.close();
         }
@@ -4054,10 +5669,11 @@ impl App {
                             if row.row_clicked {
                                 self.keymap_cursor = i;
                             }
-                            if i == self.keymap_cursor {
+                            if i == self.keymap_cursor && self.keymap_scroll {
                                 row.response.scroll_to_me(None);
                             }
                         }
+                        self.keymap_scroll = false;
                     });
 
                 ui.separator();
@@ -4294,7 +5910,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{may_toggle_hidden, short_path};
+    use super::{keymap_row, may_toggle_hidden, short_path};
 
     use super::ScrollRequest;
 
@@ -4398,5 +6014,88 @@ mod tests {
         // unclickable and invisible.
         let (_, base) = short_path("some/dir/");
         assert!(base.is_empty(), "documents current behaviour: {base:?}");
+    }
+
+    /// Pressing Alt then 9 must capture `Alt+Num9`, not `AltLeft`.
+    ///
+    /// The modifier's own key event arrives first — in an earlier frame, on
+    /// real hardware — and the capture used to end on it, so every chord
+    /// rebind saved the bare modifier. Found live on Ubuntu.
+    #[test]
+    fn a_chord_capture_waits_for_the_real_key() {
+        use super::captured_binding;
+        let alt_down = egui::Event::Key {
+            key: egui::Key::AltLeft,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        };
+        // The modifier press alone must capture nothing…
+        assert_eq!(captured_binding(&[alt_down.clone()]), None);
+        // …and the chord lands when the real key arrives.
+        let nine = egui::Event::Key {
+            key: egui::Key::Num9,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        };
+        let got = captured_binding(&[alt_down, nine]).expect("chord captured");
+        assert_eq!(got.0, "Alt+9");
+    }
+
+    /// A click on a keymap row's binding button must reach the *button*.
+    ///
+    /// The row used to lay a click-sensing widget over its whole width after
+    /// its children, and egui resolves a tied hit to the last-registered
+    /// widget — so the row ate the button's clicks and rebinding by mouse
+    /// never worked, on any platform. This drives a real click through egui's
+    /// actual hit-testing, headlessly, so the overlap cannot come back.
+    #[test]
+    fn a_click_on_the_binding_button_reaches_the_button_not_the_row() {
+        let ctx = egui::Context::default();
+        // Inside the 140×20 binding button: margins are 6/3, button is the
+        // row's first child.
+        let inside_button = egui::pos2(40.0, 14.0);
+
+        let mut last = (false, false); // (binding_clicked, row_clicked)
+        let mut run = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let hit = keymap_row(ui, crate::keymap::Action::Snooze, "S", false, false, false);
+                last = (hit.binding_clicked, hit.row_clicked);
+            });
+        };
+
+        run(vec![egui::Event::PointerMoved(inside_button)]);
+        run(vec![egui::Event::PointerButton {
+            pos: inside_button,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        run(vec![egui::Event::PointerButton {
+            pos: inside_button,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        assert!(
+            last.0,
+            "the binding button never saw the click — something is covering it"
+        );
+        assert!(
+            !last.1,
+            "the row also claimed the click, so the cursor would jump instead of rebinding"
+        );
     }
 }

@@ -45,6 +45,45 @@ pub const PURPLE: Color32 = Color32::from_rgb(0x9A, 0x6F, 0xD0);
 pub const ADD_BG: Color32 = Color32::from_rgb(0x14, 0x3A, 0x21);
 pub const DEL_BG: Color32 = Color32::from_rgb(0x45, 0x1A, 0x1D);
 
+/// The badge colours a user label can land on. `R-B26`.
+///
+/// Deliberately none of the semantic colours: a label must not be mistakable
+/// for a state (`RED` = waiting, `AMBER` = needs you), so these hues sit
+/// between them — all dark enough to carry the badge's white text.
+const LABEL_COLORS: [Color32; 8] = [
+    Color32::from_rgb(0x2E, 0x8B, 0x8B), // teal
+    Color32::from_rgb(0x5B, 0x6A, 0xC4), // indigo
+    Color32::from_rgb(0xB0, 0x4E, 0x8E), // magenta
+    Color32::from_rgb(0x6E, 0x7F, 0x2A), // olive
+    Color32::from_rgb(0x9E, 0x63, 0x38), // sienna
+    Color32::from_rgb(0x4A, 0x7F, 0xB5), // slate blue
+    Color32::from_rgb(0x3E, 0x86, 0x4F), // forest
+    Color32::from_rgb(0x8E, 0x5B, 0xA6), // plum
+];
+
+/// A stable colour for a label: same text, same colour, on every card and
+/// across restarts — hashed, not stored, so there is nothing to persist or
+/// to pick. FNV-1a because it is three lines and this is not cryptography.
+pub fn label_color(label: &str) -> Color32 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in label.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    LABEL_COLORS[(h % LABEL_COLORS.len() as u64) as usize]
+}
+
+/// The one character a collapsed-queue chip wears: the first letter or digit,
+/// uppercased — "UNITY1" is `U`, "the risky one" is `T`. Punctuation is
+/// skipped so "~/scratch" does not become a `~` chip, and anything with no
+/// honest character at all gets `?` rather than a blank square.
+pub fn chip_char(name: &str) -> char {
+    name.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .unwrap_or('?')
+}
+
 /// Install the theme. Called once, at start-up.
 ///
 /// Everything here is a decision, not a default:
@@ -518,5 +557,32 @@ mod tests {
                 "{bad} renders now — it can go back into the icon list"
             );
         }
+    }
+
+    /// The whole contract of `label_color`: deterministic per text, always
+    /// from the palette, and not accidentally constant.
+    #[test]
+    fn label_colors_are_stable_and_from_the_palette() {
+        use super::{label_color, LABEL_COLORS};
+        assert_eq!(label_color("risky"), label_color("risky"));
+        assert!(LABEL_COLORS.contains(&label_color("anything at all")));
+        let distinct: std::collections::HashSet<_> = ["a", "b", "c", "d", "e", "f"]
+            .iter()
+            .map(|l| label_color(l).to_array())
+            .collect();
+        assert!(distinct.len() > 1, "every label hashed to one colour");
+    }
+
+    /// The examples from the ask, plus the edges: leading punctuation is
+    /// skipped, lowercase is raised, and nothing yields an empty chip.
+    #[test]
+    fn chip_chars_are_the_first_honest_letter() {
+        use super::chip_char;
+        assert_eq!(chip_char("UNITY1"), 'U');
+        assert_eq!(chip_char("the risky one"), 'T');
+        assert_eq!(chip_char("~/scratch"), 'S');
+        assert_eq!(chip_char("42-experiments"), '4');
+        assert_eq!(chip_char("—"), '?');
+        assert_eq!(chip_char(""), '?');
     }
 }

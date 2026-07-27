@@ -21,7 +21,10 @@ async fn boot(name: &str) -> Harness {
     std::fs::create_dir_all(&dir).unwrap();
 
     let store = Store::open(&dir.join("test.db")).unwrap();
-    let state = AppState::new(store).unwrap();
+    // An empty claude home of the test's own. `AppState::new` would watch the
+    // real `~/.claude`, which made these tests a function of the developer's
+    // machine — a 139 MB history turns Rescan's first scan into a timeout.
+    let state = AppState::with_home(store, dir.join("claude")).unwrap();
     let app = api::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

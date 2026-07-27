@@ -744,6 +744,163 @@ impl AppState {
         })
     }
 
+    // -----------------------------------------------------------------------
+    // The file explorer (R-B24) — read-only, permanently
+    // -----------------------------------------------------------------------
+
+    /// The directory the explorer is scoped to: the repo when the session is in
+    /// one, the cwd otherwise.
+    async fn session_root(&self, id: &str) -> Result<PathBuf> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no such session"))?;
+        let root = session.repo_root.unwrap_or(session.cwd);
+        if root.is_empty() {
+            anyhow::bail!("that session has no working directory");
+        }
+        Ok(PathBuf::from(root))
+    }
+
+    /// One directory of the session's worktree, dirs first then files.
+    ///
+    /// `rel` is relative to the session root; empty means the root itself.
+    pub async fn list_dir(&self, id: &str, rel: &str) -> Result<Vec<mogeung_core::wire::DirEntry>> {
+        let root = self.session_root(id).await?;
+        let dir = resolve_inside(&root, rel)?;
+        let mut entries = Vec::new();
+        for e in std::fs::read_dir(&dir)? {
+            let e = e?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            // The one directory nobody reviews by browsing, and the biggest.
+            if name == ".git" {
+                continue;
+            }
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            entries.push(mogeung_core::wire::DirEntry { name, is_dir });
+        }
+        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+        Ok(entries)
+    }
+
+    /// One worktree file, capped rather than unbounded — the R-A5 rule applied
+    /// to worktrees. Returns the text and whether it was cut short.
+    pub async fn read_file(&self, id: &str, rel: &str) -> Result<(String, bool)> {
+        /// Past this a "file viewer" is really a memory test for the renderer.
+        const CAP: usize = 256 * 1024;
+        let root = self.session_root(id).await?;
+        let path = resolve_inside(&root, rel)?;
+        let bytes = std::fs::read(&path)?;
+        // A NUL this early means binary; sending it would render garbage and
+        // pretend it is the file.
+        if bytes.iter().take(8192).any(|b| *b == 0) {
+            anyhow::bail!("{rel} is a binary file");
+        }
+        let truncated = bytes.len() > CAP;
+        let head = &bytes[..bytes.len().min(CAP)];
+        Ok((String::from_utf8_lossy(head).into_owned(), truncated))
+    }
+
+    /// Every file of the worktree in one flat list, for go-to-file. `R-B25`.
+    ///
+    /// Runs on the blocking pool: a monorepo walk is real work, and the event
+    /// loop must keep serving the other clients while it happens.
+    pub async fn list_tree(&self, id: &str) -> Result<(Vec<String>, bool)> {
+        let root = self.session_root(id).await?;
+        let root = root
+            .canonicalize()
+            .map_err(|e| anyhow!("cannot open the session's directory: {e}"))?;
+        tokio::task::spawn_blocking(move || Ok(walk_tree(&root, TREE_CAP))).await?
+    }
+
+    /// Matching lines for a literal query across the worktree. `R-B25`.
+    ///
+    /// Same blocking-pool rule as [`Self::list_tree`], and more deserved: this
+    /// one reads file contents, not just names.
+    pub async fn search_content(
+        &self,
+        id: &str,
+        query: &str,
+    ) -> Result<(Vec<mogeung_core::wire::ContentMatch>, bool)> {
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            anyhow::bail!("nothing to search for");
+        }
+        let root = self.session_root(id).await?;
+        let root = root
+            .canonicalize()
+            .map_err(|e| anyhow!("cannot open the session's directory: {e}"))?;
+        tokio::task::spawn_blocking(move || Ok(search_tree(&root, &query, MATCH_CAP))).await?
+    }
+
+    // -----------------------------------------------------------------------
+    // The Git view (R-D10) — read-only, permanently
+    // -----------------------------------------------------------------------
+
+    /// The session's repo root, refusing sessions that are not in one — the
+    /// pane says "not a git repository" instead of erroring elsewhere.
+    async fn git_root(&self, id: &str) -> Result<PathBuf> {
+        let root = self.session_root(id).await?;
+        if !crate::git::is_repo(&root) {
+            anyhow::bail!("that session is not in a git repository");
+        }
+        Ok(root)
+    }
+
+    pub async fn git_log(
+        &self,
+        id: &str,
+        skip: u32,
+        limit: u32,
+    ) -> Result<(Vec<mogeung_core::wire::CommitInfo>, bool)> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::log_page(&root, skip, limit)).await?
+    }
+
+    pub async fn git_show(
+        &self,
+        id: &str,
+        sha: &str,
+    ) -> Result<Vec<mogeung_core::change::FileChange>> {
+        let root = self.git_root(id).await?;
+        let sha = sha.to_string();
+        tokio::task::spawn_blocking(move || crate::git::show_commit(&root, &sha)).await?
+    }
+
+    pub async fn git_status(&self, id: &str) -> Result<Vec<mogeung_core::wire::StatusEntry>> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::status(&root)).await?
+    }
+
+    pub async fn git_diff_file(
+        &self,
+        id: &str,
+        rel: &str,
+    ) -> Result<Vec<mogeung_core::change::FileChange>> {
+        let root = self.git_root(id).await?;
+        // Containment first: paths on this command are worktree identifiers,
+        // same guard as the explorer's. (A deleted file cannot canonicalise;
+        // its diff still matters, so fall back to a lexical `..` check.)
+        if resolve_inside(&root, rel).is_err()
+            && (Path::new(rel).is_absolute() || rel.split('/').any(|p| p == ".."))
+        {
+            anyhow::bail!("{rel} is not a path inside the session");
+        }
+        let rel = rel.to_string();
+        tokio::task::spawn_blocking(move || crate::git::diff_file(&root, &rel)).await?
+    }
+
+    pub async fn git_blame(
+        &self,
+        id: &str,
+        rel: &str,
+    ) -> Result<(Vec<mogeung_core::wire::BlameLine>, bool)> {
+        let root = self.git_root(id).await?;
+        resolve_inside(&root, rel)?;
+        let rel = rel.to_string();
+        tokio::task::spawn_blocking(move || crate::git::blame(&root, &rel)).await?
+    }
+
     pub async fn set_hunk_reviewed(&self, id: &str, anchor: &str, reviewed: bool) {
         let _ = self.store.set_reviewed(id, anchor, reviewed);
         self.recompute_change(id).await;
@@ -1345,6 +1502,260 @@ mod terminal_tests {
             resolved.starts_with(&name),
             "resolved to {resolved}, which is not the pane we created ({name})"
         );
+    }
+}
+
+/// Resolve `rel` against `root` and refuse anything that escapes it.
+///
+/// The daemon is unauthenticated on localhost, so this guard is what keeps
+/// "browse the session's worktree" from being "read any file on the machine by
+/// asking politely". Canonicalising *both* sides is the load-bearing part —
+/// symlinked roots (`/tmp` on macOS) would otherwise fail the prefix test for
+/// honest paths, and a `..` would pass it.
+fn resolve_inside(root: &Path, rel: &str) -> Result<PathBuf> {
+    if Path::new(rel).is_absolute() {
+        anyhow::bail!("{rel} is not a path inside the session");
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|e| anyhow!("cannot open the session's directory: {e}"))?;
+    let joined = if rel.is_empty() { root.clone() } else { root.join(rel) };
+    let full = joined
+        .canonicalize()
+        .map_err(|e| anyhow!("cannot open {rel}: {e}"))?;
+    if !full.starts_with(&root) {
+        anyhow::bail!("{rel} is not a path inside the session");
+    }
+    Ok(full)
+}
+
+/// The most files `list_tree` will name. Past this, go-to-file over a prefix
+/// of the tree beats an answer too big to send.
+const TREE_CAP: usize = 20_000;
+/// The most matches one search will return.
+const MATCH_CAP: usize = 500;
+/// Files bigger than this are skipped by search — worktree source, not blobs.
+const SEARCH_FILE_CAP: u64 = 1024 * 1024;
+/// A match line is clipped here; a minified bundle is not a search result.
+const MATCH_LINE_CAP: usize = 240;
+
+/// The walk both `list_tree` and `search_content` share: hidden files
+/// included (the tree pane lists them, so search must see them), `.git`
+/// excluded always, gitignore rules applied when the root is a repo — which is
+/// the `ignore` crate's default behaviour, not something we reimplement.
+fn worktree_walk(root: &Path) -> ignore::Walk {
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build()
+}
+
+/// `path` as the wire spells it: relative to `root`, `/`-joined.
+fn wire_path(root: &Path, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(root).ok()?;
+    let parts: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect();
+    Some(parts.join("/"))
+}
+
+fn walk_tree(root: &Path, cap: usize) -> (Vec<String>, bool) {
+    let mut paths = Vec::new();
+    let mut truncated = false;
+    for entry in worktree_walk(root) {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let Some(rel) = wire_path(root, entry.path()) else { continue };
+        if paths.len() >= cap {
+            truncated = true;
+            break;
+        }
+        paths.push(rel);
+    }
+    paths.sort();
+    (paths, truncated)
+}
+
+/// Clip to `cap` bytes without splitting a character.
+fn clip_line(line: &str, cap: usize) -> String {
+    if line.len() <= cap {
+        return line.to_string();
+    }
+    let mut end = cap;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
+
+/// A literal substring scan, smart-cased. Binary files (NUL in the head) and
+/// oversized files are skipped silently — degrade, never refuse, because a
+/// search that errors on the one unreadable file in the tree answers nothing.
+fn search_tree(
+    root: &Path,
+    query: &str,
+    cap: usize,
+) -> (Vec<mogeung_core::wire::ContentMatch>, bool) {
+    let case_sensitive = query.chars().any(|c| c.is_uppercase());
+    let needle = if case_sensitive { query.to_string() } else { query.to_lowercase() };
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    'walk: for entry in worktree_walk(root) {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        if entry.metadata().map(|m| m.len() > SEARCH_FILE_CAP).unwrap_or(true) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entry.path()) else { continue };
+        if bytes.iter().take(8192).any(|b| *b == 0) {
+            continue;
+        }
+        let Some(rel) = wire_path(root, entry.path()) else { continue };
+        let text = String::from_utf8_lossy(&bytes);
+        for (i, line) in text.lines().enumerate() {
+            let hit = if case_sensitive {
+                line.contains(&needle)
+            } else {
+                line.to_lowercase().contains(&needle)
+            };
+            if !hit {
+                continue;
+            }
+            if matches.len() >= cap {
+                truncated = true;
+                break 'walk;
+            }
+            matches.push(mogeung_core::wire::ContentMatch {
+                path: rel.clone(),
+                line: (i + 1) as u64,
+                text: clip_line(line, MATCH_LINE_CAP),
+            });
+        }
+    }
+    (matches, truncated)
+}
+
+#[cfg(test)]
+mod explorer_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        // Keyed by test name as well as pid: tests share a process and would
+        // otherwise race on one directory.
+        let dir = std::env::temp_dir().join(format!("mogeung-explorer-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
+        dir
+    }
+
+    /// The guard is the security boundary of R-B24: an unauthenticated client
+    /// must not be able to read outside the session root by construction.
+    #[test]
+    fn paths_that_escape_the_root_are_refused() {
+        let dir = scratch("escape");
+        assert!(resolve_inside(&dir, "src/lib.rs").is_ok());
+        assert!(resolve_inside(&dir, "").is_ok(), "empty means the root");
+        assert!(resolve_inside(&dir, "../").is_err(), ".. escapes");
+        assert!(resolve_inside(&dir, "src/../../etc").is_err(), "buried .. escapes");
+        assert!(resolve_inside(&dir, "/etc/passwd").is_err(), "absolute escapes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symlink pointing out of the tree is followed and then caught — the
+    /// canonical target is what gets the prefix test, not the link's name.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_tree_is_refused() {
+        let dir = scratch("symlink");
+        std::os::unix::fs::symlink("/etc", dir.join("escape")).unwrap();
+        assert!(resolve_inside(&dir, "escape").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A scratch worktree that is a git repo, so gitignore rules apply — the
+    /// `ignore` crate only honours them inside one (`require_git`).
+    fn repo_scratch(name: &str) -> PathBuf {
+        let dir = scratch(name);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "/target\n").unwrap();
+        std::fs::write(dir.join("target/junk.rs"), "generated\n").unwrap();
+        std::fs::write(dir.join(".hidden.toml"), "dot = true\n").unwrap();
+        dir
+    }
+
+    /// The go-to-file list must not drown in build output, must never name
+    /// `.git`, and must include honest dotfiles — they are in the tree pane,
+    /// so a search that cannot see them would disagree with it.
+    #[test]
+    fn the_tree_walk_honours_gitignore_and_skips_dot_git() {
+        let dir = repo_scratch("walk");
+        let (paths, truncated) = walk_tree(&dir, 100);
+        assert!(!truncated);
+        assert!(paths.contains(&"src/lib.rs".to_string()), "{paths:?}");
+        assert!(paths.contains(&".hidden.toml".to_string()), "dotfiles belong: {paths:?}");
+        assert!(paths.contains(&".gitignore".to_string()));
+        assert!(!paths.iter().any(|p| p.starts_with("target")), "ignored tree listed: {paths:?}");
+        assert!(!paths.iter().any(|p| p.starts_with(".git/")), ".git listed: {paths:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The cap is a statement, not a silent cut: `truncated` must say so.
+    #[test]
+    fn a_capped_walk_says_it_was_cut() {
+        let dir = scratch("cap");
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("f{i}.txt")), "x\n").unwrap();
+        }
+        let (paths, truncated) = walk_tree(&dir, 3);
+        assert_eq!(paths.len(), 3);
+        assert!(truncated, "cut the list without admitting it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Search is smart-cased, 1-based, and skips what it cannot honestly
+    /// search — binary and ignored files — without erroring the whole query.
+    #[test]
+    fn search_finds_lines_and_skips_binary_and_ignored() {
+        let dir = repo_scratch("search");
+        std::fs::write(dir.join("src/lib.rs"), "pub fn hi() {}\n// TODO: later\n").unwrap();
+        std::fs::write(dir.join("target/junk.rs"), "TODO in ignored land\n").unwrap();
+        std::fs::write(dir.join("blob.bin"), b"TODO\x00binary\n").unwrap();
+
+        let (m, truncated) = search_tree(&dir, "todo", MATCH_CAP);
+        assert!(!truncated);
+        assert_eq!(m.len(), 1, "expected one honest match: {m:?}");
+        assert_eq!(m[0].path, "src/lib.rs");
+        assert_eq!(m[0].line, 2, "line numbers are 1-based");
+        assert_eq!(m[0].text, "// TODO: later");
+
+        // An uppercase letter in the query flips to case-sensitive.
+        let (m, _) = search_tree(&dir, "Todo", MATCH_CAP);
+        assert!(m.is_empty(), "smart case failed: {m:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The match cap trips mid-file and still reports honestly.
+    #[test]
+    fn a_capped_search_says_it_was_cut() {
+        let dir = scratch("searchcap");
+        std::fs::write(dir.join("many.txt"), "hit\n".repeat(10)).unwrap();
+        let (m, truncated) = search_tree(&dir, "hit", 4);
+        assert_eq!(m.len(), 4);
+        assert!(truncated);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Clipping a long line must not split a multi-byte character.
+    #[test]
+    fn match_lines_are_clipped_on_char_boundaries() {
+        let long = format!("{}é tail", "x".repeat(MATCH_LINE_CAP - 1));
+        let clipped = clip_line(&long, MATCH_LINE_CAP);
+        assert!(clipped.ends_with('…'));
+        assert!(clipped.len() <= MATCH_LINE_CAP + '…'.len_utf8());
     }
 }
 

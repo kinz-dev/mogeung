@@ -1,7 +1,7 @@
 ---
 title: Reachable by keyboard
 status: shipped
-updated: 2026-07-26
+updated: 2026-07-27
 roadmap: [R-B21, R-B22, R-B23]
 depends_on: [A1, A13]
 ---
@@ -93,6 +93,32 @@ label and a scorer disagreeing, which is the failure that would make the
 palette quietly useless for one entry.
 
 ## Notes
+
+**Rebinding by mouse never worked, on any platform, and three separate
+defects hid behind one bug report.** The fatal one: each settings row laid a
+click-sensing widget over its whole width *after* its child buttons, and
+egui resolves a tied hit to the last-registered widget — so the row ate
+every click meant for the binding and reset buttons. It shipped unnoticed
+because the window was driven by keyboard during development, which is a
+lesson about testing the input path you did not build for yourself. The row
+click is now derived from "a click landed here and no button claimed it",
+and a headless egui test drives a real click through real hit-testing so
+the overlap cannot come back.
+
+**"Does anything have focus" was the wrong gate for the settings window's
+keys** (reported twice from Ubuntu, 2026-07-27, as "the keyboard stays with
+the main window"). The window stood down whenever *any* widget held egui
+focus — but the embedded terminal, the window's own search box, and whatever
+a click last landed on all count as "something", and each of those states
+left the window keyboard-dead while keys fell through to the main bindings.
+The gate now asks the question that matters — is the focused widget a text
+box (it keeps a `TextEdit` state) — and the search box itself keeps the list
+drivable with arrows and Enter, the queue filter's exact contract. Opening
+the window also takes the keyboard back from the terminal: editing bindings
+and typing into the agent are mutually exclusive intents. A second, earlier
+defect in the same window: the cursor row was scrolled into view every frame,
+which pinned the list against mouse scrolling; it now scrolls only on
+keyboard moves.
 
 **Two of the scorer's own tests failed on the first run, and both were worth
 having.** The word-start bonus was larger than the contiguity bonus, so typing

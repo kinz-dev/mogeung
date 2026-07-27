@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-25
+updated: 2026-07-27
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -29,6 +29,15 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchReviewDebt` | How much of a repo's agent output nobody has read |
 | `FetchBlastRadius` | What else references the symbols a file's diff changed |
 | `FocusTerminal` | Bring a live session's Terminal tab to the front |
+| `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`) |
+| `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
+| `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
+| `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
+| `GitLog` | A page of the session repo's commit log (`R-D10`) |
+| `GitShow` | One commit's diff, in `Change`'s file/hunk shapes; the sha is validated as hex before git sees it |
+| `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished |
+| `GitDiffFile` | One uncommitted file against `HEAD` (`/dev/null` when untracked) |
+| `GitBlame` | Per-line authorship of a worktree file, capped at 20k lines |
 
 **Note what is absent:** nothing starts, steers or stops an agent
 ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
@@ -41,7 +50,28 @@ client builds the text and puts it on your clipboard, and you paste it
 ## Events (`ServerMsg`)
 
 `Snapshot` · `SessionUpdated` · `SessionRemoved` · `Events` · `Queue` ·
-`ChangeUpdated` · `Health` · `ReviewDebt` · `BlastRadius` · `Error`
+`ChangeUpdated` · `Health` · `ReviewDebt` · `BlastRadius` · `DirListing` ·
+`FileContent` · `TreeListing` · `ContentMatches` · `GitCommits` ·
+`GitCommitDiff` · `GitLocalChanges` · `GitFileDiff` · `GitAnnotation` ·
+`Error`
+
+The `Git…` family (`R-D10`) is **read-only by protocol**: there is no
+staging, commit, checkout or any other verb that mutates a repository, and
+none may be added without an ADR — the observer rule, one layer down.
+
+`ListDir` and `FetchFile` paths are relative to the session root (repo root
+when known, else cwd); the daemon canonicalises and refuses anything that
+escapes it, symlinks included. `FileContent` is capped at 256 KiB with a
+`truncated` flag, and binary files are refused — the explorer is a viewer, and
+the daemon offers nothing that writes.
+
+`ListTree` and `SearchContent` walk with the same containment, `.git` always
+excluded and gitignore honoured when the root is a repo. Both run on the
+blocking pool so a monorepo walk cannot wedge the event loop. Search skips
+binary and oversized files *silently* — a search that errors on the one
+unreadable file answers nothing. `ContentMatches` echoes the query so a client
+can drop the answer to a search the user has since replaced — the stray-session
+rule, applied to superseded queries.
 
 `Health` is pushed after **every** scan, unsolicited. A client should never have
 to ask whether the board it is showing is complete — see
@@ -69,6 +99,15 @@ GET  /api/queue
 GET  /api/repos
 GET  /api/repos/{repo}/debt
 GET  /api/sessions/{id}/blast?path=...
+GET  /api/sessions/{id}/ls?path=...    # explorer (R-B24); path optional
+GET  /api/sessions/{id}/file?path=...
+GET  /api/sessions/{id}/tree           # every file path (R-B25)
+GET  /api/sessions/{id}/search?q=...   # literal content search (R-B25)
+GET  /api/sessions/{id}/git/log?skip=N&limit=N   # R-D10, all read-only
+GET  /api/sessions/{id}/git/show?sha=...
+GET  /api/sessions/{id}/git/status
+GET  /api/sessions/{id}/git/diff?path=...
+GET  /api/sessions/{id}/git/blame?path=...
 GET  /api/sessions
 GET  /api/sessions/{id}
 GET  /api/sessions/{id}/events?since=N

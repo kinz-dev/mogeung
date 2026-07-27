@@ -12,7 +12,9 @@
 mod app;
 mod daemon;
 mod diff;
+mod explorer;
 mod filter;
+mod gitview;
 mod hotkey;
 mod keymap;
 mod layout;

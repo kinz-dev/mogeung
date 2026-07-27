@@ -48,14 +48,21 @@ pub enum Action {
     TabInfo,
     TabDebt,
     TabTerminal,
+    /// The session's worktree, read-only. `R-B24`.
+    TabExplorer,
+    /// Commits, uncommitted changes and diffs of the session's repo. `R-D10`.
+    TabGit,
     NextTab,
     PrevTab,
-    /// Hand the keyboard back to mogeung from the embedded terminal.
+    /// Toggle whether the keyboard belongs to the embedded terminal.
     ///
-    /// Needs its own action because the obvious key cannot be used: Escape
-    /// belongs to Claude Code, where it interrupts a turn. A binding that stole
-    /// it would make the agent uninterruptible from the pane that exists to
-    /// interrupt it.
+    /// One chord both ways — into the agent and back out — because reaching
+    /// the terminal should not need a mouse when leaving it does not. Needs
+    /// its own action because the obvious key cannot be used: Escape belongs
+    /// to Claude Code, where it interrupts a turn. A binding that stole it
+    /// would make the agent uninterruptible from the pane that exists to
+    /// interrupt it. (The name says "leave" because renaming the variant
+    /// would break every saved keymap that mentions `leave_terminal`.)
     LeaveTerminal,
     // -- scrolling the content pane
     PageDown,
@@ -75,10 +82,32 @@ pub enum Action {
     ClearFilter,
     HideSession,
     PinSession,
+    /// Name the session yourself; the badge and `label:` filter follow.
+    /// `R-B26`.
+    LabelSession,
     // -- review
     ToggleRead,
     NextUnread,
     FlagHunk,
+    // -- explorer (`R-B25`)
+    /// Find a worktree file by name, fuzzily, in the palette.
+    GoToFile,
+    /// Find lines across the worktree, in the palette.
+    SearchInFiles,
+    /// The open explorer files, most recently used first.
+    RecentFiles,
+    NextFileTab,
+    PrevFileTab,
+    CloseFileTab,
+    PinFileTab,
+    /// Find within the file open in the Explorer's viewer. Client-side.
+    FindInFile,
+    /// Send the active file to the other side of the editor split.
+    MoveFileTabSplit,
+    /// Per-line authorship in the Editor's gutter. `R-D10`.
+    ToggleAnnotate,
+    /// Open the file selected in the Changes tab in the Explorer, revealed.
+    OpenInExplorer,
     // -- windows
     /// Every action, by name, without knowing its key first.
     ///
@@ -107,6 +136,8 @@ impl Action {
         Action::TabInfo,
         Action::TabDebt,
         Action::TabTerminal,
+        Action::TabExplorer,
+        Action::TabGit,
         Action::NextTab,
         Action::PrevTab,
         Action::LeaveTerminal,
@@ -125,9 +156,21 @@ impl Action {
         Action::ClearFilter,
         Action::HideSession,
         Action::PinSession,
+        Action::LabelSession,
         Action::ToggleRead,
         Action::NextUnread,
         Action::FlagHunk,
+        Action::GoToFile,
+        Action::SearchInFiles,
+        Action::RecentFiles,
+        Action::NextFileTab,
+        Action::PrevFileTab,
+        Action::CloseFileTab,
+        Action::PinFileTab,
+        Action::FindInFile,
+        Action::MoveFileTabSplit,
+        Action::ToggleAnnotate,
+        Action::OpenInExplorer,
         Action::CommandPalette,
         Action::ResetLayout,
         Action::ToggleAmbient,
@@ -147,6 +190,8 @@ impl Action {
             | Action::TabInfo
             | Action::TabDebt
             | Action::TabTerminal
+            | Action::TabExplorer
+            | Action::TabGit
             | Action::NextTab
             | Action::PrevTab
             | Action::LeaveTerminal => "Tabs",
@@ -161,8 +206,20 @@ impl Action {
             | Action::FilterFocus
             | Action::ClearFilter
             | Action::HideSession
-            | Action::PinSession => "Queue",
+            | Action::PinSession
+            | Action::LabelSession => "Queue",
             Action::ToggleRead | Action::NextUnread | Action::FlagHunk => "Review",
+            Action::GoToFile
+            | Action::SearchInFiles
+            | Action::RecentFiles
+            | Action::NextFileTab
+            | Action::PrevFileTab
+            | Action::CloseFileTab
+            | Action::PinFileTab
+            | Action::FindInFile
+            | Action::MoveFileTabSplit
+            | Action::ToggleAnnotate
+            | Action::OpenInExplorer => "Editor",
             Action::CommandPalette
             | Action::ResetLayout
             | Action::ToggleAmbient
@@ -183,9 +240,11 @@ impl Action {
             Action::TabInfo => "Show the Info tab",
             Action::TabDebt => "Show the Debt tab",
             Action::TabTerminal => "Show the Terminal tab",
+            Action::TabExplorer => "Show the Editor tab — browse and read the session's files",
+            Action::TabGit => "Show the Git tab — commits, changes and diffs",
             Action::NextTab => "Next tab",
             Action::PrevTab => "Previous tab",
-            Action::LeaveTerminal => "Give the keyboard back to mogeung",
+            Action::LeaveTerminal => "Focus the terminal, or give the keyboard back",
             Action::PageDown => "Scroll the transcript or diff down a page",
             Action::PageUp => "Scroll the transcript or diff up a page",
             Action::ScrollTop => "Jump to the top",
@@ -201,9 +260,21 @@ impl Action {
             Action::ClearFilter => "Clear the filter / close overlays",
             Action::HideSession => "Hide the session from the queue (reversible)",
             Action::PinSession => "Pin or unpin the session at the top",
+            Action::LabelSession => "Label the session — name it yourself",
             Action::ToggleRead => "Mark the selected hunk read or unread",
             Action::NextUnread => "Jump to the next unread hunk",
             Action::FlagHunk => "Flag the selected hunk for a follow-up prompt",
+            Action::GoToFile => "Go to file — find a worktree file by name",
+            Action::SearchInFiles => "Search in files — find lines across the worktree",
+            Action::RecentFiles => "Recent files — the open tabs, latest first",
+            Action::NextFileTab => "Next open file in the Editor",
+            Action::PrevFileTab => "Previous open file in the Editor",
+            Action::CloseFileTab => "Close the active Editor file",
+            Action::PinFileTab => "Pin or unpin the active Editor file",
+            Action::FindInFile => "Find in the open file",
+            Action::MoveFileTabSplit => "Open the file on the other side, side by side",
+            Action::ToggleAnnotate => "Toggle git blame in the Editor's gutter",
+            Action::OpenInExplorer => "Open the selected changed file in the Editor",
             Action::CommandPalette => "Command palette — run anything by name",
             Action::ResetLayout => "Reset the pane layout",
             Action::ToggleAmbient => "Show or hide the ambient board",
@@ -212,6 +283,27 @@ impl Action {
             Action::Rescan => "Rescan sessions now",
         }
     }
+}
+
+/// A key that is itself a modifier, and therefore never a binding on its own.
+///
+/// egui 0.35 began reporting modifier presses as `Key`s in their own right
+/// (`AltLeft`, `SuperRight`, …). Two things must not happen as a result: the
+/// rebind capture must not end on one (or every chord saves as its bare
+/// modifier — found live), and a stored binding naming one must not load as
+/// valid (or a file polluted by that capture bug fires actions on a bare Alt).
+pub fn is_modifier_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::ShiftLeft
+            | Key::ShiftRight
+            | Key::ControlLeft
+            | Key::ControlRight
+            | Key::AltLeft
+            | Key::AltRight
+            | Key::SuperLeft
+            | Key::SuperRight
+    )
 }
 
 /// A key plus modifiers, stored as text so the file stays readable and does not
@@ -272,7 +364,11 @@ impl Binding {
                     if key.is_some() {
                         return None; // two keys in one chord
                     }
-                    key = Some(Key::from_name(token)?);
+                    let k = Key::from_name(token)?;
+                    if is_modifier_key(k) {
+                        return None; // "AltLeft" is a modifier, not a binding
+                    }
+                    key = Some(k);
                 }
             }
         }
@@ -324,6 +420,12 @@ impl Default for Keymap {
         set(Action::TabInfo, &["I"]);
         set(Action::TabDebt, &["D"]);
         set(Action::TabTerminal, &["E"]);
+        // X as in eXplorer, kept although the pane now displays as "Editor":
+        // `E` belongs to the Terminal tab, and a binding that moves under
+        // trained hands costs more than a mnemonic that lags a rename.
+        set(Action::TabExplorer, &["X"]);
+        // V as in VCS — g means "first" and G is taken with it.
+        set(Action::TabGit, &["V"]);
         set(Action::NextTab, &["Ctrl+Tab"]);
         set(Action::PrevTab, &["Ctrl+Shift+Tab"]);
 
@@ -349,10 +451,28 @@ impl Default for Keymap {
         set(Action::ClearFilter, &["Escape"]);
         set(Action::HideSession, &["H"]);
         set(Action::PinSession, &["P"]);
+        // L as in label, and the last honest letter of it still free.
+        set(Action::LabelSession, &["L"]);
 
         set(Action::ToggleRead, &["Space"]);
         set(Action::NextUnread, &["N"]);
         set(Action::FlagHunk, &["F"]);
+
+        // The chords every editor taught: Ctrl+P finds a file, Ctrl+Shift+F
+        // searches contents. Both with Cmd twins for macOS hands.
+        set(Action::GoToFile, &["Ctrl+P", "Cmd+P"]);
+        set(Action::SearchInFiles, &["Ctrl+Shift+F", "Cmd+Shift+F"]);
+        set(Action::RecentFiles, &["Ctrl+E", "Cmd+E"]);
+        // Alt+arrows walk the file tabs; Ctrl+Tab already walks the panes.
+        set(Action::NextFileTab, &["Alt+Right"]);
+        set(Action::PrevFileTab, &["Alt+Left"]);
+        set(Action::CloseFileTab, &["Ctrl+W"]);
+        set(Action::PinFileTab, &["Alt+P"]);
+        set(Action::FindInFile, &["Ctrl+F", "Cmd+F"]);
+        // S as in split/side. Bare S is snooze; Alt+S was free.
+        set(Action::MoveFileTabSplit, &["Alt+S"]);
+        set(Action::ToggleAnnotate, &["Alt+B"]);
+        set(Action::OpenInExplorer, &["Alt+X"]);
 
         // Two bindings on purpose: `Cmd+K` is the palette everywhere on this
         // platform, and `Ctrl+K` is the same reflex for anyone arriving from
@@ -616,6 +736,19 @@ mod tests {
         let bad: Vec<String> = km.invalid().into_iter().map(|(_, b)| b.0).collect();
         assert!(bad.contains(&"Ctl+J".to_string()), "got {bad:?}");
         assert!(bad.contains(&"Cmd+Frobnicate".to_string()), "got {bad:?}");
+    }
+
+    /// A modifier on its own is not a chord. The capture bug that motivated
+    /// this saved `AltLeft` the instant Alt went down; a file holding one
+    /// must load as *invalid* (loud) rather than fire on a bare Alt press.
+    #[test]
+    fn a_bare_modifier_never_parses_as_a_binding() {
+        for bad in ["AltLeft", "ControlRight", "ShiftLeft", "SuperRight", "Ctrl+AltLeft"] {
+            assert!(
+                !Binding(bad.to_string()).is_valid(),
+                "{bad:?} should not be a valid binding"
+            );
+        }
     }
 
     /// The specific shapes that used to slip through.

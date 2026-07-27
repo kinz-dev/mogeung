@@ -19,13 +19,19 @@ pub struct Query {
     pub branch: Option<String>,
     /// Matches against files the session has touched.
     pub file: Option<String>,
+    /// Matches against the label the user gave the session (`R-B26`).
+    pub label: Option<String>,
     /// Everything without a field prefix, joined.
     pub text: String,
 }
 
 impl Query {
     pub fn is_empty(&self) -> bool {
-        self.repo.is_none() && self.branch.is_none() && self.file.is_none() && self.text.is_empty()
+        self.repo.is_none()
+            && self.branch.is_none()
+            && self.file.is_none()
+            && self.label.is_none()
+            && self.text.is_empty()
     }
 }
 
@@ -45,6 +51,7 @@ pub fn parse(input: &str) -> Query {
                 "repo" | "r" => q.repo = Some(value.to_string()),
                 "branch" | "b" => q.branch = Some(value.to_string()),
                 "file" | "path" | "f" => q.file = Some(value.to_string()),
+                "label" | "l" => q.label = Some(value.to_string()),
                 _ => text.push(lower),
             },
             _ => text.push(lower),
@@ -55,7 +62,10 @@ pub fn parse(input: &str) -> Query {
 }
 
 /// Does this session satisfy every part of the query?
-pub fn matches(q: &Query, s: &Session) -> bool {
+///
+/// `label` comes in from outside because a `Session` does not carry one — the
+/// user's label is client state (`prefs.rs`), and this module stays pure.
+pub fn matches(q: &Query, s: &Session, label: Option<&str>) -> bool {
     if let Some(repo) = &q.repo {
         if !s.repo_name().to_lowercase().contains(repo)
             && !s.cwd.to_lowercase().contains(repo)
@@ -78,13 +88,23 @@ pub fn matches(q: &Query, s: &Session) -> bool {
             return false;
         }
     }
+    if let Some(wanted) = &q.label {
+        match label {
+            Some(l) if l.to_lowercase().contains(wanted) => {}
+            // A label query excludes the unlabelled: `label:` means "among
+            // the ones I named", not "maybe this one too".
+            _ => return false,
+        }
+    }
     if q.text.is_empty() {
         return true;
     }
-    // Everything you might plausibly remember a session by.
+    // Everything you might plausibly remember a session by — the name the
+    // user gave it most of all.
     let hay = format!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {}",
         s.label(),
+        label.unwrap_or_default(),
         s.repo_name(),
         s.cwd,
         s.git_branch.clone().unwrap_or_default(),
@@ -184,8 +204,8 @@ mod tests {
         let a = session("fix retry", "mogeung", "main", &[]);
         let b = session("fix retry", "other", "main", &[]);
         let q = parse("repo:mogeung retry");
-        assert!(matches(&q, &a));
-        assert!(!matches(&q, &b), "repo must actually narrow");
+        assert!(matches(&q, &a, None));
+        assert!(!matches(&q, &b, None), "repo must actually narrow");
     }
 
     /// The case free text cannot answer: which session touched this file?
@@ -194,30 +214,53 @@ mod tests {
         let a = session("something", "mogeung", "main", &["/work/mogeung/src/state.rs"]);
         let b = session("something", "mogeung", "main", &["/work/mogeung/src/git.rs"]);
         let q = parse("file:state.rs");
-        assert!(matches(&q, &a));
-        assert!(!matches(&q, &b));
+        assert!(matches(&q, &a, None));
+        assert!(!matches(&q, &b, None));
     }
 
     #[test]
     fn every_word_must_match_so_typing_more_narrows() {
         let s = session("fix the retry loop", "mogeung", "main", &[]);
-        assert!(matches(&parse("retry"), &s));
-        assert!(matches(&parse("retry loop"), &s));
-        assert!(!matches(&parse("retry banana"), &s));
+        assert!(matches(&parse("retry"), &s, None));
+        assert!(matches(&parse("retry loop"), &s, None));
+        assert!(!matches(&parse("retry banana"), &s, None));
     }
 
     #[test]
     fn an_empty_query_matches_everything() {
         let s = session("anything", "repo", "main", &[]);
         assert!(parse("").is_empty());
-        assert!(matches(&parse(""), &s));
-        assert!(matches(&parse("   "), &s));
+        assert!(matches(&parse(""), &s, None));
+        assert!(matches(&parse("   "), &s, None));
     }
 
     #[test]
     fn branch_filter_skips_sessions_with_no_branch() {
         let mut s = session("x", "repo", "main", &[]);
         s.git_branch = None;
-        assert!(!matches(&parse("branch:main"), &s));
+        assert!(!matches(&parse("branch:main"), &s, None));
+    }
+
+    /// The question labels exist to answer: "the risky one", by name. `R-B26`.
+    #[test]
+    fn label_filter_narrows_and_excludes_the_unlabelled() {
+        let s = session("something", "mogeung", "main", &[]);
+        assert!(matches(&parse("label:risky"), &s, Some("the risky one")));
+        assert!(matches(&parse("l:risky"), &s, Some("the risky one")), "l: is the alias");
+        assert!(matches(&parse("label:RISKY"), &s, Some("The Risky One")), "case-blind");
+        assert!(!matches(&parse("label:safe"), &s, Some("the risky one")));
+        assert!(
+            !matches(&parse("label:risky"), &s, None),
+            "label: must exclude sessions never labelled"
+        );
+    }
+
+    /// Plain typing must find a named session too — the label is the word the
+    /// user is most likely to remember, so it cannot need its own prefix.
+    #[test]
+    fn free_text_matches_the_label() {
+        let s = session("something", "mogeung", "main", &[]);
+        assert!(matches(&parse("risky"), &s, Some("the risky one")));
+        assert!(!matches(&parse("risky"), &s, None));
     }
 }
