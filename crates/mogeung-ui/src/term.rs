@@ -124,11 +124,14 @@ impl Term {
     /// detect the click that takes focus: the response of an enclosing
     /// `allocate_ui` senses hover only, so testing `clicked()` on it silently
     /// never fires and the pane can never be typed into.
-    pub fn ui(&mut self, ui: &mut egui::Ui, focused: bool) -> egui::Response {
+    pub fn ui(&mut self, ui: &mut egui::Ui, focused: bool, font_px: f32) -> egui::Response {
         self.wheel_scrolls_tmux_history(ui);
         let view = TerminalView::new(ui, &mut self.backend)
             .set_focus(focused)
             .set_size(ui.available_size())
+            .set_font(egui_term::TerminalFont::new(egui_term::FontSettings {
+                font_type: egui::FontId::monospace(font_px),
+            }))
             .add_bindings(shift_enter_newline());
         let response = ui.add(view);
 
@@ -189,7 +192,14 @@ impl Term {
                 return;
             }
             i.events.retain(|e| match e {
-                egui::Event::MouseWheel { unit, delta, .. } => {
+                // Ctrl+wheel is the pane-zoom gesture, not scrollback —
+                // leave it alone or zooming over the terminal scrolls tmux.
+                egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                    ..
+                } if !modifiers.ctrl && !modifiers.command => {
                     lines += wheel_lines(*unit, delta.y, row, &mut self.scroll_pixels);
                     false // consumed — or it becomes arrow keys downstream
                 }

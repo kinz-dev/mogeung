@@ -11,6 +11,15 @@ author, committer when different, absolute dates, clickable parent shas,
 ref decorations, and a files/±lines diffstat, above the diff it already
 showed.
 
+**Added — per-pane zoom.** Ctrl+scroll (or a pinch) over a pane rescales
+that pane alone — the Editor, Changes, Git, Transcript and Terminal each
+remember their own level across restarts. The global Ctrl+= / Ctrl+-
+stays what it was, the whole window: the two answer different wants,
+"my eyes" versus "this diff". Content scales — code, diffs, markdown,
+log and tree rows, the terminal's font — while badges and section
+headers deliberately hold still. Zooming back near 100% snaps to exactly
+100% and forgets the setting.
+
 **Fixed — the handoff buttons speak Linux.** "IntelliJ", "Terminal",
 "VS Code" and the file manager all launched through macOS's `open -a`,
 which does not exist elsewhere — the app began life on a Mac and the

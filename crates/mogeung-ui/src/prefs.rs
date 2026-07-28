@@ -100,6 +100,13 @@ pub struct Prefs {
     /// Show thinking blocks at all.
     #[serde(default = "yes")]
     pub show_thinking: bool,
+
+    /// Per-pane content zoom, keyed by pane ("editor", "diff", "git",
+    /// "transcript", "terminal") — Ctrl+wheel over a pane, not the global
+    /// Ctrl+=/Ctrl+- which scales the whole window. Only non-default
+    /// levels are stored, so the file stays quiet until you zoom.
+    #[serde(default)]
+    pub zoom: BTreeMap<String, f32>,
 }
 
 fn yes() -> bool {
@@ -125,6 +132,7 @@ impl Default for Prefs {
             side_by_side: false,
             markdown: true,
             show_thinking: true,
+            zoom: BTreeMap::new(),
         }
     }
 }
@@ -203,6 +211,22 @@ impl Prefs {
             self.labels.remove(id);
         } else {
             self.labels.insert(id.to_string(), label.to_string());
+        }
+    }
+
+    /// The zoom factor for one pane; 1.0 unless the user set one.
+    pub fn zoom_of(&self, pane: &str) -> f32 {
+        self.zoom.get(pane).copied().unwrap_or(1.0)
+    }
+
+    /// Set a pane's zoom, clamped to what stays readable. Near-1.0 lands
+    /// back on the default and leaves the file — reset by zooming back.
+    pub fn set_zoom(&mut self, pane: &str, z: f32) {
+        let z = z.clamp(0.5, 2.5);
+        if (z - 1.0).abs() < 0.05 {
+            self.zoom.remove(pane);
+        } else {
+            self.zoom.insert(pane.to_string(), z);
         }
     }
 
@@ -334,6 +358,23 @@ mod tests {
         assert!(!json.contains("reveal"), "reveal_hidden leaked into the file");
         let back: Prefs = serde_json::from_str(&json).unwrap();
         assert!(!back.reveal_hidden);
+    }
+
+    /// Zoom is clamped, near-default self-erases, and unknown panes read
+    /// as 1.0 — the file only ever holds deliberate levels.
+    #[test]
+    fn pane_zoom_clamps_and_default_erases() {
+        let mut p = Prefs::default();
+        assert_eq!(p.zoom_of("diff"), 1.0);
+        p.set_zoom("diff", 1.5);
+        assert_eq!(p.zoom_of("diff"), 1.5);
+        assert_eq!(p.zoom_of("editor"), 1.0, "panes zoom independently");
+        p.set_zoom("diff", 9.0);
+        assert_eq!(p.zoom_of("diff"), 2.5, "clamped, not trusted");
+        p.set_zoom("diff", 0.1);
+        assert_eq!(p.zoom_of("diff"), 0.5);
+        p.set_zoom("diff", 1.02);
+        assert!(p.zoom.is_empty(), "near-1.0 must erase the entry, not store it");
     }
 
     /// The `/clear` case: same pid, new session id — the label and pin

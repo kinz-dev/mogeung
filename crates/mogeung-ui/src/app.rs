@@ -1015,6 +1015,28 @@ impl App {
         }
     }
 
+    /// Per-pane content zoom: Ctrl+wheel (or a pinch) over a pane rescales
+    /// that pane alone, remembered per pane in the prefs. The global
+    /// Ctrl+= / Ctrl+- stays what it was — the whole window — because the
+    /// two answer different wants: "my eyes" versus "this diff".
+    ///
+    /// Returns the pane's factor; call once at the top of a pane and feed
+    /// the result to [`scale_text`].
+    fn pane_zoom(&mut self, ui: &egui::Ui, pane: &str) -> f32 {
+        let mut z = self.prefs.zoom_of(pane);
+        if ui.rect_contains_pointer(ui.max_rect()) {
+            let delta = ui.input(|i| i.zoom_delta());
+            if (delta - 1.0).abs() > 1e-4 {
+                z = (z * delta).clamp(0.5, 2.5);
+                self.prefs.set_zoom(pane, z);
+                self.prefs_dirty = true;
+                // Re-read: set_zoom snaps near-1.0 back to exactly 1.0.
+                z = self.prefs.zoom_of(pane);
+            }
+        }
+        z
+    }
+
     /// Move the selection by `delta` within the visible queue. `R-B1`.
     fn move_selection(&mut self, delta: i32) {
         let vis = self.visible_queue();
@@ -3345,6 +3367,8 @@ impl App {
     /// from end to end — the daemon offers nothing that writes, so neither
     /// can this.
     fn git_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let z = self.pane_zoom(ui, "git");
+        scale_text(ui, z);
         self.gitview.ensure_session(&s.id);
 
         // Same one-door fetch rule as the Editor: ask for whatever the state
@@ -3610,7 +3634,7 @@ impl App {
                         if b.behind > 0 {
                             text.push_str(&format!(" ↓{}", b.behind));
                         }
-                        let mut rich = RichText::new(text).monospace().size(12.0);
+                        let mut rich = RichText::new(text).monospace();
                         if b.current {
                             rich = rich.color(GREEN);
                         }
@@ -3645,9 +3669,7 @@ impl App {
                         let row = ui
                             .selectable_label(
                                 false,
-                                RichText::new(format!("{} {}", t.sha, t.name))
-                                    .monospace()
-                                    .size(12.0),
+                                RichText::new(format!("{} {}", t.sha, t.name)).monospace(),
                             )
                             .on_hover_text(format!(
                                 "{} · click to show the tagged commit",
@@ -3681,8 +3703,7 @@ impl App {
                                 st.index,
                                 truncate(&st.message, 40)
                             ))
-                            .monospace()
-                            .size(12.0),
+                            .monospace(),
                         )
                         .on_hover_text(format!(
                             "{}\n{} · read-only: popping stays in the terminal",
@@ -3711,9 +3732,8 @@ impl App {
                         "U" => ("U", Some(RED), "merge conflicts"),
                         _ => (" ", None, "in sync"),
                     };
-                    let mut rich = RichText::new(format!("{mark}{} {}", sub.sha, sub.path))
-                        .monospace()
-                        .size(12.0);
+                    let mut rich =
+                        RichText::new(format!("{mark}{} {}", sub.sha, sub.path)).monospace();
                     if let Some(c) = color {
                         rich = rich.color(c);
                     }
@@ -3791,7 +3811,7 @@ impl App {
             let row = ui
                 .selectable_label(
                     picked,
-                    RichText::new(label).monospace().size(12.0).color(color),
+                    RichText::new(label).monospace().color(color),
                 )
                 .on_hover_text(if e.conflicted {
                     "unresolved merge conflict — resolving stays in the terminal"
@@ -3846,8 +3866,11 @@ impl App {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 // The graph cell: verticals for occupied lanes, a dot on
                 // this commit's, stubs where branches fan out or join.
+                // Row height follows the (possibly zoomed) monospace style,
+                // so the graph column never drifts off its rows.
+                let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
                 let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(graph_w, 16.0), egui::Sense::hover());
+                    ui.allocate_exact_size(egui::vec2(graph_w, row_h), egui::Sense::hover());
                 if let Some(row) = graph.get(i) {
                     let painter = ui.painter();
                     let x_of = |lane: usize| rect.left() + lane as f32 * lane_w + lane_w / 2.0;
@@ -3882,8 +3905,7 @@ impl App {
                     .selectable_label(
                         picked,
                         RichText::new(format!("{} {}", c.short, truncate(&c.summary, 40)))
-                            .monospace()
-                            .size(12.0),
+                            .monospace(),
                     )
                     .on_hover_text(format!(
                         "{}\n{} · {} · {}{}\nright-click for copy / open / range diff",
@@ -4164,6 +4186,8 @@ impl App {
     /// Everything shown here came over the wire — the UI never touches the
     /// worktree itself ([ADR-0001]), and nothing in this pane can write.
     fn explorer_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let z = self.pane_zoom(ui, "editor");
+        scale_text(ui, z);
         self.explorer.ensure_session(&s.id);
 
         // Ask the daemon for whatever the state wants and lacks: the root,
@@ -4829,7 +4853,6 @@ impl App {
             );
             let mut row_text = RichText::new(format!("{glyph}{}", e.name))
                 .monospace()
-                .size(12.0)
                 .color(if ignored {
                     DIM
                 } else if e.is_dir {
@@ -4882,6 +4905,8 @@ impl App {
     /// spawned it and can never be attached to, so this says so plainly and
     /// points at the fix rather than showing a broken pane.
     fn terminal_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        // Before the terminal is borrowed: zoom is App state.
+        let term_font_px = 14.0 * self.pane_zoom(ui, "terminal");
         let Some(target) = s.tmux_target.clone() else {
             ui.add_space(8.0);
             ui.label(
@@ -4955,7 +4980,7 @@ impl App {
         // only, so `clicked()` on it is always false. The first version tested
         // that one, and the pane could never be typed into.
         let area = ui
-            .allocate_ui(before, |ui| term.ui(ui, self.term_focused))
+            .allocate_ui(before, |ui| term.ui(ui, self.term_focused, term_font_px))
             .inner;
 
         // Clicking in takes the keyboard; the chord in the hint gives it back,
@@ -4981,6 +5006,8 @@ impl App {
     }
 
     fn transcript_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let z = self.pane_zoom(ui, "transcript");
+        scale_text(ui, z);
         let events = self.events.get(&s.id).cloned().unwrap_or_default();
         let scroll = self.scroll;
 
@@ -5039,6 +5066,8 @@ impl App {
     }
 
     fn changes_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let z = self.pane_zoom(ui, "diff");
+        scale_text(ui, z);
         let Some(change) = self.changes.get(&s.id).cloned() else {
             ui.label(dim("computing diff…"));
             return;
@@ -5559,6 +5588,7 @@ fn styled_line(
 ) {
     let bg = line_bg(line);
     let fg = line_fg(line);
+    let size = diff_size(ui);
 
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -5567,7 +5597,7 @@ fn styled_line(
         // knowing what is a keyword.
         if let Some(spans) = emphasis {
             for sp in spans {
-                let mut t = RichText::new(&sp.text).monospace().size(11.5).color(fg);
+                let mut t = RichText::new(&sp.text).monospace().size(size).color(fg);
                 if sp.changed {
                     t = t.background_color(if line.starts_with('+') {
                         Color32::from_rgb(0x25, 0x6B, 0x3C)
@@ -5583,7 +5613,7 @@ fn styled_line(
         }
 
         if !syntax {
-            let mut t = RichText::new(line).monospace().size(11.5).color(fg);
+            let mut t = RichText::new(line).monospace().size(size).color(fg);
             if let Some(b) = bg {
                 t = t.background_color(b);
             }
@@ -5594,7 +5624,7 @@ fn styled_line(
         for (tok, text) in crate::diff::highlight(line) {
             let mut t = RichText::new(&text)
                 .monospace()
-                .size(11.5)
+                .size(size)
                 .color(tok_color(tok, fg));
             if let Some(b) = bg {
                 t = t.background_color(b);
@@ -5602,6 +5632,32 @@ fn styled_line(
             ui.label(t);
         }
     });
+}
+
+/// Scale every text style in this scope by `z`. One lever that moves
+/// default-styled text, the markdown renderer, and the syntax highlighter
+/// alike — child uis inherit it, so a pane scaled at its top scales whole.
+/// Explicitly-sized chrome (badges, section headers) stays put on purpose:
+/// content zooms, furniture does not.
+fn scale_text(ui: &mut egui::Ui, z: f32) {
+    if (z - 1.0).abs() < 1e-3 {
+        return;
+    }
+    for font in ui.style_mut().text_styles.values_mut() {
+        font.size *= z;
+    }
+}
+
+/// The diff renderer's font size: derived from the scope's Monospace style
+/// so per-pane zoom reaches it, at the slightly-condensed ratio the diff
+/// has always used.
+fn diff_size(ui: &egui::Ui) -> f32 {
+    ui.style()
+        .text_styles
+        .get(&egui::TextStyle::Monospace)
+        .map(|f| f.size)
+        .unwrap_or(12.0)
+        * (11.5 / 12.0)
 }
 
 /// Unified view, with word-level emphasis on runs that look like replacements.
@@ -5638,7 +5694,7 @@ fn render_side_by_side(ui: &mut egui::Ui, lines: &[String], syntax: bool, words:
                         // A blank keeps the two columns aligned when one side of
                         // a replacement run is longer than the other.
                         None => {
-                            ui.label(RichText::new(" ").monospace().size(11.5));
+                            ui.label(RichText::new(" ").monospace().size(diff_size(ui)));
                         }
                     }
                 });
