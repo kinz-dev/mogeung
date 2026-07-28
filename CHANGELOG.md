@@ -11,6 +11,13 @@ author, committer when different, absolute dates, clickable parent shas,
 ref decorations, and a files/±lines diffstat, above the diff it already
 showed.
 
+**Fixed — the log's right-click menu answers the whole row.** The menu
+(copy sha/subject, open on remote, mark + diff a commit range) only
+listened on the commit's text, so right-clicking the graph, the ref
+chips, or the space after the subject did nothing — which read as there
+being no menu at all. The entire row is now the target, left-click
+included, and the hover card says the menu exists.
+
 **Fixed — labels and pins survive `/clear`.** Claude Code's `/clear`
 keeps the process but mints a fresh session id, so a hand-applied label
 died with the old id and the "same" session came back nameless. The live

@@ -3450,6 +3450,9 @@ impl App {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    // The queue's lesson: selectable text gives every label
+                    // a click sense that sits in front of the row's own.
+                    ui.style_mut().interaction.selectable_labels = false;
                     ui.spacing_mut().item_spacing.y = 1.0;
                     self.git_local_list(ui, s);
                 });
@@ -3459,6 +3462,9 @@ impl App {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    // Same rule as local changes: labels must not out-click
+                    // the rows they decorate.
+                    ui.style_mut().interaction.selectable_labels = false;
                     ui.spacing_mut().item_spacing.y = 1.0;
                     self.git_ref_sections(ui);
                     ui.horizontal(|ui| {
@@ -3825,7 +3831,7 @@ impl App {
             .map(|r| r.url.clone());
         for (i, c) in commits.iter().enumerate() {
             let picked = self.gitview.selection == crate::gitview::Selection::Commit(c.sha.clone());
-            ui.horizontal(|ui| {
+            let row = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 // The graph cell: verticals for occupied lanes, a dot on
                 // this commit's, stubs where branches fan out or join.
@@ -3861,7 +3867,7 @@ impl App {
                     }
                     painter.circle_filled(dot, 2.5, color_of(row.lane.min(7)));
                 }
-                let row_resp = ui
+                let label_resp = ui
                     .selectable_label(
                         picked,
                         RichText::new(format!("{} {}", c.short, truncate(&c.summary, 40)))
@@ -3869,7 +3875,7 @@ impl App {
                             .size(12.0),
                     )
                     .on_hover_text(format!(
-                        "{}\n{} · {} · {}{}",
+                        "{}\n{} · {} · {}{}\nright-click for copy / open / range diff",
                         c.summary,
                         c.author,
                         crate::gitview::age(now, c.epoch),
@@ -3889,10 +3895,23 @@ impl App {
                     let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
                     ui.label(RichText::new(r).size(10.0).color(color));
                 }
-                if row_resp.clicked() {
-                    self.gitview.selection = crate::gitview::Selection::Commit(c.sha.clone());
-                }
-                row_resp.context_menu(|ui| {
+                label_resp
+            });
+            // The whole row is the target, not just the text: the queue
+            // card's trick (`Response::interact` on the container's own
+            // response, which sits *behind* its children). Right-clicking
+            // the graph, the chips, or the space after the subject all
+            // reach the same menu — "right-click did nothing" was people
+            // missing a text-sized target, found in dogfooding.
+            let whole = row
+                .response
+                .interact(egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            let target = row.inner.union(whole);
+            if target.clicked() {
+                self.gitview.selection = crate::gitview::Selection::Commit(c.sha.clone());
+            }
+            target.context_menu(|ui| {
                     if ui.button("Copy sha").clicked() {
                         ui.ctx().copy_text(c.sha.clone());
                         ui.close();
@@ -3952,7 +3971,6 @@ impl App {
                         }
                     }
                 });
-            });
         }
         if !self.gitview.log_done {
             if ui.button(dim("show more")).clicked() && !self.gitview.log_pending {
