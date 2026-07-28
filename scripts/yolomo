@@ -2,11 +2,14 @@
 # Start `claude` inside a tmux session that mogeung can host in a pane.
 #
 #   yolomo                  start a NEW session for this directory
-#   yolomo -r               anything after the name is passed through to claude
+#   yolomo -d               same, but headless: don't attach this terminal.
+#                           mogeung's Terminal pane becomes the session's only
+#                           head; the session name is printed for scripting.
+#   yolomo -r               anything after the flags is passed through to claude
 #
 # Every run starts a fresh agent: two runs in one directory are two sessions
 # (mogeung-api, mogeung-api-2, …), not two clients of one agent. To re-attach
-# to a session you detached from, use tmux directly:
+# to a session you detached from (or started with -d), use tmux directly:
 #
 #   tmux attach -t mogeung-<dir>
 #
@@ -25,13 +28,26 @@
 
 set -uo pipefail
 
+detach=0
+if [ "${1:-}" = "-d" ] || [ "${1:-}" = "--detach" ]; then
+  detach=1
+  shift
+fi
+
 # Already inside tmux. Nesting gains nothing and would make the pane mapping
-# ambiguous, so just be `yolo`.
-if [ -n "${TMUX:-}" ]; then
+# ambiguous, so just be `yolo` — unless -d, where no attach happens and so
+# nothing nests: creating a detached session from inside tmux is fine.
+if [ "$detach" -eq 0 ] && [ -n "${TMUX:-}" ]; then
   exec claude --dangerously-skip-permissions ${1+"$@"}
 fi
 
 if ! command -v tmux >/dev/null 2>&1; then
+  if [ "$detach" -eq 1 ]; then
+    # A plain fallback would run claude in *this* terminal — the opposite of
+    # headless — so refuse loudly instead of surprising the caller.
+    echo "yolomo: -d needs tmux, and tmux is not installed." >&2
+    exit 1
+  fi
   echo "yolomo: tmux is not installed — falling back to a plain session." >&2
   echo "        mogeung will be able to see it but not host it." >&2
   exec claude --dangerously-skip-permissions ${1+"$@"}
@@ -70,5 +86,13 @@ tmux new-session -d -s "$name" -c "$dir" \
 # full-screen terminal attached to the same session — silent, and baffling
 # when it happens to you.
 tmux set-option -t "=${name}" window-size latest >/dev/null
+
+if [ "$detach" -eq 1 ]; then
+  # The name on stdout so scripts can capture it; the human note on stderr.
+  echo "$name"
+  echo "yolomo: started headless — mogeung will pick it up on its next scan." >&2
+  echo "        attach a terminal any time with: tmux attach -t ${name}" >&2
+  exit 0
+fi
 
 exec tmux attach-session -t "=${name}"

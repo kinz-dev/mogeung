@@ -135,7 +135,8 @@ case "$MODE" in
         # process is doing — one dependency, not two.
         echo "▸ waiting for the daemon on $PORT…"
         wait_for_daemon || exit 1
-        exec "$BIN/mogeung" --url "ws://127.0.0.1:$PORT/ws"
+        # --foreground: mprocs supervises this process, so it must not detach.
+        exec "$BIN/mogeung" --foreground --url "ws://127.0.0.1:$PORT/ws"
         ;;
 
     both)
@@ -164,7 +165,10 @@ case "$MODE" in
         [ -n "$DB" ] && echo "▸ database: $DB"
         echo "▸ web client: http://127.0.0.1:$PORT/"
 
-        "$BIN/mogeung" --url "ws://127.0.0.1:$PORT/ws" &
+        # --foreground: the wait loop below watches this pid, so if the window
+        # detached itself the loop would see an instant death and stop the
+        # daemon with it.
+        "$BIN/mogeung" --foreground --url "ws://127.0.0.1:$PORT/ws" &
         UI_PID=$!
 
         # Exit when *either* dies. A daemon that crashed leaves a window that

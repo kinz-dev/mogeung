@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=mogeung
+Comment=Watches your Claude Code sessions and tells you which one needs attention
+Exec=mogeung
+Icon=mogeung
+Terminal=false
+Categories=Development;
+StartupWMClass=mogeung

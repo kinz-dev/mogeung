@@ -95,6 +95,18 @@ closed channel now ends the thread; the change is marked `LOCAL CHANGE
 Roadmap pillars `B`, `C` (bar `R-C2`) and `D`; see
 [docs/features/0002-sharpen-triage-and-review.md](docs/features/0002-sharpen-triage-and-review.md).
 
+**Changed — `mogeung` detaches from the terminal.** Launching the window now
+gives the prompt straight back and survives the terminal closing, nohup-style.
+Console output is discarded unless `--log PATH` names a file to append it to;
+`--foreground` keeps the old attached behaviour, and is what `start.sh` and
+mprocs use so their supervision keeps working.
+
+**Added — an app icon on Linux.** The window embeds an icon (a session queue
+with one row flagged amber), which X11 honours directly. Wayland does not — it
+resolves icons from a desktop entry matching the window's app id — so
+`scripts/install.sh` now also installs `mogeung.desktop` and the icon into the
+hicolor theme on Linux, and `--uninstall` removes them.
+
 **Added — queue.** `APPROVE`, a tier above `WAITING` for sessions blocked on a
 permission prompt rather than waiting for a new instruction, told apart by an
 unanswered tool call. Keyboard triage (`j/k`, `enter`, `r`, `s`, `g`, `/`).
