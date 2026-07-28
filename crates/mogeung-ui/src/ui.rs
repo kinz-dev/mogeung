@@ -355,8 +355,72 @@ impl OpenTarget {
         match self {
             OpenTarget::Intellij => "IntelliJ",
             OpenTarget::VsCode => "VS Code",
+            // The file manager answers to its platform's name; "Finder" on
+            // Linux is a button that reads as broken before it is clicked.
+            #[cfg(target_os = "macos")]
             OpenTarget::Finder => "Finder",
+            #[cfg(not(target_os = "macos"))]
+            OpenTarget::Finder => "Files",
             OpenTarget::Terminal => "Terminal",
+        }
+    }
+}
+
+/// One way a target might launch: program, arguments, and an optional
+/// working directory (for terminals whose only "open here" is inheritance).
+type Attempt = (String, Vec<String>, Option<String>);
+
+/// The launch attempts for a target, in order — the first program that
+/// spawns wins. Split from the spawning so the per-platform tables are
+/// testable on any platform; the app began life on macOS, and every one of
+/// these buttons was quietly `open -a` until Linux dogfooding found them.
+fn attempts(target: OpenTarget, path: &str) -> Vec<Attempt> {
+    let p = path.to_string();
+    #[cfg(target_os = "macos")]
+    return match target {
+        OpenTarget::Finder => vec![("open".to_string(), vec![p], None)],
+        OpenTarget::Terminal => vec![("open".to_string(), vec!["-a".into(), "Terminal".into(), p], None)],
+        // Prefer the CLI, fall back to the bundle if `code` is not installed.
+        OpenTarget::VsCode => vec![
+            ("code".to_string(), vec![p.clone()], None),
+            ("open".to_string(), vec!["-a".into(), "Visual Studio Code".into(), p], None),
+        ],
+        OpenTarget::Intellij => vec![
+            ("idea".to_string(), vec![p.clone()], None),
+            ("open".to_string(), vec!["-a".into(), "IntelliJ IDEA".into(), p.clone()], None),
+            ("open".to_string(), vec!["-a".into(), "IntelliJ IDEA Ultimate".into(), p], None),
+        ],
+    };
+    #[cfg(not(target_os = "macos"))]
+    match target {
+        OpenTarget::Finder => vec![("xdg-open".to_string(), vec![p], None)],
+        // No portable "terminal here" exists; walk the common ones. The
+        // Debian alternatives symlink goes first — it is the user's own
+        // choice — and takes its directory by inheritance, having no flag.
+        OpenTarget::Terminal => vec![
+            ("x-terminal-emulator".to_string(), vec![], Some(p.clone())),
+            ("gnome-terminal".to_string(), vec![format!("--working-directory={p}")], None),
+            ("konsole".to_string(), vec!["--workdir".into(), p.clone()], None),
+            ("xfce4-terminal".to_string(), vec![format!("--working-directory={p}")], None),
+            ("alacritty".to_string(), vec!["--working-directory".into(), p.clone()], None),
+            ("xterm".to_string(), vec![], Some(p)),
+        ],
+        OpenTarget::VsCode => vec![("code".to_string(), vec![p], None)],
+        // JetBrains installs land differently by channel: `idea` on PATH
+        // when the user set Toolbox's shell scripts up, the Toolbox scripts
+        // directory when they did not (found live: Toolbox installed, PATH
+        // untouched), and the long names for snaps.
+        OpenTarget::Intellij => {
+            let toolbox = format!(
+                "{}/.local/share/JetBrains/Toolbox/scripts/idea",
+                std::env::var("HOME").unwrap_or_default()
+            );
+            vec![
+                ("idea".to_string(), vec![p.clone()], None),
+                (toolbox, vec![p.clone()], None),
+                ("intellij-idea-ultimate".to_string(), vec![p.clone()], None),
+                ("intellij-idea-community".to_string(), vec![p], None),
+            ]
         }
     }
 }
@@ -365,30 +429,73 @@ impl OpenTarget {
 /// than failing silently, because a missing editor is a real thing to tell the
 /// user about.
 pub fn open_in(target: OpenTarget, path: &str) -> Result<(), String> {
-    let spawn = |program: &str, args: &[&str]| -> Result<(), String> {
-        std::process::Command::new(program)
-            .args(args)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("{program}: {e}"))
-    };
-
-    match target {
-        OpenTarget::Finder => spawn("open", &[path]),
-        OpenTarget::Terminal => spawn("open", &["-a", "Terminal", path]),
-        OpenTarget::VsCode => {
-            // Prefer the CLI, fall back to the bundle if `code` is not installed.
-            spawn("code", &[path]).or_else(|_| spawn("open", &["-a", "Visual Studio Code", path]))
+    let list = attempts(target, path);
+    let mut tried = Vec::new();
+    for (program, args, cwd) in &list {
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(args);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
         }
-        OpenTarget::Intellij => spawn("idea", &[path])
-            .or_else(|_| spawn("open", &["-a", "IntelliJ IDEA", path]))
-            .or_else(|_| spawn("open", &["-a", "IntelliJ IDEA Ultimate", path])),
+        match cmd.spawn() {
+            Ok(mut child) => {
+                // Reaped off-frame, or every launch leaves a zombie behind
+                // (one `[open] <defunct>` was found live doing exactly that).
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            Err(_) => tried.push(program.as_str()),
+        }
     }
+    Err(format!(
+        "none of these launchers exist here: {}",
+        tried.join(", ")
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::icon;
+    use super::{attempts, OpenTarget};
+
+    /// The handoff buttons must speak the platform they run on — every
+    /// target needs at least one attempt, none may reach for the other
+    /// OS's launcher, and a terminal with no workdir flag must get the
+    /// directory by inheritance instead.
+    #[test]
+    fn open_targets_have_native_launchers() {
+        for target in [
+            OpenTarget::Finder,
+            OpenTarget::Terminal,
+            OpenTarget::VsCode,
+            OpenTarget::Intellij,
+        ] {
+            let list = attempts(target, "/some/repo");
+            assert!(!list.is_empty());
+            for (program, args, cwd) in &list {
+                #[cfg(not(target_os = "macos"))]
+                assert_ne!(*program, "open", "`open -a` is macOS-speak");
+                // Every attempt must carry the path somewhere: an argument
+                // mentioning it, or the working directory.
+                let in_args = args.iter().any(|a| a.contains("/some/repo"));
+                let in_cwd = cwd.as_deref() == Some("/some/repo");
+                assert!(
+                    in_args || in_cwd,
+                    "{program} would launch without the path"
+                );
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(attempts(OpenTarget::Finder, "/x")[0].0, "xdg-open");
+            let term = attempts(OpenTarget::Terminal, "/x");
+            assert_eq!(term[0].0, "x-terminal-emulator");
+            assert_eq!(term[0].2.as_deref(), Some("/x"), "no flag means inherit the cwd");
+            assert_eq!(OpenTarget::Finder.label(), "Files");
+        }
+    }
 
     /// Read the cmap tables of egui's bundled fonts and assert every icon is
     /// covered.

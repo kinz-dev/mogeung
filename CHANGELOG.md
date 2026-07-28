@@ -11,6 +11,15 @@ author, committer when different, absolute dates, clickable parent shas,
 ref decorations, and a files/±lines diffstat, above the diff it already
 showed.
 
+**Fixed — the handoff buttons speak Linux.** "IntelliJ", "Terminal",
+"VS Code" and the file manager all launched through macOS's `open -a`,
+which does not exist elsewhere — the app began life on a Mac and the
+buttons quietly did nothing on Ubuntu. Each target now walks a native
+launcher list (`xdg-open`, `x-terminal-emulator` and friends, the
+JetBrains Toolbox scripts directory, snap names), the button says
+"Files" instead of "Finder", a failed launch names everything it tried,
+and spawned launchers are reaped instead of left as zombies.
+
 **Fixed — the log's right-click menu answers the whole row.** The menu
 (copy sha/subject, open on remote, mark + diff a commit range) only
 listened on the commit's text, so right-clicking the graph, the ref
