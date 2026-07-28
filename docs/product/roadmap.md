@@ -64,7 +64,7 @@ alert of its own that was confidently wrong.
 | R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
 | R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
-## B. Sharpen the queue — **shipped**
+## B. Sharpen the queue — **shipped through R-B26; R-B27+ is the backlog**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 
@@ -96,6 +96,9 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B24 | **File explorer pane** — the session's worktree as a tree, with a read-only syntax-highlighted viewer. Deliberately not an editor — see [pillar K](#k-explicitly-not) and [feature 0007](../features/0007-file-explorer.md) | M |  |
 | R-B25 | **Explorer workbench** — remember and reveal, multi-file tabs, go-to-file, content search, in one pass ([A16](assumptions.md)). Still a viewer, never an editor. See [feature 0008](../features/0008-explorer-workbench.md) | L |  |
 | R-B26 | **Session labels** — name a session yourself; colour badge on the card, `label:` in the filter. Client view-state like pins ([A17](assumptions.md)). See [feature 0009](../features/0009-session-labels.md) | S |  |
+| R-B27 | **Editor git ergonomics** — a diff gutter vs HEAD with next/prev-change keys, inline blame on the current line, compare-with-revision side by side, and a gutter mark on lines *this session* changed (the mogeung-only one). Still a viewer, never an editor | L |  |
+| R-B28 | **Editor navigation** — symbol outline and go-to-symbol (tree-sitter is already in the tree), go-to-line, sticky scroll, folding, highlight-other-occurrences | L |  |
+| R-B29 | **Editor content comforts** — markdown preview, image preview, per-tab word wrap, copy path / `path:line`, file facts in the header, bookmarks with a jump list | M |  |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 
@@ -112,11 +115,22 @@ made redundant by `R-C1` banners. Left open deliberately.
 | R-C4 | **Push** via ntfy/Pushover for away-from-desk | S | ✅ |
 | R-C5 | **Ambient mode** — big-screen board for a second monitor | M | ✅ |
 
-## D. Review depth — **shipped**
+## D. Review depth — **shipped through R-D12; R-D13+ is the backlog**
 
-Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
-`R-D1` is the observer-safe shape: mogeung writes the prompt, you paste it
+`R-D1`–`R-D9` delivered by
+[feature 0002](../features/0002-sharpen-triage-and-review.md); `R-D1` is
+the observer-safe shape: mogeung writes the prompt, you paste it
 ([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
+
+**Git-integration status (2026-07-28):** `R-D10`–`R-D12` are built,
+committed and installed — the pane, its depth (branches, graph, stashes,
+re-blame, file-at-revision, range diff) and its table stakes (commit
+details, log filtering, file history). Their acceptance boxes stay open
+until the dogfooding week rules ([A19](assumptions.md)); day one of that
+week produced five fixes, which is the week doing its job. `R-D13`
+onward is the brainstormed backlog, grouped and sized but *not*
+committed to — each item goes through a spec when picked up, and an
+unused pane section is a removal candidate before it is a foundation.
 
 | # | Item | Effort | |
 |---|---|---|---|
@@ -132,6 +146,11 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-D10 | **Git view** — recent commits, uncommitted changes, per-commit diffs, blame in the Editor gutter. Read-only, permanently ([A18](assumptions.md)). See [feature 0010](../features/0010-git-view.md) | L |  |
 | R-D11 | **Git depth** — branches, refs, stashes, submodules, commit graph, re-blame, file-at-revision, range diffs. The reading half of a commercial client; still read-only, permanently ([A19](assumptions.md)). See [feature 0011](../features/0011-git-depth.md) | L |  |
 | R-D12 | **Git table stakes** — full commit details, log filtering by message/author/path, file history with rename following. See [feature 0012](../features/0012-git-table-stakes.md) | M |  |
+| R-D13 | **Git forensics** — pickaxe search (`-S`: when did this string appear/vanish), copy hunk/file/commit as patch text, an attribution-only log filter, hunk-navigation keys in git diffs. All small, all aimed at auditing agent work | M |  |
+| R-D14 | **Diff ergonomics** — expand hunk context on demand (daemon addition), a commit's files as a directory tree instead of a flat list, whitespace-ignore and side-by-side toggles in git diffs | M |  |
+| R-D15 | **Ref reach** — branch-to-branch compare (three-dot from the merge base, plus "commits on A not on B"), remote branches in the list, a read-only reflog, and `git worktree list` linked to the sessions running in each | M |  |
+| R-D16 | **Conflict three-way view** — ours/base/theirs read-only for a conflicted file, beyond the markers-in-a-diff we have | M |  |
+| R-D17 | **Review-state on the log** — R-D8's read/unread marks surfaced per commit, so "which commits has no human read" is visible where commits live. A step toward `R-F2` | M |  |
 
 ## E. Verification
 
@@ -160,6 +179,7 @@ Newly possible: 52 transcripts (67 MB) plus 2,084 prompts in
 | R-F6 | **Prompt library** — most-reused prompts, mined from history | S |
 | R-F7 | **Decision extraction** — pull architectural decisions out of transcripts into ADRs | L |
 | R-F8 | **Subagent trees** — visualise `isSidechain` work | M |
+| R-F9 | **Blame → transcript** — from a session-attributed commit, open that session's transcript at the turns that produced it. The cheap precursor to `R-F2`, riding `R-D11`'s attribution | M |
 
 ## G. Rate limits and cost
 
