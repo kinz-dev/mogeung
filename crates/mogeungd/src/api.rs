@@ -180,6 +180,12 @@ struct LogQuery {
     limit: u32,
     #[serde(default)]
     rev: Option<String>,
+    #[serde(default)]
+    grep: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 fn default_log_limit() -> u32 {
@@ -191,7 +197,12 @@ async fn get_git_log(
     AxPath(id): AxPath<String>,
     Query(q): Query<LogQuery>,
 ) -> impl IntoResponse {
-    match state.git_log(&id, q.skip, q.limit, q.rev).await {
+    let filter = crate::git::LogFilter {
+        grep: q.grep,
+        author: q.author,
+        path: q.path,
+    };
+    match state.git_log(&id, q.skip, q.limit, q.rev, filter).await {
         Ok((commits, done)) => Json(serde_json::json!({ "commits": commits, "done": done })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -208,7 +219,9 @@ async fn get_git_show(
     Query(q): Query<ShaQuery>,
 ) -> impl IntoResponse {
     match state.git_show(&id, &q.sha).await {
-        Ok(files) => Json(serde_json::json!({ "sha": q.sha, "files": files })),
+        Ok((files, detail)) => Json(serde_json::json!({
+            "sha": q.sha, "files": files, "detail": detail,
+        })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
 }
@@ -595,21 +608,38 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             skip,
             limit,
             rev,
-        } => match state.git_log(&session_id, skip, limit, rev.clone()).await {
-            Ok((commits, done)) => state.broadcast(ServerMsg::GitCommits {
-                session_id,
-                skip,
-                commits,
-                done,
-                rev,
-            }),
-            Err(e) => err(e),
-        },
+            grep,
+            author,
+            path,
+        } => {
+            let filter = crate::git::LogFilter {
+                grep: grep.clone(),
+                author: author.clone(),
+                path: path.clone(),
+            };
+            match state
+                .git_log(&session_id, skip, limit, rev.clone(), filter)
+                .await
+            {
+                Ok((commits, done)) => state.broadcast(ServerMsg::GitCommits {
+                    session_id,
+                    skip,
+                    commits,
+                    done,
+                    rev,
+                    grep,
+                    author,
+                    path,
+                }),
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitShow { session_id, sha } => match state.git_show(&session_id, &sha).await {
-            Ok(files) => state.broadcast(ServerMsg::GitCommitDiff {
+            Ok((files, detail)) => state.broadcast(ServerMsg::GitCommitDiff {
                 session_id,
                 sha,
                 files,
+                detail: detail.map(Box::new),
             }),
             Err(e) => err(e),
         },

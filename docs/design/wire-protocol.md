@@ -33,8 +33,8 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
 | `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
-| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`); each commit carries refs, parents and a session-attribution hint |
-| `GitShow` | One commit's diff, in `Change`'s file/hunk shapes; the sha is validated as hex before git sees it |
+| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path` filters — a set path switches `--follow` on, so a filtered log doubles as file history (`R-D12`); each commit carries refs, parents and a session-attribution hint |
+| `GitShow` | One commit's diff, in `Change`'s file/hunk shapes, plus its header — full message, committer, dates, parents (`R-D12`); the sha is validated as hex before git sees it |
 | `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished; conflicts marked, ignored paths included as `!!` dimming data |
 | `GitDiffFile` | One uncommitted file against `HEAD` (`/dev/null` when untracked) |
 | `GitBlame` | Per-line authorship, capped at 20k lines — of the worktree, or of the file at a revision (`rev`), which is what re-blame rides (`R-D11`) |
@@ -71,8 +71,11 @@ stray — the stray-session rule, applied to superseded scopes.
 Client-supplied git arguments are shape-checked before git sees them: shas
 must be hex (one trailing `^` allowed — "the parent of"), ref names are
 restricted to `[A-Za-z0-9/._-]` with no leading `-`, no `..` and no `@{`,
-and stash indices are numbers. An unauthenticated socket must not be able
-to spell a flag.
+and stash indices are numbers. Log filters are literal text (`-i
+--fixed-strings`, never regex), attached with `=` so they cannot open a
+new argument, length-capped, control-characters refused; filter paths get
+the explorer's lexical containment. An unauthenticated socket must not be
+able to spell a flag.
 
 `ListDir` and `FetchFile` paths are relative to the session root (repo root
 when known, else cwd); the daemon canonicalises and refuses anything that
@@ -118,7 +121,8 @@ GET  /api/sessions/{id}/ls?path=...    # explorer (R-B24); path optional
 GET  /api/sessions/{id}/file?path=...
 GET  /api/sessions/{id}/tree           # every file path (R-B25)
 GET  /api/sessions/{id}/search?q=...   # literal content search (R-B25)
-GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...   # R-D10/R-D11, all read-only
+GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...&grep=...&author=...&path=...
+                                       # R-D10/R-D11/R-D12, all read-only
 GET  /api/sessions/{id}/git/show?sha=...
 GET  /api/sessions/{id}/git/status
 GET  /api/sessions/{id}/git/diff?path=...

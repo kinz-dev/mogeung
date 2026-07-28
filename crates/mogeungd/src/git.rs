@@ -554,8 +554,8 @@ fn compute_change_inner(
 // mogeung driving the repo is the observer trap one layer down.
 
 use mogeung_core::wire::{
-    BlameLine, BranchInfo, CommitInfo, RefsInfo, RemoteInfo, StashInfo, StatusEntry,
-    SubmoduleInfo, TagInfo,
+    BlameLine, BranchInfo, CommitDetail, CommitInfo, RefsInfo, RemoteInfo, StashInfo,
+    StatusEntry, SubmoduleInfo, TagInfo,
 };
 
 /// Blame stops here; past this a "who wrote this line" gutter is a memory
@@ -591,15 +591,34 @@ fn valid_ref_name(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
 }
 
-/// One page of the log, newest first, scoped to `rev` (`None` = HEAD).
-/// Asks for one row past `limit`, so "was that the end of history" costs no
-/// second call. Also returns, per commit, the files it touched — fuel for
-/// the session-attribution heuristic, fetched in the same process spawn.
+/// What narrows a log page beyond its ref scope. All literal text — no
+/// regex reaches git — and `path` doubles as file history because it
+/// switches `--follow` on. `R-D12`.
+#[derive(Debug, Default, Clone)]
+pub struct LogFilter {
+    pub grep: Option<String>,
+    pub author: Option<String>,
+    pub path: Option<String>,
+}
+
+/// A filter string a client may hand to git as `--grep=…`/`--author=…`.
+/// Joined with `=` it cannot open a new argument, so the checks left are
+/// sanity: a length that fits a filter box, and no control characters.
+fn valid_filter_text(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 200 && !s.chars().any(|c| c.is_control())
+}
+
+/// One page of the log, newest first, scoped to `rev` (`None` = HEAD) and
+/// narrowed by `filter`. Asks for one row past `limit`, so "was that the
+/// end of history" costs no second call. Also returns, per commit, the
+/// files it touched — fuel for the session-attribution heuristic, fetched
+/// in the same process spawn.
 pub fn log_page(
     cwd: &Path,
     skip: u32,
     limit: u32,
     rev: Option<&str>,
+    filter: &LogFilter,
 ) -> Result<(Vec<CommitInfo>, Vec<Vec<String>>, bool)> {
     let limit = limit.clamp(1, 200);
     if let Some(r) = rev {
@@ -607,9 +626,24 @@ pub fn log_page(
             bail!("that is not a ref name");
         }
     }
+    for f in [&filter.grep, &filter.author] {
+        if let Some(f) = f {
+            if !valid_filter_text(f) {
+                bail!("that is not a filter");
+            }
+        }
+    }
+    if let Some(p) = &filter.path {
+        if !valid_filter_text(p) || Path::new(p).is_absolute() || p.split('/').any(|s| s == "..")
+        {
+            bail!("{p} is not a path inside the session");
+        }
+    }
     // \x1f between fields, \x1e between records: subjects contain anything.
     let skip_arg = format!("--skip={skip}");
     let n_arg = format!("-n{}", limit + 1);
+    let grep_arg = filter.grep.as_ref().map(|g| format!("--grep={g}"));
+    let author_arg = filter.author.as_ref().map(|a| format!("--author={a}"));
     let mut args = vec![
         "log",
         &skip_arg,
@@ -617,10 +651,29 @@ pub fn log_page(
         "--name-only",
         "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%p%x1f%s%x1e",
     ];
+    if let Some(g) = &grep_arg {
+        // Literal and case-insensitive: a filter box is not a regex field,
+        // and `--fixed-strings` covers --author the same way.
+        args.extend(["--fixed-strings", "-i", g]);
+    }
+    if let Some(a) = &author_arg {
+        if grep_arg.is_none() {
+            args.extend(["--fixed-strings", "-i"]);
+        }
+        args.push(a);
+    }
+    if filter.path.is_some() {
+        // One path exactly — --follow is only defined for one — and this
+        // is what makes the filtered log double as file history.
+        args.push("--follow");
+    }
     if let Some(r) = rev {
         args.push(r);
     }
     args.push("--");
+    if let Some(p) = &filter.path {
+        args.push(p);
+    }
     let out = run_git(cwd, &args)?;
     let (mut commits, mut files) = parse_log(&out);
     let done = commits.len() as u32 <= limit;
@@ -686,8 +739,10 @@ fn parse_log(out: &str) -> (Vec<CommitInfo>, Vec<Vec<String>>) {
 }
 
 /// One commit's patch, in the same shapes the Changes tab renders — which is
-/// what lets the Git pane reuse the entire diff pipeline for free.
-pub fn show_commit(cwd: &Path, sha: &str) -> Result<Vec<FileChange>> {
+/// what lets the Git pane reuse the entire diff pipeline for free — plus its
+/// header (`R-D12`). The header is a second, `-s` call in the same daemon
+/// trip; if it fails the diff still answers, wearing `None`.
+pub fn show_commit(cwd: &Path, sha: &str) -> Result<(Vec<FileChange>, Option<CommitDetail>)> {
     if !valid_sha(sha) {
         bail!("that is not a commit sha");
     }
@@ -698,7 +753,44 @@ pub fn show_commit(cwd: &Path, sha: &str) -> Result<Vec<FileChange>> {
             "--",
         ],
     )?;
-    Ok(parse_unified(&out, &HashSet::new()))
+    let detail = run_git(
+        cwd,
+        &[
+            "show",
+            "-s",
+            "--format=%an%x1f%cn%x1f%at%x1f%ct%x1f%p%x1f%D%x1f%B",
+            sha,
+            "--",
+        ],
+    )
+    .ok()
+    .and_then(|d| parse_commit_detail(&d));
+    Ok((parse_unified(&out, &HashSet::new()), detail))
+}
+
+/// Parse the `-s` header record. `%B` is multiline and last, so `splitn`
+/// keeps the body's newlines intact; a body containing the separator could
+/// corrupt nothing past it.
+fn parse_commit_detail(out: &str) -> Option<CommitDetail> {
+    let mut f = out.splitn(7, '\x1f');
+    Some(CommitDetail {
+        author: f.next()?.trim_start_matches(['\n', '\r']).to_string(),
+        committer: f.next()?.to_string(),
+        epoch: f.next()?.trim().parse().unwrap_or(0),
+        commit_epoch: f.next()?.trim().parse().unwrap_or(0),
+        parents: f
+            .next()?
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect(),
+        refs: f
+            .next()?
+            .split(", ")
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .collect(),
+        message: f.next().unwrap_or("").trim_end().to_string(),
+    })
 }
 
 /// The diff between two commits, `from` → `to`. Both ends are commits the
@@ -1511,6 +1603,40 @@ copy to src/b.rs
         assert!(!valid_rev("aaa111..bbb222"));
         assert!(!valid_rev("--output=x^"));
         assert!(!valid_rev("^"));
+    }
+
+    /// The `-s` header record: multiline body preserved, empty body fine,
+    /// annotated fields split only on the separator.
+    #[test]
+    fn commit_detail_keeps_the_body_multiline() {
+        let out = "keith\x1fGitHub\x1f1722000000\x1f1722000100\x1fp1 p2\x1fHEAD -> main, tag: v1\x1f\
+                   feat: the subject\n\nA body paragraph.\n\nAnother, with = signs and -- dashes.\n";
+        let d = parse_commit_detail(out).unwrap();
+        assert_eq!(d.author, "keith");
+        assert_eq!(d.committer, "GitHub");
+        assert_eq!(d.epoch, 1722000000);
+        assert_eq!(d.commit_epoch, 1722000100);
+        assert_eq!(d.parents, vec!["p1", "p2"]);
+        assert_eq!(d.refs, vec!["HEAD -> main", "tag: v1"]);
+        assert!(d.message.starts_with("feat: the subject\n\nA body paragraph."));
+        assert!(d.message.ends_with("dashes."), "trailing newline trimmed");
+
+        let bare = parse_commit_detail("a\x1fa\x1f0\x1f0\x1f\x1f\x1fsubject only").unwrap();
+        assert_eq!(bare.message, "subject only");
+        assert!(bare.parents.is_empty(), "a root commit has no parents");
+        assert!(parse_commit_detail("").is_none(), "a truncated record degrades to no header");
+    }
+
+    /// Filter text is joined with `=` so it cannot open a new argument;
+    /// what dies here is the nonsense: control characters and novels.
+    #[test]
+    fn filter_text_refuses_control_characters_and_novels() {
+        assert!(valid_filter_text("fix: the parser"));
+        assert!(valid_filter_text("--looks-like-a-flag")); // harmless after --grep=
+        assert!(!valid_filter_text(""));
+        assert!(!valid_filter_text("a\x1bb"));
+        assert!(!valid_filter_text("a\nb"));
+        assert!(!valid_filter_text(&"a".repeat(201)));
     }
 
     /// Ref names widen the argument surface; hostile shapes die here.

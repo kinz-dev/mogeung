@@ -202,6 +202,9 @@ async fn commands_about_unknown_sessions_are_harmless() {
             skip: 0,
             limit: 50,
             rev: Some("--all".into()),
+            grep: Some("a\x1b]0;pwned\x07".into()),
+            author: Some("\n--exec=rm".into()),
+            path: Some("../outside".into()),
         },
     )
     .await;

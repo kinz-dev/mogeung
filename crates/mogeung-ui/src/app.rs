@@ -464,14 +464,29 @@ impl App {
                     commits,
                     done,
                     rev,
-                } => self
-                    .gitview
-                    .ingest_commits(&session_id, skip, commits, done, rev),
+                    grep,
+                    author,
+                    path,
+                } => self.gitview.ingest_commits(
+                    &session_id,
+                    skip,
+                    commits,
+                    done,
+                    crate::gitview::LogScope {
+                        rev,
+                        grep,
+                        author,
+                        path,
+                    },
+                ),
                 ServerMsg::GitCommitDiff {
                     session_id,
                     sha,
                     files,
-                } => self.gitview.ingest_commit_diff(&session_id, sha, files),
+                    detail,
+                } => self
+                    .gitview
+                    .ingest_commit_diff(&session_id, sha, files, detail.map(|d| *d)),
                 ServerMsg::GitLocalChanges {
                     session_id,
                     entries,
@@ -3293,6 +3308,9 @@ impl App {
                     skip: 0,
                     limit: 50,
                     rev: gv.log_rev.clone(),
+                    grep: gv.log_grep.clone(),
+                    author: gv.log_author.clone(),
+                    path: gv.log_path.clone(),
                 });
             }
             if gv.refs.is_none() && !gv.refs_pending {
@@ -3405,6 +3423,39 @@ impl App {
                             }
                         }
                     });
+                    // The filter bar (`R-D12`): one field, `author:` and
+                    // `path:` pulled out, the rest matching messages. A set
+                    // path follows renames — this is also file history.
+                    ui.horizontal(|ui| {
+                        let field = ui.add(
+                            egui::TextEdit::singleline(&mut self.gitview.filter_input)
+                                .id(egui::Id::new("git-log-filter"))
+                                .hint_text("filter: text · author:… · path:…")
+                                .desired_width(ui.available_width() - 24.0),
+                        );
+                        let entered =
+                            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if entered {
+                            let (grep, author, path) =
+                                crate::gitview::parse_filter_input(&self.gitview.filter_input);
+                            self.gitview.set_log_filter(grep, author, path);
+                        }
+                        let active = self.gitview.log_grep.is_some()
+                            || self.gitview.log_author.is_some()
+                            || self.gitview.log_path.is_some();
+                        if active
+                            && ui
+                                .small_button("✕")
+                                .on_hover_text("clear the filter")
+                                .clicked()
+                        {
+                            self.gitview.filter_input.clear();
+                            self.gitview.set_log_filter(None, None, None);
+                        }
+                    });
+                    if self.gitview.log_path.is_some() {
+                        ui.label(dim("history of one file — renames followed"));
+                    }
                     self.git_log_list(ui, s);
                 });
         });
@@ -3861,6 +3912,9 @@ impl App {
                     skip: self.gitview.commits.len() as u32,
                     limit: 50,
                     rev: self.gitview.log_rev.clone(),
+                    grep: self.gitview.log_grep.clone(),
+                    author: self.gitview.log_author.clone(),
+                    path: self.gitview.log_path.clone(),
                 });
             }
         }
@@ -3915,10 +3969,71 @@ impl App {
         let files = files.clone();
         let (syntax, words) = (self.prefs.syntax, self.prefs.word_diff);
         let mut open_at_rev: Option<(String, String)> = None;
+        let mut select_commit: Option<String> = None;
+        // The commit header (`R-D12`): the full message and the facts a
+        // commercial client puts above the patch. Scrolls with the diff so
+        // a long agent-written body cannot pin the files off screen.
+        let detail = match &self.gitview.selection {
+            crate::gitview::Selection::Commit(sha) => self
+                .gitview
+                .commit_details
+                .get(sha)
+                .cloned()
+                .map(|d| (sha.clone(), d)),
+            _ => None,
+        };
         egui::ScrollArea::both()
             .id_salt(("git-diff-scroll", &title))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if let Some((sha, d)) = &detail {
+                    let when = |epoch: i64| {
+                        chrono::DateTime::from_timestamp(epoch, 0)
+                            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_default()
+                    };
+                    let (subject, body) = match d.message.split_once('\n') {
+                        Some((s, b)) => (s.to_string(), b.trim().to_string()),
+                        None => (d.message.clone(), String::new()),
+                    };
+                    ui.label(RichText::new(subject).strong().size(13.0));
+                    if !body.is_empty() {
+                        ui.label(RichText::new(body).monospace().size(11.5));
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(dim(format!("{} · {}", d.author, when(d.epoch))));
+                        if d.committer != d.author || d.commit_epoch != d.epoch {
+                            ui.label(dim(format!(
+                                "· committed by {} · {}",
+                                d.committer,
+                                when(d.commit_epoch)
+                            )));
+                        }
+                        ui.label(dim(format!(
+                            "· {} files +{} −{}",
+                            files.len(),
+                            files.iter().map(|f| f.insertions).sum::<u32>(),
+                            files.iter().map(|f| f.deletions).sum::<u32>(),
+                        )));
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(dim(format!("{} ·", sha.chars().take(10).collect::<String>())));
+                        for p in &d.parents {
+                            if ui
+                                .link(RichText::new(p).monospace().size(11.5).color(BLUE))
+                                .on_hover_text("show this parent commit")
+                                .clicked()
+                            {
+                                select_commit = Some(p.clone());
+                            }
+                        }
+                        for r in &d.refs {
+                            let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
+                            ui.label(RichText::new(r).size(10.0).color(color));
+                        }
+                    });
+                    ui.separator();
+                }
                 if files.is_empty() {
                     ui.label(dim("no textual diff — empty, binary, or a merge with no changes"));
                     return;
@@ -3954,6 +4069,9 @@ impl App {
                     ui.separator();
                 }
             });
+        if let Some(sha) = select_commit {
+            self.gitview.selection = crate::gitview::Selection::Commit(sha);
+        }
         if let Some((path, sha)) = open_at_rev {
             self.explorer.ensure_session(&self.gitview.session.clone().unwrap_or_default());
             self.explorer.open_file_at_rev(&path, &sha);
@@ -4247,6 +4365,20 @@ impl App {
                     .clicked()
                 {
                     self.annotate = !self.annotate;
+                }
+                // File history (`R-D12`): the Git pane's log, pre-filtered
+                // to this path — renames followed by the daemon.
+                if ui
+                    .small_button("history")
+                    .on_hover_text("this file's commits, in the Git pane — renames followed")
+                    .clicked()
+                {
+                    if let Some(sid) = self.explorer.session.clone() {
+                        self.gitview.ensure_session(&sid);
+                    }
+                    self.gitview.filter_input = format!("path:{path}");
+                    self.gitview.set_log_filter(None, None, Some(path.clone()));
+                    self.set_tab(Tab::Git);
                 }
             });
         });

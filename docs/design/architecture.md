@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-27
+updated: 2026-07-28
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -63,6 +63,13 @@ wedge the event loop. What the client keeps — open tabs, pins, expanded
 directories, per session in `~/.mogeung/explorer.json` — is view state, not
 authority, the same standing as the keymap and the layout: file *bodies* are
 never persisted, and every restore re-asks the daemon.
+
+The git view (`R-D10`–`R-D12`) is the third read surface: log, diffs,
+status, refs, stashes, blame, historical file bodies — every one a
+fire-and-forget command on the blocking pool, every one read-only by
+protocol, with client-supplied shas, ref names and filters shape-checked
+before git sees an argument. See
+[wire-protocol.md](wire-protocol.md) for the family and its hygiene rules.
 
 ## The scan loop
 

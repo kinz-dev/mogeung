@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — git table stakes (2026-07-28)
+
+Roadmap `R-D12`; see
+[docs/features/0012-git-table-stakes.md](docs/features/0012-git-table-stakes.md).
+
+**Added — commits tell their whole story.** Selecting a commit now shows
+its full message — subject and the body agents actually write — plus
+author, committer when different, absolute dates, clickable parent shas,
+ref decorations, and a files/±lines diffstat, above the diff it already
+showed.
+
+**Added — the log is searchable.** One filter box over the log: plain
+text matches commit messages, `author:` and `path:` pull their own
+filters, all literal and case-insensitive — never regex. Filtering by a
+path follows renames, which makes the filtered log double as **file
+history**; the Editor grows a `history` button that lands there
+pre-filled. Paging keeps working under any filter, and a page answered
+under an old filter is dropped, not shown.
+
 ## Unreleased — git depth (2026-07-28)
 
 Roadmap `R-D11`; see

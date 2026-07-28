@@ -8,7 +8,7 @@
 
 use mogeung_core::change::FileChange;
 use mogeung_core::wire::{
-    BlameLine, CommitInfo, RefsInfo, StashInfo, StatusEntry, SubmoduleInfo,
+    BlameLine, CommitDetail, CommitInfo, RefsInfo, StashInfo, StatusEntry, SubmoduleInfo,
 };
 use mogeung_core::SessionId;
 use std::collections::{HashMap, HashSet};
@@ -39,6 +39,15 @@ pub struct GitView {
     /// The ref the log is scoped to; `None` is HEAD. Changing it goes
     /// through [`GitView::set_log_rev`], which restarts the log.
     pub log_rev: Option<String>,
+    /// The filter narrowing the log (`R-D12`); all three set through
+    /// [`GitView::set_log_filter`], which restarts the log. A set `path`
+    /// makes the log a file's history (the daemon follows renames).
+    pub log_grep: Option<String>,
+    pub log_author: Option<String>,
+    pub log_path: Option<String>,
+    /// What the filter box currently reads — the uncommitted keystrokes;
+    /// the parsed, active filter is the three fields above.
+    pub filter_input: String,
     /// Graph lanes for `commits`, recomputed whenever the log changes.
     pub graph: Vec<GraphRow>,
     pub status: Vec<StatusEntry>,
@@ -49,6 +58,8 @@ pub struct GitView {
     pub selection: Selection,
     /// sha → its parsed diff.
     pub commit_diffs: HashMap<String, Vec<FileChange>>,
+    /// sha → its header, when the daemon could produce one. `R-D12`.
+    pub commit_details: HashMap<String, CommitDetail>,
     /// path → its uncommitted diff against HEAD.
     pub local_diffs: HashMap<String, Vec<FileChange>>,
     pub pending_shows: HashSet<String>,
@@ -102,6 +113,7 @@ impl GitView {
         self.status_pending = false;
         self.status_loaded = false;
         self.commit_diffs.clear();
+        self.commit_details.clear();
         self.local_diffs.clear();
         self.pending_shows.clear();
         self.pending_file_diffs.clear();
@@ -128,6 +140,29 @@ impl GitView {
             return;
         }
         self.log_rev = rev;
+        self.restart_log();
+    }
+
+    /// Narrow the log (`R-D12`). A no-op when nothing changed; otherwise
+    /// the log restarts from page zero under the new filter.
+    pub fn set_log_filter(
+        &mut self,
+        grep: Option<String>,
+        author: Option<String>,
+        path: Option<String>,
+    ) {
+        if (self.log_grep.as_ref(), self.log_author.as_ref(), self.log_path.as_ref())
+            == (grep.as_ref(), author.as_ref(), path.as_ref())
+        {
+            return;
+        }
+        self.log_grep = grep;
+        self.log_author = author;
+        self.log_path = path;
+        self.restart_log();
+    }
+
+    fn restart_log(&mut self) {
         self.commits.clear();
         self.graph.clear();
         self.log_done = false;
@@ -143,13 +178,18 @@ impl GitView {
         skip: u32,
         commits: Vec<CommitInfo>,
         done: bool,
-        rev: Option<String>,
+        scope: LogScope,
     ) {
         if self.session.as_ref() != Some(session_id) {
             return;
         }
-        // A page for a scope we have since left is the branch-switch stray.
-        if rev != self.log_rev {
+        // A page for a scope or filter we have since left is a stray — the
+        // branch-switch rule, extended to retyped filters.
+        if scope.rev != self.log_rev
+            || scope.grep != self.log_grep
+            || scope.author != self.log_author
+            || scope.path != self.log_path
+        {
             return;
         }
         self.log_pending = false;
@@ -180,11 +220,15 @@ impl GitView {
         session_id: &SessionId,
         sha: String,
         files: Vec<FileChange>,
+        detail: Option<CommitDetail>,
     ) {
         if self.session.as_ref() != Some(session_id) {
             return;
         }
         self.pending_shows.remove(&sha);
+        if let Some(d) = detail {
+            self.commit_details.insert(sha.clone(), d);
+        }
         self.commit_diffs.insert(sha, files);
     }
 
@@ -285,6 +329,44 @@ impl GitView {
             .map(|e| e.path.as_str())
             .collect()
     }
+}
+
+/// The scope a log page was answered under — compared against the pane's
+/// current scope to drop strays.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LogScope {
+    pub rev: Option<String>,
+    pub grep: Option<String>,
+    pub author: Option<String>,
+    pub path: Option<String>,
+}
+
+/// Parse the filter box: `author:` and `path:` tokens pull out, everything
+/// else joins into the message filter. Order-free, quotes not needed —
+/// `fix parser author:keith` and `author:keith fix parser` mean the same.
+pub fn parse_filter_input(input: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let mut grep_words: Vec<&str> = Vec::new();
+    let mut author = None;
+    let mut path = None;
+    for tok in input.split_whitespace() {
+        if let Some(a) = tok.strip_prefix("author:") {
+            if !a.is_empty() {
+                author = Some(a.to_string());
+            }
+        } else if let Some(p) = tok.strip_prefix("path:") {
+            if !p.is_empty() {
+                path = Some(p.to_string());
+            }
+        } else {
+            grep_words.push(tok);
+        }
+    }
+    let grep = if grep_words.is_empty() {
+        None
+    } else {
+        Some(grep_words.join(" "))
+    };
+    (grep, author, path)
 }
 
 /// Is `path` (repo-relative, no trailing slash) under any ignored prefix?
@@ -452,7 +534,7 @@ mod tests {
     fn stray_answers_for_another_session_are_dropped() {
         let mut g = GitView::default();
         g.ensure_session(&"a".to_string());
-        g.ingest_commits(&"b".to_string(), 0, vec![commit("x")], true, None);
+        g.ingest_commits(&"b".to_string(), 0, vec![commit("x")], true, LogScope::default());
         assert!(g.commits.is_empty(), "session b's log landed in session a");
         g.ingest_blame(&"b".to_string(), "f.rs".into(), vec![], false, None);
         assert!(g.blame.is_empty());
@@ -470,12 +552,12 @@ mod tests {
     fn switching_sessions_drops_the_cache_and_staying_keeps_it() {
         let mut g = GitView::default();
         g.ensure_session(&"a".to_string());
-        g.ingest_commits(&"a".to_string(), 0, vec![commit("x")], true, None);
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("x")], true, LogScope::default());
         g.selection = Selection::Commit("x".into());
         g.ensure_session(&"b".to_string());
         assert!(g.commits.is_empty(), "session a's log survived into b");
         assert_eq!(g.selection, Selection::None);
-        g.ingest_commits(&"b".to_string(), 0, vec![commit("y")], true, None);
+        g.ingest_commits(&"b".to_string(), 0, vec![commit("y")], true, LogScope::default());
         g.ensure_session(&"b".to_string());
         assert_eq!(g.commits.len(), 1, "re-ensuring the same session wiped it");
     }
@@ -486,15 +568,15 @@ mod tests {
     fn log_pages_append_in_order_and_duplicates_are_dropped() {
         let mut g = GitView::default();
         g.ensure_session(&"a".to_string());
-        g.ingest_commits(&"a".to_string(), 0, vec![commit("1"), commit("2")], false, None);
-        g.ingest_commits(&"a".to_string(), 2, vec![commit("3")], true, None);
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("1"), commit("2")], false, LogScope::default());
+        g.ingest_commits(&"a".to_string(), 2, vec![commit("3")], true, LogScope::default());
         assert_eq!(g.commits.len(), 3);
         assert!(g.log_done);
         // A stale second answer for an offset we are past: dropped.
-        g.ingest_commits(&"a".to_string(), 2, vec![commit("3")], true, None);
+        g.ingest_commits(&"a".to_string(), 2, vec![commit("3")], true, LogScope::default());
         assert_eq!(g.commits.len(), 3, "a repeated page duplicated the log");
         // Page zero is a refresh: replace, not append.
-        g.ingest_commits(&"a".to_string(), 0, vec![commit("9")], true, None);
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("9")], true, LogScope::default());
         assert_eq!(g.commits.len(), 1);
     }
 
@@ -504,18 +586,21 @@ mod tests {
     fn changing_the_log_scope_restarts_the_log_and_drops_strays() {
         let mut g = GitView::default();
         g.ensure_session(&"a".to_string());
-        g.ingest_commits(&"a".to_string(), 0, vec![commit("1")], true, None);
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("1")], true, LogScope::default());
         g.set_log_rev(Some("fix/x".into()));
         assert!(g.commits.is_empty(), "the old scope's log survived");
         // The stray: an answer for the HEAD scope after switching to fix/x.
-        g.ingest_commits(&"a".to_string(), 0, vec![commit("2")], true, None);
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("2")], true, LogScope::default());
         assert!(g.commits.is_empty(), "a stray scope's page landed");
         g.ingest_commits(
             &"a".to_string(),
             0,
             vec![commit("3")],
             true,
-            Some("fix/x".into()),
+            LogScope {
+                rev: Some("fix/x".into()),
+                ..Default::default()
+            },
         );
         assert_eq!(g.commits.len(), 1);
         // Same scope again: nothing moves.
@@ -523,12 +608,82 @@ mod tests {
         assert_eq!(g.commits.len(), 1);
     }
 
+    /// The filter box's little grammar: prefixes pull out, order is free,
+    /// the rest is message text.
+    #[test]
+    fn filter_input_parses_prefixes_in_any_order() {
+        assert_eq!(
+            parse_filter_input("fix parser author:keith path:src/git.rs"),
+            (
+                Some("fix parser".into()),
+                Some("keith".into()),
+                Some("src/git.rs".into())
+            )
+        );
+        assert_eq!(
+            parse_filter_input("path:a.rs still a grep"),
+            (Some("still a grep".into()), None, Some("a.rs".into()))
+        );
+        assert_eq!(parse_filter_input("   "), (None, None, None));
+        assert_eq!(
+            parse_filter_input("author:"),
+            (None, None, None),
+            "an empty prefix is no filter, not an empty one"
+        );
+    }
+
+    /// Retyping the filter restarts the log, and a page answered under the
+    /// old filter must not land in the new one.
+    #[test]
+    fn changing_the_filter_restarts_the_log_and_drops_strays() {
+        let mut g = GitView::default();
+        g.ensure_session(&"a".to_string());
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("1")], true, LogScope::default());
+        g.set_log_filter(Some("fix".into()), None, None);
+        assert!(g.commits.is_empty(), "the unfiltered log survived");
+        // The stray: an unfiltered page arriving after the filter was set.
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("2")], true, LogScope::default());
+        assert!(g.commits.is_empty(), "a stray unfiltered page landed");
+        g.ingest_commits(
+            &"a".to_string(),
+            0,
+            vec![commit("3")],
+            true,
+            LogScope {
+                grep: Some("fix".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.commits.len(), 1);
+        // The same filter again is a no-op, not a restart.
+        g.set_log_filter(Some("fix".into()), None, None);
+        assert_eq!(g.commits.len(), 1);
+    }
+
+    /// A commit's header rides its diff and is cached by sha; a diff
+    /// without a header (the detail fetch failed) still lands.
+    #[test]
+    fn commit_details_ride_the_diff_and_absence_is_fine() {
+        let mut g = GitView::default();
+        g.ensure_session(&"a".to_string());
+        let detail = CommitDetail {
+            author: "keith".into(),
+            message: "feat: x\n\nwhy".into(),
+            ..Default::default()
+        };
+        g.ingest_commit_diff(&"a".to_string(), "abc".into(), vec![], Some(detail));
+        g.ingest_commit_diff(&"a".to_string(), "def".into(), vec![], None);
+        assert_eq!(g.commit_details["abc"].author, "keith");
+        assert!(!g.commit_details.contains_key("def"));
+        assert!(g.commit_diffs.contains_key("def"), "no header must not mean no diff");
+    }
+
     /// Refresh forgets answers but not the user's place.
     #[test]
     fn refresh_clears_answers_but_keeps_selection() {
         let mut g = GitView::default();
         g.ensure_session(&"a".to_string());
-        g.ingest_commits(&"a".to_string(), 0, vec![commit("x")], true, None);
+        g.ingest_commits(&"a".to_string(), 0, vec![commit("x")], true, LogScope::default());
         g.selection = Selection::Commit("x".into());
         g.ingest_refs(&"a".to_string(), RefsInfo::default());
         g.ingest_stashes(&"a".to_string(), vec![]);

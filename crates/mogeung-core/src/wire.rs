@@ -75,13 +75,22 @@ pub enum ClientMsg {
     /// stages, commits, or checks out — the observer rule, one layer down.
     ///
     /// `rev` scopes the log to a branch or ref without checking anything
-    /// out; `None` means `HEAD`. `R-D11`.
+    /// out; `None` means `HEAD` (`R-D11`). `grep`/`author` narrow it by
+    /// literal, case-insensitive text; `path` narrows it to one file *and
+    /// follows renames* — which is what makes a filtered log double as
+    /// file history (`R-D12`).
     GitLog {
         session_id: SessionId,
         skip: u32,
         limit: u32,
         #[serde(default)]
         rev: Option<String>,
+        #[serde(default)]
+        grep: Option<String>,
+        #[serde(default)]
+        author: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
     },
     /// One commit's diff, parsed into the same file/hunk shapes as `Change`.
     GitShow { session_id: SessionId, sha: String },
@@ -157,6 +166,27 @@ pub struct CommitInfo {
     /// author column — the daemon cannot actually know.
     #[serde(default)]
     pub touches_session: bool,
+}
+
+/// Everything about one commit beyond its diff — the header a commercial
+/// client shows above the patch. Carried on [`ServerMsg::GitCommitDiff`]
+/// as an optional extra, so a detail-fetch failure degrades to "no
+/// header", never to "no diff". `R-D12`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CommitDetail {
+    pub author: String,
+    pub committer: String,
+    /// Unix seconds of the author date.
+    pub epoch: i64,
+    /// Unix seconds of the committer date — differs after rebase/amend.
+    pub commit_epoch: i64,
+    /// Abbreviated parent shas, clickable on the other side.
+    pub parents: Vec<String>,
+    /// Ref decorations, as `%D` names them.
+    pub refs: Vec<String>,
+    /// The full message — subject line first, body after. Agents write
+    /// long bodies, and the body is often the only honest record of why.
+    pub message: String,
 }
 
 /// One entry of a [`ClientMsg::GitStatus`] answer.
@@ -329,8 +359,9 @@ pub enum ServerMsg {
         truncated: bool,
     },
     /// A page of commits. `done` means history ended inside this page.
-    /// `rev` echoes the scope it was asked for, so a client that has since
-    /// switched branches can drop the stray.
+    /// The scope and filters echo back exactly as asked, so a client that
+    /// has since switched branches — or retyped the filter — can drop the
+    /// stray.
     GitCommits {
         session_id: SessionId,
         skip: u32,
@@ -338,12 +369,21 @@ pub enum ServerMsg {
         done: bool,
         #[serde(default)]
         rev: Option<String>,
+        #[serde(default)]
+        grep: Option<String>,
+        #[serde(default)]
+        author: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
     },
-    /// One commit's diff, in the same shapes the Changes tab renders.
+    /// One commit's diff, in the same shapes the Changes tab renders —
+    /// plus its header (`R-D12`), absent when the detail fetch failed.
     GitCommitDiff {
         session_id: SessionId,
         sha: String,
         files: Vec<crate::change::FileChange>,
+        #[serde(default)]
+        detail: Option<Box<CommitDetail>>,
     },
     /// The uncommitted state of the session's repo.
     GitLocalChanges {

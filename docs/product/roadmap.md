@@ -131,6 +131,7 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-D9 | **Blast radius** — callers and tests affected by a changed symbol | L | ✅ |
 | R-D10 | **Git view** — recent commits, uncommitted changes, per-commit diffs, blame in the Editor gutter. Read-only, permanently ([A18](assumptions.md)). See [feature 0010](../features/0010-git-view.md) | L |  |
 | R-D11 | **Git depth** — branches, refs, stashes, submodules, commit graph, re-blame, file-at-revision, range diffs. The reading half of a commercial client; still read-only, permanently ([A19](assumptions.md)). See [feature 0011](../features/0011-git-depth.md) | L |  |
+| R-D12 | **Git table stakes** — full commit details, log filtering by message/author/path, file history with rename following. See [feature 0012](../features/0012-git-table-stakes.md) | M |  |
 
 ## E. Verification
 

@@ -853,10 +853,11 @@ impl AppState {
         skip: u32,
         limit: u32,
         rev: Option<String>,
+        filter: crate::git::LogFilter,
     ) -> Result<(Vec<mogeung_core::wire::CommitInfo>, bool)> {
         let root = self.git_root(id).await?;
         let (mut commits, files, done) = tokio::task::spawn_blocking(move || {
-            crate::git::log_page(&root, skip, limit, rev.as_deref())
+            crate::git::log_page(&root, skip, limit, rev.as_deref(), &filter)
         })
         .await??;
         // Attribution (`R-D11`): a commit made during this session's
@@ -937,7 +938,10 @@ impl AppState {
         &self,
         id: &str,
         sha: &str,
-    ) -> Result<Vec<mogeung_core::change::FileChange>> {
+    ) -> Result<(
+        Vec<mogeung_core::change::FileChange>,
+        Option<mogeung_core::wire::CommitDetail>,
+    )> {
         let root = self.git_root(id).await?;
         let sha = sha.to_string();
         tokio::task::spawn_blocking(move || crate::git::show_commit(&root, &sha)).await?
