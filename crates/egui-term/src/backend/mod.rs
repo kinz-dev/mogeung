@@ -190,18 +190,29 @@ impl TerminalBackend {
         let _pty_event_subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
             .spawn(move || loop {
-                if let Ok(event) = event_receiver.recv() {
-                    pty_event_proxy_sender
-                        .send((id, event.clone()))
-                        .unwrap_or_else(|_| {
-                            panic!("pty_event_subscription_{}: sending PtyEvent is failed", id)
-                        });
-                    app_context.clone().request_repaint();
-                    match event {
-                        Event::Exit => break,
-                        Event::PtyWrite(pty) => pty_notifier.notify(pty.into_bytes()),
-                        _ => {}
+                // LOCAL CHANGE (mogeung): upstream wrote `if let Ok(event) =
+                // recv()` inside `loop`, which turns into a 100%-CPU busy
+                // spin the moment every sender is gone — recv() errors
+                // immediately and the loop retries forever. Dropping the
+                // backend (every session switch) is exactly that moment, so
+                // each switch leaked one spinning thread for the life of the
+                // process. A closed channel ends the thread instead.
+                match event_receiver.recv() {
+                    Ok(event) => {
+                        // LOCAL CHANGE (mogeung): upstream panicked when the
+                        // app side hung up first; that race is a normal
+                        // shutdown order, not a bug worth crashing a thread.
+                        if pty_event_proxy_sender.send((id, event.clone())).is_err() {
+                            break;
+                        }
+                        app_context.clone().request_repaint();
+                        match event {
+                            Event::Exit => break,
+                            Event::PtyWrite(pty) => pty_notifier.notify(pty.into_bytes()),
+                            _ => {}
+                        }
                     }
+                    Err(_) => break,
                 }
             })?;
 

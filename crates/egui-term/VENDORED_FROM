@@ -23,6 +23,14 @@ Local changes:
     is now reported as mouse buttons 64/65 when MOUSE_MODE is active, one
     press-only report per line, with Shift bypassing reporting per convention.
     Marked with `LOCAL CHANGE (mogeung)`.
+  - src/backend/mod.rs, the pty_event_subscription thread — upstream looped
+    `if let Ok(event) = recv()`, which busy-spins at 100% CPU forever once the
+    channel's senders are gone; dropping a TerminalBackend (every session
+    switch in the Terminal pane) is exactly that, so each switch leaked one
+    spinning thread. Found live: 38 leaked threads pinning every core after
+    two hours of use. A closed channel now ends the thread, and a hung-up app
+    receiver ends it instead of panicking. Marked with
+    `LOCAL CHANGE (mogeung)`.
 
 To update: clone upstream, copy src/ over this one, re-apply the changes above
 (grep for `LOCAL CHANGE`), run the workspace tests.
