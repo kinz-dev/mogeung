@@ -996,6 +996,13 @@ impl App {
         if vis.is_empty() {
             return;
         }
+        // `j`/`k` is triage by hand; follow mode yields to it exactly like
+        // it yields to a card click, or the cursor moves for one frame and
+        // snaps back to the top.
+        if self.prefs.auto_select {
+            self.prefs.auto_select = false;
+            self.prefs_dirty = true;
+        }
         let cur = self
             .selected
             .as_ref()
@@ -1865,7 +1872,10 @@ impl App {
                         }
                         if ui
                             .checkbox(&mut self.prefs.auto_select, "follow")
-                            .on_hover_text("keep the top of the queue selected as it changes")
+                            .on_hover_text(
+                                "keep the top of the queue selected as it changes — \
+                                 picking a session by click or j/k switches this off",
+                            )
                             .changed()
                         {
                             self.prefs_dirty = true;
@@ -2005,7 +2015,11 @@ impl App {
                 let mut open_terminal = false;
 
                 // R-B8. Follow mode: the top of the queue is by definition the
-                // thing most worth looking at, so let it drive the pane.
+                // thing most worth looking at, so let it drive the pane —
+                // until a hand-picked selection takes over (below). Without
+                // that yield, a click held for exactly one frame and then
+                // snapped back to the top, which read as the click not
+                // working at all.
                 if self.prefs.auto_select {
                     if let Some(top) = vis.first() {
                         if self.selected.as_ref() != Some(&top.session_id) {
@@ -2013,6 +2027,10 @@ impl App {
                         }
                     }
                 }
+                // A card click is an explicit choice; it must not lose to
+                // follow on the very next frame. Tracked separately from
+                // `to_select` because follow writes that too.
+                let mut hand_picked = false;
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -2220,6 +2238,7 @@ impl App {
                                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                                 if card.clicked() {
                                     to_select = Some(item.session_id.clone());
+                                    hand_picked = true;
                                     // Clicking a session means "take me to it",
                                     // and where it is is the terminal. Only when
                                     // there is one to show: for a session not
@@ -2302,6 +2321,15 @@ impl App {
                     });
 
                 if let Some(id) = to_select {
+                    // Choosing by hand turns follow off — visibly, in the
+                    // checkbox — the way tailing a log stops when you
+                    // scroll up. The alternative (follow silently winning)
+                    // is a click that does nothing, which is how this bug
+                    // was reported.
+                    if hand_picked && self.prefs.auto_select {
+                        self.prefs.auto_select = false;
+                        self.prefs_dirty = true;
+                    }
                     self.select(id);
                     if open_terminal {
                         self.set_tab(Tab::Terminal);

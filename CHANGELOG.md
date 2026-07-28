@@ -11,6 +11,12 @@ author, committer when different, absolute dates, clickable parent shas,
 ref decorations, and a files/±lines diffstat, above the diff it already
 showed.
 
+**Fixed — clicking a queue card works while "follow" is on.** Follow mode
+re-selected the top of the queue every frame, so a hand-picked session
+held for one frame and snapped back — a click that read as doing nothing.
+Picking a session by click or `j`/`k` now switches follow off, visibly in
+its checkbox, the way tailing a log stops when you scroll up.
+
 **Added — the log is searchable.** One filter box over the log: plain
 text matches commit messages, `author:` and `path:` pull their own
 filters, all literal and case-insensitive — never regex. Filtering by a
