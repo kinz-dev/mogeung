@@ -377,6 +377,7 @@ impl App {
     }
 
     fn ingest(&mut self) {
+        let mut sessions_changed = false;
         for msg in self.net.drain() {
             match msg {
                 ServerMsg::Snapshot { sessions, queue } => {
@@ -387,9 +388,11 @@ impl App {
                     self.queue = queue;
                     // A reconnect invalidates our transcript cache.
                     self.hydrated.clear();
+                    sessions_changed = true;
                 }
                 ServerMsg::SessionUpdated { session } => {
                     self.sessions.insert(session.id.clone(), Rc::from(session));
+                    sessions_changed = true;
                 }
                 ServerMsg::SessionRemoved { session_id } => {
                     self.sessions.remove(&session_id);
@@ -542,6 +545,20 @@ impl App {
                         self.errors.remove(0);
                     }
                 }
+            }
+        }
+        // `/clear` keeps the process but mints a new session id; the live
+        // registry is per-pid, so the succession is visible right here.
+        // Hand-applied view-state — labels, pins — follows the work
+        // instead of dying with the old id.
+        if sessions_changed {
+            let facts: Vec<(String, bool, Option<u32>, i64)> = self
+                .sessions
+                .values()
+                .map(|s| (s.id.clone(), s.alive, s.pid, s.started_at.timestamp()))
+                .collect();
+            if self.prefs.migrate_succession(&facts) {
+                self.prefs_dirty = true;
             }
         }
     }

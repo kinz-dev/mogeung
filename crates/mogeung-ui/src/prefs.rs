@@ -205,6 +205,52 @@ impl Prefs {
             self.labels.insert(id.to_string(), label.to_string());
         }
     }
+
+    /// `/clear` in Claude Code keeps the process but mints a fresh session
+    /// id, so a hand-applied label lands on a dead id while the same work
+    /// carries on under a new one. The live registry is per-*pid*, which
+    /// makes succession a fact rather than a guess: a dead session and a
+    /// live one sharing a pid are the same conversation. Labels and pins
+    /// follow it.
+    ///
+    /// `sessions` is `(id, alive, pid, started_epoch)` for every known
+    /// session. Conservative on purpose: a label never overwrites one the
+    /// successor was given by hand, and nothing is invented — only moved.
+    /// Returns whether anything changed, so the caller can mark the prefs
+    /// dirty.
+    pub fn migrate_succession(&mut self, sessions: &[(String, bool, Option<u32>, i64)]) -> bool {
+        let mut changed = false;
+        for (succ_id, alive, pid, _) in sessions {
+            if !alive {
+                continue;
+            }
+            let Some(pid) = pid else { continue };
+            // The latest dead session on the same pid is the immediate
+            // predecessor — /clear twice makes a chain, and label state
+            // walks it one hop per pass.
+            let pred = sessions
+                .iter()
+                .filter(|(id, alive, p, _)| {
+                    !alive && id != succ_id && p.as_ref() == Some(pid)
+                })
+                .max_by_key(|(_, _, _, started)| *started)
+                .map(|(id, _, _, _)| id.clone());
+            let Some(pred_id) = pred else { continue };
+            if self.label(succ_id).is_none() {
+                if let Some(label) = self.label(&pred_id).map(str::to_string) {
+                    self.labels.remove(&pred_id);
+                    self.labels.insert(succ_id.clone(), label);
+                    changed = true;
+                }
+            }
+            if self.pinned.contains(&pred_id) && !self.pinned.contains(succ_id) {
+                self.pinned.remove(&pred_id);
+                self.pinned.insert(succ_id.clone());
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +328,77 @@ mod tests {
         assert!(!json.contains("reveal"), "reveal_hidden leaked into the file");
         let back: Prefs = serde_json::from_str(&json).unwrap();
         assert!(!back.reveal_hidden);
+    }
+
+    /// The `/clear` case: same pid, new session id — the label and pin
+    /// must follow the work, not die with the old id.
+    #[test]
+    fn labels_and_pins_follow_a_cleared_session_to_its_successor() {
+        let mut p = Prefs::default();
+        p.set_label("old", "api-work");
+        p.toggle_pin("old");
+        let sessions = vec![
+            ("old".to_string(), false, Some(4242), 100),
+            ("new".to_string(), true, Some(4242), 200),
+        ];
+        assert!(p.migrate_succession(&sessions));
+        assert_eq!(p.label("new"), Some("api-work"));
+        assert_eq!(p.label("old"), None, "the dead id must not keep a shadow copy");
+        assert!(p.is_pinned("new"));
+        assert!(!p.is_pinned("old"));
+        // Idempotent: a second pass over the same facts moves nothing.
+        assert!(!p.migrate_succession(&sessions));
+    }
+
+    /// A label given to the successor by hand wins over inheritance.
+    #[test]
+    fn succession_never_overwrites_a_hand_applied_label() {
+        let mut p = Prefs::default();
+        p.set_label("old", "stale-name");
+        p.set_label("new", "fresh-name");
+        let sessions = vec![
+            ("old".to_string(), false, Some(1), 100),
+            ("new".to_string(), true, Some(1), 200),
+        ];
+        p.migrate_succession(&sessions);
+        assert_eq!(p.label("new"), Some("fresh-name"));
+        assert_eq!(p.label("old"), Some("stale-name"), "the loser stays put, not deleted");
+    }
+
+    /// Two `/clear`s before a scan: the *latest* predecessor is the one
+    /// whose state carries — and only pid-sharers are ever considered.
+    #[test]
+    fn succession_picks_the_latest_predecessor_and_ignores_strangers() {
+        let mut p = Prefs::default();
+        p.set_label("first", "renamed-early");
+        p.set_label("second", "current-name");
+        p.set_label("other-pid", "unrelated");
+        let sessions = vec![
+            ("first".to_string(), false, Some(7), 100),
+            ("second".to_string(), false, Some(7), 200),
+            ("other-pid".to_string(), false, Some(9), 300),
+            ("third".to_string(), true, Some(7), 400),
+            ("no-pid".to_string(), true, None, 500),
+        ];
+        p.migrate_succession(&sessions);
+        assert_eq!(p.label("third"), Some("current-name"));
+        assert_eq!(p.label("first"), Some("renamed-early"), "only the immediate predecessor moves");
+        assert_eq!(p.label("other-pid"), Some("unrelated"));
+        assert_eq!(p.label("no-pid"), None);
+    }
+
+    /// Two live sessions never trade state — succession requires a death.
+    #[test]
+    fn succession_requires_a_dead_predecessor() {
+        let mut p = Prefs::default();
+        p.set_label("a", "mine");
+        let sessions = vec![
+            ("a".to_string(), true, Some(3), 100),
+            ("b".to_string(), true, Some(3), 200),
+        ];
+        assert!(!p.migrate_succession(&sessions));
+        assert_eq!(p.label("a"), Some("mine"));
+        assert_eq!(p.label("b"), None);
     }
 
     #[test]

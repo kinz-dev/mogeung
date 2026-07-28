@@ -11,6 +11,13 @@ author, committer when different, absolute dates, clickable parent shas,
 ref decorations, and a files/±lines diffstat, above the diff it already
 showed.
 
+**Fixed — labels and pins survive `/clear`.** Claude Code's `/clear`
+keeps the process but mints a fresh session id, so a hand-applied label
+died with the old id and the "same" session came back nameless. The live
+registry is per-pid, which makes the succession a fact: when a dead
+session and a live one share a pid, the label and pin follow the work.
+A label never overwrites one you gave the successor by hand.
+
 **Fixed — narrow panes scroll sideways instead of folding rows.** The
 earlier worktree-tree fix added a horizontal scroll area but egui still
 hands content the visible width, so rows kept wrapping at the pane edge
