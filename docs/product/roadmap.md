@@ -10,6 +10,11 @@ The ranked backlog.
 
 Effort: **S** = hours · **M** = about a day · **L** = multi-day.
 
+Status: **✅** = shipped and proven · **⏳** = built, installed, awaiting
+the dogfooding verdict ([A19](assumptions.md)) · blank = not started.
+The distinction exists because a blank box on built work read as "not
+done" and got R-D10 asked for twice.
+
 Pillars `A`, `B`, `C` (bar one item) and `D` are shipped. What remains — `E`
 verification, `F` cross-session intelligence, `G` rate limits, `H` doc sprawl —
 is still speculation until [item 0](#0-the-non-feature) is done.
@@ -93,9 +98,9 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B21 | **Command palette** — every action by name, with its binding shown | M | ✅ |
 | R-B22 | **Keyboard-driven keyboard settings** — cursor, search and rebind without a mouse | S | ✅ |
 | R-B23 | **Status bar** — session reference facts out of the header and along the bottom | S | ✅ |
-| R-B24 | **File explorer pane** — the session's worktree as a tree, with a read-only syntax-highlighted viewer. Deliberately not an editor — see [pillar K](#k-explicitly-not) and [feature 0007](../features/0007-file-explorer.md) | M |  |
-| R-B25 | **Explorer workbench** — remember and reveal, multi-file tabs, go-to-file, content search, in one pass ([A16](assumptions.md)). Still a viewer, never an editor. See [feature 0008](../features/0008-explorer-workbench.md) | L |  |
-| R-B26 | **Session labels** — name a session yourself; colour badge on the card, `label:` in the filter. Client view-state like pins ([A17](assumptions.md)). See [feature 0009](../features/0009-session-labels.md) | S |  |
+| R-B24 | **File explorer pane** — the session's worktree as a tree, with a read-only syntax-highlighted viewer. Deliberately not an editor — see [pillar K](#k-explicitly-not) and [feature 0007](../features/0007-file-explorer.md) | M | ⏳ |
+| R-B25 | **Explorer workbench** — remember and reveal, multi-file tabs, go-to-file, content search, in one pass ([A16](assumptions.md)). Still a viewer, never an editor. See [feature 0008](../features/0008-explorer-workbench.md) | L | ⏳ |
+| R-B26 | **Session labels** — name a session yourself; colour badge on the card, `label:` in the filter. Client view-state like pins ([A17](assumptions.md)). See [feature 0009](../features/0009-session-labels.md) | S | ⏳ |
 | R-B27 | **Editor git ergonomics** — a diff gutter vs HEAD with next/prev-change keys, inline blame on the current line, compare-with-revision side by side, and a gutter mark on lines *this session* changed (the mogeung-only one). Still a viewer, never an editor | L |  |
 | R-B28 | **Editor navigation** — symbol outline and go-to-symbol (tree-sitter is already in the tree), go-to-line, sticky scroll, folding, highlight-other-occurrences | L |  |
 | R-B29 | **Editor content comforts** — markdown preview, image preview, per-tab word wrap, copy path / `path:line`, file facts in the header, bookmarks with a jump list | M |  |
@@ -152,14 +157,14 @@ bar `R-B24`–`R-B26` are held to.
 | R-D7 | **Commit-aware diffing** — committed work currently vanishes as the base moves with HEAD ([A9](assumptions.md)) | M | ✅ |
 | R-D8 | **Review debt across HEAD** — what fraction of the repo no human has read | L | ✅ |
 | R-D9 | **Blast radius** — callers and tests affected by a changed symbol | L | ✅ |
-| R-D10 | **Git view** — recent commits, uncommitted changes, per-commit diffs, blame in the Editor gutter. Read-only, permanently ([A18](assumptions.md)). See [feature 0010](../features/0010-git-view.md) | L |  |
-| R-D11 | **Git depth** — branches, refs, stashes, submodules, commit graph, re-blame, file-at-revision, range diffs. The reading half of a commercial client; still read-only, permanently ([A19](assumptions.md)). See [feature 0011](../features/0011-git-depth.md) | L |  |
-| R-D12 | **Git table stakes** — full commit details, log filtering by message/author/path, file history with rename following. See [feature 0012](../features/0012-git-table-stakes.md) | M |  |
-| R-D13 | **Git forensics** — pickaxe search (`-S`: when did this string appear/vanish), copy hunk/file/commit as patch text, an attribution-only log filter, hunk-navigation keys in git diffs. All small, all aimed at auditing agent work. See [feature 0013](../features/0013-git-reach.md) | M |  |
-| R-D14 | **Diff ergonomics** — expand hunk context on demand (daemon addition), a commit's files as a directory tree instead of a flat list, whitespace-ignore and side-by-side toggles in git diffs. See [feature 0013](../features/0013-git-reach.md) | M |  |
-| R-D15 | **Ref reach** — branch-to-branch compare (three-dot from the merge base, plus "commits on A not on B"), remote branches in the list, a read-only reflog, and `git worktree list` linked to the sessions running in each. See [feature 0013](../features/0013-git-reach.md) | M |  |
-| R-D16 | **Conflict three-way view** — ours/base/theirs read-only for a conflicted file, beyond the markers-in-a-diff we have. See [feature 0013](../features/0013-git-reach.md) | M |  |
-| R-D17 | **Review-state on the log** — R-D8's read/unread marks surfaced per commit, so "which commits has no human read" is visible where commits live. A step toward `R-F2`. See [feature 0013](../features/0013-git-reach.md) | M |  |
+| R-D10 | **Git view** — recent commits, uncommitted changes, per-commit diffs, blame in the Editor gutter. Read-only, permanently ([A18](assumptions.md)). See [feature 0010](../features/0010-git-view.md) | L | ⏳ |
+| R-D11 | **Git depth** — branches, refs, stashes, submodules, commit graph, re-blame, file-at-revision, range diffs. The reading half of a commercial client; still read-only, permanently ([A19](assumptions.md)). See [feature 0011](../features/0011-git-depth.md) | L | ⏳ |
+| R-D12 | **Git table stakes** — full commit details, log filtering by message/author/path, file history with rename following. See [feature 0012](../features/0012-git-table-stakes.md) | M | ⏳ |
+| R-D13 | **Git forensics** — pickaxe search (`-S`: when did this string appear/vanish), copy hunk/file/commit as patch text, an attribution-only log filter, hunk-navigation keys in git diffs. All small, all aimed at auditing agent work. See [feature 0013](../features/0013-git-reach.md) | M | ⏳ |
+| R-D14 | **Diff ergonomics** — expand hunk context on demand (daemon addition), a commit's files as a directory tree instead of a flat list, whitespace-ignore and side-by-side toggles in git diffs. See [feature 0013](../features/0013-git-reach.md) | M | ⏳ |
+| R-D15 | **Ref reach** — branch-to-branch compare (three-dot from the merge base, plus "commits on A not on B"), remote branches in the list, a read-only reflog, and `git worktree list` linked to the sessions running in each. See [feature 0013](../features/0013-git-reach.md) | M | ⏳ |
+| R-D16 | **Conflict three-way view** — ours/base/theirs read-only for a conflicted file, beyond the markers-in-a-diff we have. See [feature 0013](../features/0013-git-reach.md) | M | ⏳ |
+| R-D17 | **Review-state on the log** — R-D8's read/unread marks surfaced per commit, so "which commits has no human read" is visible where commits live. A step toward `R-F2`. See [feature 0013](../features/0013-git-reach.md) | M | ⏳ |
 
 ## E. Verification
 
