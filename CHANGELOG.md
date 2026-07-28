@@ -11,6 +11,13 @@ author, committer when different, absolute dates, clickable parent shas,
 ref decorations, and a files/±lines diffstat, above the diff it already
 showed.
 
+**Fixed — narrow panes scroll sideways instead of folding rows.** The
+earlier worktree-tree fix added a horizontal scroll area but egui still
+hands content the visible width, so rows kept wrapping at the pane edge
+and the scrollbar never engaged. Text is now laid out at its natural
+width (`Extend`) inside the tree, local changes, and the branch/log
+lists — resize small and they scroll, not fold.
+
 **Fixed — clicking a queue card works while "follow" is on.** Follow mode
 re-selected the top of the queue every frame, so a hand-picked session
 held for one frame and snapped back — a click that read as doing nothing.

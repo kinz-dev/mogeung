@@ -3424,19 +3424,24 @@ impl App {
                     }
                 });
             });
-            egui::ScrollArea::vertical()
+            // Both axes + Extend, the worktree tree's rule: a long path
+            // scrolls sideways instead of folding — see the tree's comment
+            // for why the scroll area alone is not enough.
+            egui::ScrollArea::both()
                 .id_salt("git-local-scroll")
                 .max_height(ui.available_height() * 0.40)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.spacing_mut().item_spacing.y = 1.0;
                     self.git_local_list(ui, s);
                 });
             ui.separator();
-            egui::ScrollArea::vertical()
+            egui::ScrollArea::both()
                 .id_salt("git-lower-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.spacing_mut().item_spacing.y = 1.0;
                     self.git_ref_sections(ui);
                     ui.horizontal(|ui| {
@@ -4203,13 +4208,20 @@ impl App {
                     }
                 });
             });
-            // Both axes: inside a horizontal scroll area the rows get
-            // unlimited width, so a deep path scrolls instead of wrapping —
-            // a tree whose rows fold onto two lines stops reading as a tree.
+            // Both axes, *and* wrap forced off. The scroll area alone was
+            // not enough: egui deliberately hands content the visible width
+            // even with horizontal scrolling on ("better to wrap text …
+            // than showing a horizontal scrollbar", scroll_area.rs), so
+            // rows kept folding at the pane edge and the horizontal bar
+            // never had anything to do. Extend makes each row lay out at
+            // its natural width; only then does a narrow pane scroll —
+            // a tree whose rows fold onto two lines stops reading as a
+            // tree.
             egui::ScrollArea::both()
                 .id_salt("explorer-tree-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.spacing_mut().item_spacing.y = 1.0;
                     if !self.explorer.current().dirs.contains_key("") {
                         ui.add_space(8.0);
