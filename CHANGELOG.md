@@ -22,8 +22,13 @@ included, and the hover card says the menu exists.
 keeps the process but mints a fresh session id, so a hand-applied label
 died with the old id and the "same" session came back nameless. The live
 registry is per-pid, which makes the succession a fact: when a dead
-session and a live one share a pid, the label and pin follow the work.
-A label never overwrites one you gave the successor by hand.
+session and a live one share a pid *and* working directory, the label
+and pin follow the work. A label never overwrites one you gave the
+successor by hand. (Took two attempts: the daemon used to wipe a
+session's pid the moment it died — the same scan that discovers the
+successor — destroying the evidence the migration matches on. Dead
+sessions now keep their last pid; everything needing a live one already
+gates on `alive`.)
 
 **Fixed — narrow panes scroll sideways instead of folding rows.** The
 earlier worktree-tree fix added a horizontal scroll area but egui still

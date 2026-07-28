@@ -213,28 +213,34 @@ impl Prefs {
     /// live one sharing a pid are the same conversation. Labels and pins
     /// follow it.
     ///
-    /// `sessions` is `(id, alive, pid, started_epoch)` for every known
-    /// session. Conservative on purpose: a label never overwrites one the
-    /// successor was given by hand, and nothing is invented — only moved.
-    /// Returns whether anything changed, so the caller can mark the prefs
-    /// dirty.
-    pub fn migrate_succession(&mut self, sessions: &[(String, bool, Option<u32>, i64)]) -> bool {
+    /// `sessions` is `(id, alive, pid, started_epoch, cwd)` for every
+    /// known session. The cwd must match as well as the pid: pids are
+    /// reused by the OS eventually, and a label jumping onto an unrelated
+    /// session that happened to inherit a number would be worse than the
+    /// bug this fixes. Conservative on purpose: a label never overwrites
+    /// one the successor was given by hand, and nothing is invented —
+    /// only moved. Returns whether anything changed, so the caller can
+    /// mark the prefs dirty.
+    pub fn migrate_succession(
+        &mut self,
+        sessions: &[(String, bool, Option<u32>, i64, String)],
+    ) -> bool {
         let mut changed = false;
-        for (succ_id, alive, pid, _) in sessions {
+        for (succ_id, alive, pid, _, cwd) in sessions {
             if !alive {
                 continue;
             }
             let Some(pid) = pid else { continue };
-            // The latest dead session on the same pid is the immediate
-            // predecessor — /clear twice makes a chain, and label state
-            // walks it one hop per pass.
+            // The latest dead session on the same pid *and* cwd is the
+            // immediate predecessor — /clear twice makes a chain, and
+            // label state walks it one hop per pass.
             let pred = sessions
                 .iter()
-                .filter(|(id, alive, p, _)| {
-                    !alive && id != succ_id && p.as_ref() == Some(pid)
+                .filter(|(id, alive, p, _, c)| {
+                    !alive && id != succ_id && p.as_ref() == Some(pid) && c == cwd
                 })
-                .max_by_key(|(_, _, _, started)| *started)
-                .map(|(id, _, _, _)| id.clone());
+                .max_by_key(|(_, _, _, started, _)| *started)
+                .map(|(id, _, _, _, _)| id.clone());
             let Some(pred_id) = pred else { continue };
             if self.label(succ_id).is_none() {
                 if let Some(label) = self.label(&pred_id).map(str::to_string) {
@@ -338,8 +344,8 @@ mod tests {
         p.set_label("old", "api-work");
         p.toggle_pin("old");
         let sessions = vec![
-            ("old".to_string(), false, Some(4242), 100),
-            ("new".to_string(), true, Some(4242), 200),
+            ("old".to_string(), false, Some(4242), 100, "/repo".to_string()),
+            ("new".to_string(), true, Some(4242), 200, "/repo".to_string()),
         ];
         assert!(p.migrate_succession(&sessions));
         assert_eq!(p.label("new"), Some("api-work"));
@@ -357,8 +363,8 @@ mod tests {
         p.set_label("old", "stale-name");
         p.set_label("new", "fresh-name");
         let sessions = vec![
-            ("old".to_string(), false, Some(1), 100),
-            ("new".to_string(), true, Some(1), 200),
+            ("old".to_string(), false, Some(1), 100, "/repo".to_string()),
+            ("new".to_string(), true, Some(1), 200, "/repo".to_string()),
         ];
         p.migrate_succession(&sessions);
         assert_eq!(p.label("new"), Some("fresh-name"));
@@ -374,11 +380,11 @@ mod tests {
         p.set_label("second", "current-name");
         p.set_label("other-pid", "unrelated");
         let sessions = vec![
-            ("first".to_string(), false, Some(7), 100),
-            ("second".to_string(), false, Some(7), 200),
-            ("other-pid".to_string(), false, Some(9), 300),
-            ("third".to_string(), true, Some(7), 400),
-            ("no-pid".to_string(), true, None, 500),
+            ("first".to_string(), false, Some(7), 100, "/repo".to_string()),
+            ("second".to_string(), false, Some(7), 200, "/repo".to_string()),
+            ("other-pid".to_string(), false, Some(9), 300, "/repo".to_string()),
+            ("third".to_string(), true, Some(7), 400, "/repo".to_string()),
+            ("no-pid".to_string(), true, None, 500, "/repo".to_string()),
         ];
         p.migrate_succession(&sessions);
         assert_eq!(p.label("third"), Some("current-name"));
@@ -387,14 +393,29 @@ mod tests {
         assert_eq!(p.label("no-pid"), None);
     }
 
+    /// A reused pid in a different directory is a stranger, not a
+    /// successor — the OS hands pid numbers out again eventually.
+    #[test]
+    fn a_reused_pid_in_another_directory_inherits_nothing() {
+        let mut p = Prefs::default();
+        p.set_label("old", "api-work");
+        let sessions = vec![
+            ("old".to_string(), false, Some(4242), 100, "/repo-a".to_string()),
+            ("new".to_string(), true, Some(4242), 200, "/repo-b".to_string()),
+        ];
+        assert!(!p.migrate_succession(&sessions));
+        assert_eq!(p.label("old"), Some("api-work"));
+        assert_eq!(p.label("new"), None);
+    }
+
     /// Two live sessions never trade state — succession requires a death.
     #[test]
     fn succession_requires_a_dead_predecessor() {
         let mut p = Prefs::default();
         p.set_label("a", "mine");
         let sessions = vec![
-            ("a".to_string(), true, Some(3), 100),
-            ("b".to_string(), true, Some(3), 200),
+            ("a".to_string(), true, Some(3), 100, "/repo".to_string()),
+            ("b".to_string(), true, Some(3), 200, "/repo".to_string()),
         ];
         assert!(!p.migrate_succession(&sessions));
         assert_eq!(p.label("a"), Some("mine"));

@@ -136,11 +136,19 @@ menu says "Label…" or "Edit label…" depending on which it is.
 **Nothing changed on the wire or in the daemon.** The whole feature is
 client-side, which is what made it an `S`.
 
-**Labels survive `/clear` (found in dogfooding, 2026-07-28).** Claude
-Code's `/clear` keeps the process but mints a new session id, so a label
-keyed by id died with the old one — reported as "the label will be
+**Labels survive `/clear` (found in dogfooding, 2026-07-28 — twice).**
+Claude Code's `/clear` keeps the process but mints a new session id, so a
+label keyed by id died with the old one — reported as "the label will be
 reset?!". The live registry is per-*pid*, which makes succession a fact
-rather than a guess: when a dead session and a live one share a pid, the
-label (and pin) move to the successor. Conservative by rule — a label
-never overwrites one the successor was given by hand, and two live
-sessions never trade state. `Prefs::migrate_succession`, pinned by tests.
+rather than a guess: when a dead session and a live one share a pid *and*
+cwd (pids get reused; directories disambiguate), the label and pin move
+to the successor. Conservative by rule — a label never overwrites one the
+successor was given by hand, and two live sessions never trade state.
+`Prefs::migrate_succession`, pinned by tests.
+
+The first attempt shipped broken and the report came straight back: the
+daemon wiped `pid` in the same scan that marked a session dead, so the
+client never saw two sessions sharing one — the migration's evidence was
+destroyed one layer below it. Dead sessions now keep their last pid
+(`state.rs` says why in place); `focus_terminal` and the Info pane's pid
+stat gate on `alive`, so nothing treats the remembered pid as live.

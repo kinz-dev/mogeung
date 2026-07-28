@@ -270,7 +270,14 @@ impl AppState {
                 }
                 None => {
                     s.alive = false;
-                    s.pid = None;
+                    // The pid is deliberately KEPT. The live registry is
+                    // per-pid, so `/clear` moves the pid to a fresh session
+                    // id — and a dead session still holding it is the only
+                    // evidence of that succession. The client's label/pin
+                    // migration matches on exactly this; wiping it here is
+                    // what silently broke the first version of that fix.
+                    // Consumers that need a *live* pid already gate on
+                    // `alive` (focus_terminal does).
                     s.live_status = None;
                     // A dead session has no pane. Leaving a stale target would
                     // offer a terminal tab that attaches to nothing.

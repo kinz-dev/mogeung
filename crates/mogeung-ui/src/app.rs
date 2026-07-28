@@ -552,10 +552,18 @@ impl App {
         // Hand-applied view-state — labels, pins — follows the work
         // instead of dying with the old id.
         if sessions_changed {
-            let facts: Vec<(String, bool, Option<u32>, i64)> = self
+            let facts: Vec<(String, bool, Option<u32>, i64, String)> = self
                 .sessions
                 .values()
-                .map(|s| (s.id.clone(), s.alive, s.pid, s.started_at.timestamp()))
+                .map(|s| {
+                    (
+                        s.id.clone(),
+                        s.alive,
+                        s.pid,
+                        s.started_at.timestamp(),
+                        s.cwd.clone(),
+                    )
+                })
                 .collect();
             if self.prefs.migrate_succession(&facts) {
                 self.prefs_dirty = true;
@@ -3142,7 +3150,10 @@ impl App {
                 stat(ui, icon::TURNS, &s.turns.to_string(), PURPLE);
                 stat(ui, icon::TOOLS, &s.tool_calls.to_string(), GREEN);
                 stat(ui, icon::TOKENS, &tokens(s.tokens_out), DIM);
-                if let Some(pid) = s.pid {
+                // Only while alive: a dead session's remembered pid now
+                // belongs to its `/clear` successor, and printing it here
+                // would name the wrong process.
+                if let Some(pid) = s.pid.filter(|_| s.alive) {
                     stat(ui, "#", &pid.to_string(), DIM);
                 }
 
