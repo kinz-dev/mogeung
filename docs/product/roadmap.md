@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-07-27
+updated: 2026-07-28
 ---
 
 # Roadmap
@@ -64,7 +64,7 @@ alert of its own that was confidently wrong.
 | R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
 | R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
-## B. Sharpen the queue — **shipped through R-B26; R-B27+ is the backlog**
+## B. Sharpen the queue — **shipped through R-B26 (and R-B30); R-B27–29 is the backlog**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 
@@ -99,6 +99,7 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B27 | **Editor git ergonomics** — a diff gutter vs HEAD with next/prev-change keys, inline blame on the current line, compare-with-revision side by side, and a gutter mark on lines *this session* changed (the mogeung-only one). Still a viewer, never an editor | L |  |
 | R-B28 | **Editor navigation** — symbol outline and go-to-symbol (tree-sitter is already in the tree), go-to-line, sticky scroll, folding, highlight-other-occurrences | L |  |
 | R-B29 | **Editor content comforts** — markdown preview, image preview, per-tab word wrap, copy path / `path:line`, file facts in the header, bookmarks with a jump list | M |  |
+| R-B30 | **Per-pane zoom** — Ctrl+wheel over a pane scales that pane alone (Editor, Changes, Git, Transcript, Terminal), remembered per pane; the global Ctrl+=/− stays whole-window. Asked for directly, built 2026-07-28 | S | ✅ |
 
 ## C. Notifications and reach — **shipped except `R-C2`**
 
@@ -115,22 +116,30 @@ made redundant by `R-C1` banners. Left open deliberately.
 | R-C4 | **Push** via ntfy/Pushover for away-from-desk | S | ✅ |
 | R-C5 | **Ambient mode** — big-screen board for a second monitor | M | ✅ |
 
-## D. Review depth — **shipped through R-D12; R-D13+ is the backlog**
+## D. Review depth — **shipped through R-D17; dogfooding judges R-D10+**
 
 `R-D1`–`R-D9` delivered by
 [feature 0002](../features/0002-sharpen-triage-and-review.md); `R-D1` is
 the observer-safe shape: mogeung writes the prompt, you paste it
 ([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
 
-**Git-integration status (2026-07-28):** `R-D10`–`R-D12` are built,
-committed and installed — the pane, its depth (branches, graph, stashes,
-re-blame, file-at-revision, range diff) and its table stakes (commit
-details, log filtering, file history). Their acceptance boxes stay open
-until the dogfooding week rules ([A19](assumptions.md)); day one of that
-week produced five fixes, which is the week doing its job. `R-D13`
-onward is the brainstormed backlog, grouped and sized but *not*
-committed to — each item goes through a spec when picked up, and an
-unused pane section is a removal candidate before it is a foundation.
+**Git-integration status (2026-07-28):** the whole pillar is built,
+committed and installed — `R-D10`–`R-D12` (the pane, its depth, its
+table stakes; features [0010](../features/0010-git-view.md)–
+[0012](../features/0012-git-table-stakes.md)) and, later the same day at
+an explicit "do R-D10 to R-D17" ask, `R-D13`–`R-D17` in one pass
+([feature 0013](../features/0013-git-reach.md)): pickaxe search,
+copy-as-patch, the attribution filter, hunk keys, diff context/
+whitespace/side-by-side controls, the file index, merge-base branch
+compare, remote branches, reflog, worktrees-with-sessions, the conflict
+three-way view, and read-marks on commit diffs. Acceptance boxes across
+features 0010–0013 stay open until the dogfooding week rules
+([A19](assumptions.md)) — day one produced six fixes, which is the week
+doing its job — and an unused section is a removal candidate, not a
+foundation. Deliberately descoped, waiting for want: a "commits on A
+not on B" list, read-badges for unviewed log rows, rebindable hunk
+keys. The rows below stay unchecked until the week is over, the same
+bar `R-B24`–`R-B26` are held to.
 
 | # | Item | Effort | |
 |---|---|---|---|
