@@ -167,6 +167,8 @@ async fn commands_about_unknown_sessions_are_harmless() {
         ClientMsg::GitStashShow {
             session_id: ghost.clone(),
             index: 9999,
+            context: Some(u32::MAX),
+            ignore_ws: Some(true),
         },
     )
     .await;
@@ -183,6 +185,8 @@ async fn commands_about_unknown_sessions_are_harmless() {
             session_id: ghost.clone(),
             from: "--output=/tmp/pwned".into(),
             to: "also not a sha".into(),
+            context: None,
+            ignore_ws: None,
         },
     )
     .await;
@@ -205,6 +209,37 @@ async fn commands_about_unknown_sessions_are_harmless() {
             grep: Some("a\x1b]0;pwned\x07".into()),
             author: Some("\n--exec=rm".into()),
             path: Some("../outside".into()),
+            pickaxe: Some("\x00".into()),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitCompare {
+            session_id: ghost.clone(),
+            branch: "-D".into(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitReflog {
+            session_id: ghost.clone(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitWorktrees {
+            session_id: ghost.clone(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitConflictFile {
+            session_id: ghost.clone(),
+            path: "/etc/passwd".into(),
         },
     )
     .await;

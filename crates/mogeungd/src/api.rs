@@ -49,6 +49,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}/git/stash", get(get_git_stash))
         .route("/api/sessions/{id}/git/submodules", get(get_git_submodules))
         .route("/api/sessions/{id}/git/range", get(get_git_range))
+        .route("/api/sessions/{id}/git/compare", get(get_git_compare))
+        .route("/api/sessions/{id}/git/reflog", get(get_git_reflog))
+        .route("/api/sessions/{id}/git/worktrees", get(get_git_worktrees))
+        .route("/api/sessions/{id}/git/conflict", get(get_git_conflict))
         .route("/api/sessions/{id}/git/file_at", get(get_git_file_at))
         .route("/ws", get(ws_upgrade))
         .with_state(state)
@@ -186,6 +190,8 @@ struct LogQuery {
     author: Option<String>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    pickaxe: Option<String>,
 }
 
 fn default_log_limit() -> u32 {
@@ -201,6 +207,7 @@ async fn get_git_log(
         grep: q.grep,
         author: q.author,
         path: q.path,
+        pickaxe: q.pickaxe,
     };
     match state.git_log(&id, q.skip, q.limit, q.rev, filter).await {
         Ok((commits, done)) => Json(serde_json::json!({ "commits": commits, "done": done })),
@@ -211,6 +218,10 @@ async fn get_git_log(
 #[derive(Deserialize)]
 struct ShaQuery {
     sha: String,
+    #[serde(default)]
+    context: Option<u32>,
+    #[serde(default)]
+    ignore_ws: Option<bool>,
 }
 
 async fn get_git_show(
@@ -218,7 +229,8 @@ async fn get_git_show(
     AxPath(id): AxPath<String>,
     Query(q): Query<ShaQuery>,
 ) -> impl IntoResponse {
-    match state.git_show(&id, &q.sha).await {
+    let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
+    match state.git_show(&id, &q.sha, opts).await {
         Ok((files, detail)) => Json(serde_json::json!({
             "sha": q.sha, "files": files, "detail": detail,
         })),
@@ -236,12 +248,22 @@ async fn get_git_status(
     }
 }
 
+#[derive(Deserialize)]
+struct DiffFileQuery {
+    path: String,
+    #[serde(default)]
+    context: Option<u32>,
+    #[serde(default)]
+    ignore_ws: Option<bool>,
+}
+
 async fn get_git_diff(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
-    Query(q): Query<PathQuery>,
+    Query(q): Query<DiffFileQuery>,
 ) -> impl IntoResponse {
-    match state.git_diff_file(&id, &q.path).await {
+    let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
+    match state.git_diff_file(&id, &q.path, opts).await {
         Ok(files) => Json(serde_json::json!({ "path": q.path, "files": files })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -290,6 +312,10 @@ async fn get_git_stashes(
 #[derive(Deserialize)]
 struct StashQuery {
     index: u32,
+    #[serde(default)]
+    context: Option<u32>,
+    #[serde(default)]
+    ignore_ws: Option<bool>,
 }
 
 async fn get_git_stash(
@@ -297,7 +323,8 @@ async fn get_git_stash(
     AxPath(id): AxPath<String>,
     Query(q): Query<StashQuery>,
 ) -> impl IntoResponse {
-    match state.git_stash_show(&id, q.index).await {
+    let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
+    match state.git_stash_show(&id, q.index, opts).await {
         Ok(files) => Json(serde_json::json!({ "index": q.index, "files": files })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -317,6 +344,10 @@ async fn get_git_submodules(
 struct RangeQuery {
     from: String,
     to: String,
+    #[serde(default)]
+    context: Option<u32>,
+    #[serde(default)]
+    ignore_ws: Option<bool>,
 }
 
 async fn get_git_range(
@@ -324,10 +355,63 @@ async fn get_git_range(
     AxPath(id): AxPath<String>,
     Query(q): Query<RangeQuery>,
 ) -> impl IntoResponse {
-    match state.git_diff_range(&id, &q.from, &q.to).await {
+    let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
+    match state.git_diff_range(&id, &q.from, &q.to, opts).await {
         Ok(files) => {
             Json(serde_json::json!({ "from": q.from, "to": q.to, "files": files }))
         }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+struct BranchQuery {
+    branch: String,
+}
+
+async fn get_git_compare(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<BranchQuery>,
+) -> impl IntoResponse {
+    match state.git_compare(&id, &q.branch).await {
+        Ok((from, to, files)) => {
+            Json(serde_json::json!({ "from": from, "to": to, "files": files }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_git_reflog(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    match state.git_reflog(&id).await {
+        Ok(entries) => Json(serde_json::json!({ "entries": entries })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_git_worktrees(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    match state.git_worktrees(&id).await {
+        Ok(worktrees) => Json(serde_json::json!({ "worktrees": worktrees })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_git_conflict(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<PathQuery>,
+) -> impl IntoResponse {
+    match state.git_conflict_stages(&id, &q.path).await {
+        Ok((base, ours, theirs, truncated)) => Json(serde_json::json!({
+            "path": q.path, "base": base, "ours": ours, "theirs": theirs,
+            "truncated": truncated,
+        })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
 }
@@ -611,11 +695,13 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             grep,
             author,
             path,
+            pickaxe,
         } => {
             let filter = crate::git::LogFilter {
                 grep: grep.clone(),
                 author: author.clone(),
                 path: path.clone(),
+                pickaxe: pickaxe.clone(),
             };
             match state
                 .git_log(&session_id, skip, limit, rev.clone(), filter)
@@ -630,19 +716,30 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                     grep,
                     author,
                     path,
+                    pickaxe,
                 }),
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitShow { session_id, sha } => match state.git_show(&session_id, &sha).await {
-            Ok((files, detail)) => state.broadcast(ServerMsg::GitCommitDiff {
-                session_id,
-                sha,
-                files,
-                detail: detail.map(Box::new),
-            }),
-            Err(e) => err(e),
-        },
+        ClientMsg::GitShow {
+            session_id,
+            sha,
+            context,
+            ignore_ws,
+        } => {
+            let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
+            match state.git_show(&session_id, &sha, opts).await {
+                Ok((files, detail)) => state.broadcast(ServerMsg::GitCommitDiff {
+                    session_id,
+                    sha,
+                    files,
+                    detail: detail.map(Box::new),
+                    context,
+                    ignore_ws,
+                }),
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitStatus { session_id } => match state.git_status(&session_id).await {
             Ok(entries) => state.broadcast(ServerMsg::GitLocalChanges {
                 session_id,
@@ -650,12 +747,20 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }),
             Err(e) => err(e),
         },
-        ClientMsg::GitDiffFile { session_id, path } => {
-            match state.git_diff_file(&session_id, &path).await {
+        ClientMsg::GitDiffFile {
+            session_id,
+            path,
+            context,
+            ignore_ws,
+        } => {
+            let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
+            match state.git_diff_file(&session_id, &path, opts).await {
                 Ok(files) => state.broadcast(ServerMsg::GitFileDiff {
                     session_id,
                     path,
                     files,
+                    context,
+                    ignore_ws,
                 }),
                 Err(e) => err(e),
             }
@@ -688,12 +793,20 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }),
             Err(e) => err(e),
         },
-        ClientMsg::GitStashShow { session_id, index } => {
-            match state.git_stash_show(&session_id, index).await {
+        ClientMsg::GitStashShow {
+            session_id,
+            index,
+            context,
+            ignore_ws,
+        } => {
+            let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
+            match state.git_stash_show(&session_id, index, opts).await {
                 Ok(files) => state.broadcast(ServerMsg::GitStashDiff {
                     session_id,
                     index,
                     files,
+                    context,
+                    ignore_ws,
                 }),
                 Err(e) => err(e),
             }
@@ -711,15 +824,66 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             session_id,
             from,
             to,
-        } => match state.git_diff_range(&session_id, &from, &to).await {
-            Ok(files) => state.broadcast(ServerMsg::GitRangeDiff {
+            context,
+            ignore_ws,
+        } => {
+            let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
+            match state.git_diff_range(&session_id, &from, &to, opts).await {
+                Ok(files) => state.broadcast(ServerMsg::GitRangeDiff {
+                    session_id,
+                    from,
+                    to,
+                    files,
+                    context,
+                    ignore_ws,
+                }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitCompare { session_id, branch } => {
+            match state.git_compare(&session_id, &branch).await {
+                Ok((from, to, files)) => state.broadcast(ServerMsg::GitRangeDiff {
+                    session_id,
+                    from,
+                    to,
+                    files,
+                    context: None,
+                    ignore_ws: None,
+                }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitReflog { session_id } => match state.git_reflog(&session_id).await {
+            Ok(entries) => state.broadcast(ServerMsg::GitReflogList {
                 session_id,
-                from,
-                to,
-                files,
+                entries,
             }),
             Err(e) => err(e),
         },
+        ClientMsg::GitWorktrees { session_id } => {
+            match state.git_worktrees(&session_id).await {
+                Ok(worktrees) => state.broadcast(ServerMsg::GitWorktreeList {
+                    session_id,
+                    worktrees,
+                }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitConflictFile { session_id, path } => {
+            match state.git_conflict_stages(&session_id, &path).await {
+                Ok((base, ours, theirs, truncated)) => {
+                    state.broadcast(ServerMsg::GitConflictStages {
+                        session_id,
+                        path,
+                        base,
+                        ours,
+                        theirs,
+                        truncated,
+                    })
+                }
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitFileAtRev {
             session_id,
             sha,

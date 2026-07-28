@@ -470,6 +470,7 @@ impl App {
                     grep,
                     author,
                     path,
+                    pickaxe,
                 } => self.gitview.ingest_commits(
                     &session_id,
                     skip,
@@ -480,6 +481,7 @@ impl App {
                         grep,
                         author,
                         path,
+                        pickaxe,
                     },
                 ),
                 ServerMsg::GitCommitDiff {
@@ -487,9 +489,16 @@ impl App {
                     sha,
                     files,
                     detail,
-                } => self
-                    .gitview
-                    .ingest_commit_diff(&session_id, sha, files, detail.map(|d| *d)),
+                    context,
+                    ignore_ws,
+                } => self.gitview.ingest_commit_diff(
+                    &session_id,
+                    sha,
+                    files,
+                    detail.map(|d| *d),
+                    context,
+                    ignore_ws,
+                ),
                 ServerMsg::GitLocalChanges {
                     session_id,
                     entries,
@@ -498,7 +507,11 @@ impl App {
                     session_id,
                     path,
                     files,
-                } => self.gitview.ingest_file_diff(&session_id, path, files),
+                    context,
+                    ignore_ws,
+                } => self
+                    .gitview
+                    .ingest_file_diff(&session_id, path, files, context, ignore_ws),
                 ServerMsg::GitAnnotation {
                     session_id,
                     path,
@@ -519,7 +532,11 @@ impl App {
                     session_id,
                     index,
                     files,
-                } => self.gitview.ingest_stash_diff(&session_id, index, files),
+                    context,
+                    ignore_ws,
+                } => self
+                    .gitview
+                    .ingest_stash_diff(&session_id, index, files, context, ignore_ws),
                 ServerMsg::GitSubmoduleList {
                     session_id,
                     submodules,
@@ -529,7 +546,29 @@ impl App {
                     from,
                     to,
                     files,
-                } => self.gitview.ingest_range_diff(&session_id, from, to, files),
+                    context,
+                    ignore_ws,
+                } => self
+                    .gitview
+                    .ingest_range_diff(&session_id, from, to, files, context, ignore_ws),
+                ServerMsg::GitReflogList {
+                    session_id,
+                    entries,
+                } => self.gitview.ingest_reflog(&session_id, entries),
+                ServerMsg::GitWorktreeList {
+                    session_id,
+                    worktrees,
+                } => self.gitview.ingest_worktrees(&session_id, worktrees),
+                ServerMsg::GitConflictStages {
+                    session_id,
+                    path,
+                    base,
+                    ours,
+                    theirs,
+                    truncated,
+                } => self
+                    .gitview
+                    .ingest_conflict(&session_id, path, base, ours, theirs, truncated),
                 ServerMsg::GitFileAtRevContent {
                     session_id,
                     sha,
@@ -3391,6 +3430,19 @@ impl App {
                     grep: gv.log_grep.clone(),
                     author: gv.log_author.clone(),
                     path: gv.log_path.clone(),
+                    pickaxe: gv.log_pickaxe.clone(),
+                });
+            }
+            if !gv.reflog_loaded && !gv.reflog_pending {
+                gv.reflog_pending = true;
+                self.net.send(ClientMsg::GitReflog {
+                    session_id: s.id.clone(),
+                });
+            }
+            if !gv.worktrees_loaded && !gv.worktrees_pending {
+                gv.worktrees_pending = true;
+                self.net.send(ClientMsg::GitWorktrees {
+                    session_id: s.id.clone(),
                 });
             }
             if gv.refs.is_none() && !gv.refs_pending {
@@ -3419,6 +3471,8 @@ impl App {
                     self.net.send(ClientMsg::GitShow {
                         session_id: s.id.clone(),
                         sha,
+                        context: Some(gv.context()),
+                        ignore_ws: Some(gv.diff_ignore_ws),
                     });
                 }
                 crate::gitview::Selection::Local(path)
@@ -3428,6 +3482,8 @@ impl App {
                     self.net.send(ClientMsg::GitDiffFile {
                         session_id: s.id.clone(),
                         path,
+                        context: Some(gv.context()),
+                        ignore_ws: Some(gv.diff_ignore_ws),
                     });
                 }
                 crate::gitview::Selection::Stash(index)
@@ -3437,6 +3493,8 @@ impl App {
                     self.net.send(ClientMsg::GitStashShow {
                         session_id: s.id.clone(),
                         index,
+                        context: Some(gv.context()),
+                        ignore_ws: Some(gv.diff_ignore_ws),
                     });
                 }
                 crate::gitview::Selection::Range(from, to)
@@ -3447,6 +3505,17 @@ impl App {
                         session_id: s.id.clone(),
                         from,
                         to,
+                        context: Some(gv.context()),
+                        ignore_ws: Some(gv.diff_ignore_ws),
+                    });
+                }
+                crate::gitview::Selection::Conflict(path)
+                    if !gv.conflicts.contains_key(&path)
+                        && gv.pending_conflicts.insert(path.clone()) =>
+                {
+                    self.net.send(ClientMsg::GitConflictFile {
+                        session_id: s.id.clone(),
+                        path,
                     });
                 }
                 _ => {}
@@ -3521,19 +3590,20 @@ impl App {
                         let field = ui.add(
                             egui::TextEdit::singleline(&mut self.gitview.filter_input)
                                 .id(egui::Id::new("git-log-filter"))
-                                .hint_text("filter: text · author:… · path:…")
+                                .hint_text("filter: text · author:… · path:… · find:…")
                                 .desired_width(ui.available_width() - 24.0),
                         );
                         let entered =
                             field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if entered {
-                            let (grep, author, path) =
+                            let (grep, author, path, pickaxe) =
                                 crate::gitview::parse_filter_input(&self.gitview.filter_input);
-                            self.gitview.set_log_filter(grep, author, path);
+                            self.gitview.set_log_filter(grep, author, path, pickaxe);
                         }
                         let active = self.gitview.log_grep.is_some()
                             || self.gitview.log_author.is_some()
-                            || self.gitview.log_path.is_some();
+                            || self.gitview.log_path.is_some()
+                            || self.gitview.log_pickaxe.is_some();
                         if active
                             && ui
                                 .small_button("✕")
@@ -3541,7 +3611,18 @@ impl App {
                                 .clicked()
                         {
                             self.gitview.filter_input.clear();
-                            self.gitview.set_log_filter(None, None, None);
+                            self.gitview.set_log_filter(None, None, None, None);
+                        }
+                        let dot = self.gitview.attribution_only;
+                        if ui
+                            .selectable_label(dot, RichText::new("●").size(10.0).color(GREEN))
+                            .on_hover_text(
+                                "only commits that look like this session's work — \
+                                 the graph hides while this is on",
+                            )
+                            .clicked()
+                        {
+                            self.gitview.attribution_only = !dot;
                         }
                     });
                     if self.gitview.log_path.is_some() {
@@ -3653,6 +3734,76 @@ impl App {
                                 Some(b.name.clone())
                             });
                         }
+                        row.context_menu(|ui| {
+                            if !b.current
+                                && ui
+                                    .button("Diff vs current, from the merge base")
+                                    .on_hover_text(
+                                        "what merging this branch would bring — three-dot \
+                                         semantics, nothing is checked out",
+                                    )
+                                    .clicked()
+                            {
+                                if let Some(sid) = self.gitview.session.clone() {
+                                    self.gitview.compare_pending = true;
+                                    self.net.send(ClientMsg::GitCompare {
+                                        session_id: sid,
+                                        branch: b.name.clone(),
+                                    });
+                                }
+                                ui.close();
+                            }
+                            if ui.button("Copy tip sha").clicked() {
+                                ui.ctx().copy_text(b.sha.clone());
+                                ui.close();
+                            }
+                        });
+                    }
+                });
+            }
+            // Remote-tracking branches: same gestures, last-fetch truth.
+            if !refs.remote_branches.is_empty() {
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("REMOTE BRANCHES ({})", refs.remote_branches.len()))
+                        .size(11.0)
+                        .color(DIM)
+                        .strong(),
+                )
+                .id_salt("git-remote-branches")
+                .show(ui, |ui| {
+                    for b in &refs.remote_branches {
+                        let scoped = self.gitview.log_rev.as_deref() == Some(b.name.as_str());
+                        let row = ui
+                            .selectable_label(
+                                scoped,
+                                RichText::new(format!("{} {}", b.sha, b.name)).monospace(),
+                            )
+                            .on_hover_text(format!(
+                                "{} · as of the last fetch\nclick to scope the log to it",
+                                crate::gitview::age(now, b.epoch)
+                            ));
+                        if row.clicked() {
+                            self.gitview.set_log_rev(if scoped {
+                                None
+                            } else {
+                                Some(b.name.clone())
+                            });
+                        }
+                        row.context_menu(|ui| {
+                            if ui
+                                .button("Diff vs current, from the merge base")
+                                .clicked()
+                            {
+                                if let Some(sid) = self.gitview.session.clone() {
+                                    self.gitview.compare_pending = true;
+                                    self.net.send(ClientMsg::GitCompare {
+                                        session_id: sid,
+                                        branch: b.name.clone(),
+                                    });
+                                }
+                                ui.close();
+                            }
+                        });
                     }
                 });
             }
@@ -3713,6 +3864,78 @@ impl App {
                     if row.clicked() {
                         self.gitview.selection = crate::gitview::Selection::Stash(st.index);
                     }
+                }
+            });
+        }
+        if !self.gitview.reflog.is_empty() {
+            egui::CollapsingHeader::new(
+                RichText::new("REFLOG").size(11.0).color(DIM).strong(),
+            )
+            .id_salt("git-reflog")
+            .show(ui, |ui| {
+                for e in self.gitview.reflog.clone() {
+                    let row = ui
+                        .selectable_label(
+                            false,
+                            RichText::new(format!(
+                                "{} {} {}",
+                                e.sha,
+                                e.selector,
+                                truncate(&e.summary, 44)
+                            ))
+                            .monospace(),
+                        )
+                        .on_hover_text(format!(
+                            "{}\nwhere HEAD has been — click to show this commit",
+                            e.summary
+                        ));
+                    if row.clicked() {
+                        self.gitview.selection =
+                            crate::gitview::Selection::Commit(e.sha.clone());
+                    }
+                }
+            });
+        }
+        if !self.gitview.worktrees.is_empty() {
+            // Worktrees are mogeung's own device (yolomo makes one per
+            // session), so each row names the session living in it.
+            let session_of = |path: &str| -> Option<String> {
+                self.sessions.values().find_map(|sess| {
+                    let root = sess.repo_root.as_deref().unwrap_or(&sess.cwd);
+                    (root == path).then(|| {
+                        self.prefs
+                            .label(&sess.id)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| sess.label())
+                    })
+                })
+            };
+            egui::CollapsingHeader::new(
+                RichText::new(format!("WORKTREES ({})", self.gitview.worktrees.len()))
+                    .size(11.0)
+                    .color(DIM)
+                    .strong(),
+            )
+            .id_salt("git-worktrees")
+            .show(ui, |ui| {
+                for w in self.gitview.worktrees.clone() {
+                    ui.horizontal(|ui| {
+                        let name = w.path.rsplit('/').next().unwrap_or(&w.path);
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {} ({})",
+                                w.sha,
+                                name,
+                                w.branch.as_deref().unwrap_or("detached"),
+                            ))
+                            .monospace(),
+                        )
+                        .on_hover_text(&w.path);
+                        if let Some(label) = session_of(&w.path) {
+                            ui.label(RichText::new(label).size(10.0).color(GREEN))
+                                .on_hover_text("the session running in this worktree");
+                        }
+                    });
                 }
             });
         }
@@ -3826,6 +4049,19 @@ impl App {
             if row.clicked() {
                 self.gitview.selection = crate::gitview::Selection::Local(e.path.clone());
             }
+            if e.conflicted {
+                row.context_menu(|ui| {
+                    if ui
+                        .button("Three-way view (base · ours · theirs)")
+                        .on_hover_text("the three staged versions, read-only")
+                        .clicked()
+                    {
+                        self.gitview.selection =
+                            crate::gitview::Selection::Conflict(e.path.clone());
+                        ui.close();
+                    }
+                });
+            }
         }
     }
 
@@ -3843,7 +4079,14 @@ impl App {
         }
         let now = Utc::now().timestamp();
         let commits = self.gitview.commits.clone();
-        let graph = self.gitview.graph.clone();
+        // The attribution filter is display-side: it narrows loaded pages,
+        // and the graph hides with it — the topology of a subset would lie.
+        let attribution_only = self.gitview.attribution_only;
+        let graph = if attribution_only {
+            Vec::new()
+        } else {
+            self.gitview.graph.clone()
+        };
         // The widest lane on screen decides the column, capped so a wild
         // history cannot push the subjects off the pane.
         let max_lanes = graph
@@ -3861,6 +4104,9 @@ impl App {
             .and_then(|r| r.remotes.first())
             .map(|r| r.url.clone());
         for (i, c) in commits.iter().enumerate() {
+            if attribution_only && !c.touches_session {
+                continue;
+            }
             let picked = self.gitview.selection == crate::gitview::Selection::Commit(c.sha.clone());
             let row = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -3928,6 +4174,23 @@ impl App {
                     let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
                     ui.label(RichText::new(r).size(10.0).color(color));
                 }
+                // R-D17: once this commit's diff has been fetched, we know
+                // whether a human has read its hunks — say so, quietly.
+                if let Some(files) = self.gitview.commit_diffs.get(&c.sha) {
+                    let total: usize = files.iter().map(|f| f.hunks.len()).sum();
+                    let read: usize = files
+                        .iter()
+                        .flat_map(|f| &f.hunks)
+                        .filter(|h| h.reviewed)
+                        .count();
+                    if total > 0 && read == total {
+                        ui.label(RichText::new("✓read").size(9.0).color(DIM))
+                            .on_hover_text("every hunk of this commit has been marked read");
+                    } else if read > 0 {
+                        ui.label(RichText::new(format!("{read}/{total}")).size(9.0).color(DIM))
+                            .on_hover_text("hunks of this commit marked read");
+                    }
+                }
                 label_resp
             });
             // The whole row is the target, not just the text: the queue
@@ -3952,6 +4215,18 @@ impl App {
                     if ui.button("Copy subject").clicked() {
                         ui.ctx().copy_text(c.summary.clone());
                         ui.close();
+                    }
+                    // Enabled once the diff is cached — which it is for any
+                    // commit being looked at, and that is the one you copy.
+                    if let Some(files) = self.gitview.commit_diffs.get(&c.sha) {
+                        if ui
+                            .button("Copy as patch")
+                            .on_hover_text("unified diff text — paste into a terminal or a prompt")
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(crate::gitview::patch_text(files));
+                            ui.close();
+                        }
                     }
                     if let Some(url) = remote_url
                         .as_deref()
@@ -4016,6 +4291,7 @@ impl App {
                     grep: self.gitview.log_grep.clone(),
                     author: self.gitview.log_author.clone(),
                     path: self.gitview.log_path.clone(),
+                    pickaxe: self.gitview.log_pickaxe.clone(),
                 });
             }
         }
@@ -4052,7 +4328,58 @@ impl App {
                     .range_diffs
                     .get(&(from.clone(), to.clone())),
             ),
+            crate::gitview::Selection::Conflict(path) => {
+                // Not a diff at all: three staged versions side by side.
+                self.git_conflict_panel(ui, &path.clone());
+                return;
+            }
         };
+        // Cloned before the toolbar below, whose option changes mutate the
+        // very caches `files` borrows from.
+        let files: Option<Vec<mogeung_core::change::FileChange>> = files.cloned();
+        // The reading controls (`R-D14`): context width, whitespace,
+        // side-by-side — any change invalidates every cached diff, which
+        // the fetch door then re-requests the current selection through.
+        ui.horizontal(|ui| {
+            let step = self.gitview.context_step;
+            let ws = self.gitview.diff_ignore_ws;
+            if ui
+                .small_button(format!("±{}", self.gitview.context()))
+                .on_hover_text("lines of context around each hunk — click to widen, wraps around")
+                .clicked()
+            {
+                self.gitview.set_diff_opts(step + 1, ws);
+            }
+            if ui
+                .selectable_label(ws, "w")
+                .on_hover_text("ignore whitespace-only changes")
+                .clicked()
+            {
+                self.gitview.set_diff_opts(step, !ws);
+            }
+            if ui
+                .selectable_label(self.prefs.side_by_side, "⫼")
+                .on_hover_text("side-by-side (shared with the Changes tab)")
+                .clicked()
+            {
+                self.prefs.side_by_side = !self.prefs.side_by_side;
+                self.prefs_dirty = true;
+            }
+            if let Some(files) = files.as_ref() {
+                if !files.is_empty()
+                    && ui
+                        .small_button("⧉ patch")
+                        .on_hover_text(
+                            "copy this whole diff as unified patch text — \
+                             paste into a terminal or a prompt",
+                        )
+                        .clicked()
+                {
+                    ui.ctx().copy_text(crate::gitview::patch_text(files));
+                }
+            }
+            ui.label(dim("n/p walk the hunks"));
+        });
         // "Open at this commit" only makes sense when the diff *is* a
         // commit; the sha rides along for the per-file buttons below.
         let at_commit = match &self.gitview.selection {
@@ -4067,10 +4394,32 @@ impl App {
             });
             return;
         };
-        let files = files.clone();
         let (syntax, words) = (self.prefs.syntax, self.prefs.word_diff);
         let mut open_at_rev: Option<(String, String)> = None;
         let mut select_commit: Option<String> = None;
+        // `n`/`p` walk hunks (`R-D13`): pointer over the panel, no text
+        // field focused — the same gate the pane zoom uses.
+        let total_hunks: usize = files.iter().map(|f| f.hunks.len()).sum();
+        if total_hunks > 0
+            && ui.rect_contains_pointer(ui.max_rect())
+            && ui.ctx().memory(|m| m.focused().is_none())
+        {
+            let (next, prev) = ui.input(|i| {
+                (i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::P))
+            });
+            if next || prev {
+                let cur = self.gitview.hunk_cursor.min(total_hunks - 1);
+                self.gitview.hunk_cursor = if next {
+                    (cur + 1) % total_hunks
+                } else {
+                    (cur + total_hunks - 1) % total_hunks
+                };
+                self.gitview.hunk_goto = Some(self.gitview.hunk_cursor);
+            }
+        }
+        let hunk_goto = self.gitview.hunk_goto.take();
+        let hunk_cursor = self.gitview.hunk_cursor;
+        let goto_file = self.gitview.goto_file.take();
         // The commit header (`R-D12`): the full message and the facts a
         // commercial client puts above the patch. Scrolls with the diff so
         // a long agent-written body cannot pin the files off screen.
@@ -4116,6 +4465,22 @@ impl App {
                             files.iter().map(|f| f.insertions).sum::<u32>(),
                             files.iter().map(|f| f.deletions).sum::<u32>(),
                         )));
+                        // R-D17: what a human has already read of this
+                        // commit — the anchors travel content-hashed, so a
+                        // mark made in the Changes tab lands here too.
+                        let total: usize = files.iter().map(|f| f.hunks.len()).sum();
+                        let read: usize = files
+                            .iter()
+                            .flat_map(|f| &f.hunks)
+                            .filter(|h| h.reviewed)
+                            .count();
+                        if read > 0 {
+                            ui.label(
+                                RichText::new(format!("· {read} of {total} hunks read"))
+                                    .size(11.0)
+                                    .color(GREEN),
+                            );
+                        }
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.label(dim(format!("{} ·", sha.chars().take(10).collect::<String>())));
@@ -4139,8 +4504,36 @@ impl App {
                     ui.label(dim("no textual diff — empty, binary, or a merge with no changes"));
                     return;
                 }
+                // The file index (`R-D14`): a forty-file agent commit as a
+                // directory tree, each row a jump. Only when there is
+                // enough to be lost in.
+                if files.len() >= 4 {
+                    egui::CollapsingHeader::new(dim(format!("files ({})", files.len())))
+                        .id_salt(("git-file-index", &title))
+                        .show(ui, |ui| {
+                            for (dir, idxs) in crate::gitview::group_by_dir(&files) {
+                                let shown = if dir.is_empty() { "·" } else { &dir };
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(dim(format!("{shown}/")));
+                                    for i in idxs {
+                                        let f = &files[i];
+                                        let name =
+                                            f.path.rsplit('/').next().unwrap_or(&f.path);
+                                        if ui
+                                            .link(RichText::new(name).monospace().size(11.5))
+                                            .clicked()
+                                        {
+                                            self.gitview.goto_file = Some(f.path.clone());
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    ui.separator();
+                }
+                let mut hunk_idx = 0usize;
                 for f in &files {
-                    ui.horizontal(|ui| {
+                    let header_resp = ui.horizontal(|ui| {
                         ui.label(mono(&f.path));
                         ui.label(dim(format!("+{} −{}", f.insertions, f.deletions)));
                         for fl in &f.flags {
@@ -4148,6 +4541,15 @@ impl App {
                         }
                         if f.truncated {
                             ui.label(RichText::new("binary or too large").size(11.0).color(AMBER));
+                        }
+                        if !f.hunks.is_empty()
+                            && ui
+                                .small_button("⧉")
+                                .on_hover_text("copy this file's diff as patch text")
+                                .clicked()
+                        {
+                            ui.ctx()
+                                .copy_text(crate::gitview::patch_text(std::slice::from_ref(f)));
                         }
                         if let Some(sha) = &at_commit {
                             if f.status != mogeung_core::change::FileStatus::Deleted
@@ -4162,9 +4564,32 @@ impl App {
                             }
                         }
                     });
+                    if goto_file.as_deref() == Some(f.path.as_str()) {
+                        header_resp.response.scroll_to_me(Some(egui::Align::TOP));
+                    }
                     for h in &f.hunks {
-                        ui.label(dim(&h.header));
-                        render_unified(ui, &h.lines, syntax, words);
+                        let current = hunk_idx == hunk_cursor && total_hunks > 0;
+                        let mut header = dim(&h.header);
+                        if current {
+                            header = RichText::new(&h.header).size(12.0).color(BLUE);
+                        }
+                        let hr = ui.horizontal(|ui| {
+                            ui.label(header);
+                            // R-D17: a hunk a human has read says so.
+                            if h.reviewed {
+                                ui.label(RichText::new("✓").size(10.0).color(GREEN))
+                                    .on_hover_text("marked read (R-D8's marks, by content)");
+                            }
+                        });
+                        if hunk_goto == Some(hunk_idx) {
+                            hr.response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        hunk_idx += 1;
+                        if self.prefs.side_by_side {
+                            render_side_by_side(ui, &h.lines, syntax, words);
+                        } else {
+                            render_unified(ui, &h.lines, syntax, words);
+                        }
                         ui.add_space(4.0);
                     }
                     ui.separator();
@@ -4178,6 +4603,61 @@ impl App {
             self.explorer.open_file_at_rev(&path, &sha);
             self.set_tab(Tab::Explorer);
         }
+    }
+
+    /// A conflicted file's three stages, read-only, side by side. `R-D16`.
+    /// No diffing between them (yet, deliberately): three readable columns
+    /// beat a clever view that hides one of the three truths.
+    fn git_conflict_panel(&mut self, ui: &mut egui::Ui, path: &str) {
+        ui.horizontal(|ui| {
+            ui.label(mono(path));
+            ui.label(
+                RichText::new("merge conflict — base · ours · theirs")
+                    .size(11.0)
+                    .color(RED),
+            );
+        });
+        let Some((base, ours, theirs, truncated)) = self.gitview.conflicts.get(path).cloned()
+        else {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                ui.label(dim("loading the three stages…"));
+            });
+            return;
+        };
+        if truncated {
+            ui.label(
+                RichText::new("cut short — a stage went on past the size cap")
+                    .size(11.0)
+                    .color(AMBER),
+            );
+        }
+        ui.separator();
+        egui::ScrollArea::both()
+            .id_salt(("git-conflict-scroll", path))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                ui.columns(3, |cols| {
+                    for (col, (name, body)) in cols.iter_mut().zip([
+                        ("base — the common ancestor", &base),
+                        ("ours — the current branch", &ours),
+                        ("theirs — the branch being merged", &theirs),
+                    ]) {
+                        col.label(RichText::new(name).size(11.0).color(DIM).strong());
+                        if body.is_empty() {
+                            col.label(dim("(this side has no version — added or deleted)"));
+                        } else {
+                            col.add(
+                                egui::Label::new(
+                                    RichText::new(body).monospace().size(11.5),
+                                )
+                                .selectable(true),
+                            );
+                        }
+                    }
+                });
+            });
     }
 
     /// The session's worktree: tree on the left, tabs and a read-only viewer
@@ -4487,7 +4967,7 @@ impl App {
                         self.gitview.ensure_session(&sid);
                     }
                     self.gitview.filter_input = format!("path:{path}");
-                    self.gitview.set_log_filter(None, None, Some(path.clone()));
+                    self.gitview.set_log_filter(None, None, Some(path.clone()), None);
                     self.set_tab(Tab::Git);
                 }
             });

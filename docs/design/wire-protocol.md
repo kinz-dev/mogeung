@@ -33,7 +33,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
 | `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
-| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path` filters — a set path switches `--follow` on, so a filtered log doubles as file history (`R-D12`); each commit carries refs, parents and a session-attribution hint |
+| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path`/`pickaxe` filters — a set path switches `--follow` on (file history, `R-D12`), `pickaxe` is `-S` ("when did this string appear", `R-D13`); each commit carries refs, parents and a session-attribution hint |
 | `GitShow` | One commit's diff, in `Change`'s file/hunk shapes, plus its header — full message, committer, dates, parents (`R-D12`); the sha is validated as hex before git sees it |
 | `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished; conflicts marked, ignored paths included as `!!` dimming data |
 | `GitDiffFile` | One uncommitted file against `HEAD` (`/dev/null` when untracked) |
@@ -41,7 +41,11 @@ available as plain REST so the daemon is curl-able without a UI.
 | `GitRefs` | Branches with tracking state, tags (annotated ones dereferenced to commits), remotes, HEAD, and `FETCH_HEAD`'s mtime — display only; the daemon never fetches |
 | `GitStashes` | The stash list; `GitStashShow` one stash's diff by index — the `stash@{N}` spec is built daemon-side from a number |
 | `GitSubmodules` | Submodule paths and their status prefix |
-| `GitDiffRange` | The diff between two commits, both shas validated |
+| `GitDiffRange` | The diff between two commits, both shas validated. `GitShow`, `GitDiffFile`, `GitStashShow` and this all take `context` (clamped ≤400) and `ignore_ws`, echoed back so a superseded cut is dropped (`R-D14`) |
+| `GitCompare` | What merging a branch would bring: merge base resolved daemon-side, answered as a `GitRangeDiff` with real shas (`R-D15`) |
+| `GitReflog` | Where HEAD has been — 100 entries, read-only recovery sight |
+| `GitWorktrees` | `git worktree list`, including the ones mogeung itself created |
+| `GitConflictFile` | A conflicted file's three stages (`:1:`/`:2:`/`:3:`), empty when a side has no version (`R-D16`) |
 | `GitFileAtRev` | One file's content at a revision (`sha`, optionally `sha^`), for the Editor's revision tabs |
 
 **Note what is absent:** nothing starts, steers or stops an agent
@@ -59,7 +63,14 @@ client builds the text and puts it on your clipboard, and you paste it
 `FileContent` · `TreeListing` · `ContentMatches` · `GitCommits` ·
 `GitCommitDiff` · `GitLocalChanges` · `GitFileDiff` · `GitAnnotation` ·
 `GitRefsInfo` · `GitStashList` · `GitStashDiff` · `GitSubmoduleList` ·
-`GitRangeDiff` · `GitFileAtRevContent` · `Error`
+`GitRangeDiff` · `GitFileAtRevContent` · `GitReflogList` ·
+`GitWorktreeList` · `GitConflictStages` · `Error`
+
+`GitCommitDiff` hunks carry R-D8's read marks (`R-D17`): the daemon feeds
+`parse_unified` the union of the repo's reviewed anchors, so a hunk a
+human read in the Changes tab arrives already marked when seen through a
+commit — anchors are content hashes, which is what makes the two views
+agree.
 
 The `Git…` family (`R-D10`, `R-D11`) is **read-only by protocol**: there is
 no staging, commit, checkout, stash-pop, fetch or any other verb that
@@ -131,7 +142,11 @@ GET  /api/sessions/{id}/git/refs
 GET  /api/sessions/{id}/git/stashes
 GET  /api/sessions/{id}/git/stash?index=N
 GET  /api/sessions/{id}/git/submodules
-GET  /api/sessions/{id}/git/range?from=...&to=...
+GET  /api/sessions/{id}/git/range?from=...&to=...&context=N&ignore_ws=...
+GET  /api/sessions/{id}/git/compare?branch=...
+GET  /api/sessions/{id}/git/reflog
+GET  /api/sessions/{id}/git/worktrees
+GET  /api/sessions/{id}/git/conflict?path=...
 GET  /api/sessions/{id}/git/file_at?sha=...&path=...
 GET  /api/sessions
 GET  /api/sessions/{id}

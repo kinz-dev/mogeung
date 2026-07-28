@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — git reach (2026-07-28)
+
+Roadmap `R-D13`–`R-D17`; see
+[docs/features/0013-git-reach.md](docs/features/0013-git-reach.md).
+
+**Added — forensics (`R-D13`).** `find:` in the log filter is the pickaxe:
+commits that changed how often a literal string occurs — "when did this
+appear, when did it vanish". A `●` toggle narrows the log to the
+session's probable commits. "Copy as patch" on a commit, and `⧉` on any
+file header, put real unified-diff text on the clipboard — appliable in a
+terminal, pasteable into a prompt. `n`/`p` walk the hunks.
+
+**Added — diff ergonomics (`R-D14`).** A `±3 → ±10 → ±30 → ±400` control
+widens hunk context; `w` mutes whitespace-only changes; `⫼` renders the
+git diffs side-by-side (shared with the Changes tab's preference). A
+multi-file diff opens with a by-directory file index whose entries jump
+to their file.
+
+**Added — ref reach (`R-D15`).** A branch's right-click offers "Diff vs
+current, from the merge base" — what merging it would bring, three-dot
+semantics, nothing checked out. Remote-tracking branches list and scope
+the log like local ones. A REFLOG section shows where HEAD has been, and
+a WORKTREES section lists every worktree — naming the session running in
+each, since yolomo makes one per session.
+
+**Added — conflict three-way (`R-D16`).** A conflicted file's right-click
+opens base · ours · theirs as three read-only columns; a side with no
+version says so instead of pretending.
+
+**Added — the log knows what you have read (`R-D17`).** A commit's hunks
+arrive carrying R-D8's read marks — anchors are content hashes, so a hunk
+read in the Changes tab is recognised inside a commit. Hunk headers wear
+`✓`, the details header counts "n of m hunks read", and the log row gains
+a quiet `✓read` badge once a commit's diff has been seen.
+
 ## Unreleased — git table stakes (2026-07-28)
 
 Roadmap `R-D12`; see

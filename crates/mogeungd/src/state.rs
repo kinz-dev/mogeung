@@ -906,9 +906,10 @@ impl AppState {
         &self,
         id: &str,
         index: u32,
+        opts: crate::git::DiffOpts,
     ) -> Result<Vec<mogeung_core::change::FileChange>> {
         let root = self.git_root(id).await?;
-        tokio::task::spawn_blocking(move || crate::git::stash_show(&root, index)).await?
+        tokio::task::spawn_blocking(move || crate::git::stash_show(&root, index, opts)).await?
     }
 
     pub async fn git_submodules(
@@ -924,10 +925,48 @@ impl AppState {
         id: &str,
         from: &str,
         to: &str,
+        opts: crate::git::DiffOpts,
     ) -> Result<Vec<mogeung_core::change::FileChange>> {
         let root = self.git_root(id).await?;
         let (from, to) = (from.to_string(), to.to_string());
-        tokio::task::spawn_blocking(move || crate::git::diff_range(&root, &from, &to)).await?
+        tokio::task::spawn_blocking(move || crate::git::diff_range(&root, &from, &to, opts))
+            .await?
+    }
+
+    pub async fn git_compare(
+        &self,
+        id: &str,
+        branch: &str,
+    ) -> Result<(String, String, Vec<mogeung_core::change::FileChange>)> {
+        let root = self.git_root(id).await?;
+        let branch = branch.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::git::compare_with_head(&root, &branch, crate::git::DiffOpts::default())
+        })
+        .await?
+    }
+
+    pub async fn git_reflog(&self, id: &str) -> Result<Vec<mogeung_core::wire::ReflogEntry>> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::reflog(&root)).await?
+    }
+
+    pub async fn git_worktrees(
+        &self,
+        id: &str,
+    ) -> Result<Vec<mogeung_core::wire::WorktreeInfo>> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::worktrees(&root)).await?
+    }
+
+    pub async fn git_conflict_stages(
+        &self,
+        id: &str,
+        rel: &str,
+    ) -> Result<(String, String, String, bool)> {
+        let root = self.git_root(id).await?;
+        let rel = rel.to_string();
+        tokio::task::spawn_blocking(move || crate::git::conflict_stages(&root, &rel)).await?
     }
 
     pub async fn git_file_at_rev(
@@ -945,13 +984,37 @@ impl AppState {
         &self,
         id: &str,
         sha: &str,
+        opts: crate::git::DiffOpts,
     ) -> Result<(
         Vec<mogeung_core::change::FileChange>,
         Option<mogeung_core::wire::CommitDetail>,
     )> {
         let root = self.git_root(id).await?;
+        // R-D17: the union of every reviewed anchor across this repo's
+        // sessions, so a commit's hunks arrive knowing whether a human
+        // has already read that code. Anchors are content hashes, which
+        // is exactly what lets a mark made in the Changes tab land on the
+        // same hunk seen through a commit.
+        let reviewed = {
+            let repo = root.to_string_lossy().to_string();
+            let sessions = self.sessions.read().await;
+            let ids: Vec<String> = sessions
+                .values()
+                .filter(|s| s.repo_root.as_deref() == Some(repo.as_str()) || s.cwd == repo)
+                .map(|s| s.id.clone())
+                .collect();
+            drop(sessions);
+            let mut set = std::collections::HashSet::new();
+            for sid in ids {
+                if let Ok(anchors) = self.store.reviewed_anchors(&sid) {
+                    set.extend(anchors);
+                }
+            }
+            set
+        };
         let sha = sha.to_string();
-        tokio::task::spawn_blocking(move || crate::git::show_commit(&root, &sha)).await?
+        tokio::task::spawn_blocking(move || crate::git::show_commit(&root, &sha, opts, &reviewed))
+            .await?
     }
 
     pub async fn git_status(&self, id: &str) -> Result<Vec<mogeung_core::wire::StatusEntry>> {
@@ -963,6 +1026,7 @@ impl AppState {
         &self,
         id: &str,
         rel: &str,
+        opts: crate::git::DiffOpts,
     ) -> Result<Vec<mogeung_core::change::FileChange>> {
         let root = self.git_root(id).await?;
         // Containment first: paths on this command are worktree identifiers,
@@ -974,7 +1038,7 @@ impl AppState {
             anyhow::bail!("{rel} is not a path inside the session");
         }
         let rel = rel.to_string();
-        tokio::task::spawn_blocking(move || crate::git::diff_file(&root, &rel)).await?
+        tokio::task::spawn_blocking(move || crate::git::diff_file(&root, &rel, opts)).await?
     }
 
     pub async fn git_blame(

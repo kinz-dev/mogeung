@@ -91,13 +91,33 @@ pub enum ClientMsg {
         author: Option<String>,
         #[serde(default)]
         path: Option<String>,
+        /// Pickaxe (`-S`): commits that changed the number of occurrences
+        /// of this literal string — "when did this appear/vanish". `R-D13`.
+        #[serde(default)]
+        pickaxe: Option<String>,
     },
     /// One commit's diff, parsed into the same file/hunk shapes as `Change`.
-    GitShow { session_id: SessionId, sha: String },
+    /// `context` widens the hunks' surrounding lines (default 3);
+    /// `ignore_ws` mutes whitespace-only noise (`-w`). `R-D14`.
+    GitShow {
+        session_id: SessionId,
+        sha: String,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
+    },
     /// The repo's uncommitted state — staged, unstaged and untracked.
     GitStatus { session_id: SessionId },
     /// One uncommitted file's diff against `HEAD`.
-    GitDiffFile { session_id: SessionId, path: String },
+    GitDiffFile {
+        session_id: SessionId,
+        path: String,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
+    },
     /// Per-line authorship of one file, for the Editor's annotate gutter.
     /// `rev: None` blames the worktree file; `Some(sha)` blames the file as
     /// it stood at that revision — which is what makes re-blame ("who
@@ -117,7 +137,14 @@ pub enum ClientMsg {
     /// popping them.
     GitStashes { session_id: SessionId },
     /// One stash's diff, by its position in the list (`stash@{index}`).
-    GitStashShow { session_id: SessionId, index: u32 },
+    GitStashShow {
+        session_id: SessionId,
+        index: u32,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
+    },
     /// Submodule paths and their state.
     GitSubmodules { session_id: SessionId },
     /// The diff between two commits, `from` → `to`.
@@ -125,6 +152,28 @@ pub enum ClientMsg {
         session_id: SessionId,
         from: String,
         to: String,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
+    },
+    /// The diff a branch would bring to the current branch, from their
+    /// merge base — three-dot semantics, resolved daemon-side. Answers as
+    /// [`ServerMsg::GitRangeDiff`] with the resolved shas. `R-D15`.
+    GitCompare {
+        session_id: SessionId,
+        branch: String,
+    },
+    /// Where HEAD has been — `git reflog`, read-only recovery sight.
+    GitReflog { session_id: SessionId },
+    /// The repo's worktrees, `git worktree list` — including the ones
+    /// mogeung itself created for sessions.
+    GitWorktrees { session_id: SessionId },
+    /// A conflicted file's three stages — base (`:1:`), ours (`:2:`),
+    /// theirs (`:3:`) — for the read-only three-way view. `R-D16`.
+    GitConflictFile {
+        session_id: SessionId,
+        path: String,
     },
     /// One file's content as it stood at one revision, for the Editor's
     /// revision tabs. `sha` may carry a trailing `^` — "the parent of" —
@@ -266,6 +315,32 @@ pub struct RefsInfo {
     /// Unix seconds of the last `git fetch` anyone ran, from
     /// `FETCH_HEAD`'s mtime. `None` when nothing was ever fetched.
     pub fetch_epoch: Option<i64>,
+    /// Remote-tracking branches (`origin/…`), as of the last fetch —
+    /// scope the log to one like any local branch. `R-D15`.
+    #[serde(default)]
+    pub remote_branches: Vec<BranchInfo>,
+}
+
+/// One line of [`ClientMsg::GitReflog`]'s answer — where HEAD has been.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReflogEntry {
+    /// Abbreviated sha the entry points at.
+    pub sha: String,
+    /// The selector, e.g. `HEAD@{3}`.
+    pub selector: String,
+    /// Freeform action text: "checkout: moving from x to y", …
+    pub summary: String,
+}
+
+/// One row of [`ClientMsg::GitWorktrees`]'s answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeInfo {
+    /// Absolute path of the worktree.
+    pub path: String,
+    /// Abbreviated HEAD sha there.
+    pub sha: String,
+    /// Checked-out branch, or `None` when detached.
+    pub branch: Option<String>,
 }
 
 /// One stash in a [`ClientMsg::GitStashes`] answer.
@@ -375,15 +450,22 @@ pub enum ServerMsg {
         author: Option<String>,
         #[serde(default)]
         path: Option<String>,
+        #[serde(default)]
+        pickaxe: Option<String>,
     },
     /// One commit's diff, in the same shapes the Changes tab renders —
     /// plus its header (`R-D12`), absent when the detail fetch failed.
+    /// The diff options echo back so a superseded answer is dropped.
     GitCommitDiff {
         session_id: SessionId,
         sha: String,
         files: Vec<crate::change::FileChange>,
         #[serde(default)]
         detail: Option<Box<CommitDetail>>,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
     },
     /// The uncommitted state of the session's repo.
     GitLocalChanges {
@@ -395,6 +477,10 @@ pub enum ServerMsg {
         session_id: SessionId,
         path: String,
         files: Vec<crate::change::FileChange>,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
     },
     /// Authorship per line of one file. `truncated` means the file went on
     /// past the blame cap. `rev` echoes the revision blamed (`None` = the
@@ -422,18 +508,27 @@ pub enum ServerMsg {
         session_id: SessionId,
         index: u32,
         files: Vec<crate::change::FileChange>,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
     },
     /// Submodules and their state.
     GitSubmoduleList {
         session_id: SessionId,
         submodules: Vec<SubmoduleInfo>,
     },
-    /// The diff between two commits.
+    /// The diff between two commits. [`ClientMsg::GitCompare`] answers
+    /// here too, with the merge base as `from`.
     GitRangeDiff {
         session_id: SessionId,
         from: String,
         to: String,
         files: Vec<crate::change::FileChange>,
+        #[serde(default)]
+        context: Option<u32>,
+        #[serde(default)]
+        ignore_ws: Option<bool>,
     },
     /// One file as it stood at one revision, for the Editor's revision
     /// tabs. Read-only like the worktree twin, and doubly so — the past
@@ -443,6 +538,26 @@ pub enum ServerMsg {
         sha: String,
         path: String,
         content: String,
+        truncated: bool,
+    },
+    /// Where HEAD has been, newest first.
+    GitReflogList {
+        session_id: SessionId,
+        entries: Vec<ReflogEntry>,
+    },
+    /// The repo's worktrees.
+    GitWorktreeList {
+        session_id: SessionId,
+        worktrees: Vec<WorktreeInfo>,
+    },
+    /// A conflicted file's three stages, read-only. A stage a merge did
+    /// not produce (added-by-both has no base) arrives empty.
+    GitConflictStages {
+        session_id: SessionId,
+        path: String,
+        base: String,
+        ours: String,
+        theirs: String,
         truncated: bool,
     },
     Error { message: String },

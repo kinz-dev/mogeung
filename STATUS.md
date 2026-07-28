@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 260 passing |
-| Rust | 24563 lines |
-| Docs | 45 files, 10 ADRs |
+| Tests | 268 passing |
+| Rust | 26058 lines |
+| Docs | 46 files, 10 ADRs |
 
 ## Assumptions
 
@@ -33,4 +33,5 @@ Untested: **6** · At risk: **2** · Supported: 10 · Refuted: 1
 | [Git view](docs/features/0010-git-view.md) | `in-progress` | [A13, A18] |
 | [Git depth — reading parity with a commercial client](docs/features/0011-git-depth.md) | `in-progress` | [A13, A18, A19] |
 | [Git table stakes — commit details, log filtering, file history](docs/features/0012-git-table-stakes.md) | `in-progress` | [A13, A18, A19] |
+| [Git reach — forensics, ergonomics, refs, conflicts, review-state](docs/features/0013-git-reach.md) | `in-progress` | [A13, A18, A19] |
 

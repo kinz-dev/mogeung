@@ -8,7 +8,8 @@
 
 use mogeung_core::change::FileChange;
 use mogeung_core::wire::{
-    BlameLine, CommitDetail, CommitInfo, RefsInfo, StashInfo, StatusEntry, SubmoduleInfo,
+    BlameLine, CommitDetail, CommitInfo, ReflogEntry, RefsInfo, StashInfo, StatusEntry,
+    SubmoduleInfo, WorktreeInfo,
 };
 use mogeung_core::SessionId;
 use std::collections::{HashMap, HashSet};
@@ -26,6 +27,8 @@ pub enum Selection {
     Stash(u32),
     /// The diff between two marked commits, oldest first as diffed.
     Range(String, String),
+    /// A conflicted file's three stages, by repo-relative path. `R-D16`.
+    Conflict(String),
 }
 
 #[derive(Default)]
@@ -45,6 +48,12 @@ pub struct GitView {
     pub log_grep: Option<String>,
     pub log_author: Option<String>,
     pub log_path: Option<String>,
+    /// Pickaxe (`find:`): commits that changed this literal. `R-D13`.
+    pub log_pickaxe: Option<String>,
+    /// Show only commits wearing the session-attribution dot. Display
+    /// filter over loaded pages; the graph hides while it is on, because
+    /// the topology of a subset would be a lie.
+    pub attribution_only: bool,
     /// What the filter box currently reads — the uncommitted keystrokes;
     /// the parsed, active filter is the three fields above.
     pub filter_input: String,
@@ -88,7 +97,34 @@ pub struct GitView {
     pub pending_ranges: HashSet<(String, String)>,
     /// A commit marked as one end of a range diff, waiting for the other.
     pub range_from: Option<String>,
+    /// Index into [`CONTEXT_STEPS`] — how much context diffs are cut with.
+    pub context_step: usize,
+    /// Mute whitespace-only changes in diffs (`-w`).
+    pub diff_ignore_ws: bool,
+    /// A `GitCompare` is in flight; the next range answer is its result
+    /// and becomes the selection.
+    pub compare_pending: bool,
+    pub reflog: Vec<ReflogEntry>,
+    pub reflog_loaded: bool,
+    pub reflog_pending: bool,
+    pub worktrees: Vec<WorktreeInfo>,
+    pub worktrees_loaded: bool,
+    pub worktrees_pending: bool,
+    /// path → (base, ours, theirs, truncated). `R-D16`.
+    pub conflicts: HashMap<String, (String, String, String, bool)>,
+    pub pending_conflicts: HashSet<String>,
+    /// The hunk `n`/`p` walk through the diff panel: current index and a
+    /// pending scroll request consumed by the render.
+    pub hunk_cursor: usize,
+    pub hunk_goto: Option<usize>,
+    /// A file the diff panel's index asked to scroll to; consumed by the
+    /// render when that file's header appears.
+    pub goto_file: Option<String>,
 }
+
+/// The context widths the ± control cycles through; the last is "all of
+/// it" for any file that is not generated output.
+pub const CONTEXT_STEPS: [u32; 4] = [3, 10, 30, 400];
 
 impl GitView {
     /// Point the cache at `id`, dropping everything when it moves.
@@ -131,6 +167,46 @@ impl GitView {
         self.submodules_pending = false;
         self.range_diffs.clear();
         self.pending_ranges.clear();
+        self.compare_pending = false;
+        self.reflog.clear();
+        self.reflog_loaded = false;
+        self.reflog_pending = false;
+        self.worktrees.clear();
+        self.worktrees_loaded = false;
+        self.worktrees_pending = false;
+        self.conflicts.clear();
+        self.pending_conflicts.clear();
+    }
+
+    /// The current diff context width.
+    pub fn context(&self) -> u32 {
+        CONTEXT_STEPS[self.context_step % CONTEXT_STEPS.len()]
+    }
+
+    /// Change how diffs are cut (`R-D14`). Every cached diff was cut the
+    /// old way, so they all go — the selection stays and refetches.
+    pub fn set_diff_opts(&mut self, context_step: usize, ignore_ws: bool) {
+        if (self.context_step, self.diff_ignore_ws) == (context_step, ignore_ws) {
+            return;
+        }
+        self.context_step = context_step % CONTEXT_STEPS.len();
+        self.diff_ignore_ws = ignore_ws;
+        self.commit_diffs.clear();
+        self.local_diffs.clear();
+        self.stash_diffs.clear();
+        self.range_diffs.clear();
+        self.pending_shows.clear();
+        self.pending_file_diffs.clear();
+        self.pending_stash_shows.clear();
+        self.pending_ranges.clear();
+    }
+
+    /// Do a diff answer's echoed options match what the pane wants now?
+    /// `None` means "asked with defaults" — a compare answer, or an old
+    /// daemon — and is accepted only when the pane is at defaults too.
+    fn opts_match(&self, context: Option<u32>, ignore_ws: Option<bool>) -> bool {
+        context.unwrap_or(3) == self.context()
+            && ignore_ws.unwrap_or(false) == self.diff_ignore_ws
     }
 
     /// Scope the log to a ref (`None` = HEAD). A no-op when unchanged;
@@ -150,15 +226,21 @@ impl GitView {
         grep: Option<String>,
         author: Option<String>,
         path: Option<String>,
+        pickaxe: Option<String>,
     ) {
-        if (self.log_grep.as_ref(), self.log_author.as_ref(), self.log_path.as_ref())
-            == (grep.as_ref(), author.as_ref(), path.as_ref())
+        if (
+            self.log_grep.as_ref(),
+            self.log_author.as_ref(),
+            self.log_path.as_ref(),
+            self.log_pickaxe.as_ref(),
+        ) == (grep.as_ref(), author.as_ref(), path.as_ref(), pickaxe.as_ref())
         {
             return;
         }
         self.log_grep = grep;
         self.log_author = author;
         self.log_path = path;
+        self.log_pickaxe = pickaxe;
         self.restart_log();
     }
 
@@ -189,6 +271,7 @@ impl GitView {
             || scope.grep != self.log_grep
             || scope.author != self.log_author
             || scope.path != self.log_path
+            || scope.pickaxe != self.log_pickaxe
         {
             return;
         }
@@ -215,20 +298,27 @@ impl GitView {
         self.status = entries;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ingest_commit_diff(
         &mut self,
         session_id: &SessionId,
         sha: String,
         files: Vec<FileChange>,
         detail: Option<CommitDetail>,
+        context: Option<u32>,
+        ignore_ws: Option<bool>,
     ) {
         if self.session.as_ref() != Some(session_id) {
             return;
         }
-        self.pending_shows.remove(&sha);
+        // The detail is option-independent; keep it even from a stray.
         if let Some(d) = detail {
             self.commit_details.insert(sha.clone(), d);
         }
+        if !self.opts_match(context, ignore_ws) {
+            return;
+        }
+        self.pending_shows.remove(&sha);
         self.commit_diffs.insert(sha, files);
     }
 
@@ -237,8 +327,10 @@ impl GitView {
         session_id: &SessionId,
         path: String,
         files: Vec<FileChange>,
+        context: Option<u32>,
+        ignore_ws: Option<bool>,
     ) {
-        if self.session.as_ref() != Some(session_id) {
+        if self.session.as_ref() != Some(session_id) || !self.opts_match(context, ignore_ws) {
             return;
         }
         self.pending_file_diffs.remove(&path);
@@ -283,8 +375,10 @@ impl GitView {
         session_id: &SessionId,
         index: u32,
         files: Vec<FileChange>,
+        context: Option<u32>,
+        ignore_ws: Option<bool>,
     ) {
-        if self.session.as_ref() != Some(session_id) {
+        if self.session.as_ref() != Some(session_id) || !self.opts_match(context, ignore_ws) {
             return;
         }
         self.pending_stash_shows.remove(&index);
@@ -310,13 +404,62 @@ impl GitView {
         from: String,
         to: String,
         files: Vec<FileChange>,
+        context: Option<u32>,
+        ignore_ws: Option<bool>,
     ) {
         if self.session.as_ref() != Some(session_id) {
             return;
         }
-        let key = (from, to);
-        self.pending_ranges.remove(&key);
-        self.range_diffs.insert(key, files);
+        let key = (from.clone(), to.clone());
+        if self.pending_ranges.contains(&key) {
+            if !self.opts_match(context, ignore_ws) {
+                return;
+            }
+            self.pending_ranges.remove(&key);
+            self.range_diffs.insert(key, files);
+        } else if self.compare_pending {
+            // A branch compare answers as a range with daemon-resolved
+            // shas the client could not have known; adopt it as the
+            // selection. `R-D15`.
+            self.compare_pending = false;
+            self.range_diffs.insert(key, files);
+            self.selection = Selection::Range(from, to);
+        }
+    }
+
+    pub fn ingest_reflog(&mut self, session_id: &SessionId, entries: Vec<ReflogEntry>) {
+        if self.session.as_ref() != Some(session_id) {
+            return;
+        }
+        self.reflog_pending = false;
+        self.reflog_loaded = true;
+        self.reflog = entries;
+    }
+
+    pub fn ingest_worktrees(&mut self, session_id: &SessionId, worktrees: Vec<WorktreeInfo>) {
+        if self.session.as_ref() != Some(session_id) {
+            return;
+        }
+        self.worktrees_pending = false;
+        self.worktrees_loaded = true;
+        self.worktrees = worktrees;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ingest_conflict(
+        &mut self,
+        session_id: &SessionId,
+        path: String,
+        base: String,
+        ours: String,
+        theirs: String,
+        truncated: bool,
+    ) {
+        if self.session.as_ref() != Some(session_id) {
+            return;
+        }
+        self.pending_conflicts.remove(&path);
+        self.conflicts.insert(path, (base, ours, theirs, truncated));
     }
 
     /// The ignored path prefixes from the last status answer — `!!` rows,
@@ -339,15 +482,20 @@ pub struct LogScope {
     pub grep: Option<String>,
     pub author: Option<String>,
     pub path: Option<String>,
+    pub pickaxe: Option<String>,
 }
 
-/// Parse the filter box: `author:` and `path:` tokens pull out, everything
-/// else joins into the message filter. Order-free, quotes not needed —
-/// `fix parser author:keith` and `author:keith fix parser` mean the same.
-pub fn parse_filter_input(input: &str) -> (Option<String>, Option<String>, Option<String>) {
+/// Parse the filter box: `author:`, `path:` and `find:` tokens pull out,
+/// everything else joins into the message filter. Order-free, quotes not
+/// needed. `find:` is the pickaxe — commits that changed how often the
+/// text occurs (`R-D13`).
+pub fn parse_filter_input(
+    input: &str,
+) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
     let mut grep_words: Vec<&str> = Vec::new();
     let mut author = None;
     let mut path = None;
+    let mut pickaxe = None;
     for tok in input.split_whitespace() {
         if let Some(a) = tok.strip_prefix("author:") {
             if !a.is_empty() {
@@ -356,6 +504,10 @@ pub fn parse_filter_input(input: &str) -> (Option<String>, Option<String>, Optio
         } else if let Some(p) = tok.strip_prefix("path:") {
             if !p.is_empty() {
                 path = Some(p.to_string());
+            }
+        } else if let Some(x) = tok.strip_prefix("find:") {
+            if !x.is_empty() {
+                pickaxe = Some(x.to_string());
             }
         } else {
             grep_words.push(tok);
@@ -366,7 +518,60 @@ pub fn parse_filter_input(input: &str) -> (Option<String>, Option<String>, Optio
     } else {
         Some(grep_words.join(" "))
     };
-    (grep, author, path)
+    (grep, author, path, pickaxe)
+}
+
+/// Rebuild unified-diff text from the cached shapes — what "Copy as
+/// patch" puts on the clipboard. The hunks kept their raw lines and
+/// headers, so this round-trips what git said, minus the index lines a
+/// patch does not need. `R-D13`.
+pub fn patch_text(files: &[FileChange]) -> String {
+    let mut out = String::new();
+    for f in files {
+        let old = f.old_path.as_deref().unwrap_or(&f.path);
+        out.push_str(&format!("diff --git a/{} b/{}
+", old, f.path));
+        match f.status {
+            mogeung_core::change::FileStatus::Added => {
+                out.push_str(&format!("--- /dev/null
++++ b/{}
+", f.path));
+            }
+            mogeung_core::change::FileStatus::Deleted => {
+                out.push_str(&format!("--- a/{}
++++ /dev/null
+", old));
+            }
+            _ => {
+                out.push_str(&format!("--- a/{}
++++ b/{}
+", old, f.path));
+            }
+        }
+        for h in &f.hunks {
+            out.push_str(&h.header);
+            out.push('\n');
+            for line in &h.lines {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// Group a diff's files by their directory for the panel's file index —
+/// (dir, indices into `files`), dirs sorted, root files under "".
+pub fn group_by_dir(files: &[FileChange]) -> Vec<(String, Vec<usize>)> {
+    let mut map: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
+    for (i, f) in files.iter().enumerate() {
+        let dir = match f.path.rsplit_once('/') {
+            Some((d, _)) => d.to_string(),
+            None => String::new(),
+        };
+        map.entry(dir).or_default().push(i);
+    }
+    map.into_iter().collect()
 }
 
 /// Is `path` (repo-relative, no trailing slash) under any ignored prefix?
@@ -544,7 +749,7 @@ mod tests {
         assert!(!g.stashes_loaded);
         g.ingest_submodules(&"b".to_string(), vec![]);
         assert!(!g.submodules_loaded);
-        g.ingest_range_diff(&"b".to_string(), "x".into(), "y".into(), vec![]);
+        g.ingest_range_diff(&"b".to_string(), "x".into(), "y".into(), vec![], None, None);
         assert!(g.range_diffs.is_empty());
     }
 
@@ -613,21 +818,22 @@ mod tests {
     #[test]
     fn filter_input_parses_prefixes_in_any_order() {
         assert_eq!(
-            parse_filter_input("fix parser author:keith path:src/git.rs"),
+            parse_filter_input("fix parser author:keith path:src/git.rs find:retry"),
             (
                 Some("fix parser".into()),
                 Some("keith".into()),
-                Some("src/git.rs".into())
+                Some("src/git.rs".into()),
+                Some("retry".into())
             )
         );
         assert_eq!(
             parse_filter_input("path:a.rs still a grep"),
-            (Some("still a grep".into()), None, Some("a.rs".into()))
+            (Some("still a grep".into()), None, Some("a.rs".into()), None)
         );
-        assert_eq!(parse_filter_input("   "), (None, None, None));
+        assert_eq!(parse_filter_input("   "), (None, None, None, None));
         assert_eq!(
-            parse_filter_input("author:"),
-            (None, None, None),
+            parse_filter_input("author: find:"),
+            (None, None, None, None),
             "an empty prefix is no filter, not an empty one"
         );
     }
@@ -639,7 +845,7 @@ mod tests {
         let mut g = GitView::default();
         g.ensure_session(&"a".to_string());
         g.ingest_commits(&"a".to_string(), 0, vec![commit("1")], true, LogScope::default());
-        g.set_log_filter(Some("fix".into()), None, None);
+        g.set_log_filter(Some("fix".into()), None, None, None);
         assert!(g.commits.is_empty(), "the unfiltered log survived");
         // The stray: an unfiltered page arriving after the filter was set.
         g.ingest_commits(&"a".to_string(), 0, vec![commit("2")], true, LogScope::default());
@@ -656,7 +862,7 @@ mod tests {
         );
         assert_eq!(g.commits.len(), 1);
         // The same filter again is a no-op, not a restart.
-        g.set_log_filter(Some("fix".into()), None, None);
+        g.set_log_filter(Some("fix".into()), None, None, None);
         assert_eq!(g.commits.len(), 1);
     }
 
@@ -671,8 +877,8 @@ mod tests {
             message: "feat: x\n\nwhy".into(),
             ..Default::default()
         };
-        g.ingest_commit_diff(&"a".to_string(), "abc".into(), vec![], Some(detail));
-        g.ingest_commit_diff(&"a".to_string(), "def".into(), vec![], None);
+        g.ingest_commit_diff(&"a".to_string(), "abc".into(), vec![], Some(detail), None, None);
+        g.ingest_commit_diff(&"a".to_string(), "def".into(), vec![], None, None, None);
         assert_eq!(g.commit_details["abc"].author, "keith");
         assert!(!g.commit_details.contains_key("def"));
         assert!(g.commit_diffs.contains_key("def"), "no header must not mean no diff");
@@ -788,6 +994,109 @@ mod tests {
         assert!(!is_ignored("target2/x", &["target/"]));
         assert!(!is_ignored("src/a.rs", &["target/"]));
         assert!(is_ignored("a/b.log", &["a/b.log"]));
+    }
+
+    fn hunk(header: &str, lines: &[&str]) -> mogeung_core::change::Hunk {
+        mogeung_core::change::Hunk {
+            anchor: String::new(),
+            header: header.into(),
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            insertions: 0,
+            deletions: 0,
+            flags: Vec::new(),
+            score: 0,
+            reviewed: false,
+        }
+    }
+
+    /// The clipboard patch must round-trip what git said: headers, signs,
+    /// context — and /dev/null on the created/deleted ends.
+    #[test]
+    fn patch_text_rebuilds_a_unified_diff() {
+        let mut f = FileChange {
+            path: "src/a.rs".into(),
+            old_path: None,
+            status: mogeung_core::change::FileStatus::Modified,
+            insertions: 0,
+            deletions: 0,
+            hunks: vec![hunk("@@ -1,2 +1,2 @@", &[" fn a() {}", "-old", "+new"])],
+            score: 0,
+            flags: Vec::new(),
+            truncated: false,
+        };
+        let text = patch_text(std::slice::from_ref(&f));
+        assert!(text.starts_with("diff --git a/src/a.rs b/src/a.rs
+"));
+        assert!(text.contains("--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,2 @@
+"));
+        assert!(text.contains(" fn a() {}
+-old
++new
+"));
+        f.status = mogeung_core::change::FileStatus::Added;
+        assert!(patch_text(std::slice::from_ref(&f)).contains("--- /dev/null"));
+        f.status = mogeung_core::change::FileStatus::Deleted;
+        assert!(patch_text(&[f]).contains("+++ /dev/null"));
+    }
+
+    /// The file index groups by directory, root files under "".
+    #[test]
+    fn file_index_groups_by_directory() {
+        let file = |p: &str| FileChange {
+            path: p.into(),
+            old_path: None,
+            status: mogeung_core::change::FileStatus::Modified,
+            insertions: 0,
+            deletions: 0,
+            hunks: Vec::new(),
+            score: 0,
+            flags: Vec::new(),
+            truncated: false,
+        };
+        let files = vec![file("src/a.rs"), file("README.md"), file("src/b.rs"), file("docs/x.md")];
+        let groups = group_by_dir(&files);
+        assert_eq!(groups[0].0, "", "root files group under the empty dir");
+        assert_eq!(groups[0].1, vec![1]);
+        assert_eq!(groups.iter().find(|(d, _)| d == "src").unwrap().1, vec![0, 2]);
+    }
+
+    /// Changing the diff options invalidates every cached diff and drops
+    /// answers cut the old way.
+    #[test]
+    fn diff_option_changes_drop_stale_answers() {
+        let mut g = GitView::default();
+        g.ensure_session(&"a".to_string());
+        g.pending_shows.insert("abc".into());
+        g.ingest_commit_diff(&"a".to_string(), "abc".into(), vec![], None, None, None);
+        assert!(g.commit_diffs.contains_key("abc"), "defaults must match defaults");
+        g.set_diff_opts(1, true); // ±10, -w
+        assert!(g.commit_diffs.is_empty(), "old-cut diffs must not survive");
+        // An answer cut with the old options arrives late: dropped.
+        g.pending_shows.insert("abc".into());
+        g.ingest_commit_diff(&"a".to_string(), "abc".into(), vec![], None, Some(3), Some(false));
+        assert!(g.commit_diffs.is_empty(), "a stale-cut answer landed");
+        g.ingest_commit_diff(&"a".to_string(), "abc".into(), vec![], None, Some(10), Some(true));
+        assert!(g.commit_diffs.contains_key("abc"));
+    }
+
+    /// A compare's answer becomes the selection; an unrelated range answer
+    /// does not.
+    #[test]
+    fn a_compare_answer_is_adopted_as_the_selection() {
+        let mut g = GitView::default();
+        g.ensure_session(&"a".to_string());
+        g.ingest_range_diff(&"a".to_string(), "base".into(), "tip".into(), vec![], None, None);
+        assert_eq!(g.selection, Selection::None, "unsolicited ranges must not steal the pane");
+        g.compare_pending = true;
+        g.ingest_range_diff(&"a".to_string(), "base".into(), "tip".into(), vec![], None, None);
+        assert_eq!(
+            g.selection,
+            Selection::Range("base".into(), "tip".into()),
+            "the compare's answer is the selection"
+        );
+        assert!(!g.compare_pending);
     }
 
     /// The hosts we can recognise get a commit URL; everything else is an

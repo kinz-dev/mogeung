@@ -554,8 +554,8 @@ fn compute_change_inner(
 // mogeung driving the repo is the observer trap one layer down.
 
 use mogeung_core::wire::{
-    BlameLine, BranchInfo, CommitDetail, CommitInfo, RefsInfo, RemoteInfo, StashInfo,
-    StatusEntry, SubmoduleInfo, TagInfo,
+    BlameLine, BranchInfo, CommitDetail, CommitInfo, ReflogEntry, RefsInfo, RemoteInfo,
+    StashInfo, StatusEntry, SubmoduleInfo, TagInfo, WorktreeInfo,
 };
 
 /// Blame stops here; past this a "who wrote this line" gutter is a memory
@@ -599,6 +599,43 @@ pub struct LogFilter {
     pub grep: Option<String>,
     pub author: Option<String>,
     pub path: Option<String>,
+    /// Pickaxe: commits that changed how often this literal occurs.
+    pub pickaxe: Option<String>,
+}
+
+/// How a diff is cut: context width and whitespace sensitivity. `R-D14`.
+#[derive(Debug, Clone, Copy)]
+pub struct DiffOpts {
+    pub context: u32,
+    pub ignore_ws: bool,
+}
+
+impl Default for DiffOpts {
+    fn default() -> Self {
+        DiffOpts {
+            context: 3,
+            ignore_ws: false,
+        }
+    }
+}
+
+impl DiffOpts {
+    pub fn from_wire(context: Option<u32>, ignore_ws: Option<bool>) -> Self {
+        DiffOpts {
+            // 400 lines of context is "the whole file" for most files and
+            // a bounded answer for the rest.
+            context: context.unwrap_or(3).min(400),
+            ignore_ws: ignore_ws.unwrap_or(false),
+        }
+    }
+
+    fn args(&self) -> Vec<String> {
+        let mut a = vec![format!("--unified={}", self.context)];
+        if self.ignore_ws {
+            a.push("-w".to_string());
+        }
+        a
+    }
 }
 
 /// A filter string a client may hand to git as `--grep=…`/`--author=…`.
@@ -626,7 +663,7 @@ pub fn log_page(
             bail!("that is not a ref name");
         }
     }
-    for f in [&filter.grep, &filter.author] {
+    for f in [&filter.grep, &filter.author, &filter.pickaxe] {
         if let Some(f) = f {
             if !valid_filter_text(f) {
                 bail!("that is not a filter");
@@ -644,6 +681,7 @@ pub fn log_page(
     let n_arg = format!("-n{}", limit + 1);
     let grep_arg = filter.grep.as_ref().map(|g| format!("--grep={g}"));
     let author_arg = filter.author.as_ref().map(|a| format!("--author={a}"));
+    let pickaxe_arg = filter.pickaxe.as_ref().map(|x| format!("-S{x}"));
     let mut args = vec![
         "log",
         &skip_arg,
@@ -661,6 +699,10 @@ pub fn log_page(
             args.extend(["--fixed-strings", "-i"]);
         }
         args.push(a);
+    }
+    if let Some(x) = &pickaxe_arg {
+        // -S is literal by default: no regex ever reaches git from here.
+        args.push(x);
     }
     if filter.path.is_some() {
         // One path exactly — --follow is only defined for one — and this
@@ -742,17 +784,20 @@ fn parse_log(out: &str) -> (Vec<CommitInfo>, Vec<Vec<String>>) {
 /// what lets the Git pane reuse the entire diff pipeline for free — plus its
 /// header (`R-D12`). The header is a second, `-s` call in the same daemon
 /// trip; if it fails the diff still answers, wearing `None`.
-pub fn show_commit(cwd: &Path, sha: &str) -> Result<(Vec<FileChange>, Option<CommitDetail>)> {
+pub fn show_commit(
+    cwd: &Path,
+    sha: &str,
+    opts: DiffOpts,
+    reviewed: &HashSet<String>,
+) -> Result<(Vec<FileChange>, Option<CommitDetail>)> {
     if !valid_sha(sha) {
         bail!("that is not a commit sha");
     }
-    let out = run_git_diff(
-        cwd,
-        &[
-            "show", "--no-color", "--no-ext-diff", "-M", "-C", "--unified=3", "--format=", sha,
-            "--",
-        ],
-    )?;
+    let unified = opts.args();
+    let mut args: Vec<&str> = vec!["show", "--no-color", "--no-ext-diff", "-M", "-C"];
+    args.extend(unified.iter().map(String::as_str));
+    args.extend(["--format=", sha, "--"]);
+    let out = run_git_diff(cwd, &args)?;
     let detail = run_git(
         cwd,
         &[
@@ -765,7 +810,7 @@ pub fn show_commit(cwd: &Path, sha: &str) -> Result<(Vec<FileChange>, Option<Com
     )
     .ok()
     .and_then(|d| parse_commit_detail(&d));
-    Ok((parse_unified(&out, &HashSet::new()), detail))
+    Ok((parse_unified(&out, reviewed), detail))
 }
 
 /// Parse the `-s` header record. `%B` is multiline and last, so `splitn`
@@ -795,17 +840,38 @@ fn parse_commit_detail(out: &str) -> Option<CommitDetail> {
 
 /// The diff between two commits, `from` → `to`. Both ends are commits the
 /// client picked off the log; the range is read the same way a commit is.
-pub fn diff_range(cwd: &Path, from: &str, to: &str) -> Result<Vec<FileChange>> {
+pub fn diff_range(cwd: &Path, from: &str, to: &str, opts: DiffOpts) -> Result<Vec<FileChange>> {
     if !valid_sha(from) || !valid_sha(to) {
         bail!("that is not a commit sha");
     }
-    let out = run_git_diff(
-        cwd,
-        &[
-            "diff", "--no-color", "--no-ext-diff", "-M", "-C", "--unified=3", from, to, "--",
-        ],
-    )?;
+    let unified = opts.args();
+    let mut args: Vec<&str> = vec!["diff", "--no-color", "--no-ext-diff", "-M", "-C"];
+    args.extend(unified.iter().map(String::as_str));
+    args.extend([from, to, "--"]);
+    let out = run_git_diff(cwd, &args)?;
     Ok(parse_unified(&out, &HashSet::new()))
+}
+
+/// What merging `branch` would bring to the current branch: the diff from
+/// their merge base to the branch tip — three-dot semantics, with the two
+/// ends resolved here so the answer can name real shas. `R-D15`.
+pub fn compare_with_head(
+    cwd: &Path,
+    branch: &str,
+    opts: DiffOpts,
+) -> Result<(String, String, Vec<FileChange>)> {
+    if !valid_ref_name(branch) {
+        bail!("that is not a ref name");
+    }
+    let base = run_git(cwd, &["merge-base", "HEAD", branch])?
+        .trim()
+        .to_string();
+    let tip = run_git(cwd, &["rev-parse", branch])?.trim().to_string();
+    if !valid_sha(&base) || !valid_sha(&tip) {
+        bail!("could not resolve the merge base");
+    }
+    let files = diff_range(cwd, &base, &tip, opts)?;
+    Ok((base, tip, files))
 }
 
 /// The repo's refs in one answer. Several git calls, one wire round-trip —
@@ -844,6 +910,24 @@ pub fn refs(cwd: &Path) -> Result<RefsInfo> {
         )
         .unwrap_or_default(),
     );
+    // Remote-tracking branches: same framing as local, no tracking
+    // fields of their own, `origin/HEAD` symref skipped as noise.
+    let remote_branches: Vec<BranchInfo> = parse_branches(
+        &run_git(
+            cwd,
+            &[
+                "for-each-ref",
+                "refs/remotes",
+                "--sort=-committerdate",
+                "--count=200",
+                "--format=%(refname:short)%1f%(objectname:short)%1f%(HEAD)%1f%(upstream:short)%1f%(upstream:track)%1f%(committerdate:unix)%1e",
+            ],
+        )
+        .unwrap_or_default(),
+    )
+    .into_iter()
+    .filter(|b| !b.name.ends_with("/HEAD"))
+    .collect();
     let remotes = parse_remotes(&run_git(cwd, &["remote", "-v"]).unwrap_or_default());
     // FETCH_HEAD lives in the *common* dir, so a worktree session still
     // sees the fetch its main checkout ran. Reading an mtime is as far as
@@ -864,6 +948,7 @@ pub fn refs(cwd: &Path) -> Result<RefsInfo> {
         tags,
         remotes,
         fetch_epoch,
+        remote_branches,
     })
 }
 
@@ -967,12 +1052,13 @@ fn parse_stashes(out: &str) -> Vec<StashInfo> {
 
 /// One stash's diff. The argument is built here from a number — a client
 /// cannot spell `stash@{…}` at the daemon, only an index.
-pub fn stash_show(cwd: &Path, index: u32) -> Result<Vec<FileChange>> {
+pub fn stash_show(cwd: &Path, index: u32, opts: DiffOpts) -> Result<Vec<FileChange>> {
     let spec = format!("stash@{{{index}}}");
-    let out = run_git_diff(
-        cwd,
-        &["stash", "show", "-p", "--no-color", "--unified=3", &spec],
-    )?;
+    let unified = opts.args();
+    let mut args: Vec<&str> = vec!["stash", "show", "-p", "--no-color"];
+    args.extend(unified.iter().map(String::as_str));
+    args.push(&spec);
+    let out = run_git_diff(cwd, &args)?;
     Ok(parse_unified(&out, &HashSet::new()))
 }
 
@@ -1008,6 +1094,104 @@ fn parse_submodules(out: &str) -> Vec<SubmoduleInfo> {
             })
         })
         .collect()
+}
+
+/// Where HEAD has been — the read-only recovery map. Freeform subjects,
+/// so only the separators are trusted. `R-D15`.
+pub fn reflog(cwd: &Path) -> Result<Vec<ReflogEntry>> {
+    let out = run_git(
+        cwd,
+        &["reflog", "-n", "100", "--format=%h%x1f%gd%x1f%gs%x1e"],
+    )?;
+    Ok(parse_reflog(&out))
+}
+
+fn parse_reflog(out: &str) -> Vec<ReflogEntry> {
+    out.split('\x1e')
+        .filter_map(|rec| {
+            let mut f = rec.trim_start_matches(['\n', '\r']).split('\x1f');
+            let sha = f.next()?.trim().to_string();
+            if sha.is_empty() {
+                return None;
+            }
+            Some(ReflogEntry {
+                sha,
+                selector: f.next().unwrap_or("").to_string(),
+                summary: f.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect()
+}
+
+/// `git worktree list --porcelain`, parsed leniently: blocks separated by
+/// blank lines, each opened by a `worktree <path>` line. `R-D15`.
+pub fn worktrees(cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+    let out = run_git(cwd, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktrees(&out))
+}
+
+fn parse_worktrees(out: &str) -> Vec<WorktreeInfo> {
+    let mut list = Vec::new();
+    let mut cur: Option<WorktreeInfo> = None;
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(w) = cur.take() {
+                list.push(w);
+            }
+            cur = Some(WorktreeInfo {
+                path: path.to_string(),
+                sha: String::new(),
+                branch: None,
+            });
+        } else if let Some(sha) = line.strip_prefix("HEAD ") {
+            if let Some(w) = cur.as_mut() {
+                w.sha = sha.chars().take(8).collect();
+            }
+        } else if let Some(branch) = line.strip_prefix("branch ") {
+            if let Some(w) = cur.as_mut() {
+                w.branch = Some(
+                    branch
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(branch)
+                        .to_string(),
+                );
+            }
+        }
+        // "detached", "bare", "locked …" and anything future are noted by
+        // their absence — a branchless row reads as detached.
+    }
+    if let Some(w) = cur.take() {
+        list.push(w);
+    }
+    list
+}
+
+/// Cap per conflict stage — three of these travel in one message.
+const MAX_STAGE_BYTES: usize = 256 * 1024;
+
+/// A conflicted file's three stages: base, ours, theirs. A stage the
+/// merge did not produce (both-added has no base) comes back empty rather
+/// than erroring — the view's job is to show what exists. `R-D16`.
+pub fn conflict_stages(cwd: &Path, rel: &str) -> Result<(String, String, String, bool)> {
+    if Path::new(rel).is_absolute() || rel.split('/').any(|p| p == "..") {
+        bail!("{rel} is not a path inside the session");
+    }
+    let mut truncated = false;
+    let mut stage = |n: u32| -> String {
+        let spec = format!(":{n}:{rel}");
+        let mut text = run_git(cwd, &["show", &spec]).unwrap_or_default();
+        if text.len() > MAX_STAGE_BYTES {
+            let mut end = MAX_STAGE_BYTES;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+            truncated = true;
+        }
+        text
+    };
+    let (base, ours, theirs) = (stage(1), stage(2), stage(3));
+    Ok((base, ours, theirs, truncated))
 }
 
 /// Cap for revision-tab bodies, the explorer's own cap: past this the tab
@@ -1079,13 +1263,14 @@ fn parse_status(out: &str) -> Vec<StatusEntry> {
 
 /// One uncommitted file against `HEAD` — or against nothing, when it is
 /// untracked and `HEAD` has never heard of it.
-pub fn diff_file(cwd: &Path, rel: &str) -> Result<Vec<FileChange>> {
+pub fn diff_file(cwd: &Path, rel: &str, opts: DiffOpts) -> Result<Vec<FileChange>> {
     let tracked = run_git(cwd, &["ls-files", "--error-unmatch", "--", rel]).is_ok();
     let out = if tracked {
-        run_git_diff(
-            cwd,
-            &["diff", "--no-color", "--no-ext-diff", "-M", "--unified=3", "HEAD", "--", rel],
-        )?
+        let unified = opts.args();
+        let mut args: Vec<&str> = vec!["diff", "--no-color", "--no-ext-diff", "-M"];
+        args.extend(unified.iter().map(String::as_str));
+        args.extend(["HEAD", "--", rel]);
+        run_git_diff(cwd, &args)?
     } else {
         run_git_diff(cwd, &["diff", "--no-color", "--no-index", "--", "/dev/null", rel])
             .unwrap_or_default()
@@ -1578,6 +1763,42 @@ copy to src/b.rs
         let files = parse_unified(diff, &HashSet::new());
         assert_eq!(files[0].status, FileStatus::Renamed);
         assert_eq!(files[0].old_path.as_deref(), Some("src/a.rs"));
+    }
+
+    /// Reflog subjects are freeform; only the separators are trusted.
+    #[test]
+    fn reflog_parsing_reads_selector_and_summary() {
+        let out = "abc123\x1fHEAD@{0}\x1fcheckout: moving from main to fix/x\x1e\n\
+                   def456\x1fHEAD@{1}\x1fcommit: weird \"subject\" with \x7f\x1e";
+        let entries = parse_reflog(out);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].selector, "HEAD@{0}");
+        assert!(entries[1].summary.contains("weird"));
+        assert!(parse_reflog("").is_empty());
+    }
+
+    /// Worktree porcelain: blocks with a path, a HEAD, and a branch — or
+    /// no branch at all, which reads as detached.
+    #[test]
+    fn worktree_parsing_reads_blocks_and_detached() {
+        let out = "worktree /home/k/repo\nHEAD aaaa111122223333aaaa111122223333aaaa1111\nbranch refs/heads/main\n\n\
+                   worktree /home/k/.mogeung/worktrees/repo/xyz\nHEAD bbbb111122223333aaaa111122223333aaaa1111\ndetached\n";
+        let w = parse_worktrees(out);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0].path, "/home/k/repo");
+        assert_eq!(w[0].branch.as_deref(), Some("main"));
+        assert_eq!(w[0].sha, "aaaa1111");
+        assert_eq!(w[1].branch, None, "no branch line reads as detached");
+        assert!(parse_worktrees("").is_empty());
+    }
+
+    /// Diff options: context is clamped, whitespace adds exactly `-w`.
+    #[test]
+    fn diff_opts_clamp_and_spell_their_args() {
+        let d = DiffOpts::from_wire(None, None);
+        assert_eq!(d.args(), vec!["--unified=3"]);
+        let d = DiffOpts::from_wire(Some(10_000), Some(true));
+        assert_eq!(d.args(), vec!["--unified=400", "-w"]);
     }
 
     /// The read-only guarantee starts at argument hygiene: a "sha" that
