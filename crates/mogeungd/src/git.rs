@@ -408,6 +408,11 @@ fn parse_unified(diff: &str, reviewed: &HashSet<String>) -> Vec<FileChange> {
             } else if let Some(old) = line.strip_prefix("rename from ") {
                 f.status = FileStatus::Renamed;
                 f.old_path = Some(old.to_string());
+            } else if let Some(old) = line.strip_prefix("copy from ") {
+                // A copy reads like a rename whose source survives; the
+                // shapes have no separate status and do not need one.
+                f.status = FileStatus::Renamed;
+                f.old_path = Some(old.to_string());
             } else if line.starts_with("Binary files") || line.starts_with("GIT binary patch") {
                 f.truncated = true;
             } else if line.starts_with("@@") {
@@ -548,7 +553,10 @@ fn compute_change_inner(
 // does. Staging, committing, checkout — all of it stays in the terminal;
 // mogeung driving the repo is the observer trap one layer down.
 
-use mogeung_core::wire::{BlameLine, CommitInfo, StatusEntry};
+use mogeung_core::wire::{
+    BlameLine, BranchInfo, CommitInfo, RefsInfo, RemoteInfo, StashInfo, StatusEntry,
+    SubmoduleInfo, TagInfo,
+};
 
 /// Blame stops here; past this a "who wrote this line" gutter is a memory
 /// test. The truncated flag says so.
@@ -561,43 +569,120 @@ fn valid_sha(s: &str) -> bool {
     !s.is_empty() && s.len() <= 40 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// One page of the log, newest first. Asks for one row past `limit`, so
-/// "was that the end of history" costs no second call.
-pub fn log_page(cwd: &Path, skip: u32, limit: u32) -> Result<(Vec<CommitInfo>, bool)> {
-    let limit = limit.clamp(1, 200);
-    // \x1f between fields, \x1e between records: subjects contain anything.
-    let out = run_git(
-        cwd,
-        &[
-            "log",
-            &format!("--skip={skip}"),
-            &format!("-n{}", limit + 1),
-            "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s%x1e",
-        ],
-    )?;
-    let mut commits = parse_log(&out);
-    let done = commits.len() as u32 <= limit;
-    commits.truncate(limit as usize);
-    Ok((commits, done))
+/// A sha, optionally suffixed `^` — "the parent of". The one revision
+/// operator re-blame needs, and the only one allowed: still no way to spell
+/// a flag.
+fn valid_rev(s: &str) -> bool {
+    valid_sha(s.strip_suffix('^').unwrap_or(s))
 }
 
-fn parse_log(out: &str) -> Vec<CommitInfo> {
-    out.split('\x1e')
-        .filter_map(|rec| {
-            let mut f = rec.trim_start_matches(['\n', '\r']).split('\x1f');
-            let sha = f.next()?.trim().to_string();
-            if sha.is_empty() {
-                return None;
+/// A ref name a client may scope the log to. Deliberately narrower than
+/// what git itself would accept: branch and tag names in the wild are
+/// `[A-Za-z0-9._/-]`, and everything a hostile client would need — a
+/// leading `-`, `..`, `@{` — is outside that set or refused explicitly.
+fn valid_ref_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 250
+        && !s.starts_with(['-', '.', '/'])
+        && !s.ends_with('/')
+        && !s.contains("..")
+        && !s.contains("@{")
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+}
+
+/// One page of the log, newest first, scoped to `rev` (`None` = HEAD).
+/// Asks for one row past `limit`, so "was that the end of history" costs no
+/// second call. Also returns, per commit, the files it touched — fuel for
+/// the session-attribution heuristic, fetched in the same process spawn.
+pub fn log_page(
+    cwd: &Path,
+    skip: u32,
+    limit: u32,
+    rev: Option<&str>,
+) -> Result<(Vec<CommitInfo>, Vec<Vec<String>>, bool)> {
+    let limit = limit.clamp(1, 200);
+    if let Some(r) = rev {
+        if !valid_ref_name(r) {
+            bail!("that is not a ref name");
+        }
+    }
+    // \x1f between fields, \x1e between records: subjects contain anything.
+    let skip_arg = format!("--skip={skip}");
+    let n_arg = format!("-n{}", limit + 1);
+    let mut args = vec![
+        "log",
+        &skip_arg,
+        &n_arg,
+        "--name-only",
+        "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%p%x1f%s%x1e",
+    ];
+    if let Some(r) = rev {
+        args.push(r);
+    }
+    args.push("--");
+    let out = run_git(cwd, &args)?;
+    let (mut commits, mut files) = parse_log(&out);
+    let done = commits.len() as u32 <= limit;
+    commits.truncate(limit as usize);
+    files.truncate(limit as usize);
+    Ok((commits, files, done))
+}
+
+/// Parse `--format=…%x1e --name-only` output. Only the separators are
+/// trusted: a line containing `\x1f` is a record's fields; every other
+/// non-blank line is a filename belonging to the *previous* record, because
+/// `--name-only` prints a commit's files after its format line.
+fn parse_log(out: &str) -> (Vec<CommitInfo>, Vec<Vec<String>>) {
+    let mut commits: Vec<CommitInfo> = Vec::new();
+    let mut files: Vec<Vec<String>> = Vec::new();
+    for chunk in out.split('\x1e') {
+        let mut pre_files: Vec<String> = Vec::new();
+        let mut fields: Option<&str> = None;
+        for line in chunk.lines() {
+            if fields.is_none() && line.contains('\x1f') {
+                fields = Some(line);
+            } else if fields.is_none() && !line.trim().is_empty() {
+                pre_files.push(line.trim().to_string());
             }
-            Some(CommitInfo {
-                sha,
-                short: f.next()?.to_string(),
-                author: f.next()?.to_string(),
-                epoch: f.next()?.parse().unwrap_or(0),
-                summary: f.next().unwrap_or("").to_string(),
-            })
-        })
-        .collect()
+        }
+        // The files seen before this chunk's field line were printed under
+        // the previous commit.
+        if let Some(prev) = files.last_mut() {
+            *prev = pre_files;
+        }
+        let Some(rec) = fields else { continue };
+        let mut f = rec.split('\x1f');
+        let Some(sha) = f.next().map(|s| s.trim().to_string()) else {
+            continue;
+        };
+        if sha.is_empty() {
+            continue;
+        }
+        commits.push(CommitInfo {
+            sha,
+            short: f.next().unwrap_or("").to_string(),
+            author: f.next().unwrap_or("").to_string(),
+            epoch: f.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            refs: f
+                .next()
+                .unwrap_or("")
+                .split(", ")
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
+                .collect(),
+            parents: f
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect(),
+            summary: f.next().unwrap_or("").to_string(),
+            touches_session: false,
+        });
+        files.push(Vec::new());
+    }
+    (commits, files)
 }
 
 /// One commit's patch, in the same shapes the Changes tab renders — which is
@@ -609,16 +694,267 @@ pub fn show_commit(cwd: &Path, sha: &str) -> Result<Vec<FileChange>> {
     let out = run_git_diff(
         cwd,
         &[
-            "show", "--no-color", "--no-ext-diff", "-M", "--unified=3", "--format=", sha, "--",
+            "show", "--no-color", "--no-ext-diff", "-M", "-C", "--unified=3", "--format=", sha,
+            "--",
         ],
     )?;
     Ok(parse_unified(&out, &HashSet::new()))
 }
 
+/// The diff between two commits, `from` → `to`. Both ends are commits the
+/// client picked off the log; the range is read the same way a commit is.
+pub fn diff_range(cwd: &Path, from: &str, to: &str) -> Result<Vec<FileChange>> {
+    if !valid_sha(from) || !valid_sha(to) {
+        bail!("that is not a commit sha");
+    }
+    let out = run_git_diff(
+        cwd,
+        &[
+            "diff", "--no-color", "--no-ext-diff", "-M", "-C", "--unified=3", from, to, "--",
+        ],
+    )?;
+    Ok(parse_unified(&out, &HashSet::new()))
+}
+
+/// The repo's refs in one answer. Several git calls, one wire round-trip —
+/// a header line is not worth five.
+pub fn refs(cwd: &Path) -> Result<RefsInfo> {
+    let head = run_git(cwd, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let head_sha = run_git(cwd, &["rev-parse", "--short", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let branches = parse_branches(
+        &run_git(
+            cwd,
+            &[
+                "for-each-ref",
+                "refs/heads",
+                "--sort=-committerdate",
+                "--count=200",
+                "--format=%(refname:short)%1f%(objectname:short)%1f%(HEAD)%1f%(upstream:short)%1f%(upstream:track)%1f%(committerdate:unix)%1e",
+            ],
+        )
+        .unwrap_or_default(),
+    );
+    let tags = parse_tags(
+        &run_git(
+            cwd,
+            &[
+                "for-each-ref",
+                "refs/tags",
+                "--sort=-creatordate",
+                "--count=100",
+                "--format=%(refname:short)%1f%(objectname:short)%1f%(*objectname:short)%1f%(creatordate:unix)%1e",
+            ],
+        )
+        .unwrap_or_default(),
+    );
+    let remotes = parse_remotes(&run_git(cwd, &["remote", "-v"]).unwrap_or_default());
+    // FETCH_HEAD lives in the *common* dir, so a worktree session still
+    // sees the fetch its main checkout ran. Reading an mtime is as far as
+    // "remote status" goes — the daemon never fetches.
+    let fetch_epoch = run_git(cwd, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .ok()
+        .and_then(|d| {
+            std::fs::metadata(Path::new(d.trim()).join("FETCH_HEAD"))
+                .and_then(|m| m.modified())
+                .ok()
+        })
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    Ok(RefsInfo {
+        head,
+        head_sha,
+        branches,
+        tags,
+        remotes,
+        fetch_epoch,
+    })
+}
+
+fn parse_branches(out: &str) -> Vec<BranchInfo> {
+    out.split('\x1e')
+        .filter_map(|rec| {
+            let mut f = rec.trim_start_matches(['\n', '\r']).split('\x1f');
+            let name = f.next()?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let sha = f.next()?.to_string();
+            let current = f.next()? == "*";
+            let upstream = Some(f.next()?.to_string()).filter(|s| !s.is_empty());
+            // "[ahead 2, behind 1]", "[ahead 2]", "[behind 1]", "[gone]", "".
+            let track = f.next().unwrap_or("");
+            let grab = |key: &str| -> u32 {
+                track
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .find(|w| w[0] == key)
+                    .and_then(|w| w[1].parse().ok())
+                    .unwrap_or(0)
+            };
+            Some(BranchInfo {
+                name,
+                sha,
+                current,
+                upstream,
+                ahead: grab("ahead"),
+                behind: grab("behind"),
+                epoch: f.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+fn parse_tags(out: &str) -> Vec<TagInfo> {
+    out.split('\x1e')
+        .filter_map(|rec| {
+            let mut f = rec.trim_start_matches(['\n', '\r']).split('\x1f');
+            let name = f.next()?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let plain = f.next()?.to_string();
+            // The deref field is non-empty exactly for annotated tags, and
+            // is the commit; lightweight tags already point at one.
+            let deref = f.next().unwrap_or("").to_string();
+            Some(TagInfo {
+                name,
+                sha: if deref.is_empty() { plain } else { deref },
+                epoch: f.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+fn parse_remotes(out: &str) -> Vec<RemoteInfo> {
+    let mut seen = HashSet::new();
+    out.lines()
+        .filter_map(|line| {
+            // "origin\thttps://… (fetch)" — one row per remote, fetch URL.
+            let (name, rest) = line.split_once('\t')?;
+            let url = rest.strip_suffix(" (fetch)")?;
+            if !seen.insert(name.to_string()) {
+                return None;
+            }
+            Some(RemoteInfo {
+                name: name.to_string(),
+                url: url.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// The stash list. `%gs` is the reflog subject — "WIP on main: …" or the
+/// message `stash push -m` gave it.
+pub fn stashes(cwd: &Path) -> Result<Vec<StashInfo>> {
+    let out = run_git(cwd, &["stash", "list", "--format=%at%x1f%gs%x1e"])?;
+    Ok(parse_stashes(&out))
+}
+
+fn parse_stashes(out: &str) -> Vec<StashInfo> {
+    out.split('\x1e')
+        .filter_map(|rec| {
+            let mut f = rec.trim_start_matches(['\n', '\r']).split('\x1f');
+            let epoch: i64 = f.next()?.trim().parse().ok()?;
+            let message = f.next().unwrap_or("").to_string();
+            Some((epoch, message))
+        })
+        .enumerate()
+        .map(|(i, (epoch, message))| StashInfo {
+            index: i as u32,
+            message,
+            epoch,
+        })
+        .collect()
+}
+
+/// One stash's diff. The argument is built here from a number — a client
+/// cannot spell `stash@{…}` at the daemon, only an index.
+pub fn stash_show(cwd: &Path, index: u32) -> Result<Vec<FileChange>> {
+    let spec = format!("stash@{{{index}}}");
+    let out = run_git_diff(
+        cwd,
+        &["stash", "show", "-p", "--no-color", "--unified=3", &spec],
+    )?;
+    Ok(parse_unified(&out, &HashSet::new()))
+}
+
+/// Submodule paths and their state, `git submodule status` parsed leniently.
+pub fn submodules(cwd: &Path) -> Result<Vec<SubmoduleInfo>> {
+    let out = run_git(cwd, &["submodule", "status"])?;
+    Ok(parse_submodules(&out))
+}
+
+fn parse_submodules(out: &str) -> Vec<SubmoduleInfo> {
+    out.lines()
+        .filter_map(|line| {
+            if line.len() < 3 {
+                return None;
+            }
+            // "[ +-U]<sha> <path>( (<describe>))?"
+            let (state, rest) = line.split_at(1);
+            let mut parts = rest.trim().splitn(2, ' ');
+            let sha = parts.next()?.to_string();
+            if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            let rest = parts.next().unwrap_or("");
+            let (path, note) = match rest.rsplit_once(" (") {
+                Some((p, n)) => (p.to_string(), n.trim_end_matches(')').to_string()),
+                None => (rest.to_string(), String::new()),
+            };
+            Some(SubmoduleInfo {
+                path,
+                sha: sha.chars().take(8).collect(),
+                state: state.to_string(),
+                note,
+            })
+        })
+        .collect()
+}
+
+/// Cap for revision-tab bodies, the explorer's own cap: past this the tab
+/// shows the head of the file and says so.
+const MAX_REV_FILE_BYTES: usize = 512 * 1024;
+
+/// One file's content at a revision — `git show sha:path`, the read-only
+/// answer to "what did this look like before the agent rewrote it".
+pub fn file_at_rev(cwd: &Path, rev: &str, rel: &str) -> Result<(String, bool)> {
+    if !valid_rev(rev) {
+        bail!("that is not a revision");
+    }
+    // The path is historical: it may not exist in the worktree at all, so
+    // containment is lexical — no absolute paths, no `..`.
+    if Path::new(rel).is_absolute() || rel.split('/').any(|p| p == "..") {
+        bail!("{rel} is not a path inside the session");
+    }
+    let spec = format!("{rev}:{rel}");
+    let out = run_git(cwd, &["show", &spec])?;
+    let truncated = out.len() > MAX_REV_FILE_BYTES;
+    let mut content = out;
+    if truncated {
+        // Cut on a char boundary; a revision tab is a reading aid, not an
+        // archive download.
+        let mut end = MAX_REV_FILE_BYTES;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        content.truncate(end);
+    }
+    Ok((content, truncated))
+}
+
 /// The repo's uncommitted state, porcelain v1 parsed leniently — a code we
-/// do not recognise still lists, it just wears its raw `XY`.
+/// do not recognise still lists, it just wears its raw `XY`. `--ignored`
+/// adds `!!` rows (directories collapsed), which clients use to *dim*, not
+/// to list.
 pub fn status(cwd: &Path) -> Result<Vec<StatusEntry>> {
-    let out = run_git(cwd, &["status", "--porcelain"])?;
+    let out = run_git(cwd, &["status", "--porcelain", "--ignored"])?;
     Ok(parse_status(&out))
 }
 
@@ -634,11 +970,16 @@ fn parse_status(out: &str) -> Vec<StatusEntry> {
             let path = path.rsplit(" -> ").next().unwrap_or(path);
             let x = code.chars().next().unwrap_or(' ');
             let y = code.chars().nth(1).unwrap_or(' ');
+            // The porcelain's unmerged table: any U, or both sides added or
+            // both deleted.
+            let conflicted =
+                x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
             Some(StatusEntry {
                 path: path.trim_matches('"').to_string(),
-                staged: x != ' ' && x != '?',
-                unstaged: y != ' ',
+                staged: x != ' ' && x != '?' && x != '!',
+                unstaged: y != ' ' && y != '!',
                 state: code.to_string(),
+                conflicted,
             })
         })
         .collect()
@@ -667,18 +1008,27 @@ pub fn diff_file(cwd: &Path, rel: &str) -> Result<Vec<FileChange>> {
     Ok(files)
 }
 
-/// Per-line authorship of the worktree file. Uncommitted lines come back
-/// with git's all-zeros sha and its "Not Committed Yet" author, unchanged —
-/// renaming them is the client's editorial decision, not the daemon's.
-pub fn blame(cwd: &Path, rel: &str) -> Result<(Vec<BlameLine>, bool)> {
-    let out = run_git(cwd, &["blame", "--porcelain", "--", rel])?;
+/// Per-line authorship, of the worktree file (`rev: None`) or of the file
+/// as it stood at a revision. Uncommitted lines come back with git's
+/// all-zeros sha and its "Not Committed Yet" author, unchanged — renaming
+/// them is the client's editorial decision, not the daemon's.
+pub fn blame(cwd: &Path, rel: &str, rev: Option<&str>) -> Result<(Vec<BlameLine>, bool)> {
+    let out = match rev {
+        None => run_git(cwd, &["blame", "--porcelain", "--", rel])?,
+        Some(r) => {
+            if !valid_rev(r) {
+                bail!("that is not a revision");
+            }
+            run_git(cwd, &["blame", "--porcelain", r, "--", rel])?
+        }
+    };
     Ok(parse_blame(&out))
 }
 
 fn parse_blame(out: &str) -> (Vec<BlameLine>, bool) {
     // Porcelain prints full commit details once per commit; later lines of
     // the same commit carry only the header. Remember what each sha said.
-    let mut known: std::collections::HashMap<String, (String, i64)> =
+    let mut known: std::collections::HashMap<String, (String, i64, String)> =
         std::collections::HashMap::new();
     let mut lines: Vec<BlameLine> = Vec::new();
     let mut cur: Option<String> = None;
@@ -692,11 +1042,12 @@ fn parse_blame(out: &str) -> (Vec<BlameLine>, bool) {
                     truncated = true;
                     break;
                 }
-                let (author, epoch) = known.get(&sha).cloned().unwrap_or_default();
+                let (author, epoch, summary) = known.get(&sha).cloned().unwrap_or_default();
                 lines.push(BlameLine {
                     sha: sha.chars().take(8).collect(),
                     author,
                     epoch,
+                    summary,
                 });
             }
             continue;
@@ -713,6 +1064,10 @@ fn parse_blame(out: &str) -> (Vec<BlameLine>, bool) {
         } else if let Some(t) = line.strip_prefix("author-time ") {
             if let Some(sha) = &cur {
                 known.entry(sha.clone()).or_default().1 = t.trim().parse().unwrap_or(0);
+            }
+        } else if let Some(s) = line.strip_prefix("summary ") {
+            if let Some(sha) = &cur {
+                known.entry(sha.clone()).or_default().2 = s.to_string();
             }
         }
     }
@@ -947,15 +1302,104 @@ index 333..444 100644
     /// anything printable, so only the \x1f/\x1e framing is trustworthy.
     #[test]
     fn log_parsing_survives_hostile_subjects() {
-        let out = "aaa111\x1faaa\x1fkeith\x1f1722000000\x1ffix: a \"quoted\" thing\x1e\n\
-                   bbb222\x1fbbb\x1fclaude\x1f1722000100\x1fsubject with \x7f and spaces\x1e";
-        let commits = parse_log(out);
+        let out =
+            "aaa111\x1faaa\x1fkeith\x1f1722000000\x1fHEAD -> main, tag: v1\x1fp1 p2\x1ffix: a \"quoted\" thing\x1e\n\
+             bbb222\x1fbbb\x1fclaude\x1f1722000100\x1f\x1fp3\x1fsubject with \x7f and spaces\x1e";
+        let (commits, _) = parse_log(out);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].short, "aaa");
         assert_eq!(commits[0].epoch, 1722000000);
         assert!(commits[0].summary.contains("quoted"));
-        assert!(parse_log("").is_empty());
-        assert!(parse_log("garbage with no separators").len() <= 1);
+        assert_eq!(commits[0].refs, vec!["HEAD -> main", "tag: v1"]);
+        assert_eq!(commits[0].parents, vec!["p1", "p2"]);
+        assert!(commits[1].refs.is_empty());
+        assert!(parse_log("").0.is_empty());
+        assert!(parse_log("garbage with no separators").0.len() <= 1);
+    }
+
+    /// `--name-only` prints a commit's files *after* its format line, so
+    /// they land at the head of the next \x1e chunk — and must attach to
+    /// the commit that produced them, not the one that follows.
+    #[test]
+    fn log_files_attach_to_the_commit_that_touched_them() {
+        let out = "aaa111\x1faaa\x1fkeith\x1f1722000000\x1f\x1fp1\x1ffirst\x1e\n\n\
+                   src/a.rs\nsrc/b.rs\n\n\
+                   bbb222\x1fbbb\x1fkeith\x1f1722000100\x1f\x1f\x1fsecond\x1e\n\n\
+                   docs/c.md\n";
+        let (commits, files) = parse_log(out);
+        assert_eq!(commits.len(), 2);
+        assert_eq!(files[0], vec!["src/a.rs", "src/b.rs"]);
+        assert_eq!(files[1], vec!["docs/c.md"], "the tail chunk's files belong to the last commit");
+    }
+
+    /// The for-each-ref framing: current-branch marker, tracking counts
+    /// pulled out of "[ahead 2, behind 1]", and a branch with no upstream.
+    #[test]
+    fn branch_parsing_reads_tracking_state() {
+        let out = "main\x1fabc123\x1f*\x1forigin/main\x1f[ahead 2, behind 1]\x1f1722000000\x1e\n\
+                   fix/x\x1fdef456\x1f \x1f\x1f\x1f1722000100\x1e\n\
+                   gone-br\x1f987fed\x1f \x1forigin/gone-br\x1f[gone]\x1f1722000200\x1e";
+        let bs = parse_branches(out);
+        assert_eq!(bs.len(), 3);
+        assert!(bs[0].current);
+        assert_eq!(bs[0].ahead, 2);
+        assert_eq!(bs[0].behind, 1);
+        assert_eq!(bs[0].upstream.as_deref(), Some("origin/main"));
+        assert!(!bs[1].current);
+        assert_eq!(bs[1].upstream, None);
+        assert_eq!((bs[1].ahead, bs[1].behind), (0, 0));
+        assert_eq!((bs[2].ahead, bs[2].behind), (0, 0), "[gone] is not a count");
+        assert!(parse_branches("").is_empty());
+    }
+
+    /// Annotated tags carry the commit in the deref field; lightweight tags
+    /// only in the plain one. Clicking either must land on a commit.
+    #[test]
+    fn tag_parsing_dereferences_annotated_tags() {
+        let out = "v1.0\x1ftag0bj00\x1fcommit11\x1f1722000000\x1e\n\
+                   light\x1fcommit22\x1f\x1f1722000100\x1e";
+        let ts = parse_tags(out);
+        assert_eq!(ts[0].sha, "commit11", "annotated tag must dereference");
+        assert_eq!(ts[1].sha, "commit22");
+    }
+
+    #[test]
+    fn remote_parsing_dedupes_fetch_and_push() {
+        let out = "origin\thttps://github.com/x/y.git (fetch)\n\
+                   origin\thttps://github.com/x/y.git (push)\n\
+                   fork\tgit@github.com:z/y.git (fetch)\n";
+        let rs = parse_remotes(out);
+        assert_eq!(rs.len(), 2);
+        assert_eq!(rs[0].name, "origin");
+        assert_eq!(rs[1].url, "git@github.com:z/y.git");
+    }
+
+    #[test]
+    fn stash_parsing_indexes_in_list_order() {
+        let out = "1722000100\x1fWIP on main: abc fix the thing\x1e\n\
+                   1722000000\x1fOn fix/x: stashed by hand\x1e";
+        let ss = parse_stashes(out);
+        assert_eq!(ss.len(), 2);
+        assert_eq!(ss[0].index, 0, "stash@{{0}} is the newest, first in the list");
+        assert_eq!(ss[1].index, 1);
+        assert!(ss[1].message.contains("stashed by hand"));
+    }
+
+    /// `git submodule status` prefixes: in-sync, out-of-date, uninitialised.
+    #[test]
+    fn submodule_parsing_keeps_the_state_prefix() {
+        let out = " aaaa111122223333aaaa111122223333aaaa1111 vendor/lib (v1.2.0)\n\
+                   +bbbb111122223333aaaa111122223333aaaa1111 vendor/other (heads/main)\n\
+                   -cccc111122223333aaaa111122223333aaaa1111 vendor/uninit\n";
+        let subs = parse_submodules(out);
+        assert_eq!(subs.len(), 3);
+        assert_eq!(subs[0].state, " ");
+        assert_eq!(subs[0].path, "vendor/lib");
+        assert_eq!(subs[0].note, "v1.2.0");
+        assert_eq!(subs[1].state, "+");
+        assert_eq!(subs[2].state, "-");
+        assert_eq!(subs[2].note, "");
+        assert!(parse_submodules("").is_empty());
     }
 
     /// The porcelain codes that actually occur, including the rename arrow
@@ -974,6 +1418,24 @@ index 333..444 100644
         assert!(!by("new.txt").staged, "untracked is not staged");
         assert!(by("new.txt").unstaged);
         assert_eq!(by("new.rs").state, "R ", "a rename lists under its new name");
+        assert!(entries.iter().all(|e| !e.conflicted));
+    }
+
+    /// The unmerged table: any `U`, both-added, both-deleted. And ignored
+    /// rows, which are neither staged nor unstaged — dimming data, not a
+    /// change.
+    #[test]
+    fn status_parsing_marks_conflicts_and_ignored() {
+        let out = "UU src/merge.rs\nAA both.rs\nDD gone.rs\nAU theirs.rs\n!! target/\n M ok.rs\n";
+        let entries = parse_status(out);
+        let by = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
+        for p in ["src/merge.rs", "both.rs", "gone.rs", "theirs.rs"] {
+            assert!(by(p).conflicted, "{p} must read as conflicted");
+        }
+        assert!(!by("ok.rs").conflicted);
+        let ignored = by("target/");
+        assert_eq!(ignored.state, "!!");
+        assert!(!ignored.staged && !ignored.unstaged, "ignored is not a change");
     }
 
     /// Porcelain blame repeats a commit's details only once; every later
@@ -984,23 +1446,46 @@ index 333..444 100644
 aaaa111122223333aaaa111122223333aaaa1111 1 1 2
 author keith
 author-time 1722000000
+summary fix: the thing
 \tfn one() {}
 aaaa111122223333aaaa111122223333aaaa1111 2 2
 \tfn two() {}
 0000000000000000000000000000000000000000 3 3 1
 author Not Committed Yet
 author-time 1722000200
+summary Version of src/x.rs from src/x.rs
 \tfn three() {}
 ";
         let (lines, truncated) = parse_blame(out);
         assert!(!truncated);
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].author, "keith");
+        assert_eq!(lines[0].summary, "fix: the thing");
         assert_eq!(lines[1].author, "keith", "the repeat must inherit the details");
+        assert_eq!(lines[1].summary, "fix: the thing");
         assert_eq!(lines[1].sha, lines[0].sha);
         assert_eq!(lines[2].author, "Not Committed Yet");
         assert!(lines[2].sha.chars().all(|c| c == '0'));
         assert_eq!(parse_blame("").0.len(), 0, "an empty file blames to nothing");
+    }
+
+    /// `-C` copies read as renames whose source survives.
+    #[test]
+    fn copies_read_as_renames() {
+        let diff = "\
+diff --git a/src/a.rs b/src/b.rs
+similarity index 95%
+copy from src/a.rs
+copy to src/b.rs
+--- a/src/a.rs
++++ b/src/b.rs
+@@ -1,2 +1,2 @@
+ x
++y
+";
+        let files = parse_unified(diff, &HashSet::new());
+        assert_eq!(files[0].status, FileStatus::Renamed);
+        assert_eq!(files[0].old_path.as_deref(), Some("src/a.rs"));
     }
 
     /// The read-only guarantee starts at argument hygiene: a "sha" that
@@ -1013,6 +1498,37 @@ author-time 1722000200
         assert!(!valid_sha("--output=/tmp/x"));
         assert!(!valid_sha("HEAD"));
         assert!(!valid_sha(&"a".repeat(41)));
+    }
+
+    /// The one revision operator allowed is a trailing `^` — still nothing
+    /// that could spell a flag or a range.
+    #[test]
+    fn revs_allow_exactly_one_trailing_parent_hat() {
+        assert!(valid_rev("aaa111"));
+        assert!(valid_rev("aaa111^"));
+        assert!(!valid_rev("^aaa111"));
+        assert!(!valid_rev("aaa111^^"));
+        assert!(!valid_rev("aaa111..bbb222"));
+        assert!(!valid_rev("--output=x^"));
+        assert!(!valid_rev("^"));
+    }
+
+    /// Ref names widen the argument surface; hostile shapes die here.
+    #[test]
+    fn ref_names_that_could_be_arguments_are_refused() {
+        assert!(valid_ref_name("main"));
+        assert!(valid_ref_name("origin/main"));
+        assert!(valid_ref_name("fix/issue-42_v1.2"));
+        assert!(!valid_ref_name(""));
+        assert!(!valid_ref_name("-D"));
+        assert!(!valid_ref_name("--all"));
+        assert!(!valid_ref_name("a..b"));
+        assert!(!valid_ref_name("a@{1}"));
+        assert!(!valid_ref_name(".hidden"));
+        assert!(!valid_ref_name("/abs"));
+        assert!(!valid_ref_name("trailing/"));
+        assert!(!valid_ref_name("has space"));
+        assert!(!valid_ref_name("semi;colon"));
     }
 
     #[test]

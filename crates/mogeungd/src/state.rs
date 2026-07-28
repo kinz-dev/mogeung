@@ -852,9 +852,85 @@ impl AppState {
         id: &str,
         skip: u32,
         limit: u32,
+        rev: Option<String>,
     ) -> Result<(Vec<mogeung_core::wire::CommitInfo>, bool)> {
         let root = self.git_root(id).await?;
-        tokio::task::spawn_blocking(move || crate::git::log_page(&root, skip, limit)).await?
+        let (mut commits, files, done) = tokio::task::spawn_blocking(move || {
+            crate::git::log_page(&root, skip, limit, rev.as_deref())
+        })
+        .await??;
+        // Attribution (`R-D11`): a commit made during this session's
+        // lifetime that touches files the session edited *probably* came
+        // from it. A heuristic, marked as such on the wire — the daemon
+        // cannot actually know, and two sessions on one file both match
+        // (A8's limit, inherited).
+        if let Some(session) = self.get(id).await {
+            let started = session.started_at.timestamp();
+            let root = session.repo_root.unwrap_or_default();
+            let root = root.trim_end_matches('/');
+            if !root.is_empty() && !session.touched_files.is_empty() {
+                let touched: std::collections::HashSet<&str> =
+                    session.touched_files.iter().map(|s| s.as_str()).collect();
+                for (c, fs) in commits.iter_mut().zip(&files) {
+                    // A minute of slack absorbs clock skew between the
+                    // transcript's timestamps and the committer's.
+                    c.touches_session = c.epoch + 60 >= started
+                        && fs
+                            .iter()
+                            .any(|rel| touched.contains(format!("{root}/{rel}").as_str()));
+                }
+            }
+        }
+        Ok((commits, done))
+    }
+
+    pub async fn git_refs(&self, id: &str) -> Result<mogeung_core::wire::RefsInfo> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::refs(&root)).await?
+    }
+
+    pub async fn git_stashes(&self, id: &str) -> Result<Vec<mogeung_core::wire::StashInfo>> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::stashes(&root)).await?
+    }
+
+    pub async fn git_stash_show(
+        &self,
+        id: &str,
+        index: u32,
+    ) -> Result<Vec<mogeung_core::change::FileChange>> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::stash_show(&root, index)).await?
+    }
+
+    pub async fn git_submodules(
+        &self,
+        id: &str,
+    ) -> Result<Vec<mogeung_core::wire::SubmoduleInfo>> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::submodules(&root)).await?
+    }
+
+    pub async fn git_diff_range(
+        &self,
+        id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<mogeung_core::change::FileChange>> {
+        let root = self.git_root(id).await?;
+        let (from, to) = (from.to_string(), to.to_string());
+        tokio::task::spawn_blocking(move || crate::git::diff_range(&root, &from, &to)).await?
+    }
+
+    pub async fn git_file_at_rev(
+        &self,
+        id: &str,
+        sha: &str,
+        rel: &str,
+    ) -> Result<(String, bool)> {
+        let root = self.git_root(id).await?;
+        let (sha, rel) = (sha.to_string(), rel.to_string());
+        tokio::task::spawn_blocking(move || crate::git::file_at_rev(&root, &sha, &rel)).await?
     }
 
     pub async fn git_show(
@@ -894,11 +970,20 @@ impl AppState {
         &self,
         id: &str,
         rel: &str,
+        rev: Option<String>,
     ) -> Result<(Vec<mogeung_core::wire::BlameLine>, bool)> {
         let root = self.git_root(id).await?;
-        resolve_inside(&root, rel)?;
+        // A worktree blame names a file that exists; a historical blame
+        // names one that may not, so its containment is lexical — the
+        // `git_diff_file` wrinkle again.
+        if rev.is_none() {
+            resolve_inside(&root, rel)?;
+        } else if Path::new(rel).is_absolute() || rel.split('/').any(|p| p == "..") {
+            anyhow::bail!("{rel} is not a path inside the session");
+        }
         let rel = rel.to_string();
-        tokio::task::spawn_blocking(move || crate::git::blame(&root, &rel)).await?
+        tokio::task::spawn_blocking(move || crate::git::blame(&root, &rel, rev.as_deref()))
+            .await?
     }
 
     pub async fn set_hunk_reviewed(&self, id: &str, anchor: &str, reviewed: bool) {

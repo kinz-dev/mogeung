@@ -112,6 +112,17 @@ impl ScrollRequest {
 /// running. A session here already has thousands of events.
 const TRANSCRIPT_PAGE: usize = 150;
 
+/// Lane colours for the log graph, cycled — distinct enough to follow a
+/// line by eye, few enough to stay quiet.
+const GRAPH_COLORS: [egui::Color32; 6] = [
+    BLUE,
+    GREEN,
+    AMBER,
+    egui::Color32::from_rgb(0xB0, 0x6A, 0xD8),
+    egui::Color32::from_rgb(0x3F, 0xB3, 0xB3),
+    egui::Color32::from_rgb(0xD8, 0x6A, 0x9A),
+];
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Pane {
     Queue,
@@ -273,6 +284,9 @@ pub struct App {
     gitview: crate::gitview::GitView,
     /// Blame gutter on in the Editor's viewers.
     annotate: bool,
+    /// The blamed line a gutter context menu was opened on — captured at
+    /// the right-click, because the pointer wanders while the menu is up.
+    blame_menu_line: Option<mogeung_core::wire::BlameLine>,
 
     errors: Vec<String>,
 }
@@ -349,6 +363,7 @@ impl App {
             explorer,
             gitview: Default::default(),
             annotate: false,
+            blame_menu_line: None,
             // Surfaced in the window, not only on stderr: the terminal that
             // launched this is exactly what you are trying to stop looking at.
             errors: hotkey_error
@@ -448,7 +463,10 @@ impl App {
                     skip,
                     commits,
                     done,
-                } => self.gitview.ingest_commits(&session_id, skip, commits, done),
+                    rev,
+                } => self
+                    .gitview
+                    .ingest_commits(&session_id, skip, commits, done, rev),
                 ServerMsg::GitCommitDiff {
                     session_id,
                     sha,
@@ -468,7 +486,41 @@ impl App {
                     path,
                     lines,
                     truncated,
-                } => self.gitview.ingest_blame(&session_id, path, lines, truncated),
+                    rev,
+                } => self
+                    .gitview
+                    .ingest_blame(&session_id, path, lines, truncated, rev),
+                ServerMsg::GitRefsInfo { session_id, info } => {
+                    self.gitview.ingest_refs(&session_id, *info)
+                }
+                ServerMsg::GitStashList {
+                    session_id,
+                    stashes,
+                } => self.gitview.ingest_stashes(&session_id, stashes),
+                ServerMsg::GitStashDiff {
+                    session_id,
+                    index,
+                    files,
+                } => self.gitview.ingest_stash_diff(&session_id, index, files),
+                ServerMsg::GitSubmoduleList {
+                    session_id,
+                    submodules,
+                } => self.gitview.ingest_submodules(&session_id, submodules),
+                ServerMsg::GitRangeDiff {
+                    session_id,
+                    from,
+                    to,
+                    files,
+                } => self.gitview.ingest_range_diff(&session_id, from, to, files),
+                ServerMsg::GitFileAtRevContent {
+                    session_id,
+                    sha,
+                    path,
+                    content,
+                    truncated,
+                } => self
+                    .explorer
+                    .ingest_rev_file(&session_id, &sha, &path, content, truncated),
                 ServerMsg::Error { message } => {
                     self.errors.push(message);
                     if self.errors.len() > 6 {
@@ -3218,8 +3270,9 @@ impl App {
     }
 
     /// The session repo's git state: local changes and log on the left, the
-    /// selected diff on the right. `R-D10`. Read-only from end to end — the
-    /// daemon offers nothing that writes, so neither can this.
+    /// selected diff on the right. `R-D10`, deepened by `R-D11`. Read-only
+    /// from end to end — the daemon offers nothing that writes, so neither
+    /// can this.
     fn git_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
         self.gitview.ensure_session(&s.id);
 
@@ -3239,6 +3292,25 @@ impl App {
                     session_id: s.id.clone(),
                     skip: 0,
                     limit: 50,
+                    rev: gv.log_rev.clone(),
+                });
+            }
+            if gv.refs.is_none() && !gv.refs_pending {
+                gv.refs_pending = true;
+                self.net.send(ClientMsg::GitRefs {
+                    session_id: s.id.clone(),
+                });
+            }
+            if !gv.stashes_loaded && !gv.stashes_pending {
+                gv.stashes_pending = true;
+                self.net.send(ClientMsg::GitStashes {
+                    session_id: s.id.clone(),
+                });
+            }
+            if !gv.submodules_loaded && !gv.submodules_pending {
+                gv.submodules_pending = true;
+                self.net.send(ClientMsg::GitSubmodules {
+                    session_id: s.id.clone(),
                 });
             }
             match gv.selection.clone() {
@@ -3260,11 +3332,32 @@ impl App {
                         path,
                     });
                 }
+                crate::gitview::Selection::Stash(index)
+                    if !gv.stash_diffs.contains_key(&index)
+                        && gv.pending_stash_shows.insert(index) =>
+                {
+                    self.net.send(ClientMsg::GitStashShow {
+                        session_id: s.id.clone(),
+                        index,
+                    });
+                }
+                crate::gitview::Selection::Range(from, to)
+                    if !gv.range_diffs.contains_key(&(from.clone(), to.clone()))
+                        && gv.pending_ranges.insert((from.clone(), to.clone())) =>
+                {
+                    self.net.send(ClientMsg::GitDiffRange {
+                        session_id: s.id.clone(),
+                        from,
+                        to,
+                    });
+                }
                 _ => {}
             }
         }
 
         egui::Panel::left("git-left").default_size(320.0).show(ui, |ui| {
+            self.git_header(ui);
+            ui.separator();
             ui.horizontal(|ui| {
                 ui.label(RichText::new("LOCAL CHANGES").size(11.0).color(DIM).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3287,24 +3380,237 @@ impl App {
             });
             egui::ScrollArea::vertical()
                 .id_salt("git-local-scroll")
-                .max_height(ui.available_height() * 0.45)
+                .max_height(ui.available_height() * 0.40)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     self.git_local_list(ui, s);
                 });
             ui.separator();
-            ui.label(RichText::new("LOG").size(11.0).color(DIM).strong());
             egui::ScrollArea::vertical()
-                .id_salt("git-log-scroll")
+                .id_salt("git-lower-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
+                    self.git_ref_sections(ui);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("LOG").size(11.0).color(DIM).strong());
+                        if let Some(rev) = self.gitview.log_rev.clone() {
+                            if ui
+                                .small_button(format!("⌥ {rev} ✕"))
+                                .on_hover_text("scoped to this ref — click to go back to HEAD")
+                                .clicked()
+                            {
+                                self.gitview.set_log_rev(None);
+                            }
+                        }
+                    });
                     self.git_log_list(ui, s);
                 });
         });
 
         self.git_diff_panel(ui);
+    }
+
+    /// One line of repo orientation: branch, tracking state, remote, fetch
+    /// age. Display only — mogeung never fetches ([feature 0011]).
+    fn git_header(&mut self, ui: &mut egui::Ui) {
+        let Some(refs) = &self.gitview.refs else {
+            ui.label(dim("reading refs…"));
+            return;
+        };
+        let now = Utc::now().timestamp();
+        ui.horizontal_wrapped(|ui| {
+            match &refs.head {
+                Some(branch) => {
+                    ui.label(
+                        RichText::new(format!("⎇ {branch}"))
+                            .size(12.0)
+                            .strong(),
+                    )
+                    .on_hover_text(format!("HEAD is {}", refs.head_sha));
+                }
+                None => {
+                    ui.label(
+                        RichText::new(format!("⎇ detached @ {}", refs.head_sha))
+                            .size(12.0)
+                            .color(AMBER),
+                    )
+                    .on_hover_text("HEAD points at a commit, not a branch");
+                }
+            }
+            if let Some(cur) = refs.branches.iter().find(|b| b.current) {
+                if let Some(up) = &cur.upstream {
+                    let mut track = String::new();
+                    if cur.ahead > 0 {
+                        track.push_str(&format!(" ↑{}", cur.ahead));
+                    }
+                    if cur.behind > 0 {
+                        track.push_str(&format!(" ↓{}", cur.behind));
+                    }
+                    ui.label(dim(format!("{up}{track}"))).on_hover_text(
+                        "commits ahead ↑ / behind ↓ the upstream, as of the last fetch",
+                    );
+                }
+            }
+            if let Some(r) = refs.remotes.first() {
+                let fetched = match refs.fetch_epoch {
+                    Some(t) => {
+                        format!("fetched {} ago", crate::gitview::age(now, t))
+                    }
+                    None => "never fetched".to_string(),
+                };
+                ui.label(dim(format!("· {} · {fetched}", r.name)))
+                    .on_hover_text(format!(
+                        "{}\nmogeung never fetches — this is the repo's own last fetch",
+                        r.url
+                    ));
+            }
+        });
+    }
+
+    /// The collapsible reading lists: branches, tags, stashes, submodules.
+    /// Sections with nothing to say do not appear.
+    fn git_ref_sections(&mut self, ui: &mut egui::Ui) {
+        let now = Utc::now().timestamp();
+        if let Some(refs) = self.gitview.refs.clone() {
+            if !refs.branches.is_empty() {
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("BRANCHES ({})", refs.branches.len()))
+                        .size(11.0)
+                        .color(DIM)
+                        .strong(),
+                )
+                .id_salt("git-branches")
+                .show(ui, |ui| {
+                    for b in &refs.branches {
+                        let scoped = self.gitview.log_rev.as_deref() == Some(b.name.as_str());
+                        let mut text = format!("{} {}", b.sha, b.name);
+                        if b.ahead > 0 {
+                            text.push_str(&format!(" ↑{}", b.ahead));
+                        }
+                        if b.behind > 0 {
+                            text.push_str(&format!(" ↓{}", b.behind));
+                        }
+                        let mut rich = RichText::new(text).monospace().size(12.0);
+                        if b.current {
+                            rich = rich.color(GREEN);
+                        }
+                        let row = ui
+                            .selectable_label(scoped, rich)
+                            .on_hover_text(format!(
+                                "{} · {}{}\nclick to scope the log to this branch — nothing is checked out",
+                                crate::gitview::age(now, b.epoch),
+                                b.upstream.as_deref().unwrap_or("no upstream"),
+                                if b.current { "\nthe checked-out branch" } else { "" },
+                            ));
+                        if row.clicked() {
+                            self.gitview.set_log_rev(if scoped {
+                                None
+                            } else {
+                                Some(b.name.clone())
+                            });
+                        }
+                    }
+                });
+            }
+            if !refs.tags.is_empty() {
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("TAGS ({})", refs.tags.len()))
+                        .size(11.0)
+                        .color(DIM)
+                        .strong(),
+                )
+                .id_salt("git-tags")
+                .show(ui, |ui| {
+                    for t in &refs.tags {
+                        let row = ui
+                            .selectable_label(
+                                false,
+                                RichText::new(format!("{} {}", t.sha, t.name))
+                                    .monospace()
+                                    .size(12.0),
+                            )
+                            .on_hover_text(format!(
+                                "{} · click to show the tagged commit",
+                                crate::gitview::age(now, t.epoch)
+                            ));
+                        if row.clicked() {
+                            self.gitview.selection =
+                                crate::gitview::Selection::Commit(t.sha.clone());
+                        }
+                    }
+                });
+            }
+        }
+        if !self.gitview.stashes.is_empty() {
+            egui::CollapsingHeader::new(
+                RichText::new(format!("STASHES ({})", self.gitview.stashes.len()))
+                    .size(11.0)
+                    .color(DIM)
+                    .strong(),
+            )
+            .id_salt("git-stashes")
+            .show(ui, |ui| {
+                for st in self.gitview.stashes.clone() {
+                    let picked =
+                        self.gitview.selection == crate::gitview::Selection::Stash(st.index);
+                    let row = ui
+                        .selectable_label(
+                            picked,
+                            RichText::new(format!(
+                                "stash@{{{}}} {}",
+                                st.index,
+                                truncate(&st.message, 40)
+                            ))
+                            .monospace()
+                            .size(12.0),
+                        )
+                        .on_hover_text(format!(
+                            "{}\n{} · read-only: popping stays in the terminal",
+                            st.message,
+                            crate::gitview::age(now, st.epoch)
+                        ));
+                    if row.clicked() {
+                        self.gitview.selection = crate::gitview::Selection::Stash(st.index);
+                    }
+                }
+            });
+        }
+        if !self.gitview.submodules.is_empty() {
+            egui::CollapsingHeader::new(
+                RichText::new(format!("SUBMODULES ({})", self.gitview.submodules.len()))
+                    .size(11.0)
+                    .color(DIM)
+                    .strong(),
+            )
+            .id_salt("git-submodules")
+            .show(ui, |ui| {
+                for sub in &self.gitview.submodules {
+                    let (mark, color, meaning) = match sub.state.as_str() {
+                        "+" => ("+", Some(AMBER), "checked out at a different commit than recorded"),
+                        "-" => ("-", Some(DIM), "not initialised"),
+                        "U" => ("U", Some(RED), "merge conflicts"),
+                        _ => (" ", None, "in sync"),
+                    };
+                    let mut rich = RichText::new(format!("{mark}{} {}", sub.sha, sub.path))
+                        .monospace()
+                        .size(12.0);
+                    if let Some(c) = color {
+                        rich = rich.color(c);
+                    }
+                    ui.label(rich)
+                    .on_hover_text(format!(
+                        "{meaning}{}",
+                        if sub.note.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {}", sub.note)
+                        }
+                    ));
+                }
+            });
+        }
     }
 
     /// The uncommitted files, staged and unstaged distinguished by colour.
@@ -3313,10 +3619,12 @@ impl App {
             ui.label(dim("reading the working tree…"));
             return;
         }
-        let entries: Vec<mogeung_core::wire::StatusEntry> = self
+        let mut entries: Vec<mogeung_core::wire::StatusEntry> = self
             .gitview
             .status
             .iter()
+            // `!!` rows are dimming data for the explorer, not changes.
+            .filter(|e| e.state != "!!")
             .filter(|e| {
                 if !self.gitview.session_only {
                     return true;
@@ -3341,10 +3649,14 @@ impl App {
             }));
             return;
         }
+        // Conflicts first: the one uncommitted state that is never routine.
+        entries.sort_by_key(|e| !e.conflicted);
         for e in entries {
             let picked =
                 self.gitview.selection == crate::gitview::Selection::Local(e.path.clone());
-            let color = if e.staged && !e.unstaged {
+            let color = if e.conflicted {
+                RED
+            } else if e.staged && !e.unstaged {
                 GREEN
             } else if e.staged {
                 AMBER
@@ -3353,19 +3665,25 @@ impl App {
             } else {
                 BLUE
             };
+            let label = if e.conflicted {
+                format!("{} {}  ⚠ conflict", e.state, e.path)
+            } else {
+                format!("{} {}", e.state, e.path)
+            };
             let row = ui
                 .selectable_label(
                     picked,
-                    RichText::new(format!("{} {}", e.state, e.path))
-                        .monospace()
-                        .size(12.0)
-                        .color(color),
+                    RichText::new(label).monospace().size(12.0).color(color),
                 )
-                .on_hover_text(match (e.staged, e.unstaged) {
-                    (true, true) => "staged, with further unstaged edits",
-                    (true, false) => "staged",
-                    (false, _) if e.state == "??" => "untracked",
-                    _ => "unstaged",
+                .on_hover_text(if e.conflicted {
+                    "unresolved merge conflict — resolving stays in the terminal"
+                } else {
+                    match (e.staged, e.unstaged) {
+                        (true, true) => "staged, with further unstaged edits",
+                        (true, false) => "staged",
+                        (false, _) if e.state == "??" => "untracked",
+                        _ => "unstaged",
+                    }
                 });
             if row.clicked() {
                 self.gitview.selection = crate::gitview::Selection::Local(e.path.clone());
@@ -3373,7 +3691,9 @@ impl App {
         }
     }
 
-    /// Recent commits, newest first, paging on demand.
+    /// Recent commits, newest first, paging on demand — with a graph
+    /// column, ref decorations, an attribution hint, and a read-only
+    /// context menu.
     fn git_log_list(&mut self, ui: &mut egui::Ui, s: &Session) {
         if self.gitview.commits.is_empty() {
             ui.label(dim(if self.gitview.log_done {
@@ -3385,29 +3705,153 @@ impl App {
         }
         let now = Utc::now().timestamp();
         let commits = self.gitview.commits.clone();
-        for c in &commits {
+        let graph = self.gitview.graph.clone();
+        // The widest lane on screen decides the column, capped so a wild
+        // history cannot push the subjects off the pane.
+        let max_lanes = graph
+            .iter()
+            .map(|r| r.occupied.len().max(r.lane + 1))
+            .max()
+            .unwrap_or(1)
+            .min(8);
+        let lane_w = 8.0f32;
+        let graph_w = max_lanes as f32 * lane_w;
+        let remote_url = self
+            .gitview
+            .refs
+            .as_ref()
+            .and_then(|r| r.remotes.first())
+            .map(|r| r.url.clone());
+        for (i, c) in commits.iter().enumerate() {
             let picked = self.gitview.selection == crate::gitview::Selection::Commit(c.sha.clone());
-            let row = ui
-                .selectable_label(
-                    picked,
-                    RichText::new(format!(
-                        "{} {}",
-                        c.short,
-                        truncate(&c.summary, 46)
-                    ))
-                    .monospace()
-                    .size(12.0),
-                )
-                .on_hover_text(format!(
-                    "{}\n{} · {} · {}",
-                    c.summary,
-                    c.author,
-                    crate::gitview::age(now, c.epoch),
-                    c.sha
-                ));
-            if row.clicked() {
-                self.gitview.selection = crate::gitview::Selection::Commit(c.sha.clone());
-            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                // The graph cell: verticals for occupied lanes, a dot on
+                // this commit's, stubs where branches fan out or join.
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(graph_w, 16.0), egui::Sense::hover());
+                if let Some(row) = graph.get(i) {
+                    let painter = ui.painter();
+                    let x_of = |lane: usize| rect.left() + lane as f32 * lane_w + lane_w / 2.0;
+                    let color_of = |lane: usize| GRAPH_COLORS[lane % GRAPH_COLORS.len()];
+                    for (lane, occ) in row.occupied.iter().enumerate().take(8) {
+                        if *occ {
+                            painter.line_segment(
+                                [
+                                    egui::pos2(x_of(lane), rect.top()),
+                                    egui::pos2(x_of(lane), rect.bottom()),
+                                ],
+                                egui::Stroke::new(1.0, color_of(lane)),
+                            );
+                        }
+                    }
+                    let dot = egui::pos2(x_of(row.lane.min(7)), rect.center().y);
+                    for &m in row.merges.iter().filter(|&&m| m < 8) {
+                        painter.line_segment(
+                            [dot, egui::pos2(x_of(m), rect.bottom())],
+                            egui::Stroke::new(1.0, color_of(m)),
+                        );
+                    }
+                    for &j in row.joins.iter().filter(|&&j| j < 8) {
+                        painter.line_segment(
+                            [egui::pos2(x_of(j), rect.top()), dot],
+                            egui::Stroke::new(1.0, color_of(j)),
+                        );
+                    }
+                    painter.circle_filled(dot, 2.5, color_of(row.lane.min(7)));
+                }
+                let row_resp = ui
+                    .selectable_label(
+                        picked,
+                        RichText::new(format!("{} {}", c.short, truncate(&c.summary, 40)))
+                            .monospace()
+                            .size(12.0),
+                    )
+                    .on_hover_text(format!(
+                        "{}\n{} · {} · {}{}",
+                        c.summary,
+                        c.author,
+                        crate::gitview::age(now, c.epoch),
+                        c.sha,
+                        if c.touches_session {
+                            "\n● probably this session's work (files + timing match)"
+                        } else {
+                            ""
+                        }
+                    ));
+                if c.touches_session {
+                    ui.label(RichText::new("●").size(9.0).color(GREEN)).on_hover_text(
+                        "probably this session's work — its files and timing match. A hint, not a fact",
+                    );
+                }
+                for r in c.refs.iter().take(3) {
+                    let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
+                    ui.label(RichText::new(r).size(10.0).color(color));
+                }
+                if row_resp.clicked() {
+                    self.gitview.selection = crate::gitview::Selection::Commit(c.sha.clone());
+                }
+                row_resp.context_menu(|ui| {
+                    if ui.button("Copy sha").clicked() {
+                        ui.ctx().copy_text(c.sha.clone());
+                        ui.close();
+                    }
+                    if ui.button("Copy subject").clicked() {
+                        ui.ctx().copy_text(c.summary.clone());
+                        ui.close();
+                    }
+                    if let Some(url) = remote_url
+                        .as_deref()
+                        .and_then(|u| crate::gitview::commit_url(u, &c.sha))
+                    {
+                        if ui.button("Open on remote").on_hover_text(&url).clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    match self.gitview.range_from.clone() {
+                        Some(marked) if marked != c.sha => {
+                            if ui
+                                .button("Diff against marked commit")
+                                .on_hover_text("older → newer, decided by commit time")
+                                .clicked()
+                            {
+                                // Older first, so the diff reads forward in
+                                // time regardless of click order.
+                                let marked_epoch = commits
+                                    .iter()
+                                    .find(|m| m.sha == marked)
+                                    .map(|m| m.epoch)
+                                    .unwrap_or(i64::MIN);
+                                let (from, to) = if marked_epoch <= c.epoch {
+                                    (marked.clone(), c.sha.clone())
+                                } else {
+                                    (c.sha.clone(), marked.clone())
+                                };
+                                self.gitview.selection =
+                                    crate::gitview::Selection::Range(from, to);
+                                self.gitview.range_from = None;
+                                ui.close();
+                            }
+                            if ui.button("Clear mark").clicked() {
+                                self.gitview.range_from = None;
+                                ui.close();
+                            }
+                        }
+                        _ => {
+                            if ui
+                                .button("Mark for range diff")
+                                .on_hover_text("then pick a second commit to diff the two")
+                                .clicked()
+                            {
+                                self.gitview.range_from = Some(c.sha.clone());
+                                ui.close();
+                            }
+                        }
+                    }
+                });
+            });
         }
         if !self.gitview.log_done {
             if ui.button(dim("show more")).clicked() && !self.gitview.log_pending {
@@ -3416,6 +3860,7 @@ impl App {
                     session_id: s.id.clone(),
                     skip: self.gitview.commits.len() as u32,
                     limit: 50,
+                    rev: self.gitview.log_rev.clone(),
                 });
             }
         }
@@ -3438,6 +3883,27 @@ impl App {
             crate::gitview::Selection::Local(path) => {
                 (path.clone(), self.gitview.local_diffs.get(path))
             }
+            crate::gitview::Selection::Stash(index) => (
+                format!("stash@{{{index}}}"),
+                self.gitview.stash_diffs.get(index),
+            ),
+            crate::gitview::Selection::Range(from, to) => (
+                format!(
+                    "{}..{}",
+                    from.chars().take(10).collect::<String>(),
+                    to.chars().take(10).collect::<String>()
+                ),
+                self.gitview
+                    .range_diffs
+                    .get(&(from.clone(), to.clone())),
+            ),
+        };
+        // "Open at this commit" only makes sense when the diff *is* a
+        // commit; the sha rides along for the per-file buttons below.
+        let at_commit = match &self.gitview.selection {
+            crate::gitview::Selection::Commit(sha) => Some(sha.clone()),
+            crate::gitview::Selection::Range(_, to) => Some(to.clone()),
+            _ => None,
         };
         let Some(files) = files else {
             ui.add_space(12.0);
@@ -3448,6 +3914,7 @@ impl App {
         };
         let files = files.clone();
         let (syntax, words) = (self.prefs.syntax, self.prefs.word_diff);
+        let mut open_at_rev: Option<(String, String)> = None;
         egui::ScrollArea::both()
             .id_salt(("git-diff-scroll", &title))
             .auto_shrink([false, false])
@@ -3466,6 +3933,18 @@ impl App {
                         if f.truncated {
                             ui.label(RichText::new("binary or too large").size(11.0).color(AMBER));
                         }
+                        if let Some(sha) = &at_commit {
+                            if f.status != mogeung_core::change::FileStatus::Deleted
+                                && ui
+                                    .small_button("@")
+                                    .on_hover_text(
+                                        "open this file as it was at this commit — read-only, in the Editor",
+                                    )
+                                    .clicked()
+                            {
+                                open_at_rev = Some((f.path.clone(), sha.clone()));
+                            }
+                        }
                     });
                     for h in &f.hunks {
                         ui.label(dim(&h.header));
@@ -3475,6 +3954,11 @@ impl App {
                     ui.separator();
                 }
             });
+        if let Some((path, sha)) = open_at_rev {
+            self.explorer.ensure_session(&self.gitview.session.clone().unwrap_or_default());
+            self.explorer.open_file_at_rev(&path, &sha);
+            self.set_tab(Tab::Explorer);
+        }
     }
 
     /// The session's worktree: tree on the left, tabs and a read-only viewer
@@ -3492,6 +3976,19 @@ impl App {
         // and it lives in the paint rather than `set_tab`, so a pane that is
         // *docked* visible works without ever having been switched to.
         {
+            // The ignore list rides git status; ask for it here too, so the
+            // tree dims gitignored subtrees before the Git pane ever opens.
+            // Repo sessions only — a non-repo session has nothing to dim
+            // and would only earn an error toast.
+            if s.repo_root.is_some() {
+                self.gitview.ensure_session(&s.id);
+                if !self.gitview.status_loaded && !self.gitview.status_pending {
+                    self.gitview.status_pending = true;
+                    self.net.send(ClientMsg::GitStatus {
+                        session_id: s.id.clone(),
+                    });
+                }
+            }
             let st = self.explorer.current_mut();
             let wants: Vec<String> = std::iter::once(String::new())
                 .chain(st.expanded.iter().cloned())
@@ -3504,19 +4001,40 @@ impl App {
                     path,
                 });
             }
-            // Both splits read at once, so both actives want bodies.
-            let body_wants: Vec<String> = [0u8, 1]
+            // Both splits read at once, so both actives want bodies. A
+            // worktree tab fetches from the worktree; a revision tab
+            // fetches from history, keyed so the two never collide.
+            let body_wants: Vec<(String, Option<String>)> = [0u8, 1]
                 .into_iter()
                 .filter_map(|g| st.active_of(g).and_then(|i| st.open.get(i)))
-                .filter(|t| t.view.is_none() && !st.pending_files.contains(&t.path))
-                .map(|t| t.path.clone())
+                .filter(|t| t.view.is_none())
+                .filter(|t| {
+                    let key = match &t.rev {
+                        None => t.path.clone(),
+                        Some(rev) => crate::explorer::rev_key(rev, &t.path),
+                    };
+                    !st.pending_files.contains(&key)
+                })
+                .map(|t| (t.path.clone(), t.rev.clone()))
                 .collect();
-            for path in body_wants {
-                st.pending_files.insert(path.clone());
-                self.net.send(ClientMsg::FetchFile {
-                    session_id: s.id.clone(),
-                    path,
-                });
+            for (path, rev) in body_wants {
+                match rev {
+                    None => {
+                        st.pending_files.insert(path.clone());
+                        self.net.send(ClientMsg::FetchFile {
+                            session_id: s.id.clone(),
+                            path,
+                        });
+                    }
+                    Some(rev) => {
+                        st.pending_files.insert(crate::explorer::rev_key(&rev, &path));
+                        self.net.send(ClientMsg::GitFileAtRev {
+                            session_id: s.id.clone(),
+                            sha: rev,
+                            path,
+                        });
+                    }
+                }
             }
         }
 
@@ -3580,14 +4098,14 @@ impl App {
     /// middle-click closes, double-click pins, and the one unpinned tab per
     /// side is the preview that single-click opens reuse.
     fn explorer_tab_strip(&mut self, ui: &mut egui::Ui, group: u8) {
-        let tabs: Vec<(usize, String, bool)> = self
+        let tabs: Vec<(usize, String, bool, Option<String>)> = self
             .explorer
             .current()
             .open
             .iter()
             .enumerate()
             .filter(|(_, t)| t.group == group)
-            .map(|(i, t)| (i, t.path.clone(), t.pinned))
+            .map(|(i, t)| (i, t.path.clone(), t.pinned, t.rev.clone()))
             .collect();
         if tabs.is_empty() {
             return;
@@ -3597,23 +4115,36 @@ impl App {
             .id_salt(("explorer-tab-strip", group))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (i, path, pinned) in &tabs {
+                    for (i, path, pinned, rev) in &tabs {
                         let name = path.rsplit('/').next().unwrap_or(path);
-                        let mut text = RichText::new(name.to_string()).size(12.0);
+                        let mut text = match rev {
+                            // A revision tab names its era; seven hex is a
+                            // human-sized sha.
+                            Some(r) => RichText::new(format!(
+                                "{name} @{}",
+                                r.chars().take(8).collect::<String>()
+                            ))
+                            .size(12.0)
+                            .color(AMBER),
+                            None => RichText::new(name.to_string()).size(12.0),
+                        };
                         if !pinned {
                             // The preview tab announces its impermanence the
                             // way every editor does: italics.
                             text = text.italics();
                         }
                         let row = ui.selectable_label(active == Some(*i), text).on_hover_text(
-                            format!(
-                                "{path}\n{}",
-                                if *pinned {
-                                    "pinned — double-click to unpin"
-                                } else {
-                                    "preview — double-click to pin"
-                                }
-                            ),
+                            match rev {
+                                Some(r) => format!("{path} as of {r} — read-only history"),
+                                None => format!(
+                                    "{path}\n{}",
+                                    if *pinned {
+                                        "pinned — double-click to unpin"
+                                    } else {
+                                        "preview — double-click to pin"
+                                    }
+                                ),
+                            },
                         );
                         row.context_menu(|ui| {
                             if ui
@@ -3670,6 +4201,7 @@ impl App {
             return;
         };
         let path = tab.path.clone();
+        let rev = tab.rev.clone();
         let Some(view) = &tab.view else {
             ui.add_space(12.0);
             ui.vertical_centered(|ui| {
@@ -3682,8 +4214,22 @@ impl App {
         ui.horizontal(|ui| {
             // Truncated, never wrapped: a header that folds onto two lines
             // pushes the file down and reads as two files.
-            ui.add(egui::Label::new(mono(&path)).truncate())
-                .on_hover_text(&path);
+            let header = match &rev {
+                Some(r) => format!("{path} @ {r}"),
+                None => path.clone(),
+            };
+            ui.add(egui::Label::new(mono(&header)).truncate())
+                .on_hover_text(&header);
+            if let Some(r) = &rev {
+                ui.label(
+                    RichText::new("history — the file as of this revision")
+                        .size(11.0)
+                        .color(AMBER),
+                )
+                .on_hover_text(format!(
+                    "git show {r}:{path} — nothing here can edit the past (or the present)"
+                ));
+            }
             if truncated {
                 ui.label(
                     RichText::new("cut short — the file goes on past the size cap")
@@ -3826,35 +4372,36 @@ impl App {
             },
         );
 
-        // The annotate gutter (`R-D10`): per-line authorship, same font as
-        // the code so the rows cannot drift, clickable through the galley's
-        // row geometry. Blame is of the worktree file, so uncommitted lines
-        // arrive as git's zero sha and render as a quiet dot.
-        let mut blame_col: Option<(egui::text::LayoutJob, Vec<String>)> = None;
+        // The annotate gutter (`R-D10`, deepened by `R-D11`): per-line
+        // authorship, same font as the code so the rows cannot drift,
+        // clickable through the galley's row geometry. A worktree tab
+        // blames the worktree (uncommitted lines arrive as git's zero sha
+        // and render as a quiet dot); a revision tab blames its own era.
+        let blame_key = (path.clone(), rev.clone().unwrap_or_default());
+        let mut blame_col: Option<(egui::text::LayoutJob, Vec<mogeung_core::wire::BlameLine>)> =
+            None;
         if self.annotate {
             if let Some(sid) = self.explorer.session.clone() {
                 self.gitview.ensure_session(&sid);
-                if !self.gitview.blame.contains_key(&path)
-                    && self.gitview.pending_blame.insert(path.clone())
+                if !self.gitview.blame.contains_key(&blame_key)
+                    && self.gitview.pending_blame.insert(blame_key.clone())
                 {
                     self.net.send(ClientMsg::GitBlame {
                         session_id: sid,
                         path: path.clone(),
+                        rev: rev.clone(),
                     });
                 }
             }
-            if let Some((lines, _)) = self.gitview.blame.get(&path) {
+            if let Some((lines, _)) = self.gitview.blame.get(&blame_key) {
                 let mut text = String::new();
-                let mut shas: Vec<String> = Vec::with_capacity(lines.len());
                 for l in lines {
                     let uncommitted = l.sha.chars().all(|c| c == '0');
                     if uncommitted {
                         text.push_str(&format!("{:>8} {:<10}", "·", ""));
-                        shas.push(String::new());
                     } else {
                         let author: String = l.author.chars().take(10).collect();
                         text.push_str(&format!("{} {:<10}", l.sha, author));
-                        shas.push(l.sha.clone());
                     }
                     text.push('\n');
                 }
@@ -3868,10 +4415,11 @@ impl App {
                         ..Default::default()
                     },
                 );
-                blame_col = Some((bj, shas));
+                blame_col = Some((bj, lines.clone()));
             }
         }
         let mut open_commit: Option<String> = None;
+        let mut open_rev_tab: Option<String> = None;
 
         let mut area = egui::ScrollArea::both()
             .id_salt(("explorer-file-scroll", &path, group))
@@ -3910,26 +4458,91 @@ impl App {
                 }
             }
             ui.horizontal_top(|ui| {
-                if let Some((bj, shas)) = blame_col {
+                if let Some((bj, lines)) = blame_col {
                     let resp = ui.add(
                         egui::Label::new(bj)
                             .selectable(false)
                             .sense(egui::Sense::click()),
                     );
+                    // Which row a pointer position names, by the code
+                    // galley's real geometry — the same rows the bands use.
+                    let row_at = |pos: egui::Pos2| {
+                        let rel = pos.y - resp.rect.top();
+                        galley.rows.partition_point(|r| r.pos.y <= rel).saturating_sub(1)
+                    };
+                    let committed_at = |row: usize| {
+                        lines
+                            .get(row)
+                            .filter(|l| !l.sha.chars().all(|c| c == '0'))
+                            .cloned()
+                    };
                     if resp.clicked() {
-                        if let Some(pos) = resp.interact_pointer_pos() {
-                            // Which row was hit, by the code galley's real
-                            // geometry — the same rows the bands use.
-                            let rel = pos.y - resp.rect.top();
-                            let row = galley
-                                .rows
-                                .partition_point(|r| r.pos.y <= rel)
-                                .saturating_sub(1);
-                            if let Some(sha) = shas.get(row).filter(|s| !s.is_empty()) {
-                                open_commit = Some(sha.clone());
+                        if let Some(l) =
+                            resp.interact_pointer_pos().map(row_at).and_then(committed_at)
+                        {
+                            open_commit = Some(l.sha);
+                        }
+                    }
+                    // The hover card: what GitLens calls line blame — sha,
+                    // author, age, subject — without leaving the file.
+                    if resp.hovered() && !resp.context_menu_opened() {
+                        if let Some(pos) = resp.hover_pos() {
+                            match committed_at(row_at(pos)) {
+                                Some(l) => resp.show_tooltip_ui(|ui| {
+                                    let now = Utc::now().timestamp();
+                                    ui.label(mono(format!("{} · {}", l.sha, l.author)));
+                                    if !l.summary.is_empty() {
+                                        ui.label(RichText::new(&l.summary).size(12.0));
+                                    }
+                                    ui.label(dim(format!(
+                                        "{} ago · click: show commit · right-click: more",
+                                        crate::gitview::age(now, l.epoch)
+                                    )));
+                                }),
+                                None => resp.show_tooltip_text("not committed yet"),
                             }
                         }
                     }
+                    // The read-only investigation verbs live on the line.
+                    if resp.secondary_clicked() {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            self.blame_menu_line = committed_at(row_at(pos));
+                        }
+                    }
+                    resp.context_menu(|ui| {
+                        let Some(l) = self.blame_menu_line.clone() else {
+                            ui.label(dim("not committed yet"));
+                            return;
+                        };
+                        ui.label(mono(format!("{} · {}", l.sha, l.author)));
+                        ui.separator();
+                        if ui.button("Show commit in Git pane").clicked() {
+                            open_commit = Some(l.sha.clone());
+                            ui.close();
+                        }
+                        if ui
+                            .button("Re-blame before this commit")
+                            .on_hover_text(
+                                "open the file as of the parent, blamed at that era — \
+                                 who touched this line before",
+                            )
+                            .clicked()
+                        {
+                            open_rev_tab = Some(format!("{}^", l.sha));
+                            ui.close();
+                        }
+                        if ui
+                            .button("Open file at this commit")
+                            .clicked()
+                        {
+                            open_rev_tab = Some(l.sha.clone());
+                            ui.close();
+                        }
+                        if ui.button("Copy sha").clicked() {
+                            ui.ctx().copy_text(l.sha.clone());
+                            ui.close();
+                        }
+                    });
                 }
                 ui.add(egui::Label::new(gutter_job).selectable(false));
                 // Selectable and highlighted, and structurally unable to
@@ -3942,6 +4555,11 @@ impl App {
         if let Some(sha) = open_commit {
             self.gitview.selection = crate::gitview::Selection::Commit(sha);
             self.set_tab(Tab::Git);
+        }
+        // Re-blame walks history by opening the same path at an older
+        // revision — the blame stack *is* the tab strip.
+        if let Some(r) = open_rev_tab {
+            self.explorer.open_file_at_rev(&path, &r);
         }
     }
 
@@ -3963,6 +4581,19 @@ impl App {
             .current()
             .active_tab()
             .map(|t| t.path.clone());
+        // Gitignored subtrees read dimmer — generated noise should look
+        // like noise. Only when the git cache is on the same session; a
+        // stale session's ignore list must not dim this one's tree.
+        let ignored_prefixes: Vec<String> =
+            if self.gitview.session == self.explorer.session {
+                self.gitview
+                    .ignored_prefixes()
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            };
         for e in entries {
             let path = crate::explorer::join(dir, &e.name);
             let open = self.explorer.current().expanded.contains(&path);
@@ -3974,13 +4605,27 @@ impl App {
                 "▸ "
             };
             let picked = !e.is_dir && active_path.as_deref() == Some(path.as_str());
-            let row = ui.selectable_label(
-                picked,
-                RichText::new(format!("{glyph}{}", e.name))
-                    .monospace()
-                    .size(12.0)
-                    .color(if e.is_dir { TEXT } else { BLUE }),
+            let ignored = crate::gitview::is_ignored(
+                &path,
+                &ignored_prefixes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             );
+            let mut row_text = RichText::new(format!("{glyph}{}", e.name))
+                .monospace()
+                .size(12.0)
+                .color(if ignored {
+                    DIM
+                } else if e.is_dir {
+                    TEXT
+                } else {
+                    BLUE
+                });
+            if ignored {
+                row_text = row_text.weak();
+            }
+            let mut row = ui.selectable_label(picked, row_text);
+            if ignored {
+                row = row.on_hover_text("gitignored");
+            }
             // The row reveal asked to be scrolled to, honoured the frame it
             // finally exists — its listing may have been in flight for a while.
             if self.explorer.current().reveal.as_deref() == Some(path.as_str()) {
@@ -4661,6 +5306,14 @@ fn tok_color(t: crate::diff::Tok, base: Color32) -> Color32 {
 }
 
 fn line_bg(line: &str) -> Option<Color32> {
+    // Conflict markers get their own band regardless of diff sign: an
+    // agent mid-merge is exactly what a reviewer must not scroll past.
+    let body = line.get(1..).unwrap_or("");
+    if body.starts_with("<<<<<<<") || body.starts_with(">>>>>>>")
+        || body.starts_with("=======") || body.starts_with("|||||||")
+    {
+        return Some(Color32::from_rgb(0x6B, 0x25, 0x3C));
+    }
     match line.chars().next() {
         Some('+') => Some(ADD_BG),
         Some('-') => Some(DEL_BG),

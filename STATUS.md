@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 230 passing |
-| Rust | 21436 lines |
-| Docs | 43 files, 10 ADRs |
+| Tests | 249 passing |
+| Rust | 23724 lines |
+| Docs | 44 files, 10 ADRs |
 
 ## Assumptions
 
-Untested: **6** · At risk: **2** · Supported: 9 · Refuted: 1
+Untested: **6** · At risk: **2** · Supported: 10 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -31,4 +31,5 @@ Untested: **6** · At risk: **2** · Supported: 9 · Refuted: 1
 | [Explorer workbench](docs/features/0008-explorer-workbench.md) | `in-progress` | [A13, A15, A16] |
 | [Session labels](docs/features/0009-session-labels.md) | `in-progress` | [A13, A17] |
 | [Git view](docs/features/0010-git-view.md) | `in-progress` | [A13, A18] |
+| [Git depth — reading parity with a commercial client](docs/features/0011-git-depth.md) | `in-progress` | [A13, A18, A19] |
 

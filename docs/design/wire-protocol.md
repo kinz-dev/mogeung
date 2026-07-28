@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-27
+updated: 2026-07-28
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -33,11 +33,16 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
 | `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
-| `GitLog` | A page of the session repo's commit log (`R-D10`) |
+| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`); each commit carries refs, parents and a session-attribution hint |
 | `GitShow` | One commit's diff, in `Change`'s file/hunk shapes; the sha is validated as hex before git sees it |
-| `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished |
+| `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished; conflicts marked, ignored paths included as `!!` dimming data |
 | `GitDiffFile` | One uncommitted file against `HEAD` (`/dev/null` when untracked) |
-| `GitBlame` | Per-line authorship of a worktree file, capped at 20k lines |
+| `GitBlame` | Per-line authorship, capped at 20k lines — of the worktree, or of the file at a revision (`rev`), which is what re-blame rides (`R-D11`) |
+| `GitRefs` | Branches with tracking state, tags (annotated ones dereferenced to commits), remotes, HEAD, and `FETCH_HEAD`'s mtime — display only; the daemon never fetches |
+| `GitStashes` | The stash list; `GitStashShow` one stash's diff by index — the `stash@{N}` spec is built daemon-side from a number |
+| `GitSubmodules` | Submodule paths and their status prefix |
+| `GitDiffRange` | The diff between two commits, both shas validated |
+| `GitFileAtRev` | One file's content at a revision (`sha`, optionally `sha^`), for the Editor's revision tabs |
 
 **Note what is absent:** nothing starts, steers or stops an agent
 ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
@@ -53,11 +58,21 @@ client builds the text and puts it on your clipboard, and you paste it
 `ChangeUpdated` · `Health` · `ReviewDebt` · `BlastRadius` · `DirListing` ·
 `FileContent` · `TreeListing` · `ContentMatches` · `GitCommits` ·
 `GitCommitDiff` · `GitLocalChanges` · `GitFileDiff` · `GitAnnotation` ·
-`Error`
+`GitRefsInfo` · `GitStashList` · `GitStashDiff` · `GitSubmoduleList` ·
+`GitRangeDiff` · `GitFileAtRevContent` · `Error`
 
-The `Git…` family (`R-D10`) is **read-only by protocol**: there is no
-staging, commit, checkout or any other verb that mutates a repository, and
-none may be added without an ADR — the observer rule, one layer down.
+The `Git…` family (`R-D10`, `R-D11`) is **read-only by protocol**: there is
+no staging, commit, checkout, stash-pop, fetch or any other verb that
+mutates a repository, and none may be added without an ADR — the observer
+rule, one layer down. `GitCommits` echoes the ref scope and `GitAnnotation`
+the revision it blamed, so a client that has since moved on can drop the
+stray — the stray-session rule, applied to superseded scopes.
+
+Client-supplied git arguments are shape-checked before git sees them: shas
+must be hex (one trailing `^` allowed — "the parent of"), ref names are
+restricted to `[A-Za-z0-9/._-]` with no leading `-`, no `..` and no `@{`,
+and stash indices are numbers. An unauthenticated socket must not be able
+to spell a flag.
 
 `ListDir` and `FetchFile` paths are relative to the session root (repo root
 when known, else cwd); the daemon canonicalises and refuses anything that
@@ -103,11 +118,17 @@ GET  /api/sessions/{id}/ls?path=...    # explorer (R-B24); path optional
 GET  /api/sessions/{id}/file?path=...
 GET  /api/sessions/{id}/tree           # every file path (R-B25)
 GET  /api/sessions/{id}/search?q=...   # literal content search (R-B25)
-GET  /api/sessions/{id}/git/log?skip=N&limit=N   # R-D10, all read-only
+GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...   # R-D10/R-D11, all read-only
 GET  /api/sessions/{id}/git/show?sha=...
 GET  /api/sessions/{id}/git/status
 GET  /api/sessions/{id}/git/diff?path=...
-GET  /api/sessions/{id}/git/blame?path=...
+GET  /api/sessions/{id}/git/blame?path=...&rev=...
+GET  /api/sessions/{id}/git/refs
+GET  /api/sessions/{id}/git/stashes
+GET  /api/sessions/{id}/git/stash?index=N
+GET  /api/sessions/{id}/git/submodules
+GET  /api/sessions/{id}/git/range?from=...&to=...
+GET  /api/sessions/{id}/git/file_at?sha=...&path=...
 GET  /api/sessions
 GET  /api/sessions/{id}
 GET  /api/sessions/{id}/events?since=N

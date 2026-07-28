@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-07-26
+updated: 2026-07-28
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs

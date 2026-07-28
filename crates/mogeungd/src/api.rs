@@ -44,6 +44,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}/git/status", get(get_git_status))
         .route("/api/sessions/{id}/git/diff", get(get_git_diff))
         .route("/api/sessions/{id}/git/blame", get(get_git_blame))
+        .route("/api/sessions/{id}/git/refs", get(get_git_refs))
+        .route("/api/sessions/{id}/git/stashes", get(get_git_stashes))
+        .route("/api/sessions/{id}/git/stash", get(get_git_stash))
+        .route("/api/sessions/{id}/git/submodules", get(get_git_submodules))
+        .route("/api/sessions/{id}/git/range", get(get_git_range))
+        .route("/api/sessions/{id}/git/file_at", get(get_git_file_at))
         .route("/ws", get(ws_upgrade))
         .with_state(state)
 }
@@ -172,6 +178,8 @@ struct LogQuery {
     skip: u32,
     #[serde(default = "default_log_limit")]
     limit: u32,
+    #[serde(default)]
+    rev: Option<String>,
 }
 
 fn default_log_limit() -> u32 {
@@ -183,7 +191,7 @@ async fn get_git_log(
     AxPath(id): AxPath<String>,
     Query(q): Query<LogQuery>,
 ) -> impl IntoResponse {
-    match state.git_log(&id, q.skip, q.limit).await {
+    match state.git_log(&id, q.skip, q.limit, q.rev).await {
         Ok((commits, done)) => Json(serde_json::json!({ "commits": commits, "done": done })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -226,15 +234,106 @@ async fn get_git_diff(
     }
 }
 
+#[derive(Deserialize)]
+struct BlameQuery {
+    path: String,
+    #[serde(default)]
+    rev: Option<String>,
+}
+
 async fn get_git_blame(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
-    Query(q): Query<PathQuery>,
+    Query(q): Query<BlameQuery>,
 ) -> impl IntoResponse {
-    match state.git_blame(&id, &q.path).await {
+    match state.git_blame(&id, &q.path, q.rev).await {
         Ok((lines, truncated)) => {
             Json(serde_json::json!({ "lines": lines, "truncated": truncated }))
         }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_git_refs(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    match state.git_refs(&id).await {
+        Ok(info) => Json(serde_json::json!(info)),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_git_stashes(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    match state.git_stashes(&id).await {
+        Ok(stashes) => Json(serde_json::json!({ "stashes": stashes })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+struct StashQuery {
+    index: u32,
+}
+
+async fn get_git_stash(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<StashQuery>,
+) -> impl IntoResponse {
+    match state.git_stash_show(&id, q.index).await {
+        Ok(files) => Json(serde_json::json!({ "index": q.index, "files": files })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+async fn get_git_submodules(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    match state.git_submodules(&id).await {
+        Ok(submodules) => Json(serde_json::json!({ "submodules": submodules })),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+struct RangeQuery {
+    from: String,
+    to: String,
+}
+
+async fn get_git_range(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<RangeQuery>,
+) -> impl IntoResponse {
+    match state.git_diff_range(&id, &q.from, &q.to).await {
+        Ok(files) => {
+            Json(serde_json::json!({ "from": q.from, "to": q.to, "files": files }))
+        }
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+struct FileAtQuery {
+    sha: String,
+    path: String,
+}
+
+async fn get_git_file_at(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<FileAtQuery>,
+) -> impl IntoResponse {
+    match state.git_file_at_rev(&id, &q.sha, &q.path).await {
+        Ok((content, truncated)) => Json(serde_json::json!({
+            "sha": q.sha, "path": q.path, "content": content, "truncated": truncated,
+        })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
 }
@@ -495,12 +594,14 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             session_id,
             skip,
             limit,
-        } => match state.git_log(&session_id, skip, limit).await {
+            rev,
+        } => match state.git_log(&session_id, skip, limit, rev.clone()).await {
             Ok((commits, done)) => state.broadcast(ServerMsg::GitCommits {
                 session_id,
                 skip,
                 commits,
                 done,
+                rev,
             }),
             Err(e) => err(e),
         },
@@ -529,16 +630,79 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitBlame { session_id, path } => {
-            match state.git_blame(&session_id, &path).await {
-                Ok((lines, truncated)) => state.broadcast(ServerMsg::GitAnnotation {
+        ClientMsg::GitBlame {
+            session_id,
+            path,
+            rev,
+        } => match state.git_blame(&session_id, &path, rev.clone()).await {
+            Ok((lines, truncated)) => state.broadcast(ServerMsg::GitAnnotation {
+                session_id,
+                path,
+                lines,
+                truncated,
+                rev,
+            }),
+            Err(e) => err(e),
+        },
+        ClientMsg::GitRefs { session_id } => match state.git_refs(&session_id).await {
+            Ok(info) => state.broadcast(ServerMsg::GitRefsInfo {
+                session_id,
+                info: Box::new(info),
+            }),
+            Err(e) => err(e),
+        },
+        ClientMsg::GitStashes { session_id } => match state.git_stashes(&session_id).await {
+            Ok(stashes) => state.broadcast(ServerMsg::GitStashList {
+                session_id,
+                stashes,
+            }),
+            Err(e) => err(e),
+        },
+        ClientMsg::GitStashShow { session_id, index } => {
+            match state.git_stash_show(&session_id, index).await {
+                Ok(files) => state.broadcast(ServerMsg::GitStashDiff {
                     session_id,
-                    path,
-                    lines,
-                    truncated,
+                    index,
+                    files,
                 }),
                 Err(e) => err(e),
             }
         }
+        ClientMsg::GitSubmodules { session_id } => {
+            match state.git_submodules(&session_id).await {
+                Ok(submodules) => state.broadcast(ServerMsg::GitSubmoduleList {
+                    session_id,
+                    submodules,
+                }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitDiffRange {
+            session_id,
+            from,
+            to,
+        } => match state.git_diff_range(&session_id, &from, &to).await {
+            Ok(files) => state.broadcast(ServerMsg::GitRangeDiff {
+                session_id,
+                from,
+                to,
+                files,
+            }),
+            Err(e) => err(e),
+        },
+        ClientMsg::GitFileAtRev {
+            session_id,
+            sha,
+            path,
+        } => match state.git_file_at_rev(&session_id, &sha, &path).await {
+            Ok((content, truncated)) => state.broadcast(ServerMsg::GitFileAtRevContent {
+                session_id,
+                sha,
+                path,
+                content,
+                truncated,
+            }),
+            Err(e) => err(e),
+        },
     }
 }

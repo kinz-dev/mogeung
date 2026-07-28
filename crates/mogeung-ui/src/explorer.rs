@@ -39,6 +39,11 @@ pub struct FileView {
 /// One open file. The tab is the durable thing; the body comes and goes.
 pub struct FileTab {
     pub path: String,
+    /// `Some(rev)` makes this a *revision* tab: the body is the file as it
+    /// stood at that revision (`R-D11`), fetched over the git wire instead
+    /// of from the worktree. Revision tabs are never persisted — a sha in
+    /// `explorer.json` would outlive its meaning.
+    pub rev: Option<String>,
     /// A pinned tab is never reused as the preview slot.
     pub pinned: bool,
     /// Which side of the split this tab lives on: 0 = left, 1 = right.
@@ -211,6 +216,7 @@ impl Explorer {
             self.clock += 1;
             st.open.push(FileTab {
                 path: t.path.clone(),
+                rev: None,
                 pinned: t.pinned,
                 group: t.group.min(1),
                 view: None,
@@ -266,7 +272,11 @@ impl Explorer {
         let clock = self.clock;
         let st = self.current_mut();
         let group = st.focus.min(1);
-        if let Some(i) = st.open.iter().position(|t| t.path == path) {
+        if let Some(i) = st
+            .open
+            .iter()
+            .position(|t| t.rev.is_none() && t.path == path)
+        {
             // Already open — on either side. Activation follows it there
             // rather than opening the same file twice.
             let t = &mut st.open[i];
@@ -278,11 +288,15 @@ impl Explorer {
         } else if let (false, Some(i)) = (
             pin,
             // The preview slot is per side: browsing on the right must not
-            // eat the preview you were reading on the left.
-            st.open.iter().position(|t| !t.pinned && t.group == group),
+            // eat the preview you were reading on the left. A revision tab
+            // is never the preview slot — it was opened deliberately.
+            st.open
+                .iter()
+                .position(|t| !t.pinned && t.rev.is_none() && t.group == group),
         ) {
             st.open[i] = FileTab {
                 path: path.to_string(),
+                rev: None,
                 pinned: false,
                 group,
                 view: None,
@@ -293,6 +307,7 @@ impl Explorer {
         } else {
             st.open.push(FileTab {
                 path: path.to_string(),
+                rev: None,
                 pinned: pin,
                 group,
                 view: None,
@@ -303,6 +318,39 @@ impl Explorer {
         }
         self.evict_bodies();
         self.dirty = true;
+    }
+
+    /// Open `path` as it stood at `rev` — a read-only revision tab, always
+    /// deliberate (pinned), reused when the same (path, rev) is already
+    /// open. `R-D11`.
+    pub fn open_file_at_rev(&mut self, path: &str, rev: &str) {
+        self.clock += 1;
+        let clock = self.clock;
+        let st = self.current_mut();
+        let group = st.focus.min(1);
+        if let Some(i) = st
+            .open
+            .iter()
+            .position(|t| t.path == path && t.rev.as_deref() == Some(rev))
+        {
+            st.open[i].last_used = clock;
+            st.focus = st.open[i].group;
+            st.actives[usize::from(st.focus)] = Some(i);
+        } else {
+            st.open.push(FileTab {
+                path: path.to_string(),
+                rev: Some(rev.to_string()),
+                pinned: true,
+                group,
+                view: None,
+                goto_line: None,
+                last_used: clock,
+            });
+            st.actives[usize::from(group)] = Some(st.open.len() - 1);
+        }
+        self.evict_bodies();
+        // Not marked dirty: revision tabs are not saved, so the shape on
+        // disk did not change.
     }
 
     pub fn close_tab(&mut self, i: usize) {
@@ -450,8 +498,38 @@ impl Explorer {
         if let Some(st) = self.states.get_mut(session_id) {
             st.pending_files.remove(&path);
             // Filling every tab with the path, not just the active one — the
-            // user may have moved on while the answer was in flight.
-            for t in st.open.iter_mut().filter(|t| t.path == path) {
+            // user may have moved on while the answer was in flight. Never a
+            // revision tab: its body is a different era of the file.
+            for t in st
+                .open
+                .iter_mut()
+                .filter(|t| t.rev.is_none() && t.path == path)
+            {
+                t.view = Some(FileView {
+                    content: content.clone(),
+                    truncated,
+                });
+            }
+        }
+    }
+
+    /// A revision tab's body arriving. Keyed by (path, rev) — the worktree
+    /// twin of the same path must not swallow it, nor vice versa.
+    pub fn ingest_rev_file(
+        &mut self,
+        session_id: &SessionId,
+        sha: &str,
+        path: &str,
+        content: String,
+        truncated: bool,
+    ) {
+        if let Some(st) = self.states.get_mut(session_id) {
+            st.pending_files.remove(&rev_key(sha, path));
+            for t in st
+                .open
+                .iter_mut()
+                .filter(|t| t.path == path && t.rev.as_deref() == Some(sha))
+            {
                 t.view = Some(FileView {
                     content: content.clone(),
                     truncated,
@@ -494,23 +572,28 @@ impl Explorer {
     fn to_saved(&self) -> SavedFile {
         let mut sessions = self.saved.clone();
         for (id, st) in &self.states {
+            // Revision tabs stay out of the file, so the surviving actives
+            // must be re-pointed at the filtered list.
+            let kept: Vec<usize> = (0..st.open.len())
+                .filter(|&i| st.open[i].rev.is_none())
+                .collect();
+            let remap = |a: Option<usize>| a.and_then(|i| kept.iter().position(|&k| k == i));
             let entry = SavedSession {
                 expanded: {
                     let mut v: Vec<String> = st.expanded.iter().cloned().collect();
                     v.sort();
                     v
                 },
-                open: st
-                    .open
+                open: kept
                     .iter()
-                    .map(|t| SavedTab {
-                        path: t.path.clone(),
-                        pinned: t.pinned,
-                        group: t.group,
+                    .map(|&i| SavedTab {
+                        path: st.open[i].path.clone(),
+                        pinned: st.open[i].pinned,
+                        group: st.open[i].group,
                     })
                     .collect(),
-                active: st.active_of(0),
-                active_right: st.active_of(1),
+                active: remap(st.active_of(0)),
+                active_right: remap(st.active_of(1)),
             };
             if entry.expanded.is_empty() && entry.open.is_empty() {
                 sessions.remove(id);
@@ -571,6 +654,12 @@ struct SavedFile {
 
 fn parse_saved(text: &str) -> Result<SavedFile, serde_json::Error> {
     serde_json::from_str(text)
+}
+
+/// The in-flight key for a revision-tab fetch. Shares `pending_files` with
+/// worktree fetches; the `sha:` prefix keeps the two namespaces apart.
+pub fn rev_key(sha: &str, path: &str) -> String {
+    format!("{sha}:{path}")
 }
 
 /// The directories above `path`, nearest the root first — what reveal expands.
@@ -853,6 +942,48 @@ mod tests {
         assert!(!st.open[1].pinned);
         assert_eq!(st.active_of(0), Some(0));
         assert!(st.open.iter().all(|t| t.view.is_none()), "bodies must never persist");
+    }
+
+    /// Revision tabs are session-local by design: they never reach the
+    /// saved file, and the surviving actives are re-pointed at the tabs
+    /// that do.
+    #[test]
+    fn revision_tabs_are_not_saved_and_actives_survive_the_filter() {
+        let id = "a".to_string();
+        let mut e = explorer_on(&id);
+        e.open_file_at_rev("src/lib.rs", "abc123");
+        e.open_file("src/lib.rs", true, None);
+        let out = e.to_saved();
+        let saved = &out.sessions[&id];
+        assert_eq!(saved.open.len(), 1, "the revision tab leaked to disk");
+        assert_eq!(
+            saved.active,
+            Some(0),
+            "the active index must be remapped past the dropped revision tab"
+        );
+    }
+
+    /// A revision tab and its worktree twin hold different eras of the same
+    /// path; each answer must land only in its own.
+    #[test]
+    fn revision_bodies_and_worktree_bodies_do_not_cross() {
+        let id = "a".to_string();
+        let mut e = explorer_on(&id);
+        e.open_file("f.rs", true, None);
+        e.open_file_at_rev("f.rs", "abc123");
+        e.ingest_file(&id, "f.rs".into(), "worktree era".into(), false);
+        e.ingest_rev_file(&id, "abc123", "f.rs", "commit era".into(), false);
+        let st = e.current();
+        let worktree = st.open.iter().find(|t| t.rev.is_none()).unwrap();
+        let rev = st.open.iter().find(|t| t.rev.is_some()).unwrap();
+        assert_eq!(worktree.view.as_ref().unwrap().content, "worktree era");
+        assert_eq!(rev.view.as_ref().unwrap().content, "commit era");
+        // Re-opening the same (path, rev) reuses the tab.
+        e.open_file_at_rev("f.rs", "abc123");
+        assert_eq!(e.current().open.len(), 2);
+        // A different rev of the same path is its own tab.
+        e.open_file_at_rev("f.rs", "abc123^");
+        assert_eq!(e.current().open.len(), 3);
     }
 
     /// A session merely mentioned on disk is not forgotten by a run that

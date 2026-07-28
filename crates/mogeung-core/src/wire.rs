@@ -73,16 +73,58 @@ pub enum ClientMsg {
     ///
     /// Like everything git here: read-only, permanently. The daemon never
     /// stages, commits, or checks out — the observer rule, one layer down.
-    GitLog { session_id: SessionId, skip: u32, limit: u32 },
+    ///
+    /// `rev` scopes the log to a branch or ref without checking anything
+    /// out; `None` means `HEAD`. `R-D11`.
+    GitLog {
+        session_id: SessionId,
+        skip: u32,
+        limit: u32,
+        #[serde(default)]
+        rev: Option<String>,
+    },
     /// One commit's diff, parsed into the same file/hunk shapes as `Change`.
     GitShow { session_id: SessionId, sha: String },
     /// The repo's uncommitted state — staged, unstaged and untracked.
     GitStatus { session_id: SessionId },
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile { session_id: SessionId, path: String },
-    /// Per-line authorship of one worktree file, for the Editor's annotate
-    /// gutter.
-    GitBlame { session_id: SessionId, path: String },
+    /// Per-line authorship of one file, for the Editor's annotate gutter.
+    /// `rev: None` blames the worktree file; `Some(sha)` blames the file as
+    /// it stood at that revision — which is what makes re-blame ("who
+    /// touched this *before* that commit") possible. `R-D11`.
+    GitBlame {
+        session_id: SessionId,
+        path: String,
+        #[serde(default)]
+        rev: Option<String>,
+    },
+    /// The repo's refs in one answer: where HEAD is, local branches with
+    /// their tracking state, tags, remotes, and how stale the last fetch
+    /// is. Display only — the daemon never fetches; even `git fetch`
+    /// writes `.git`. `R-D11`.
+    GitRefs { session_id: SessionId },
+    /// The stash list. Read-only: listing stashes, never pushing or
+    /// popping them.
+    GitStashes { session_id: SessionId },
+    /// One stash's diff, by its position in the list (`stash@{index}`).
+    GitStashShow { session_id: SessionId, index: u32 },
+    /// Submodule paths and their state.
+    GitSubmodules { session_id: SessionId },
+    /// The diff between two commits, `from` → `to`.
+    GitDiffRange {
+        session_id: SessionId,
+        from: String,
+        to: String,
+    },
+    /// One file's content as it stood at one revision, for the Editor's
+    /// revision tabs. `sha` may carry a trailing `^` — "the parent of" —
+    /// which is what re-blame opens.
+    GitFileAtRev {
+        session_id: SessionId,
+        sha: String,
+        path: String,
+    },
 }
 
 /// One entry of a [`ClientMsg::ListDir`] answer.
@@ -102,6 +144,19 @@ pub struct CommitInfo {
     pub epoch: i64,
     /// The subject line only; bodies stay in the terminal.
     pub summary: String,
+    /// Ref decorations pointing here — branch heads, tags, `HEAD ->` —
+    /// exactly as `%D` names them, split on commas.
+    #[serde(default)]
+    pub refs: Vec<String>,
+    /// Abbreviated parent shas, in order. Two or more means a merge; the
+    /// graph column is drawn from these.
+    #[serde(default)]
+    pub parents: Vec<String>,
+    /// Heuristic: this commit lands inside the selected session's lifetime
+    /// and touches files that session edited. A hint badge, never an
+    /// author column — the daemon cannot actually know.
+    #[serde(default)]
+    pub touches_session: bool,
 }
 
 /// One entry of a [`ClientMsg::GitStatus`] answer.
@@ -114,7 +169,12 @@ pub struct StatusEntry {
     /// The worktree differs from the index (or the file is untracked).
     pub unstaged: bool,
     /// The raw porcelain `XY` code, for display: `M `, ` M`, `??`, `A `…
+    /// Ignored paths arrive as `!!` — clients dim them, not list them.
     pub state: String,
+    /// An unresolved merge conflict — the one uncommitted state that is
+    /// never routine.
+    #[serde(default)]
+    pub conflicted: bool,
 }
 
 /// One line's authorship in a [`ClientMsg::GitBlame`] answer, in file order.
@@ -124,6 +184,80 @@ pub struct BlameLine {
     pub sha: String,
     pub author: String,
     pub epoch: i64,
+    /// The commit's subject line, for the gutter's hover card.
+    #[serde(default)]
+    pub summary: String,
+}
+
+/// One local branch in a [`ClientMsg::GitRefs`] answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchInfo {
+    pub name: String,
+    /// Abbreviated tip sha.
+    pub sha: String,
+    /// This is the checked-out branch.
+    pub current: bool,
+    /// The upstream it tracks, e.g. `origin/main`, if any.
+    pub upstream: Option<String>,
+    /// Commits ahead of / behind that upstream. Zeros when no upstream.
+    pub ahead: u32,
+    pub behind: u32,
+    /// Unix seconds of the tip's committer date.
+    pub epoch: i64,
+}
+
+/// One tag in a [`ClientMsg::GitRefs`] answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagInfo {
+    pub name: String,
+    /// Abbreviated sha of the *commit* the tag lands on — annotated tags
+    /// are dereferenced, so clicking a tag always selects a commit.
+    pub sha: String,
+    pub epoch: i64,
+}
+
+/// One remote in a [`ClientMsg::GitRefs`] answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub url: String,
+}
+
+/// Everything [`ClientMsg::GitRefs`] answers with.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RefsInfo {
+    /// The checked-out branch name; `None` means detached HEAD.
+    pub head: Option<String>,
+    /// Abbreviated sha of HEAD itself.
+    pub head_sha: String,
+    pub branches: Vec<BranchInfo>,
+    pub tags: Vec<TagInfo>,
+    pub remotes: Vec<RemoteInfo>,
+    /// Unix seconds of the last `git fetch` anyone ran, from
+    /// `FETCH_HEAD`'s mtime. `None` when nothing was ever fetched.
+    pub fetch_epoch: Option<i64>,
+}
+
+/// One stash in a [`ClientMsg::GitStashes`] answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StashInfo {
+    /// Position in the list — the `N` of `stash@{N}`.
+    pub index: u32,
+    pub message: String,
+    pub epoch: i64,
+}
+
+/// One submodule in a [`ClientMsg::GitSubmodules`] answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmoduleInfo {
+    pub path: String,
+    /// Abbreviated recorded sha.
+    pub sha: String,
+    /// The raw `git submodule status` prefix: ` ` in sync, `+` checked out
+    /// at a different commit, `-` not initialised, `U` merge conflicts.
+    pub state: String,
+    /// The describe suffix, when git offers one.
+    pub note: String,
 }
 
 /// One matching line of a [`ClientMsg::SearchContent`] answer.
@@ -195,11 +329,15 @@ pub enum ServerMsg {
         truncated: bool,
     },
     /// A page of commits. `done` means history ended inside this page.
+    /// `rev` echoes the scope it was asked for, so a client that has since
+    /// switched branches can drop the stray.
     GitCommits {
         session_id: SessionId,
         skip: u32,
         commits: Vec<CommitInfo>,
         done: bool,
+        #[serde(default)]
+        rev: Option<String>,
     },
     /// One commit's diff, in the same shapes the Changes tab renders.
     GitCommitDiff {
@@ -219,11 +357,52 @@ pub enum ServerMsg {
         files: Vec<crate::change::FileChange>,
     },
     /// Authorship per line of one file. `truncated` means the file went on
-    /// past the blame cap.
+    /// past the blame cap. `rev` echoes the revision blamed (`None` = the
+    /// worktree), the cache key on the other side.
     GitAnnotation {
         session_id: SessionId,
         path: String,
         lines: Vec<BlameLine>,
+        truncated: bool,
+        #[serde(default)]
+        rev: Option<String>,
+    },
+    /// The repo's refs, in one shot. `R-D11`.
+    GitRefsInfo {
+        session_id: SessionId,
+        info: Box<RefsInfo>,
+    },
+    /// The stash list.
+    GitStashList {
+        session_id: SessionId,
+        stashes: Vec<StashInfo>,
+    },
+    /// One stash's diff, same shapes as every other diff here.
+    GitStashDiff {
+        session_id: SessionId,
+        index: u32,
+        files: Vec<crate::change::FileChange>,
+    },
+    /// Submodules and their state.
+    GitSubmoduleList {
+        session_id: SessionId,
+        submodules: Vec<SubmoduleInfo>,
+    },
+    /// The diff between two commits.
+    GitRangeDiff {
+        session_id: SessionId,
+        from: String,
+        to: String,
+        files: Vec<crate::change::FileChange>,
+    },
+    /// One file as it stood at one revision, for the Editor's revision
+    /// tabs. Read-only like the worktree twin, and doubly so — the past
+    /// cannot be edited even in the terminal.
+    GitFileAtRevContent {
+        session_id: SessionId,
+        sha: String,
+        path: String,
+        content: String,
         truncated: bool,
     },
     Error { message: String },

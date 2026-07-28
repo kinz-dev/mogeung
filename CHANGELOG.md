@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased — git depth (2026-07-28)
+
+Roadmap `R-D11`; see
+[docs/features/0011-git-depth.md](docs/features/0011-git-depth.md).
+
+**Added — the Git pane grows the reading half of a commercial client.** A
+header names the current branch (or detached HEAD), its upstream with
+ahead/behind counts, the remote, and how stale the last fetch is — display
+only, mogeung never fetches. Collapsible lists for branches (click one to
+scope the log to it, nothing is checked out), tags (annotated ones
+dereferenced to their commits), stashes with their diffs, and submodules
+with their state. The log gains a lane graph of branch/merge topology, ref
+decorations, and a green dot on commits that look like the selected
+session's work — files plus timing, marked as the heuristic it is. A
+right-click menu offers copy sha/subject, open-on-remote for
+GitHub/GitLab/Bitbucket-shaped URLs, and mark-two-commits to diff an
+arbitrary range. Renames and copies are detected in every diff.
+
+**Added — blame that investigates.** Hovering the annotate gutter shows the
+line's commit — sha, author, age, subject; right-clicking offers show
+commit, copy sha, open the file at that commit, and *re-blame before this
+commit*: the file opens as of the parent revision, blamed at that era, so a
+line's history walks backwards one tab at a time. Revision tabs are
+read-only, marked `@sha`, and never persisted.
+
+**Added — conflict and ignore awareness.** Conflicted files sort first in
+local changes wearing a red `⚠ conflict`; conflict markers get their own
+band in any diff. Gitignored subtrees are dimmed in the explorer tree and
+kept out of local changes.
+
+**Unchanged, on purpose — read-only, permanently.** Every new wire pair
+reads; argument hygiene widens with the surface (ref names, stash indices
+and `sha^` are shape-checked before git ever sees them). Staging, commit,
+checkout, stash-pop and fetch stay in the terminal, per
+[feature 0011](docs/features/0011-git-depth.md).
+
+**Fixed — switching sessions in the Terminal pane no longer eats a CPU
+core each time.** The vendored terminal widget's event-forwarder thread
+looped `if let Ok = recv()`, which busy-spins forever once its channel
+closes — and dropping the old terminal on a session switch is exactly
+that. Two hours of dogfooding left 38 threads pinning every core. A
+closed channel now ends the thread; the change is marked `LOCAL CHANGE
+(mogeung)` in `crates/egui-term` and recorded in its `VENDORED_FROM`.
+
 ## Unreleased — sharpen triage, reach and review (2026-07-25)
 
 Roadmap pillars `B`, `C` (bar `R-C2`) and `D`; see

@@ -146,6 +146,74 @@ async fn commands_about_unknown_sessions_are_harmless() {
         },
     )
     .await;
+    // The whole R-D11 git family: every one must answer an unknown session
+    // (and a hostile argument) with an error event, never a wedged socket.
+    send(
+        &mut ws,
+        ClientMsg::GitRefs {
+            session_id: ghost.clone(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitStashes {
+            session_id: ghost.clone(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitStashShow {
+            session_id: ghost.clone(),
+            index: 9999,
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitSubmodules {
+            session_id: ghost.clone(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitDiffRange {
+            session_id: ghost.clone(),
+            from: "--output=/tmp/pwned".into(),
+            to: "also not a sha".into(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitFileAtRev {
+            session_id: ghost.clone(),
+            sha: "-x".into(),
+            path: "../escape".into(),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitLog {
+            session_id: ghost.clone(),
+            skip: 0,
+            limit: 50,
+            rev: Some("--all".into()),
+        },
+    )
+    .await;
+    send(
+        &mut ws,
+        ClientMsg::GitBlame {
+            session_id: ghost.clone(),
+            path: "x.rs".into(),
+            rev: Some("HEAD^".into()),
+        },
+    )
+    .await;
 
     send(&mut ws, ClientMsg::Subscribe).await;
     let alive = wait_for(&mut ws, 5, |m| {
