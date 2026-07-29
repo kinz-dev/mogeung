@@ -191,6 +191,7 @@ pub fn reason_color(r: AttentionReason) -> Color32 {
         AttentionReason::AwaitingPermission => Color32::from_rgb(0xFF, 0x6B, 0x35),
         AttentionReason::AwaitingInput => RED,
         AttentionReason::Failed => RED,
+        AttentionReason::RateLimited => AMBER,
         AttentionReason::NeedsReview => AMBER,
         AttentionReason::Stalled => PURPLE,
         AttentionReason::Running => BLUE,

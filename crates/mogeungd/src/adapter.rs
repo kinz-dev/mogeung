@@ -12,6 +12,7 @@
 use chrono::{DateTime, Utc};
 use mogeung_core::health::LineClass;
 use mogeung_core::transcript::EventKind;
+use mogeung_core::verify::VerifyKind;
 use serde_json::Value;
 
 /// Transcript event types we have seen, understand the purpose of, and
@@ -55,6 +56,11 @@ pub const HANDLED: &[&str] = &[
     "ai-title",
     "last-prompt",
     "file-history-delta",
+    // Never observed in the wild (2026-07-29: zero across 235 transcripts —
+    // the roadmap's premise for R-G1 was wrong; limits arrive as a synthetic
+    // assistant message instead). Handled anyway so that if a future CLI does
+    // emit it, we capture its raw shape instead of just alarming on the name.
+    "rate_limit_event",
 ];
 
 /// The outcome of reading one transcript line.
@@ -113,6 +119,18 @@ pub struct Parsed {
     pub error: Option<String>,
     /// Emitted by a subagent rather than the main conversation.
     pub sidechain: bool,
+    /// This line is the CLI's synthetic "you've hit your session limit"
+    /// message. `R-G1`.
+    pub limit_hit: bool,
+    /// The reset phrase from that message, verbatim prose (e.g. `8pm
+    /// (Europe/London)`), when it carried one.
+    pub limit_resets: Option<String>,
+    /// Bash commands on this line that look like verification —
+    /// `(tool_use_id, kind, clipped command)`. `R-E1`.
+    pub verify_cmds: Vec<(String, VerifyKind, String)>,
+    /// "Tests pass"-shaped assertions in this line's assistant prose —
+    /// `(kind, clipped sentence)`. `R-E3`.
+    pub claims: Vec<(VerifyKind, String)>,
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -177,6 +195,142 @@ fn tool_summary(name: &str, input: &Value) -> String {
             .to_string(),
     };
     one_line(&s, 160)
+}
+
+/// Classify a shell command as verification, if it is one. `R-E1`.
+///
+/// Honest patterns over a tokenised command, nothing cleverer: `cd x && cargo
+/// test` is a test run, `grep test foo.rs` is not. Chained commands
+/// (`&&`/`;`/`||`) classify per segment and the strongest kind wins —
+/// `cargo build && cargo test` is a test run.
+pub fn verify_kind(command: &str) -> Option<VerifyKind> {
+    command
+        .split(|c| c == ';' || c == '\n')
+        .flat_map(|s| s.split("&&"))
+        .flat_map(|s| s.split("||"))
+        .filter_map(segment_kind)
+        .max()
+}
+
+fn segment_kind(seg: &str) -> Option<VerifyKind> {
+    // Strip leading env assignments and unexciting wrappers.
+    let words: Vec<&str> = seg
+        .split_whitespace()
+        .skip_while(|w| w.contains('=') || *w == "sudo" || *w == "env" || *w == "time")
+        .collect();
+    let (first, rest) = words.split_first()?;
+    let first = first.rsplit('/').next().unwrap_or(first);
+    let has = |w: &str| rest.iter().any(|r| *r == w);
+
+    Some(match first {
+        "pytest" | "jest" | "vitest" | "rspec" | "phpunit" | "ctest" | "gotestsum" => {
+            VerifyKind::Test
+        }
+        "mypy" | "pyright" | "tsc" => VerifyKind::Typecheck,
+        "eslint" | "ruff" | "flake8" | "golangci-lint" | "shellcheck" => VerifyKind::Lint,
+        "nyc" | "gcov" | "tarpaulin" => VerifyKind::Coverage,
+        "cargo" => match rest.first().copied() {
+            Some("test" | "nextest") => VerifyKind::Test,
+            Some("clippy") => VerifyKind::Lint,
+            Some("check") => VerifyKind::Typecheck,
+            Some("llvm-cov" | "tarpaulin") => VerifyKind::Coverage,
+            Some("build") => VerifyKind::Build,
+            _ => return None,
+        },
+        "go" => match rest.first().copied() {
+            Some("test") => VerifyKind::Test,
+            Some("vet") => VerifyKind::Lint,
+            Some("build") => VerifyKind::Build,
+            _ => return None,
+        },
+        "npm" | "yarn" | "pnpm" | "bun" => {
+            let sub = rest.iter().find(|w| **w != "run")?;
+            if sub.contains("test") {
+                VerifyKind::Test
+            } else if *sub == "build" {
+                VerifyKind::Build
+            } else if sub.contains("lint") {
+                VerifyKind::Lint
+            } else if sub.contains("typecheck") || sub.contains("tsc") {
+                VerifyKind::Typecheck
+            } else {
+                return None;
+            }
+        }
+        "make" => {
+            if has("test") || has("check") {
+                VerifyKind::Test
+            } else {
+                VerifyKind::Build
+            }
+        }
+        "mvn" | "gradle" | "gradlew" | "dotnet" => {
+            if has("test") {
+                VerifyKind::Test
+            } else if has("package") || has("compile") || has("build") || has("install") {
+                VerifyKind::Build
+            } else {
+                return None;
+            }
+        }
+        "python" | "python3" => {
+            if rest.windows(2).any(|w| w == ["-m", "pytest"] || w == ["-m", "unittest"]) {
+                VerifyKind::Test
+            } else {
+                return None;
+            }
+        }
+        // `./scripts/run-tests.sh`, `./test.sh` — a script that says test.
+        f if f.ends_with(".sh") && f.contains("test") => VerifyKind::Test,
+        _ if rest.iter().any(|w| *w == "--coverage") => VerifyKind::Coverage,
+        _ => return None,
+    })
+}
+
+/// Success-shaped claim phrases. Failure reports ("tests fail") are not
+/// claims that need checking — the agent is already admitting it.
+const CLAIM_PATTERNS: &[(&str, VerifyKind)] = &[
+    ("tests pass", VerifyKind::Test),
+    ("tests passed", VerifyKind::Test),
+    ("test passes", VerifyKind::Test),
+    ("tests are passing", VerifyKind::Test),
+    ("test suite passes", VerifyKind::Test),
+    ("all tests green", VerifyKind::Test),
+    ("tests are green", VerifyKind::Test),
+    ("0 failed", VerifyKind::Test),
+    ("build succeeds", VerifyKind::Build),
+    ("build succeeded", VerifyKind::Build),
+    ("builds successfully", VerifyKind::Build),
+    ("build passes", VerifyKind::Build),
+    ("compiles cleanly", VerifyKind::Build),
+    ("compilation succeeded", VerifyKind::Build),
+    ("typecheck passes", VerifyKind::Typecheck),
+    ("type checks pass", VerifyKind::Typecheck),
+    ("no type errors", VerifyKind::Typecheck),
+    ("clippy is clean", VerifyKind::Lint),
+    ("lint passes", VerifyKind::Lint),
+    ("no lint errors", VerifyKind::Lint),
+];
+
+/// Extract success-shaped verification claims from assistant prose. `R-E3`.
+fn extract_claims(text: &str, out: &mut Vec<(VerifyKind, String)>) {
+    let lower = text.to_lowercase();
+    for (pat, kind) in CLAIM_PATTERNS {
+        let Some(pos) = lower.find(pat) else { continue };
+        // Clip the sentence around the match, on char boundaries.
+        let start = text[..pos]
+            .rfind(['.', '!', '\n'])
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let end = text[pos..]
+            .find(['.', '!', '\n'])
+            .map(|i| pos + i + 1)
+            .unwrap_or(text.len());
+        let sentence = one_line(&text[start..end], 200);
+        if !out.iter().any(|(_, s)| *s == sentence) {
+            out.push((*kind, sentence));
+        }
+    }
 }
 
 /// Tools whose use means a file on disk changed.
@@ -331,8 +485,36 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
             }
         }
 
+        // A future CLI's structured rate-limit line. Never yet observed; the
+        // arm exists so its first appearance is captured, not just alarmed on.
+        // The raw shape lands in the transcript as a notice so a human can see
+        // exactly what the format turned out to be.
+        "rate_limit_event" => {
+            out.events.push(EventKind::Notice {
+                level: mogeung_core::transcript::NoticeLevel::Warn,
+                message: format!("rate_limit_event: {}", one_line(&v.to_string(), 500)),
+            });
+            out.limit_hit = true;
+        }
+
         "assistant" => {
             let msg = v.get("message")?;
+            // The CLI reports a hit rate limit as a synthetic assistant
+            // message, not an event type — verified against the real corpus,
+            // 2026-07-29. `message.model == "<synthetic>"` is the signature;
+            // the text is prose ("You've hit your session limit · resets
+            // 8pm (Europe/London)").
+            if str_at(msg, "model") == Some("<synthetic>") {
+                let text = text_of(msg.get("content").unwrap_or(&Value::Null));
+                let lower = text.to_lowercase();
+                if lower.contains("limit") {
+                    out.limit_hit = true;
+                    out.limit_resets = text
+                        .split_once("resets")
+                        .map(|(_, r)| truncate(r.trim_start_matches([' ', ':']), 80))
+                        .filter(|r| !r.is_empty());
+                }
+            }
             if let Some(usage) = msg.get("usage") {
                 let n = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
                 out.tokens_in = n("input_tokens")
@@ -357,6 +539,11 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
                     Some("text") => {
                         if let Some(t) = str_at(block, "text") {
                             if !t.trim().is_empty() {
+                                // Subagent prose stays out: its claims are
+                                // about subtasks, not the session's work.
+                                if !out.sidechain {
+                                    extract_claims(t, &mut out.claims);
+                                }
                                 out.events.push(EventKind::AssistantText {
                                     text: truncate(t, 8000),
                                 });
@@ -377,6 +564,17 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
                         let empty = Value::Object(Default::default());
                         let input = block.get("input").unwrap_or(&empty);
                         let summary = tool_summary(&name, input);
+                        if name == "Bash" && !out.sidechain {
+                            if let Some(cmd) = str_at(input, "command") {
+                                if let Some(kind) = verify_kind(cmd) {
+                                    out.verify_cmds.push((
+                                        str_at(block, "id").unwrap_or("").to_string(),
+                                        kind,
+                                        one_line(cmd, 160),
+                                    ));
+                                }
+                            }
+                        }
                         if let Some(p) = touched_path(&name, input) {
                             out.touched.push(p);
                         }
@@ -414,6 +612,7 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
         && out.touched.is_empty()
         && out.error.is_none()
         && out.tokens_out == 0
+        && !out.limit_hit
     {
         return None;
     }
@@ -560,6 +759,92 @@ mod tests {
         let l = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"overloaded_error"}]}}"#;
         let p = parsed(l);
         assert!(p.error.unwrap().contains("overloaded"));
+    }
+
+    /// R-G1. The real shape, taken from the corpus (2026-07-06 hits): a
+    /// synthetic assistant message, not an event type.
+    #[test]
+    fn a_synthetic_limit_message_is_a_limit_hit() {
+        let l = r#"{"type":"assistant","timestamp":"2026-07-06T17:14:01.090Z","message":{"model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"You've hit your session limit · resets 8pm (Europe/London)"}],"usage":{"input_tokens":0,"output_tokens":0}}}"#;
+        let p = parsed(l);
+        assert!(p.limit_hit);
+        assert_eq!(p.limit_resets.as_deref(), Some("8pm (Europe/London)"));
+        assert!(p.error.is_none(), "a limit is not a failure");
+    }
+
+    /// A synthetic message that is not about limits must not cry limit.
+    #[test]
+    fn other_synthetic_messages_are_not_limit_hits() {
+        let l = r#"{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Conversation compacted"}]}}"#;
+        let p = parsed(l);
+        assert!(!p.limit_hit);
+    }
+
+    /// R-G1's future-proofing: the structured event has never been observed,
+    /// but if it appears it must be captured with its shape, not just alarmed
+    /// on as unknown.
+    #[test]
+    fn a_structured_rate_limit_event_is_captured_not_unknown() {
+        let l = r#"{"type":"rate_limit_event","window":"5h","utilization":0.97}"#;
+        let p = parsed(l);
+        assert!(p.limit_hit);
+        match &p.events[0] {
+            EventKind::Notice { message, .. } => {
+                assert!(message.contains("utilization"), "raw shape lost: {message}")
+            }
+            other => panic!("expected a notice carrying the raw shape, got {other:?}"),
+        }
+    }
+
+    /// R-E1. The classifier must recognise real verification and refuse
+    /// lookalikes — `grep test` is not a test run.
+    #[test]
+    fn verification_commands_classify_and_lookalikes_do_not() {
+        use VerifyKind::*;
+        let cases = [
+            ("cargo test --workspace", Some(Test)),
+            ("cd /w && cargo test", Some(Test)),
+            ("cargo build --release && cargo test", Some(Test)),
+            ("RUST_LOG=debug cargo check", Some(Typecheck)),
+            ("cargo clippy -- -D warnings", Some(Lint)),
+            ("npm run test:unit", Some(Test)),
+            ("yarn build", Some(Build)),
+            ("python3 -m pytest tests/", Some(Test)),
+            ("make test", Some(Test)),
+            ("make", Some(Build)),
+            ("./scripts/run-tests.sh", Some(Test)),
+            ("tsc --noEmit", Some(Typecheck)),
+            ("cargo llvm-cov --lcov", Some(Coverage)),
+            // The lookalikes.
+            ("grep test src/main.rs", None),
+            ("cat tests/fixtures/corpus.jsonl", None),
+            ("git log --grep 'cargo test'", None),
+            ("ls", None),
+        ];
+        for (cmd, want) in cases {
+            assert_eq!(verify_kind(cmd), want, "misclassified: {cmd}");
+        }
+    }
+
+    /// R-E1/R-E3. A verifying Bash call and a success claim both surface.
+    #[test]
+    fn verify_commands_and_claims_are_extracted() {
+        let l = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done. All tests pass now."},{"type":"tool_use","id":"toolu_v1","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+        let p = parsed(l);
+        assert_eq!(p.verify_cmds.len(), 1);
+        assert_eq!(p.verify_cmds[0].0, "toolu_v1");
+        assert_eq!(p.verify_cmds[0].1, VerifyKind::Test);
+        assert_eq!(p.claims.len(), 1);
+        assert!(p.claims[0].1.contains("tests pass"));
+    }
+
+    /// Subagent claims are about subtasks, not the session's work.
+    #[test]
+    fn sidechain_claims_and_commands_stay_out() {
+        let l = r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"tests pass"},{"type":"tool_use","id":"t","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+        let p = parsed(l);
+        assert!(p.claims.is_empty());
+        assert!(p.verify_cmds.is_empty());
     }
 
     #[test]

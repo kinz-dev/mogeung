@@ -6,10 +6,15 @@
 
 pub mod attention;
 pub mod change;
+pub mod config;
+pub mod docs;
 pub mod health;
+pub mod insight;
 pub mod review;
 pub mod session;
 pub mod transcript;
+pub mod usage;
+pub mod verify;
 pub mod wire;
 
 pub use attention::{AttentionItem, AttentionReason};

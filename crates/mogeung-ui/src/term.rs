@@ -21,7 +21,29 @@ use egui_term::{
     Binding, BindingAction, BackendSettings, InputKind, PtyEvent, TerminalBackend, TerminalMode,
     TerminalView,
 };
+use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver};
+
+/// What the embedded pane tells the program inside it that it is.
+///
+/// This must be set explicitly. alacritty_terminal sets no `TERM` at all, so
+/// the child inherits the *window's* environment — and a window started from a
+/// desktop launcher, a `.app`, or the daemon has no `TERM` in it. tmux then
+/// fails with `open terminal failed: terminal does not support clear`, which
+/// names a capability and so reads like a font or terminfo problem rather than
+/// an empty variable. Because the pane re-attaches whenever tmux exits, the
+/// failure arrives once per frame and the tab appears to flicker.
+///
+/// Not `alacritty`, which is what the emulator actually is: that terminfo entry
+/// ships with alacritty rather than with ncurses, so on a machine without
+/// alacritty installed it is missing and tmux refuses the same way. Every
+/// machine that has tmux has `xterm-256color`, and the widget implements it.
+const TERM: &str = "xterm-256color";
+
+/// The environment the attached tmux client runs with.
+fn child_env() -> HashMap<String, String> {
+    HashMap::from([("TERM".to_string(), TERM.to_string())])
+}
 
 /// Shift+Enter must insert a newline rather than submit the turn.
 ///
@@ -88,6 +110,7 @@ impl Term {
                     format!("={target}"),
                 ],
                 working_directory: None,
+                env: child_env(),
             },
         )?;
         Ok(Self {
@@ -280,6 +303,39 @@ mod tests {
         assert_eq!(binding[0].0.modifiers, egui::Modifiers::SHIFT);
     }
 
+    /// The child must be told what terminal it is talking to. Nothing else
+    /// sets `TERM` — not alacritty_terminal, not the window process when it was
+    /// started from a launcher or the tray — and tmux handed an empty one dies
+    /// with `open terminal failed: terminal does not support clear`.
+    #[test]
+    fn the_child_is_given_a_term() {
+        let env = child_env();
+        let term = env.get("TERM").expect("TERM must be set explicitly");
+        assert!(!term.is_empty(), "an empty TERM is what tmux refuses");
+        assert_ne!(term, "dumb", "dumb has no clear capability");
+    }
+
+    /// And it must name an entry this machine actually has. `alacritty` — what
+    /// the emulator really is — ships with alacritty rather than with ncurses,
+    /// so it is absent wherever alacritty is not installed and tmux refuses it
+    /// exactly as it refuses an empty one. Skipped where `infocmp` is missing:
+    /// the point is the terminfo database, and without one there is nothing to
+    /// check.
+    #[test]
+    fn the_term_we_claim_has_a_terminfo_entry_with_clear() {
+        let Ok(out) = std::process::Command::new("infocmp").arg(TERM).output() else {
+            return;
+        };
+        if !out.status.success() {
+            panic!("no terminfo entry for {TERM}");
+        }
+        let caps = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            caps.contains("clear="),
+            "{TERM} has no clear capability — tmux will refuse it"
+        );
+    }
+
     #[test]
     fn each_target_gets_its_own_widget_id() {
         assert_ne!(id_for("mogeung-app:0.0"), id_for("mogeung-api:0.0"));
@@ -328,3 +384,4 @@ mod tests {
         assert!(wheel_lines(egui::MouseWheelUnit::Line, -2.0, row, &mut accum) < 0);
     }
 }
+

@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-28
+updated: 2026-07-29
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -70,7 +70,8 @@ client builds the text and puts it on your clipboard, and you paste it
 `parse_unified` the union of the repo's reviewed anchors, so a hunk a
 human read in the Changes tab arrives already marked when seen through a
 commit — anchors are content hashes, which is what makes the two views
-agree.
+agree. Its optional `CommitDetail` also names the branches containing
+the commit (`R-D18`, serde-defaulted so either side may be older).
 
 The `Git…` family (`R-D10`, `R-D11`) is **read-only by protocol**: there is
 no staging, commit, checkout, stash-pop, fetch or any other verb that
@@ -185,3 +186,30 @@ Using the web client from a phone means binding beyond localhost, which means
 warning at startup when `--listen` is not a loopback address. Treat it as
 suitable for a trusted home network and nothing more; a VPN or SSH tunnel is the
 correct answer until authentication exists.
+
+## The 2026-07-29 families
+
+The one-go pass (features 0015–0022) grew the contract in five places,
+all in the established shapes — fire-and-forget commands, answers that
+echo their question, `#[serde(default)]` on everything new:
+
+- **Usage** — `FetchUsage` → `UsageStats`. Tokens only (ADR-0005); the
+  window-limit figure inside is an estimate from observed limit hits and
+  is labelled so on the type.
+- **Signals** — `SetSignalCommand` / `RunSignal` / `FetchSignal` →
+  `SignalStatus`. The single place a client can make the daemon execute
+  anything, and it is a human-configured check run on an explicit click;
+  there is deliberately no timer that can reach it.
+- **Insight** — `InsightSearch`, `FetchDigest`, `FetchRecurring`,
+  `FetchPromptLibrary`, `FetchAnalytics`, `FetchSubagents`,
+  `FetchDecisions`, `FetchFileSessions` → their `*Report` twins, each
+  echoing query/day/path so stale answers drop.
+- **Docs** — `FetchDocScan` → `DocReport`, per watched repo only — the
+  daemon refuses paths no session lives in.
+- **Auth (`R-I4`)** — `router_with_token` wraps everything when the
+  daemon starts with `--token`: `Authorization: Bearer …` or `?token=`
+  (the WS client cannot set headers), constant-time compare, clean 401.
+  No token → the historical open-on-loopback behaviour, byte for byte.
+
+Every WS command keeps a REST twin (`/api/usage`, `/api/insight/*`,
+`/api/repos/{repo}/docscan`, …) so the daemon stays curl-able.

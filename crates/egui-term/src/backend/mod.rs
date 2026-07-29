@@ -153,6 +153,10 @@ impl TerminalBackend {
         let pty_config = tty::Options {
             shell: Some(tty::Shell::new(settings.shell, settings.args)),
             working_directory: settings.working_directory,
+            // LOCAL CHANGE (mogeung): pass the caller's environment through.
+            // alacritty_terminal sets no `TERM` of its own, so without this the
+            // child gets whatever the window process happened to inherit.
+            env: settings.env,
             ..tty::Options::default()
         };
         let config = term::Config::default();
@@ -269,6 +273,19 @@ impl TerminalBackend {
         let line = min(line, terminal_size.num_lines as usize - 1);
 
         viewport_to_point(display_offset, Point::new(line, col))
+    }
+
+    /// LOCAL CHANGE (mogeung): the current selection as text, read from the
+    /// live terminal rather than the render cache. `selectable_content` below
+    /// reads `last_content()`, which is only refreshed by `sync()` — a
+    /// selection made *this frame* (a double-click's word, the tail of a drag)
+    /// is not in it yet, so copying from it silently loses the newest cells.
+    /// It also concatenates cells with no line breaks. alacritty's own
+    /// `selection_to_string` has neither problem.
+    pub fn selection_text(&self) -> Option<String> {
+        let term = self.term.clone();
+        let terminal = term.lock();
+        terminal.selection_to_string()
     }
 
     pub fn selectable_content(&self) -> String {

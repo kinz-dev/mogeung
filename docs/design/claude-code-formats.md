@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-07-25
+updated: 2026-07-29
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -113,3 +113,20 @@ is also the dangerous one, because it looks like "nothing is happening".
 `parse_line` returns a `LineOutcome`, never a bare `Option`, precisely so that
 "we chose to skip this" and "we have never seen this" cannot be confused. Every
 outcome is counted: see [health-and-canary.md](health-and-canary.md).
+
+## Learned in the 2026-07-29 sweep
+
+- **Rate limits are prose, not events.** No `rate_limit_event` exists in
+  any of 235 local transcripts; a hit arrives as an assistant message
+  with `message.model == "<synthetic>"` and all-zero usage, its reset
+  time embedded in the text. The parser keys on that signature.
+- **Subagent transcripts nest**: `<session>/subagents/agent-*.jsonl`,
+  plus a sibling `tool-results/` overflow dir. A flat glob undercounts;
+  the usage and insight scanners walk recursively and attribute subagent
+  burn to the parent.
+- **`history.jsonl`** is uniform: `display`, `pastedContents` (values
+  carry inline `content` *or* only a `contentHash`), `timestamp` (unix
+  millis, monotonic), `project` (absolute cwd; its directory-name
+  encoding is lossy — go history→dir, never back), `sessionId`.
+- **`usage.iterations`** can be `null` or an array of per-iteration
+  sub-objects; summing both `usage` and its iterations double-counts.

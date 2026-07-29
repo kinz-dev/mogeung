@@ -25,7 +25,12 @@ const EGUI_TERM_WIDGET_ID_PREFIX: &str = "egui_term::instance::";
 #[derive(Debug, Clone)]
 enum InputAction {
     BackendCall(BackendCommand),
-    WriteToClipboard(String),
+    /// LOCAL CHANGE (mogeung): read the selection *after* the preceding
+    /// backend calls in the same event have run, then put it on the system
+    /// clipboard. `WriteToClipboard(String)` captured the text at
+    /// decision time, which for a double-click is before the word selection
+    /// exists.
+    CopySelection,
     Ignore,
 }
 
@@ -187,7 +192,7 @@ impl<'a> TerminalView<'a> {
                     modifiers,
                     pos,
                     ..
-                } if pointer_inside => input_actions.push(process_button_click(
+                } if pointer_inside => input_actions.extend(process_button_click(
                     state,
                     layout,
                     self.backend,
@@ -214,8 +219,12 @@ impl<'a> TerminalView<'a> {
                     InputAction::BackendCall(cmd) => {
                         self.backend.process_command(cmd);
                     },
-                    InputAction::WriteToClipboard(data) => {
-                        layout.ctx.copy_text(data);
+                    InputAction::CopySelection => {
+                        if let Some(text) = self.backend.selection_text() {
+                            if !text.is_empty() {
+                                layout.ctx.copy_text(text);
+                            }
+                        }
                     },
                     InputAction::Ignore => {},
                 }
@@ -380,16 +389,14 @@ fn process_keyboard_event(
         egui::Event::Copy => {
             #[cfg(not(any(target_os = "ios", target_os = "macos")))]
             if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
-                let content = backend.selectable_content();
-                InputAction::WriteToClipboard(content)
+                InputAction::CopySelection
             } else {
                 // Hotfix - Send ^C when there's not selection on view.
                 InputAction::BackendCall(BackendCommand::Write([0x3].to_vec()))
             }
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                let content = backend.selectable_content();
-                InputAction::WriteToClipboard(content)
+                InputAction::CopySelection
             }
         },
         egui::Event::Key {
@@ -518,6 +525,16 @@ fn process_mouse_wheel(
     vec![InputAction::BackendCall(BackendCommand::Scroll(lines))]
 }
 
+/// LOCAL CHANGE (mogeung): whether a primary-button event should be reported
+/// to the application instead of driving local selection. Upstream answered
+/// "yes whenever the app enabled any mouse mode" — and Claude Code always
+/// does, with tmux passing the mode through, so the left button could *never*
+/// select here. mogeung observes; a click means the person wants the text,
+/// not the agent. Always local.
+fn forward_primary_to_app(_terminal_mode: TermMode) -> bool {
+    false
+}
+
 fn process_button_click(
     state: &mut TerminalViewState,
     layout: &Response,
@@ -527,7 +544,7 @@ fn process_button_click(
     position: Pos2,
     modifiers: &Modifiers,
     pressed: bool,
-) -> InputAction {
+) -> Vec<InputAction> {
     match button {
         PointerButton::Primary => process_left_button(
             state,
@@ -538,7 +555,7 @@ fn process_button_click(
             modifiers,
             pressed,
         ),
-        _ => InputAction::Ignore,
+        _ => vec![],
     }
 }
 
@@ -550,15 +567,15 @@ fn process_left_button(
     position: Pos2,
     modifiers: &Modifiers,
     pressed: bool,
-) -> InputAction {
+) -> Vec<InputAction> {
     let terminal_mode = backend.last_content().terminal_mode;
-    if terminal_mode.intersects(TermMode::MOUSE_MODE) {
-        InputAction::BackendCall(BackendCommand::MouseReport(
+    if forward_primary_to_app(terminal_mode) {
+        vec![InputAction::BackendCall(BackendCommand::MouseReport(
             MouseButton::LeftButton,
             *modifiers,
             state.current_mouse_position_on_grid,
             pressed,
-        ))
+        ))]
     } else if pressed {
         process_left_button_pressed(state, layout, position)
     } else {
@@ -577,11 +594,18 @@ fn process_left_button_pressed(
     state: &mut TerminalViewState,
     layout: &Response,
     position: Pos2,
-) -> InputAction {
+) -> Vec<InputAction> {
     state.is_dragged = true;
-    InputAction::BackendCall(build_start_select_command(layout, position))
+    vec![InputAction::BackendCall(build_start_select_command(
+        layout, position,
+    ))]
 }
 
+/// LOCAL CHANGE (mogeung): releasing the button copies whatever ended up
+/// selected — drag, double-click word or triple-click line — straight to the
+/// system clipboard, PuTTY-style. `CopySelection` runs after the selection
+/// command in the same action list, and a plain click's empty point selection
+/// copies nothing, so the clipboard is never clobbered by mere clicking.
 fn process_left_button_released(
     state: &mut TerminalViewState,
     layout: &Response,
@@ -589,9 +613,9 @@ fn process_left_button_released(
     bindings_layout: &BindingsLayout,
     position: Pos2,
     modifiers: &Modifiers,
-) -> InputAction {
+) -> Vec<InputAction> {
     state.is_dragged = false;
-    if layout.double_clicked() || layout.triple_clicked() {
+    let action = if layout.double_clicked() || layout.triple_clicked() {
         InputAction::BackendCall(build_start_select_command(layout, position))
     } else {
         let terminal_content = backend.last_content();
@@ -609,7 +633,8 @@ fn process_left_button_released(
         } else {
             InputAction::Ignore
         }
-    }
+    };
+    vec![action, InputAction::CopySelection]
 }
 
 fn build_start_select_command(
@@ -649,25 +674,15 @@ fn process_mouse_move(
     );
 
     let mut actions = vec![];
-    // Handle command or selection update based on terminal mode and modifiers
+    // LOCAL CHANGE (mogeung): a drag always extends the local selection —
+    // the press that set `is_dragged` started one (see
+    // `forward_primary_to_app`). Upstream forwarded the drag to the app under
+    // mode 1003 and, under Claude Code's actual modes, updated a selection
+    // that was never started — so dragging did nothing at all.
     if state.is_dragged {
-        let terminal_mode = terminal_content.terminal_mode;
-        let cmd = if terminal_mode.contains(TermMode::MOUSE_MOTION)
-            && modifiers.is_none()
-        {
-            InputAction::BackendCall(BackendCommand::MouseReport(
-                MouseButton::LeftMove,
-                *modifiers,
-                state.current_mouse_position_on_grid,
-                true,
-            ))
-        } else {
-            InputAction::BackendCall(BackendCommand::SelectUpdate(
-                cursor_x, cursor_y,
-            ))
-        };
-
-        actions.push(cmd);
+        actions.push(InputAction::BackendCall(BackendCommand::SelectUpdate(
+            cursor_x, cursor_y,
+        )));
     }
 
     // Handle link hover if applicable
@@ -679,4 +694,20 @@ fn process_mouse_move(
     }
 
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_primary_to_app;
+    use alacritty_terminal::term::TermMode;
+
+    /// Claude Code always enables mouse reporting, and tmux passes the mode
+    /// through to this pty — so upstream's "forward clicks whenever the app
+    /// wants the mouse" meant the left button could never select text here.
+    #[test]
+    fn the_left_button_belongs_to_the_person_not_the_app() {
+        assert!(!forward_primary_to_app(TermMode::MOUSE_MODE));
+        assert!(!forward_primary_to_app(TermMode::MOUSE_MOTION));
+        assert!(!forward_primary_to_app(TermMode::empty()));
+    }
 }

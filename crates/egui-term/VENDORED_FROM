@@ -32,5 +32,29 @@ Local changes:
     receiver ends it instead of panicking. Marked with
     `LOCAL CHANGE (mogeung)`.
 
+  - src/view.rs, the primary mouse button — upstream forwarded clicks to the
+    application whenever it enabled any mouse reporting, and forwarded drags
+    only under mode 1003. Claude Code always enables mouse reporting (tmux
+    passes the mode through), so left-drag selection was dead in exactly the
+    sessions this pane exists for, and clicks fell into whatever tmux was
+    doing (copy-mode selections landing in tmux's buffer, unreachable from
+    the system clipboard — egui-term speaks no OSC 52). The left button now
+    always drives local selection (`forward_primary_to_app` is the switch),
+    a drag always extends it, and releasing copies the selection to the
+    system clipboard, PuTTY-style. `selection_text()` on the backend reads
+    the live terminal via alacritty's `selection_to_string` — the old
+    `selectable_content()` read the render cache, which misses a selection
+    made the same frame, and dropped newlines. Ctrl+Shift+C uses the same
+    path. Marked with `LOCAL CHANGE (mogeung)`.
+
+  - src/backend/settings.rs and src/backend/mod.rs, `BackendSettings::env` —
+    upstream offered no way to set the child's environment, and
+    alacritty_terminal sets no `TERM` of its own, so the child inherited the
+    window process's. A window started from a launcher or the tray has no
+    `TERM` at all, and the tmux inside then died on every attach with
+    `open terminal failed: terminal does not support clear`. The extra
+    environment now reaches `tty::Options::env`. Marked with
+    `LOCAL CHANGE (mogeung)`.
+
 To update: clone upstream, copy src/ over this one, re-apply the changes above
 (grep for `LOCAL CHANGE`), run the workspace tests.

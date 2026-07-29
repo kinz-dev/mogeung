@@ -17,6 +17,66 @@ use mogeung_core::{ClientMsg, ServerMsg, Session};
 use serde::Deserialize;
 use std::sync::Arc;
 
+/// The router, optionally behind a shared token — `R-I4`.
+///
+/// The token rides `Authorization: Bearer …` or, for WebSocket clients that
+/// cannot set headers, a `token=` query parameter. Comparison is
+/// constant-time; a miss is a plain 401, never a hang. No token configured
+/// means the historical open-on-loopback behaviour, unchanged.
+pub fn router_with_token(state: Arc<AppState>, token: Option<String>) -> Router {
+    let r = router(state);
+    match token.filter(|t| !t.is_empty()) {
+        None => r,
+        Some(t) => r.layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let t = t.clone();
+                async move {
+                    if request_authorized(&req, &t) {
+                        next.run(req).await
+                    } else {
+                        (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            "missing or wrong token",
+                        )
+                            .into_response()
+                    }
+                }
+            },
+        )),
+    }
+}
+
+fn request_authorized(req: &axum::extract::Request, token: &str) -> bool {
+    let header_ok = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|v| constant_time_eq(v, token))
+        .unwrap_or(false);
+    if header_ok {
+        return true;
+    }
+    req.uri()
+        .query()
+        .map(|q| {
+            q.split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .any(|(k, v)| k == "token" && constant_time_eq(v, token))
+        })
+        .unwrap_or(false)
+}
+
+/// Length-leaking only — every byte is compared regardless of mismatches, so
+/// timing does not walk the token one prefix at a time.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         // The thin web client (R-C3). Same WebSocket, same authority model:
@@ -30,6 +90,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}/review_all", post(review_all))
         .route("/api/sessions/{id}/review", post(review_hunk))
         .route("/api/queue", get(get_queue))
+        // Tokens, never dollars (ADR-0005); any threshold inside is an
+        // estimate from observed limit hits, not a quota. R-G1–R-G3.
+        .route("/api/usage", get(get_usage))
+        // Cross-session intelligence (pillar F) and docs (pillar H) — the
+        // WS commands' curl-able twins, read-only like everything here.
+        .route("/api/insight/search", get(get_insight_search))
+        .route("/api/insight/digest", get(get_insight_digest))
+        .route("/api/insight/recurring", get(get_insight_recurring))
+        .route("/api/insight/prompts", get(get_insight_prompts))
+        .route("/api/insight/analytics", get(get_insight_analytics))
+        .route("/api/insight/file", get(get_insight_file))
+        .route("/api/sessions/{id}/subagents", get(get_subagents))
+        .route("/api/sessions/{id}/decisions", get(get_decisions))
+        .route("/api/repos/{repo}/docscan", get(get_docscan))
         .route("/api/rescan", post(rescan))
         .route("/api/repos", get(list_repos))
         .route("/api/repos/{repo}/debt", get(get_debt))
@@ -85,6 +159,78 @@ async fn index() -> impl IntoResponse {
 
 async fn list_repos(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::to_value(state.known_repos().await).unwrap_or_default())
+}
+
+async fn get_usage(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let report = state.usage_report().await;
+    Json(serde_json::to_value(report).unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+struct InsightSearchQuery {
+    q: String,
+}
+
+async fn get_insight_search(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<InsightSearchQuery>,
+) -> impl IntoResponse {
+    Json(serde_json::to_value(state.insight_search(q.q).await).unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+struct DayQuery {
+    day: String,
+}
+
+async fn get_insight_digest(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<DayQuery>,
+) -> impl IntoResponse {
+    Json(serde_json::to_value(state.day_digest(q.day).await).unwrap_or_default())
+}
+
+async fn get_insight_recurring(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::to_value(state.recurring_failures().await).unwrap_or_default())
+}
+
+async fn get_insight_prompts(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::to_value(state.prompt_library().await).unwrap_or_default())
+}
+
+async fn get_insight_analytics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::to_value(state.analytics().await).unwrap_or_default())
+}
+
+async fn get_insight_file(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<PathQuery>,
+) -> impl IntoResponse {
+    Json(serde_json::to_value(state.file_sessions(&q.path).await).unwrap_or_default())
+}
+
+async fn get_subagents(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    Json(serde_json::to_value(state.subagent_tree(&id).await).unwrap_or_default())
+}
+
+async fn get_decisions(
+    State(state): State<Arc<AppState>>,
+    AxPath(id): AxPath<String>,
+) -> impl IntoResponse {
+    Json(serde_json::to_value(state.decision_candidates(&id).await).unwrap_or_default())
+}
+
+async fn get_docscan(
+    State(state): State<Arc<AppState>>,
+    AxPath(repo): AxPath<String>,
+) -> impl IntoResponse {
+    match state.doc_scan(&repo).await {
+        Ok(inv) => Json(serde_json::to_value(inv).unwrap_or_default()),
+        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    }
 }
 
 async fn get_debt(
@@ -616,6 +762,74 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }
         }
         ClientMsg::Rescan => state.scan().await,
+        ClientMsg::FetchUsage => {
+            let report = state.usage_report().await;
+            state.broadcast(ServerMsg::UsageStats {
+                report: Box::new(report),
+            });
+        }
+        ClientMsg::SetSignalCommand { repo, command } => {
+            state.set_signal_command(&repo, &command).await;
+        }
+        ClientMsg::RunSignal { session_id } => {
+            if let Err(e) = state.run_signal(&session_id).await {
+                err(e);
+            }
+        }
+        ClientMsg::FetchSignal { repo } => {
+            let status = state.signal_status(&repo).await;
+            state.broadcast(status);
+        }
+        ClientMsg::InsightSearch { query } => {
+            let results = state.insight_search(query.clone()).await;
+            state.broadcast(ServerMsg::InsightSearchResults {
+                query,
+                results: Box::new(results),
+            });
+        }
+        ClientMsg::FetchDigest { day } => {
+            let digest = state.day_digest(day.clone()).await;
+            state.broadcast(ServerMsg::DayDigestReport {
+                day,
+                digest: Box::new(digest),
+            });
+        }
+        ClientMsg::FetchRecurring => {
+            let failures = state.recurring_failures().await;
+            state.broadcast(ServerMsg::RecurringFailures { failures });
+        }
+        ClientMsg::FetchPromptLibrary => {
+            let clusters = state.prompt_library().await;
+            state.broadcast(ServerMsg::PromptLibrary { clusters });
+        }
+        ClientMsg::FetchAnalytics => {
+            let analytics = state.analytics().await;
+            state.broadcast(ServerMsg::AnalyticsReport {
+                analytics: Box::new(analytics),
+            });
+        }
+        ClientMsg::FetchSubagents { session_id } => {
+            let nodes = state.subagent_tree(&session_id).await;
+            state.broadcast(ServerMsg::SubagentTreeReport { session_id, nodes });
+        }
+        ClientMsg::FetchDecisions { session_id } => {
+            let candidates = state.decision_candidates(&session_id).await;
+            state.broadcast(ServerMsg::DecisionReport {
+                session_id,
+                candidates,
+            });
+        }
+        ClientMsg::FetchFileSessions { path } => {
+            let entries = state.file_sessions(&path).await;
+            state.broadcast(ServerMsg::FileSessions { path, entries });
+        }
+        ClientMsg::FetchDocScan { repo } => match state.doc_scan(&repo).await {
+            Ok(inventory) => state.broadcast(ServerMsg::DocReport {
+                repo,
+                inventory: Box::new(inventory),
+            }),
+            Err(e) => err(e),
+        },
         ClientMsg::FetchHealth => {
             let health = state.health().await;
             state.broadcast(ServerMsg::Health {

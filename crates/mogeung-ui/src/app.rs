@@ -32,6 +32,9 @@ pub enum Tab {
     /// The session repo's commits, uncommitted changes and diffs. `R-D10`.
     /// Read-only, permanently — the observer rule, one layer down.
     Git,
+    /// Cross-session intelligence: search, digest, analytics, prompts,
+    /// failures, docs. Pillars F and H, with pillar G's burn tables.
+    Insight,
 }
 
 impl Tab {
@@ -47,6 +50,7 @@ impl Tab {
             // "Editor" is what the user calls it, not a write path.
             Tab::Explorer => "Editor",
             Tab::Git => "Git",
+            Tab::Insight => "Insight",
         }
     }
 
@@ -62,6 +66,7 @@ impl Tab {
             Tab::Terminal => Action::TabTerminal,
             Tab::Explorer => Action::TabExplorer,
             Tab::Git => Action::TabGit,
+            Tab::Insight => Action::TabInsight,
         }
     }
 }
@@ -232,6 +237,35 @@ pub struct App {
     health: Health,
     show_health: bool,
 
+    /// Token burn and the limit picture, refreshed on a slow cadence. Any
+    /// threshold in it is an estimate from observed limit hits, and the UI
+    /// says so wherever it shows one. `R-G1`–`R-G3`.
+    usage: Option<mogeung_core::usage::UsageReport>,
+    usage_asked: Option<chrono::DateTime<Utc>>,
+
+    /// Per-repo signal-runner state, keyed by repo root. `R-E2`.
+    signals: HashMap<String, SignalState>,
+
+    /// The Insight pane's caches and pending flags. Pillars F and H.
+    insight: InsightState,
+    /// Scroll the Transcript pane to the first event at or after this time —
+    /// how a search hit (`R-F1`) or a commit (`R-F9`) "opens the transcript
+    /// at" a moment. Consumed by the next Transcript render.
+    focus_event_ts: Option<chrono::DateTime<Utc>>,
+    /// Subagent trees per session, fetched once per session per run. `R-F8`.
+    subagents: HashMap<SessionId, Vec<mogeung_core::insight::SubagentNode>>,
+    subagents_asked: HashSet<SessionId>,
+
+    /// Editor navigation state — outline panel, go-to-line, occurrence
+    /// highlight, markdown preview. `R-B28`/`R-B29`. Transient by design;
+    /// only wrap and bookmarks persist (prefs).
+    outline_open: bool,
+    outline_filter: String,
+    show_goto: bool,
+    goto_input: String,
+    occurrences_word: Option<String>,
+    md_preview: HashSet<String>,
+
     /// System-wide key that raises this window. `None` when disabled or
     /// already taken by another application.
     hotkey: Option<crate::hotkey::Hotkey>,
@@ -280,6 +314,15 @@ pub struct App {
     term: Option<crate::term::Term>,
     /// Whether keystrokes belong to the agent or to mogeung. See `handle_keys`.
     term_focused: bool,
+    /// A refused attach, remembered against its target so the pane stops
+    /// trying. Without it a failure that recurs — the wrong `TERM`, a session
+    /// that has ended — is retried every frame, spawning a tmux per frame and
+    /// flashing its own error at the refresh rate.
+    term_failed: Option<(String, String)>,
+
+    /// Whether the restored window position has been checked against the
+    /// monitors that actually exist. One-shot, on the first frame. `R-J1`.
+    geometry_checked: bool,
 
     /// The file explorer pane's cache. `R-B24`.
     explorer: crate::explorer::Explorer,
@@ -295,6 +338,84 @@ pub struct App {
     errors: Vec<String>,
 }
 
+/// Which Insight sub-view is forward.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum InsightView {
+    #[default]
+    Search,
+    Digest,
+    Analytics,
+    Prompts,
+    Failures,
+    Decisions,
+    File,
+    Docs,
+}
+
+impl InsightView {
+    const ALL: [InsightView; 8] = [
+        InsightView::Search,
+        InsightView::Digest,
+        InsightView::Analytics,
+        InsightView::Prompts,
+        InsightView::Failures,
+        InsightView::Decisions,
+        InsightView::File,
+        InsightView::Docs,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            InsightView::Search => "Search",
+            InsightView::Digest => "Digest",
+            InsightView::Analytics => "Analytics",
+            InsightView::Prompts => "Prompts",
+            InsightView::Failures => "Failures",
+            InsightView::Decisions => "Decisions",
+            InsightView::File => "File",
+            InsightView::Docs => "Docs",
+        }
+    }
+}
+
+/// The Insight pane's caches. Answers echo their question (query, day, repo,
+/// path) and stale ones are dropped — the stray-answer rule, pane-wide.
+#[derive(Default)]
+struct InsightState {
+    view: InsightView,
+    query: String,
+    results: Option<(String, mogeung_core::insight::SearchResults)>,
+    search_pending: bool,
+    day: String,
+    digest: Option<mogeung_core::insight::DayDigest>,
+    digest_pending: bool,
+    analytics: Option<mogeung_core::insight::Analytics>,
+    analytics_asked: bool,
+    prompts: Option<Vec<mogeung_core::insight::PromptCluster>>,
+    prompts_asked: bool,
+    failures: Option<Vec<mogeung_core::insight::RecurringFailure>>,
+    failures_asked: bool,
+    decisions: HashMap<SessionId, Vec<mogeung_core::insight::DecisionCandidate>>,
+    decisions_asked: HashSet<SessionId>,
+    file_query: String,
+    file_results: Option<(String, Vec<mogeung_core::insight::FileSession>)>,
+    docs_repo: String,
+    docs: Option<(String, mogeung_core::docs::DocInventory)>,
+    docs_pending: bool,
+}
+
+/// One repo's signal-runner view state. `R-E2`.
+#[derive(Default)]
+struct SignalState {
+    command: Option<String>,
+    running: bool,
+    last: Option<mogeung_core::verify::SignalRun>,
+    /// The command as typed; initialised from the store once.
+    edit: String,
+    edit_init: bool,
+    fetched: bool,
+    asked: bool,
+}
+
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -305,12 +426,17 @@ impl App {
         daemon_addr: String,
     ) -> Self {
         ui::apply_theme(&cc.egui_ctx);
+        // R-B29: PNG/JPEG decoding for the Editor's image preview.
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         if let Some(h) = &hotkey {
             h.start_waker(cc.egui_ctx.clone());
         }
         let net = Net::connect(url, cc.egui_ctx.clone());
         let (keymap, keymap_warning) = crate::keymap::Keymap::load();
         let (prefs, prefs_warning) = crate::prefs::Prefs::load();
+        // Read again rather than threaded down from `main`: a detached window
+        // has no terminal, so the complaint printed there reaches nobody.
+        let config_warning = mogeung_core::config::Config::load().1;
         let (tree, layout_warning) = crate::layout::load();
         let (explorer, explorer_warning) = crate::explorer::Explorer::load();
         App {
@@ -346,6 +472,19 @@ impl App {
             show_launch: false,
             health: Health::default(),
             show_health: false,
+            usage: None,
+            usage_asked: None,
+            signals: HashMap::new(),
+            insight: InsightState::default(),
+            focus_event_ts: None,
+            subagents: HashMap::new(),
+            subagents_asked: HashSet::new(),
+            outline_open: false,
+            outline_filter: String::new(),
+            show_goto: false,
+            goto_input: String::new(),
+            occurrences_word: None,
+            md_preview: HashSet::new(),
             md_cache: egui_commonmark::CommonMarkCache::default(),
             transcript_limit: TRANSCRIPT_PAGE,
             scroll: None,
@@ -365,6 +504,8 @@ impl App {
             git_filter_focus: false,
             term: None,
             term_focused: false,
+            term_failed: None,
+            geometry_checked: false,
             explorer,
             gitview: Default::default(),
             annotate: false,
@@ -375,6 +516,7 @@ impl App {
                 .into_iter()
                 .chain(keymap_warning)
                 .chain(prefs_warning)
+                .chain(config_warning)
                 .chain(layout_warning)
                 .chain(explorer_warning)
                 .collect(),
@@ -435,6 +577,67 @@ impl App {
                     self.changes.insert(session_id, Rc::from(change));
                 }
                 ServerMsg::Health { health } => self.health = *health,
+                ServerMsg::UsageStats { report } => self.usage = Some(*report),
+                ServerMsg::SignalStatus {
+                    repo,
+                    command,
+                    running,
+                    last,
+                } => {
+                    let st = self.signals.entry(repo).or_default();
+                    st.running = running;
+                    st.last = last.map(|b| *b);
+                    st.fetched = true;
+                    // Fill the editor from the store once; after that the
+                    // user's typing wins over echoes.
+                    if !st.edit_init {
+                        st.edit = command.clone().unwrap_or_default();
+                        st.edit_init = true;
+                    }
+                    st.command = command;
+                }
+                ServerMsg::InsightSearchResults { query, results } => {
+                    self.insight.search_pending = false;
+                    // Only the answer to the query still on screen.
+                    if query == self.insight.query.trim() {
+                        self.insight.results = Some((query, *results));
+                    }
+                }
+                ServerMsg::DayDigestReport { day, digest } => {
+                    self.insight.digest_pending = false;
+                    if day == self.insight.day {
+                        self.insight.digest = Some(*digest);
+                    }
+                }
+                ServerMsg::RecurringFailures { failures } => {
+                    self.insight.failures = Some(failures);
+                }
+                ServerMsg::PromptLibrary { clusters } => {
+                    self.insight.prompts = Some(clusters);
+                }
+                ServerMsg::AnalyticsReport { analytics } => {
+                    self.insight.analytics = Some(*analytics);
+                }
+                ServerMsg::SubagentTreeReport { session_id, nodes } => {
+                    self.subagents.insert(session_id, nodes);
+                }
+                ServerMsg::DecisionReport {
+                    session_id,
+                    candidates,
+                } => {
+                    self.insight.decisions.insert(session_id, candidates);
+                }
+                ServerMsg::FileSessions { path, entries } => {
+                    if path == self.insight.file_query.trim() {
+                        self.insight.file_results = Some((path, entries));
+                    }
+                }
+                ServerMsg::DocReport { repo, inventory } => {
+                    self.insight.docs_pending = false;
+                    if repo == self.insight.docs_repo {
+                        self.insight.docs = Some((repo, *inventory));
+                    }
+                }
                 ServerMsg::ReviewDebt { debt } => self.debt = Some(*debt),
                 ServerMsg::BlastRadius { radius } => {
                     self.blast_pending = false;
@@ -704,6 +907,107 @@ impl App {
     fn selected_session(&self) -> Option<&Rc<Session>> {
         self.selected.as_ref().and_then(|id| self.sessions.get(id))
     }
+
+    /// Remember where the window is, and rescue it if it came back somewhere
+    /// unreachable. `R-J1`.
+    ///
+    /// # Size always, position only where the platform has one
+    ///
+    /// **Wayland reports no window position at all** — `outer_position()`
+    /// returns `NotSupported`, so egui leaves *both* `outer_rect` and
+    /// `inner_rect` empty and there is no rect to read. The first version keyed
+    /// everything off `outer_rect` and therefore did nothing whatsoever on the
+    /// machine it was written on: no file, no size, no complaint. Found by
+    /// running the window, which no test here would have done.
+    ///
+    /// So the size comes from the drawing surface, which every platform has,
+    /// and the position from `outer_rect` when there is one. Under Wayland a
+    /// window keeps its size across launches and is placed by the compositor,
+    /// which is that platform's answer rather than a degradation of ours.
+    ///
+    /// The rescue is here rather than at startup because the monitor
+    /// arrangement is not knowable before the window exists: `main` restores
+    /// the stored position optimistically, and this corrects it on the first
+    /// frame that reports a monitor. Unplugging the display the window was
+    /// last closed on is the case that matters, and it is not exotic.
+    fn track_geometry(&mut self, ui: &egui::Ui) {
+        let (outer, monitor, maximized, fullscreen) = ui.ctx().input(|i| {
+            let v = i.viewport();
+            (
+                v.outer_rect,
+                v.monitor_size,
+                v.maximized.unwrap_or(false),
+                v.fullscreen.unwrap_or(false),
+            )
+        });
+
+        // Points to logical pixels. `viewport_rect` and `outer_rect` are both in
+        // egui points, which shrink as the global zoom grows; `with_inner_size`
+        // is in logical pixels. Without the factor, launching zoomed would
+        // store a smaller window than the one on screen, and every restart
+        // would shrink it again.
+        let zoom = ui.ctx().zoom_factor();
+        let size = ui.ctx().viewport_rect().size() * zoom;
+        let pos = outer.map(|r| r.min * zoom);
+
+        if !self.geometry_checked {
+            self.geometry_checked = true;
+            if let Some(p) = pos {
+                let here = crate::prefs::Window {
+                    width: size.x,
+                    height: size.y,
+                    x: Some(p.x),
+                    y: Some(p.y),
+                };
+                let reachable = here
+                    .usable(monitor.map(|m| (m.x * zoom, m.y * zoom)))
+                    .is_some_and(|w| w.x.is_some());
+                if !reachable {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                        egui::pos2(48.0, 48.0),
+                    ));
+                    return;
+                }
+            }
+        }
+
+        // A maximized or fullscreen window reports the screen, not the size you
+        // would want back on restore — remembering it would mean un-maximizing
+        // into a window that fills the screen anyway, with no way back to the
+        // size you had.
+        if maximized || fullscreen {
+            return;
+        }
+        // Written while the pointer is up, on the same reasoning as the layout
+        // below: a drag-resize would otherwise write the file every frame.
+        if ui.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        // A window not yet mapped reports nothing usable; storing it would
+        // overwrite a good remembered size with a placeholder.
+        if size.x < crate::prefs::MIN_SIZE.0 || size.y < crate::prefs::MIN_SIZE.1 {
+            return;
+        }
+        let now = crate::prefs::Window {
+            width: size.x,
+            height: size.y,
+            x: pos.map(|p| p.x),
+            y: pos.map(|p| p.y),
+        };
+        let moved = match self.prefs.window {
+            Some(w) => {
+                (w.width - now.width).abs() > 1.0
+                    || (w.height - now.height).abs() > 1.0
+                    || w.x.zip(now.x).is_none_or(|(a, b)| (a - b).abs() > 1.0)
+                    || w.y.zip(now.y).is_none_or(|(a, b)| (a - b).abs() > 1.0)
+            }
+            None => true,
+        };
+        if moved {
+            self.prefs.window = Some(now);
+            self.prefs_dirty = true;
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -741,6 +1045,9 @@ impl eframe::App for App {
         // Consumed by whichever scroll area drew this frame; dropped if none
         // did, so a stale request cannot fire later in a different tab.
         self.scroll = None;
+
+        // Before the write below, so a move lands in the same save.
+        self.track_geometry(ui);
 
         if self.prefs_dirty {
             self.prefs_dirty = false;
@@ -1365,6 +1672,7 @@ impl App {
             A::TabTerminal => self.set_tab(Tab::Terminal),
             A::TabExplorer => self.set_tab(Tab::Explorer),
             A::TabGit => self.set_tab(Tab::Git),
+            A::TabInsight => self.set_tab(Tab::Insight),
             A::ToggleAnnotate => {
                 self.annotate = !self.annotate;
                 if self.annotate {
@@ -1836,17 +2144,49 @@ impl App {
         self.set_tab(next);
     }
 
+    /// A daemon on another machine: local-only actions must refuse rather
+    /// than act on the wrong box. `R-I4`.
+    fn remote_daemon(&self) -> bool {
+        let a = &self.daemon_addr;
+        !(a.contains("127.0.0.1") || a.contains("localhost") || a.contains("[::1]"))
+    }
+
+    /// Jump-to-terminal, refused against a remote daemon — the terminal it
+    /// would focus is on the other machine.
+    fn send_focus(&mut self, session_id: SessionId) {
+        if self.remote_daemon() {
+            self.errors.push(
+                "remote daemon — its terminals are on the other machine; \
+                 jump-to-terminal is not available"
+                    .into(),
+            );
+            return;
+        }
+        self.net.send(ClientMsg::FocusTerminal { session_id });
+    }
+
+    /// Open-in, refused against a remote daemon — the path exists over there.
+    fn open_in_local(&mut self, target: ui::OpenTarget, dir: &str) {
+        if self.remote_daemon() {
+            self.errors.push(format!(
+                "remote daemon — {dir} lives on the other machine; open-in is not available"
+            ));
+            return;
+        }
+        if let Err(e) = ui::open_in(target, dir) {
+            self.errors.push(e);
+        }
+    }
+
     fn focus_selected_terminal(&mut self) {
         if let Some(id) = self.selected.clone() {
             let alive = self.sessions.get(&id).map(|s| s.alive).unwrap_or(false);
             if alive {
-                self.net.send(ClientMsg::FocusTerminal { session_id: id });
+                self.send_focus(id);
             } else if let Some(s) = self.sessions.get(&id) {
                 // Exited: the useful equivalent is opening where it worked.
                 let dir = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
-                if let Err(e) = ui::open_in(ui::OpenTarget::Terminal, &dir) {
-                    self.errors.push(e);
-                }
+                self.open_in_local(ui::OpenTarget::Terminal, &dir);
             }
         }
     }
@@ -2443,7 +2783,7 @@ impl App {
                     });
                 }
                 if let Some(session_id) = to_focus {
-                    self.net.send(ClientMsg::FocusTerminal { session_id });
+                    self.send_focus(session_id);
                 }
                 if let Some(id) = to_pin {
                     self.prefs.toggle_pin(&id);
@@ -3142,6 +3482,11 @@ fn queue_card(
         if let Some(b) = &s.git_branch {
             ui.label(dim(format!("{} {b}", icon::BRANCH)));
         }
+        // R-I1: sessions from another CLI say so; Claude Code stays unmarked
+        // as the default it has always been.
+        if s.source == mogeung_core::session::SessionSource::Codex {
+            ui.label(RichText::new("codex").size(10.5).color(PURPLE));
+        }
         if s.files_changed > 0 {
             ui.label(dim(format!(
                 "{} files +{} -{}",
@@ -3150,6 +3495,11 @@ fn queue_card(
         }
         if s.turns > 0 {
             ui.label(dim(format!("{} turns", s.turns)));
+        }
+        // R-E4. Quiet — a mark, not an alarm; the Info tab has the long form.
+        if !s.alive && s.unverified() {
+            ui.label(RichText::new("unverified").size(10.5).color(AMBER))
+                .on_hover_text("edited files; no build/test/typecheck completed");
         }
     });
     ui.label(dim(truncate(&item.detail, 90)));
@@ -3221,6 +3571,16 @@ impl App {
             ui.horizontal(|ui| {
                 ui.style_mut().interaction.selectable_labels = false;
                 let now = Utc::now();
+                // Burn is a slow-moving number; a minute of staleness is
+                // invisible, a scan per frame would not be.
+                if self
+                    .usage_asked
+                    .map(|t| (now - t).num_seconds() >= 60)
+                    .unwrap_or(true)
+                {
+                    self.usage_asked = Some(now);
+                    self.net.send(ClientMsg::FetchUsage);
+                }
                 let Some(s) = self.selected_session().cloned() else {
                     // Never blank: with nothing selected it still answers "is
                     // anything running".
@@ -3229,6 +3589,7 @@ impl App {
                         "{live} live session(s) · {} known",
                         self.sessions.len()
                     )));
+                    self.burn_stat(ui);
                     return;
                 };
 
@@ -3254,6 +3615,7 @@ impl App {
                 if let Some(pid) = s.pid.filter(|_| s.alive) {
                     stat(ui, "#", &pid.to_string(), DIM);
                 }
+                self.burn_stat(ui);
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // The path is the widest thing here and the least urgent,
@@ -3266,6 +3628,27 @@ impl App {
                 });
             });
         });
+    }
+
+    /// The trailing five-hour burn, tinted by how close it sits to the
+    /// estimated limit — and always labelled an estimate, because the CLI
+    /// publishes no quota. `R-G2`.
+    fn burn_stat(&self, ui: &mut egui::Ui) {
+        let Some(u) = &self.usage else { return };
+        let base = format!("5h {}", tokens(u.window_tokens_out));
+        match u.window_fraction() {
+            Some(f) if f >= 0.8 => {
+                stat(ui, icon::TOKENS, &format!("{base} ≈{:.0}% of est. limit", f * 100.0), RED)
+            }
+            Some(f) if f >= 0.5 => {
+                stat(ui, icon::TOKENS, &format!("{base} ≈{:.0}% of est. limit", f * 100.0), AMBER)
+            }
+            _ => stat(ui, icon::TOKENS, &base, DIM),
+        }
+        ui.label(dim("")).on_hover_text(
+            "output tokens in the trailing five hours; the limit fraction is \
+             an estimate from past limit hits, not a published quota",
+        );
     }
 
     fn detail_panel(&mut self, root: &mut egui::Ui) {
@@ -3284,14 +3667,27 @@ impl App {
             // between you and the diff.
             ui.horizontal(|ui| {
                 if s.alive {
-                    let (txt, col) = match s.live_status {
-                        Some(LiveStatus::Idle) => ("WAITING FOR YOU", RED),
-                        Some(LiveStatus::Busy) => ("BUSY", BLUE),
-                        _ => ("LIVE", DIM),
+                    // A limit-hit session must not claim to be waiting on you
+                    // — typing at it does nothing until the reset. `R-G1`.
+                    let (txt, col) = if s.limit_hit_at.is_some() {
+                        ("RATE LIMITED", AMBER)
+                    } else {
+                        match s.live_status {
+                            Some(LiveStatus::Idle) => ("WAITING FOR YOU", RED),
+                            Some(LiveStatus::Busy) => ("BUSY", BLUE),
+                            _ => ("LIVE", DIM),
+                        }
                     };
                     ui.label(badge(txt, col));
                 } else {
                     ui.label(badge("ended", DIM));
+                    // R-E4: the header twin of the queue-row mark.
+                    if s.unverified() {
+                        ui.label(RichText::new("unverified").size(10.5).color(AMBER))
+                            .on_hover_text(
+                                "edited files; no build/test/typecheck completed — see Info",
+                            );
+                    }
                 }
                 ui.add(
                     egui::Label::new(RichText::new(s.label()).size(14.0).strong()).truncate(),
@@ -3355,9 +3751,7 @@ impl App {
                             ))
                             .clicked()
                         {
-                            if let Err(e) = ui::open_in(t, &s.cwd) {
-                                self.errors.push(e);
-                            }
+                            self.open_in_local(t, &s.cwd);
                         }
                     }
                 });
@@ -3435,6 +3829,7 @@ impl App {
             Tab::Terminal => self.terminal_tab(ui, s),
             Tab::Explorer => self.explorer_tab(ui, s),
             Tab::Git => self.git_tab(ui, s),
+            Tab::Insight => self.insight_tab(ui),
         }
     }
 
@@ -4215,6 +4610,17 @@ impl App {
                     let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
                     ui.label(RichText::new(r).size(10.0).color(color));
                 }
+                // R-D18: IntelliJ's author and date columns, adapted to a
+                // narrow pane — dimmed, truncated, after the decorations.
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {}",
+                        truncate(&c.author, 12),
+                        crate::gitview::age(now, c.epoch)
+                    ))
+                    .size(10.0)
+                    .color(DIM),
+                );
                 // R-D17: once this commit's diff has been fetched, we know
                 // whether a human has read its hunks — say so, quietly.
                 if let Some(files) = self.gitview.commit_diffs.get(&c.sha) {
@@ -4277,6 +4683,19 @@ impl App {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                             ui.close();
                         }
+                    }
+                    // R-F9: from a commit to the conversation that (probably)
+                    // produced it — the session's transcript at that moment.
+                    if ui
+                        .button("Open transcript here")
+                        .on_hover_text(
+                            "the selected session's transcript, scrolled to this commit's time",
+                        )
+                        .clicked()
+                    {
+                        self.focus_event_ts = chrono::DateTime::from_timestamp(c.epoch, 0);
+                        self.set_tab(Tab::Transcript);
+                        ui.close();
                     }
                     ui.separator();
                     match self.gitview.range_from.clone() {
@@ -4438,32 +4857,8 @@ impl App {
         let (syntax, words) = (self.prefs.syntax, self.prefs.word_diff);
         let mut open_at_rev: Option<(String, String)> = None;
         let mut select_commit: Option<String> = None;
-        // `n`/`p` walk hunks (`R-D13`): pointer over the panel, no text
-        // field focused — the same gate the pane zoom uses.
-        let total_hunks: usize = files.iter().map(|f| f.hunks.len()).sum();
-        if total_hunks > 0
-            && ui.rect_contains_pointer(ui.max_rect())
-            && ui.ctx().memory(|m| m.focused().is_none())
-        {
-            let (next, prev) = ui.input(|i| {
-                (i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::P))
-            });
-            if next || prev {
-                let cur = self.gitview.hunk_cursor.min(total_hunks - 1);
-                self.gitview.hunk_cursor = if next {
-                    (cur + 1) % total_hunks
-                } else {
-                    (cur + total_hunks - 1) % total_hunks
-                };
-                self.gitview.hunk_goto = Some(self.gitview.hunk_cursor);
-            }
-        }
-        let hunk_goto = self.gitview.hunk_goto.take();
-        let hunk_cursor = self.gitview.hunk_cursor;
-        let goto_file = self.gitview.goto_file.take();
-        // The commit header (`R-D12`): the full message and the facts a
-        // commercial client puts above the patch. Scrolls with the diff so
-        // a long agent-written body cannot pin the files off screen.
+        // The commit header (`R-D12`) — rendered in the sidebar (`R-D18`)
+        // so it stays on screen while the hunks scroll.
         let detail = match &self.gitview.selection {
             crate::gitview::Selection::Commit(sha) => self
                 .gitview
@@ -4473,108 +4868,208 @@ impl App {
                 .map(|d| (sha.clone(), d)),
             _ => None,
         };
+        // R-D18: the file the pane is narrowed to, owned by the selection —
+        // a file picked on one commit narrows nothing on the next.
+        let selection = self.gitview.selection.clone();
+        let mut focus_idx = self
+            .gitview
+            .focus_for(&selection)
+            .and_then(|p| files.iter().position(|f| f.path == p));
+        // `n`/`p` walk hunks (`R-D13`): pointer over the panel, no text
+        // field focused — the same gate the pane zoom uses. With a file
+        // focused they cross into the neighbouring file at the edges
+        // (`R-D18`), the way IntelliJ's diff walk does.
+        let counts: Vec<usize> = files.iter().map(|f| f.hunks.len()).collect();
+        let total_all: usize = counts.iter().sum();
+        if total_all > 0
+            && ui.rect_contains_pointer(ui.max_rect())
+            && ui.ctx().memory(|m| m.focused().is_none())
+        {
+            let (next, prev) = ui.input(|i| {
+                (i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::P))
+            });
+            if next || prev {
+                match focus_idx {
+                    Some(fi) => {
+                        let cur =
+                            self.gitview.hunk_cursor.min(counts[fi].saturating_sub(1));
+                        if let Some((nf, nh)) =
+                            crate::gitview::step_hunk(&counts, fi, cur, next)
+                        {
+                            if nf != fi {
+                                self.gitview.focus_file = Some(files[nf].path.clone());
+                                focus_idx = Some(nf);
+                            }
+                            self.gitview.hunk_cursor = nh;
+                            self.gitview.hunk_goto = Some(nh);
+                        }
+                    }
+                    None => {
+                        let cur = self.gitview.hunk_cursor.min(total_all - 1);
+                        self.gitview.hunk_cursor = if next {
+                            (cur + 1) % total_all
+                        } else {
+                            (cur + total_all - 1) % total_all
+                        };
+                        self.gitview.hunk_goto = Some(self.gitview.hunk_cursor);
+                    }
+                }
+            }
+        }
+        let hunk_goto = self.gitview.hunk_goto.take();
+        let hunk_cursor = self.gitview.hunk_cursor;
+        // R-D18: the IntelliJ shape — a sidebar with the commit's changed
+        // files as a selectable tree and its details beneath, the remaining
+        // width showing the focused file's diff (or every file, from the
+        // tree's root row). The details live outside the diff scroll so a
+        // long agent-written body cannot pin the hunks off screen.
+        let sidebar = detail.is_some() || files.len() >= 2;
+        // `Some(None)` is the root row: back to the whole diff.
+        let mut tree_pick: Option<Option<usize>> = None;
+        if sidebar {
+            egui::Panel::left("git-commit-sidebar")
+                .resizable(true)
+                .default_size(230.0)
+                .show(ui, |ui| {
+                    egui::ScrollArea::both()
+                        .id_salt(("git-sidebar", &title))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if !files.is_empty() {
+                                if ui
+                                    .selectable_label(
+                                        focus_idx.is_none(),
+                                        RichText::new(format!(
+                                            "{} files  +{} −{}",
+                                            files.len(),
+                                            files.iter().map(|f| f.insertions).sum::<u32>(),
+                                            files.iter().map(|f| f.deletions).sum::<u32>(),
+                                        ))
+                                        .size(11.5),
+                                    )
+                                    .on_hover_text("every file's diff in one scroll")
+                                    .clicked()
+                                {
+                                    tree_pick = Some(None);
+                                }
+                                let tree = crate::gitview::file_tree(&files);
+                                render_file_tree(ui, &tree, &files, focus_idx, "", &mut tree_pick);
+                            }
+                            if let Some((sha, d)) = &detail {
+                                ui.separator();
+                                let when = |epoch: i64| {
+                                    chrono::DateTime::from_timestamp(epoch, 0)
+                                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                                        .unwrap_or_default()
+                                };
+                                let (subject, body) = match d.message.split_once('\n') {
+                                    Some((s, b)) => (s.to_string(), b.trim().to_string()),
+                                    None => (d.message.clone(), String::new()),
+                                };
+                                ui.label(RichText::new(subject).strong().size(13.0));
+                                if !body.is_empty() {
+                                    ui.label(RichText::new(body).monospace().size(11.5));
+                                }
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(dim(format!("{} · {}", d.author, when(d.epoch))));
+                                    if d.committer != d.author || d.commit_epoch != d.epoch {
+                                        ui.label(dim(format!(
+                                            "· committed by {} · {}",
+                                            d.committer,
+                                            when(d.commit_epoch)
+                                        )));
+                                    }
+                                    // R-D17: what a human has already read of
+                                    // this commit — the anchors travel
+                                    // content-hashed, so a mark made in the
+                                    // Changes tab lands here too.
+                                    let total: usize =
+                                        files.iter().map(|f| f.hunks.len()).sum();
+                                    let read: usize = files
+                                        .iter()
+                                        .flat_map(|f| &f.hunks)
+                                        .filter(|h| h.reviewed)
+                                        .count();
+                                    if read > 0 {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "· {read} of {total} hunks read"
+                                            ))
+                                            .size(11.0)
+                                            .color(GREEN),
+                                        );
+                                    }
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(dim(format!(
+                                        "{} ·",
+                                        sha.chars().take(10).collect::<String>()
+                                    )));
+                                    for p in &d.parents {
+                                        if ui
+                                            .link(
+                                                RichText::new(p)
+                                                    .monospace()
+                                                    .size(11.5)
+                                                    .color(BLUE),
+                                            )
+                                            .on_hover_text("show this parent commit")
+                                            .clicked()
+                                        {
+                                            select_commit = Some(p.clone());
+                                        }
+                                    }
+                                    for r in &d.refs {
+                                        let color =
+                                            if r.starts_with("tag: ") { AMBER } else { BLUE };
+                                        ui.label(RichText::new(r).size(10.0).color(color));
+                                    }
+                                });
+                                // R-D18: "has this reached main?" — the one
+                                // question the header never answered.
+                                if !d.branches.is_empty() {
+                                    let named: Vec<&str> =
+                                        d.branches.iter().take(3).map(String::as_str).collect();
+                                    let text = if d.branches.len() <= 3 {
+                                        format!("in: {}", named.join(", "))
+                                    } else {
+                                        format!(
+                                            "in {} branches: {}, …",
+                                            d.branches.len(),
+                                            named.join(", ")
+                                        )
+                                    };
+                                    ui.label(RichText::new(text).size(10.0).color(BLUE))
+                                        .on_hover_text(d.branches.join("\n"));
+                                }
+                            }
+                        });
+                });
+        }
+        if let Some(pick) = tree_pick {
+            self.gitview.focus_file = pick.map(|i| files[i].path.clone());
+            self.gitview.hunk_cursor = 0;
+            focus_idx = pick;
+        }
+        egui::CentralPanel::no_frame().show(ui, |ui| {
         egui::ScrollArea::both()
-            .id_salt(("git-diff-scroll", &title))
+            // The focus is part of the scroll identity: each file starts at
+            // its own top instead of inheriting the previous file's offset.
+            .id_salt(("git-diff-scroll", &title, focus_idx))
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if let Some((sha, d)) = &detail {
-                    let when = |epoch: i64| {
-                        chrono::DateTime::from_timestamp(epoch, 0)
-                            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                            .unwrap_or_default()
-                    };
-                    let (subject, body) = match d.message.split_once('\n') {
-                        Some((s, b)) => (s.to_string(), b.trim().to_string()),
-                        None => (d.message.clone(), String::new()),
-                    };
-                    ui.label(RichText::new(subject).strong().size(13.0));
-                    if !body.is_empty() {
-                        ui.label(RichText::new(body).monospace().size(11.5));
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(dim(format!("{} · {}", d.author, when(d.epoch))));
-                        if d.committer != d.author || d.commit_epoch != d.epoch {
-                            ui.label(dim(format!(
-                                "· committed by {} · {}",
-                                d.committer,
-                                when(d.commit_epoch)
-                            )));
-                        }
-                        ui.label(dim(format!(
-                            "· {} files +{} −{}",
-                            files.len(),
-                            files.iter().map(|f| f.insertions).sum::<u32>(),
-                            files.iter().map(|f| f.deletions).sum::<u32>(),
-                        )));
-                        // R-D17: what a human has already read of this
-                        // commit — the anchors travel content-hashed, so a
-                        // mark made in the Changes tab lands here too.
-                        let total: usize = files.iter().map(|f| f.hunks.len()).sum();
-                        let read: usize = files
-                            .iter()
-                            .flat_map(|f| &f.hunks)
-                            .filter(|h| h.reviewed)
-                            .count();
-                        if read > 0 {
-                            ui.label(
-                                RichText::new(format!("· {read} of {total} hunks read"))
-                                    .size(11.0)
-                                    .color(GREEN),
-                            );
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(dim(format!("{} ·", sha.chars().take(10).collect::<String>())));
-                        for p in &d.parents {
-                            if ui
-                                .link(RichText::new(p).monospace().size(11.5).color(BLUE))
-                                .on_hover_text("show this parent commit")
-                                .clicked()
-                            {
-                                select_commit = Some(p.clone());
-                            }
-                        }
-                        for r in &d.refs {
-                            let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
-                            ui.label(RichText::new(r).size(10.0).color(color));
-                        }
-                    });
-                    ui.separator();
-                }
                 if files.is_empty() {
                     ui.label(dim("no textual diff — empty, binary, or a merge with no changes"));
                     return;
                 }
-                // The file index (`R-D14`): a forty-file agent commit as a
-                // directory tree, each row a jump. Only when there is
-                // enough to be lost in.
-                if files.len() >= 4 {
-                    egui::CollapsingHeader::new(dim(format!("files ({})", files.len())))
-                        .id_salt(("git-file-index", &title))
-                        .show(ui, |ui| {
-                            for (dir, idxs) in crate::gitview::group_by_dir(&files) {
-                                let shown = if dir.is_empty() { "·" } else { &dir };
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(dim(format!("{shown}/")));
-                                    for i in idxs {
-                                        let f = &files[i];
-                                        let name =
-                                            f.path.rsplit('/').next().unwrap_or(&f.path);
-                                        if ui
-                                            .link(RichText::new(name).monospace().size(11.5))
-                                            .clicked()
-                                        {
-                                            self.gitview.goto_file = Some(f.path.clone());
-                                        }
-                                    }
-                                });
-                            }
-                        });
-                    ui.separator();
-                }
                 let mut hunk_idx = 0usize;
-                for f in &files {
-                    let header_resp = ui.horizontal(|ui| {
+                for f in files
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| focus_idx.map_or(true, |fi| fi == *i))
+                    .map(|(_, f)| f)
+                {
+                    ui.horizontal(|ui| {
                         ui.label(mono(&f.path));
                         ui.label(dim(format!("+{} −{}", f.insertions, f.deletions)));
                         for fl in &f.flags {
@@ -4605,11 +5100,8 @@ impl App {
                             }
                         }
                     });
-                    if goto_file.as_deref() == Some(f.path.as_str()) {
-                        header_resp.response.scroll_to_me(Some(egui::Align::TOP));
-                    }
                     for h in &f.hunks {
-                        let current = hunk_idx == hunk_cursor && total_hunks > 0;
+                        let current = hunk_idx == hunk_cursor && total_all > 0;
                         let mut header = dim(&h.header);
                         if current {
                             header = RichText::new(&h.header).size(12.0).color(BLUE);
@@ -4636,6 +5128,7 @@ impl App {
                     ui.separator();
                 }
             });
+        });
         if let Some(sha) = select_commit {
             self.gitview.selection = crate::gitview::Selection::Commit(sha);
         }
@@ -4960,6 +5453,45 @@ impl App {
         };
         let content = view.content.clone();
         let truncated = view.truncated;
+        let language = crate::explorer::language_of(&path).to_string();
+        let line_count = content.lines().count().max(1);
+
+        // R-B29: image files preview instead of rendering as bytes-as-text.
+        // The bytes are read from this machine's disk — the worktree is local
+        // in every supported layout except a remote daemon, which refuses.
+        if matches!(language.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
+            && rev.is_none()
+        {
+            ui.add(egui::Label::new(mono(&path)).truncate());
+            if self.remote_daemon() {
+                ui.label(dim("remote daemon — the image lives on the other machine"));
+                return;
+            }
+            let root = self
+                .explorer
+                .session
+                .as_ref()
+                .and_then(|sid| self.sessions.get(sid))
+                .map(|s| s.repo_root.clone().unwrap_or_else(|| s.cwd.clone()));
+            if let Some(root) = root {
+                let full = std::path::Path::new(&root).join(&path);
+                match std::fs::read(&full) {
+                    Ok(bytes) => {
+                        egui::ScrollArea::both().show(ui, |ui| {
+                            ui.add(
+                                egui::Image::from_bytes(format!("bytes://{path}"), bytes)
+                                    .max_width(ui.available_width()),
+                            );
+                        });
+                    }
+                    Err(e) => {
+                        ui.label(dim(format!("could not read the image: {e}")));
+                    }
+                }
+            }
+            return;
+        }
+
         ui.horizontal(|ui| {
             // Truncated, never wrapped: a header that folds onto two lines
             // pushes the file down and reads as two files.
@@ -4969,6 +5501,13 @@ impl App {
             };
             ui.add(egui::Label::new(mono(&header)).truncate())
                 .on_hover_text(&header);
+            // R-B29: file facts where the eye already is.
+            ui.label(dim(format!(
+                "{} · {} line(s) · {}",
+                mogeung_core::health::human_bytes(content.len() as u64),
+                line_count,
+                if language.is_empty() { "text" } else { &language }
+            )));
             if let Some(r) = &rev {
                 ui.label(
                     RichText::new("history — the file as of this revision")
@@ -4997,6 +5536,89 @@ impl App {
                 {
                     self.annotate = !self.annotate;
                 }
+                // R-B28: the symbol outline.
+                if ui
+                    .selectable_label(self.outline_open, "outline")
+                    .on_hover_text("symbols in this file — click to jump, type to filter")
+                    .clicked()
+                {
+                    self.outline_open = !self.outline_open;
+                }
+                // R-B29: wrap is a property of the file, so it persists per path.
+                let wrapped = self.prefs.editor_wrap.contains(&path);
+                if ui
+                    .selectable_label(wrapped, "wrap")
+                    .on_hover_text("wrap long lines — remembered for this file")
+                    .clicked()
+                {
+                    if wrapped {
+                        self.prefs.editor_wrap.remove(&path);
+                    } else {
+                        self.prefs.editor_wrap.insert(path.clone());
+                    }
+                    self.prefs_dirty = true;
+                }
+                // R-B29: markdown renders as prose on demand.
+                if language == "md" {
+                    let on = self.md_preview.contains(&path);
+                    if ui
+                        .selectable_label(on, "preview")
+                        .on_hover_text("render the markdown instead of showing its source")
+                        .clicked()
+                    {
+                        if on {
+                            self.md_preview.remove(&path);
+                        } else {
+                            self.md_preview.insert(path.clone());
+                        }
+                    }
+                }
+                if ui
+                    .small_button("copy path")
+                    .on_hover_text("the path, relative to the session root")
+                    .clicked()
+                {
+                    ui.ctx().copy_text(path.clone());
+                }
+                // R-B27: this file beside its HEAD version — revision tabs and
+                // the split already existed; this is the one-click pairing.
+                if rev.is_none() {
+                    if ui
+                        .small_button("vs HEAD")
+                        .on_hover_text("open the committed version beside this one")
+                        .clicked()
+                    {
+                        self.explorer.open_file_at_rev(&path, "HEAD");
+                        if let Some(i) = {
+                            let st = self.explorer.current();
+                            st.active_of(st.focus)
+                        } {
+                            self.explorer.move_tab_to_other_side(i);
+                        }
+                    }
+                }
+                // R-B29: the jump list.
+                let marks: Vec<(String, String, u64)> = self
+                    .prefs
+                    .bookmarks
+                    .iter()
+                    .filter(|(sid, _, _)| Some(sid) == self.explorer.session.as_ref())
+                    .cloned()
+                    .collect();
+                if !marks.is_empty() {
+                    ui.menu_button(format!("marks ({})", marks.len()), |ui| {
+                        let mut open: Option<(String, u64)> = None;
+                        for (_, p, l) in &marks {
+                            if ui.button(mono(format!("{p}:{l}")).size(11.0)).clicked() {
+                                open = Some((p.clone(), *l));
+                                ui.close();
+                            }
+                        }
+                        if let Some((p, l)) = open {
+                            self.explorer.open_file(&p, false, Some(l));
+                        }
+                    });
+                }
                 // File history (`R-D12`): the Git pane's log, pre-filtered
                 // to this path — renames followed by the daemon.
                 if ui
@@ -5013,6 +5635,93 @@ impl App {
                 }
             });
         });
+
+        // R-B29: markdown preview replaces the source entirely — a preview
+        // beside the source is two panes' worth of one file.
+        if language == "md" && self.md_preview.contains(&path) {
+            egui::ScrollArea::vertical()
+                .id_salt(("md-preview", &path, group))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui_commonmark::CommonMarkViewer::new()
+                        .show(ui, &mut self.md_cache, &content);
+                });
+            return;
+        }
+
+        // R-B28: the outline, in a side panel so the code keeps its scroll.
+        if self.outline_open {
+            let symbols = crate::symbols::outline(&content, &language);
+            let mut goto_sym: Option<u64> = None;
+            egui::Panel::right(egui::Id::new(("outline", group)))
+                .frame(egui::Frame::NONE.fill(BG_PANEL).inner_margin(6))
+                .default_size(220.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.outline_filter)
+                            .hint_text("go to symbol…")
+                            .desired_width(f32::INFINITY),
+                    );
+                    if symbols.is_empty() {
+                        ui.label(dim("no symbols recognised in this file"));
+                    }
+                    let filter = self.outline_filter.to_lowercase();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for sym in &symbols {
+                            if !filter.is_empty()
+                                && !sym.name.to_lowercase().contains(&filter)
+                            {
+                                continue;
+                            }
+                            let indent = "  ".repeat(sym.depth as usize);
+                            let glyph = match sym.kind {
+                                crate::symbols::SymbolKind::Function
+                                | crate::symbols::SymbolKind::Method => "ƒ",
+                                crate::symbols::SymbolKind::Type => "T",
+                                crate::symbols::SymbolKind::Const => "c",
+                                crate::symbols::SymbolKind::Module => "m",
+                                crate::symbols::SymbolKind::Heading => "#",
+                                crate::symbols::SymbolKind::Other => "·",
+                            };
+                            if ui
+                                .selectable_label(
+                                    false,
+                                    mono(format!("{indent}{glyph} {}", sym.name)).size(11.0),
+                                )
+                                .clicked()
+                            {
+                                goto_sym = Some(sym.line as u64);
+                            }
+                        }
+                    });
+                });
+            if goto_sym.is_some() {
+                goto_line = goto_sym;
+            }
+        }
+
+        // R-B28: go-to-line. Ctrl+G on the focused side.
+        if focused && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G)) {
+            self.show_goto = !self.show_goto;
+            self.goto_input.clear();
+        }
+        if self.show_goto {
+            ui.horizontal(|ui| {
+                ui.label(dim("go to line"));
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.goto_input).desired_width(80.0),
+                );
+                resp.request_focus();
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.show_goto = false;
+                } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if let Ok(n) = self.goto_input.trim().parse::<u64>() {
+                        goto_line = Some(n.clamp(1, line_count as u64));
+                    }
+                    self.show_goto = false;
+                }
+            });
+        }
 
         // Ctrl+F. Entirely client-side: the body is already here, so a match
         // list is a scan, and jumping reuses the goto machinery search
@@ -5085,18 +5794,57 @@ impl App {
         }
         ui.separator();
 
-        let language = crate::explorer::language_of(&path).to_string();
         let theme =
             egui_extras::syntax_highlighting::CodeTheme::from_memory(ui.ctx(), ui.style());
         // The same memoised highlight `code_view_ui` uses — unrolled here so
         // the gutter and the code can sit side by side on identical rows.
-        let job = egui_extras::syntax_highlighting::highlight(
+        let mut job = egui_extras::syntax_highlighting::highlight(
             ui.ctx(),
             ui.style(),
             &theme,
             &content,
             &language,
         );
+        // R-B29: per-file wrap. The width estimate leaves room for the
+        // gutters; exactness does not matter, only that lines stop escaping.
+        if self.prefs.editor_wrap.contains(&path) {
+            let reserved = 80.0 + if self.annotate { 240.0 } else { 0.0 };
+            job.wrap.max_width = (ui.available_width() - reserved).max(200.0);
+        }
+
+        // R-B27: the diff gutter's data. Changed-vs-HEAD from the same
+        // per-file diff the Git pane uses; this session's own lines from the
+        // session diff already on hand. Worktree tabs only — a revision has
+        // no uncommitted delta.
+        let mut changed_head: Vec<u32> = Vec::new();
+        let mut changed_session: Vec<u32> = Vec::new();
+        if rev.is_none() {
+            if let Some(sid) = self.explorer.session.clone() {
+                self.gitview.ensure_session(&sid);
+                if !self.gitview.local_diffs.contains_key(&path)
+                    && self.gitview.pending_file_diffs.insert(path.clone())
+                {
+                    self.net.send(ClientMsg::GitDiffFile {
+                        session_id: sid.clone(),
+                        path: path.clone(),
+                        context: Some(self.gitview.context()),
+                        ignore_ws: Some(self.gitview.diff_ignore_ws),
+                    });
+                }
+                if let Some(files) = self.gitview.local_diffs.get(&path) {
+                    changed_head = changed_lines_of(files);
+                }
+                if let Some(ch) = self.changes.get(&sid) {
+                    if let Some(f) = ch
+                        .files
+                        .iter()
+                        .find(|f| f.path == path || f.path.ends_with(&path))
+                    {
+                        changed_session = changed_lines_of(std::slice::from_ref(f));
+                    }
+                }
+            }
+        }
         // Laid out here and read for geometry: the galley's own row
         // positions are the only honest source of line coordinates. The
         // first version multiplied a guessed row height instead, and the
@@ -5193,7 +5941,7 @@ impl App {
             area = area
                 .vertical_scroll_offset((line_y(line) - ui.available_height() / 3.0).max(0.0));
         }
-        area.show(ui, |ui| {
+        let scroll_out = area.show(ui, |ui| {
             // Match bands go down first so the text paints over them. Whole
             // lines, not columns: row geometry is exact, column arithmetic
             // lies the moment a tab or a wide glyph appears.
@@ -5217,6 +5965,28 @@ impl App {
                         ),
                         0.0,
                         AMBER.linear_multiply(if current == Some(*l) { 0.28 } else { 0.10 }),
+                    );
+                }
+            }
+            // R-B28: occurrence bands, under the text like the find bands —
+            // a different tint so a search and a highlight stay tellable.
+            if let Some(word) = &self.occurrences_word {
+                let origin = ui.cursor().min;
+                let band_w = ui.available_width().clamp(0.0, 4000.0);
+                let painter = ui.painter();
+                let mut seen = HashSet::new();
+                for (l, _) in crate::symbols::occurrences(&content, word) {
+                    if !seen.insert(l) {
+                        continue;
+                    }
+                    let Some(row) = galley.rows.get(l - 1) else { continue };
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(origin.x, origin.y + row.pos.y),
+                            egui::vec2(band_w, row.rect().height()),
+                        ),
+                        0.0,
+                        BLUE.linear_multiply(0.10),
                     );
                 }
             }
@@ -5307,10 +6077,106 @@ impl App {
                         }
                     });
                 }
-                ui.add(egui::Label::new(gutter_job).selectable(false));
+                let gutter_resp = ui.add(egui::Label::new(gutter_job).selectable(false));
+                // R-B27: the diff gutter — a bar beside the line number.
+                // Session-changed lines get the attribution colour on top of
+                // the plain changed bar, so "changed" and "changed *by this
+                // session*" stay distinguishable at a glance.
+                if !changed_head.is_empty() || !changed_session.is_empty() {
+                    let painter = ui.painter();
+                    let top = gutter_resp.rect.top();
+                    let x = gutter_resp.rect.left() - 4.0;
+                    let bar = |l: u32, color: egui::Color32, w: f32| {
+                        if let Some(row) = galley.rows.get(l.saturating_sub(1) as usize) {
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(x, top + row.pos.y),
+                                    egui::vec2(w, row.rect().height()),
+                                ),
+                                0.0,
+                                color,
+                            );
+                        }
+                    };
+                    for l in &changed_head {
+                        bar(*l, BLUE, 3.0);
+                    }
+                    for l in &changed_session {
+                        bar(*l, PURPLE, 2.0);
+                    }
+                }
                 // Selectable and highlighted, and structurally unable to
                 // edit: a `Label` has no writable buffer.
-                ui.add(egui::Label::new(job).selectable(true));
+                let code_resp = ui.add(
+                    egui::Label::new(job)
+                        .selectable(true)
+                        .sense(egui::Sense::click()),
+                );
+                // R-B28/R-B29: the line the pointer is on, by real geometry.
+                let code_row_at = |pos: egui::Pos2| -> usize {
+                    let rel = pos.y - code_resp.rect.top();
+                    galley.rows.partition_point(|r| r.pos.y <= rel).saturating_sub(1)
+                };
+                code_resp.context_menu(|ui| {
+                    let line = ui
+                        .ctx()
+                        .pointer_interact_pos()
+                        .map(code_row_at)
+                        .unwrap_or(0) as u64
+                        + 1;
+                    let word = ui
+                        .ctx()
+                        .pointer_interact_pos()
+                        .and_then(|pos| {
+                            let rel = pos - code_resp.rect.min;
+                            let idx = galley.cursor_from_pos(rel).index;
+                            word_at_char_index(&content, idx.0)
+                        });
+                    if let Some(w) = &word {
+                        if ui
+                            .button(format!("Highlight occurrences of \"{w}\""))
+                            .clicked()
+                        {
+                            self.occurrences_word = Some(w.clone());
+                            ui.close();
+                        }
+                    }
+                    if self.occurrences_word.is_some()
+                        && ui.button("Clear occurrence highlight").clicked()
+                    {
+                        self.occurrences_word = None;
+                        ui.close();
+                    }
+                    if ui.button(format!("Copy {path}:{line}")).clicked() {
+                        ui.ctx().copy_text(format!("{path}:{line}"));
+                        ui.close();
+                    }
+                    // R-B29: bookmarks, toggled where the pointer is.
+                    if let Some(sid) = self.explorer.session.clone() {
+                        let mark = (sid, path.clone(), line);
+                        let existing = self.prefs.bookmarks.iter().position(|b| *b == mark);
+                        let label = if existing.is_some() {
+                            format!("Remove bookmark at line {line}")
+                        } else {
+                            format!("Bookmark line {line}")
+                        };
+                        if ui.button(label).clicked() {
+                            match existing {
+                                Some(i) => {
+                                    self.prefs.bookmarks.remove(i);
+                                }
+                                None => {
+                                    self.prefs.bookmarks.push(mark);
+                                    if self.prefs.bookmarks.len() > 100 {
+                                        self.prefs.bookmarks.remove(0);
+                                    }
+                                }
+                            }
+                            self.prefs_dirty = true;
+                            ui.close();
+                        }
+                    }
+                });
             });
         });
         // An annotated line names a commit; clicking it is "show me that
@@ -5324,6 +6190,48 @@ impl App {
         if let Some(r) = open_rev_tab {
             self.explorer.open_file_at_rev(&path, &r);
         }
+
+        // R-B27: n/p walk the changed lines — the Git pane's hunk keys, the
+        // same gating: pointer over this pane, no text widget focused.
+        if rev.is_none()
+            && !changed_head.is_empty()
+            && ui.ui_contains_pointer()
+            && !self.explorer_find_open
+            && !self.show_goto
+            && ui.ctx().memory(|m| m.focused().is_none())
+        {
+            let (next, prev) = ui.input(|i| {
+                (i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::P))
+            });
+            if next || prev {
+                let top_row = galley
+                    .rows
+                    .partition_point(|r| r.pos.y <= scroll_out.state.offset.y);
+                let current = top_row as u32 + 1;
+                let target = if next {
+                    changed_head
+                        .iter()
+                        .copied()
+                        .find(|l| *l > current)
+                        .or_else(|| changed_head.first().copied())
+                } else {
+                    changed_head
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|l| *l < current)
+                        .or_else(|| changed_head.last().copied())
+                };
+                if let Some(t) = target {
+                    let st = self.explorer.current_mut();
+                    if let Some(i) = st.active_of(group) {
+                        if let Some(tab) = st.open.get_mut(i) {
+                            tab.goto_line = Some(t as u64);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// One directory level of the explorer tree, recursively.
@@ -5336,7 +6244,10 @@ impl App {
             return;
         };
         if entries.is_empty() && depth == 0 {
-            ui.label(dim("nothing here"));
+            // A directory that could not be read never reaches here — the
+            // daemon answers those with an error, which lands in the error
+            // strip. So this is genuinely empty, and says so. `R-J5`.
+            ui.label(dim("this folder is empty"));
             return;
         }
         let active_path = self
@@ -5445,9 +6356,7 @@ impl App {
                 .button(format!("{} Jump to its terminal instead", icon::TERMINAL))
                 .clicked()
             {
-                self.net.send(ClientMsg::FocusTerminal {
-                    session_id: s.id.clone(),
-                });
+                self.send_focus(s.id.clone());
             }
             return;
         };
@@ -5455,18 +6364,36 @@ impl App {
         // Re-attach when the selection moves to a different session. Comparing
         // targets rather than session ids is deliberate: a session that is
         // restarted keeps its id but gets a new pane.
-        let stale = self
-            .term
-            .as_ref()
-            .map(|t| t.target() != target || t.exited())
-            .unwrap_or(true);
-        if stale {
+        if self.term.as_ref().is_some_and(|t| t.target() != target) {
+            self.term = None;
+        }
+        if self.term_failed.as_ref().is_some_and(|(t, _)| *t != target) {
+            self.term_failed = None;
+        }
+
+        // A refusal is remembered and *not* retried. It used to be retried on
+        // the next frame, which is fine for a one-off but a spin for anything
+        // that recurs — a tmux that rejects the environment it was handed, a
+        // session that has ended — because each frame spawned another tmux and
+        // redrew the same error. What looked like a flickering message was the
+        // pane failing sixty times a second.
+        if let Some((_, err)) = self.term_failed.clone() {
+            ui.add_space(8.0);
+            ui.colored_label(RED, format!("could not attach to {target}: {err}"));
+            ui.add_space(8.0);
+            if ui.button("Try again").clicked() {
+                self.term_failed = None;
+            }
+            return;
+        }
+
+        if self.term.is_none() {
             self.term_focused = false;
             match crate::term::Term::attach(ui.ctx(), &target) {
                 Ok(t) => self.term = Some(t),
                 Err(e) => {
                     self.term = None;
-                    ui.colored_label(RED, format!("could not attach to {target}: {e}"));
+                    self.term_failed = Some((target.clone(), e.to_string()));
                     return;
                 }
             }
@@ -5476,10 +6403,23 @@ impl App {
             return;
         };
         term.poll();
+        // Keep drawing an exited terminal rather than replacing it: whatever
+        // tmux printed on the way out is still in the grid, and that text is
+        // the only explanation the user gets.
+        let exited = term.exited();
+        let mut reattach = false;
 
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{} {target}", icon::TERMINAL)).weak());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if exited {
+                    reattach = ui.button("Re-attach").clicked();
+                    ui.label(
+                        RichText::new("the tmux client ended — the session itself is untouched")
+                            .color(RED),
+                    );
+                    return;
+                }
                 let hint = if self.term_focused {
                     format!(
                         "keyboard goes to the agent — {} returns it",
@@ -5524,11 +6464,22 @@ impl App {
                 egui::StrokeKind::Inside,
             );
         }
+
+        // After the last use of `term`, which borrows the field this drops.
+        if reattach {
+            self.term = None;
+            self.term_focused = false;
+        }
     }
 
     fn transcript_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
         let z = self.pane_zoom(ui, "transcript");
         scale_text(ui, z);
+        // `R-J5`. Kept apart: nothing has arrived yet, versus the transcript
+        // really is empty. Flattened into one empty list, both said "no events
+        // yet" — and the one that means "still loading" is the one you would
+        // otherwise sit and stare at.
+        let arrived = self.events.contains_key(&s.id);
         let events = self.events.get(&s.id).cloned().unwrap_or_default();
         let scroll = self.scroll;
 
@@ -5553,6 +6504,37 @@ impl App {
         });
         ui.separator();
 
+        // R-F8: the session's subagents, from their nested transcripts.
+        if !self.subagents_asked.contains(&s.id) {
+            self.subagents_asked.insert(s.id.clone());
+            self.net.send(ClientMsg::FetchSubagents {
+                session_id: s.id.clone(),
+            });
+        }
+        if let Some(nodes) = self.subagents.get(&s.id).filter(|n| !n.is_empty()) {
+            egui::CollapsingHeader::new(dim(format!("subagents ({})", nodes.len())))
+                .id_salt(("subagents", &s.id))
+                .show(ui, |ui| {
+                    for n in nodes {
+                        ui.horizontal(|ui| {
+                            ui.label(mono(format!("agent-{}", n.agent_id)).size(11.0));
+                            ui.label(dim(format!("{} line(s)", n.lines)));
+                            if let Some(a) = &n.last_activity {
+                                ui.add(
+                                    egui::Label::new(dim(truncate(a, 90))).truncate(),
+                                );
+                            }
+                        });
+                    }
+                });
+            ui.separator();
+        }
+
+        // A jump to a moment must be able to reach skipped history.
+        if self.focus_event_ts.is_some() {
+            self.transcript_limit = self.transcript_limit.max(events.len());
+        }
+
         // Only the tail is drawn: markdown is parsed per visible event per
         // frame, so an unbounded transcript would tie the frame rate to how
         // long the session has been running.
@@ -5567,7 +6549,11 @@ impl App {
                     ui.scroll_with_delta(req.delta(ui.clip_rect().height()));
                 }
                 if events.is_empty() {
-                    ui.label(dim("no events yet"));
+                    ui.label(dim(if arrived {
+                        "no events in this transcript yet — the session has not spoken"
+                    } else {
+                        "reading the transcript…"
+                    }));
                 }
                 if skipped > 0 {
                     ui.vertical_centered(|ui| {
@@ -5581,7 +6567,23 @@ impl App {
                     ui.add_space(4.0);
                 }
                 for ev in shown {
-                    event_row(ui, ev, &mut self.md_cache, &self.prefs);
+                    // R-F1/R-F9: land on the first event at or after the
+                    // asked-for moment, once, then behave normally.
+                    let focus_here = self
+                        .focus_event_ts
+                        .map(|t| ev.ts >= t)
+                        .unwrap_or(false);
+                    let resp = ui
+                        .scope(|ui| event_row(ui, ev, &mut self.md_cache, &self.prefs))
+                        .response;
+                    if focus_here {
+                        resp.scroll_to_me(Some(egui::Align::Center));
+                        self.focus_event_ts = None;
+                    }
+                }
+                // A moment later than everything shown: settle at the end.
+                if self.focus_event_ts.is_some() && !shown.is_empty() {
+                    self.focus_event_ts = None;
                 }
             });
     }
@@ -5741,7 +6743,10 @@ impl App {
             .iter()
             .find(|f| Some(f.path.as_str()) == self.selected_file.as_deref());
         let scroll = self.scroll;
-        egui::ScrollArea::vertical()
+        // Both axes since `R-J2`: diff rows no longer wrap, so a long line is
+        // reached by scrolling sideways. The git panes have always worked this
+        // way; before this the two diff surfaces disagreed.
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if let Some(req) = scroll {
@@ -5789,7 +6794,13 @@ impl App {
                         .iter()
                         .any(|f| f.session_id == s.id && f.header == hunk.header && f.path == file.path);
                     egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
+                        // The pane's width, not the available width: inside a
+                        // horizontally-scrolling area the latter is effectively
+                        // unbounded, and setting it would give every hunk a
+                        // frame the width of the scroll extent. A minimum
+                        // rather than an exact width, so a long diff line still
+                        // widens the frame it sits in.
+                        ui.set_min_width(ui.clip_rect().width() - 24.0);
                         ui.horizontal_wrapped(|ui| {
                             let mut reviewed = hunk.reviewed;
                             if ui.checkbox(&mut reviewed, "read").changed() {
@@ -5951,6 +6962,7 @@ impl App {
                     });
                 };
                 row("session id", s.id.clone());
+                row("source", s.source.label().to_string());
                 row("name", s.name.clone().unwrap_or_else(|| "—".into()));
                 row("cwd", s.cwd.clone());
                 row("repo", s.repo_root.clone().unwrap_or_else(|| "—".into()));
@@ -5975,7 +6987,764 @@ impl App {
                     ui.label(dim("last prompt"));
                     ui.label(RichText::new(p).size(12.5));
                 }
+
+                self.verification_section(ui, s);
             });
+    }
+
+    /// Evidence, claims and the signal runner — pillar E's home. `R-E1`–`R-E5`.
+    fn verification_section(&mut self, ui: &mut egui::Ui, s: &Session) {
+        ui.add_space(10.0);
+        ui.separator();
+        ui.label(dim("verification"));
+
+        if s.unverified() {
+            ui.label(
+                RichText::new("UNVERIFIED — edited files; no build/test/typecheck completed")
+                    .size(11.5)
+                    .color(AMBER),
+            );
+        }
+        if s.verify_runs.is_empty() {
+            ui.label(dim("no build/test/typecheck commands seen in this session"));
+        }
+        for r in s.verify_runs.iter().rev().take(12) {
+            let (mark, col, word) = match r.ok {
+                Some(true) => (icon::READ, GREEN, "ok"),
+                Some(false) => (icon::HIDE, RED, "failed"),
+                None => ("…", DIM, "no result"),
+            };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(mark).size(11.5).color(col));
+                ui.label(dim(format!("{:>9}", r.kind.label())));
+                ui.label(mono(truncate(&r.command, 90)).size(11.5));
+                ui.label(RichText::new(word).size(10.5).color(col));
+            });
+        }
+
+        if !s.claims.is_empty() {
+            ui.add_space(6.0);
+            ui.label(dim(format!("claims ({})", s.claims.len())));
+            for c in s.claims.iter().rev().take(10) {
+                ui.horizontal_wrapped(|ui| {
+                    if c.contradicted {
+                        ui.label(
+                            RichText::new("CONTRADICTED").size(10.0).color(RED).strong(),
+                        )
+                        .on_hover_text(
+                            "the run this claim matches ended in failure",
+                        );
+                    }
+                    ui.label(RichText::new(truncate(&c.text, 140)).size(11.5));
+                });
+                // The heuristic's work, stated — never an implied verdict.
+                ui.label(dim(format!("   {}", c.evidence)));
+            }
+        }
+
+        let repo = s
+            .repo_root
+            .clone()
+            .unwrap_or_else(|| s.cwd.clone());
+        if repo.is_empty() {
+            return;
+        }
+        ui.add_space(10.0);
+        ui.label(dim("signal command — runs only when you click, never on its own"));
+
+        let mut send_fetch = false;
+        let mut send_set: Option<String> = None;
+        let mut send_run = false;
+        {
+            let st = self.signals.entry(repo.clone()).or_default();
+            if !st.fetched && !st.asked {
+                st.asked = true;
+                send_fetch = true;
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut st.edit)
+                        .hint_text("e.g. cargo test --workspace")
+                        .desired_width(340.0)
+                        .font(egui::TextStyle::Monospace),
+                );
+                if ui.button("save").clicked() {
+                    send_set = Some(st.edit.clone());
+                }
+                let can_run = st.command.is_some() && !st.running;
+                let label = if st.running { "running…" } else { "run" };
+                if ui.add_enabled(can_run, egui::Button::new(label)).clicked() {
+                    send_run = true;
+                }
+            });
+            if let Some(last) = &st.last {
+                let (word, col) = match last.exit {
+                    Some(0) => ("exited ok".to_string(), GREEN),
+                    Some(c) => (format!("exited {c}"), RED),
+                    None => ("did not run".to_string(), RED),
+                };
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(word).size(11.5).color(col));
+                    ui.label(dim(format!(
+                        "{} · {}s · {}",
+                        truncate(&last.command, 60),
+                        last.secs,
+                        last.started_at.format("%m-%d %H:%M")
+                    )));
+                });
+                if !last.tail.is_empty() {
+                    egui::CollapsingHeader::new(dim("output tail"))
+                        .id_salt(("signal-tail", &repo))
+                        .show(ui, |ui| {
+                            ui.label(mono(&last.tail).size(10.5));
+                        });
+                }
+                if last.coverage.is_empty() {
+                    // R-E5: absent data says so; a made-up zero would be worse.
+                    ui.label(dim("coverage on changed lines: no data"));
+                } else {
+                    ui.label(dim("coverage on changed lines"));
+                    for fc in last.coverage.iter().take(20) {
+                        let total = fc.changed_covered + fc.changed_missed;
+                        let col = if fc.changed_missed == 0 { GREEN } else { AMBER };
+                        ui.horizontal(|ui| {
+                            ui.label(mono(truncate(&fc.path, 60)).size(11.0));
+                            ui.label(
+                                RichText::new(format!(
+                                    "{}/{total} covered",
+                                    fc.changed_covered
+                                ))
+                                .size(11.0)
+                                .color(col),
+                            );
+                        });
+                    }
+                }
+            }
+        }
+        if send_fetch {
+            self.net.send(ClientMsg::FetchSignal { repo: repo.clone() });
+        }
+        if let Some(command) = send_set {
+            self.net.send(ClientMsg::SetSignalCommand {
+                repo: repo.clone(),
+                command,
+            });
+        }
+        if send_run {
+            self.net.send(ClientMsg::RunSignal {
+                session_id: s.id.clone(),
+            });
+        }
+    }
+
+    /// Cross-session intelligence — pillars F and H in one pane, with pillar
+    /// G's burn tables in the Analytics view. Session-independent: this pane
+    /// reads across everything the daemon watches.
+    fn insight_tab(&mut self, ui: &mut egui::Ui) {
+        let z = self.pane_zoom(ui, "insight");
+        scale_text(ui, z);
+
+        ui.horizontal(|ui| {
+            for v in InsightView::ALL {
+                if ui
+                    .selectable_label(self.insight.view == v, v.label())
+                    .clicked()
+                {
+                    self.insight.view = v;
+                }
+            }
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| match self.insight.view {
+                InsightView::Search => self.insight_search_view(ui),
+                InsightView::Digest => self.insight_digest_view(ui),
+                InsightView::Analytics => self.insight_analytics_view(ui),
+                InsightView::Prompts => self.insight_prompts_view(ui),
+                InsightView::Failures => self.insight_failures_view(ui),
+                InsightView::Decisions => self.insight_decisions_view(ui),
+                InsightView::File => self.insight_file_view(ui),
+                InsightView::Docs => self.insight_docs_view(ui),
+            });
+    }
+
+    /// `R-F1`. Enter to search — the corpus is tens of MB and a per-keystroke
+    /// scan would punish typing.
+    fn insight_search_view(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.insight.query)
+                    .hint_text("search every transcript and all prompt history — Enter to run")
+                    .desired_width(420.0),
+            );
+            let go = (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                || ui.button("search").clicked();
+            if go && !self.insight.query.trim().is_empty() {
+                self.insight.search_pending = true;
+                self.net.send(ClientMsg::InsightSearch {
+                    query: self.insight.query.trim().to_string(),
+                });
+            }
+            if self.insight.search_pending {
+                ui.label(dim("searching…"));
+            }
+        });
+
+        let mut jump: Option<(String, Option<chrono::DateTime<Utc>>)> = None;
+        if let Some((q, r)) = &self.insight.results {
+            ui.label(dim(format!(
+                "{} hit(s) for \"{}\" across {} file(s){}{}",
+                r.hits.len(),
+                q,
+                r.files_scanned,
+                if r.truncated { " — capped, refine the query" } else { "" },
+                if r.files_truncated > 0 {
+                    " · some large files searched partially"
+                } else {
+                    ""
+                },
+            )));
+            for h in &r.hits {
+                let src = match h.source {
+                    mogeung_core::insight::SearchSource::History => "hist",
+                    mogeung_core::insight::SearchSource::Prompt => "you",
+                    mogeung_core::insight::SearchSource::Transcript => "sess",
+                };
+                let when = h
+                    .timestamp
+                    .map(|t| t.format("%m-%d %H:%M").to_string())
+                    .unwrap_or_default();
+                let row = ui.horizontal(|ui| {
+                    ui.label(dim(format!("{src:>4}")));
+                    ui.label(dim(format!(
+                        "{} L{} {when}",
+                        &h.session_id[..8.min(h.session_id.len())],
+                        h.line
+                    )));
+                    ui.add(egui::Label::new(mono(&h.preview).size(11.5)).truncate())
+                });
+                let resp = row
+                    .response
+                    .interact(egui::Sense::click())
+                    .on_hover_text(match h.source {
+                        mogeung_core::insight::SearchSource::History => {
+                            "click to copy the prompt"
+                        }
+                        _ => "click to open the transcript here",
+                    });
+                if resp.clicked() {
+                    match h.source {
+                        mogeung_core::insight::SearchSource::History => {
+                            ui.ctx().copy_text(h.preview.clone());
+                        }
+                        _ => jump = Some((h.session_id.clone(), h.timestamp)),
+                    }
+                }
+            }
+        }
+        if let Some((sid, ts)) = jump {
+            if self.sessions.contains_key(&sid) {
+                self.selected = Some(sid);
+                self.focus_event_ts = ts;
+                self.set_tab(Tab::Transcript);
+            }
+        }
+    }
+
+    /// `R-F3`. Evidence for one local day — counts, never narrative.
+    fn insight_digest_view(&mut self, ui: &mut egui::Ui) {
+        if self.insight.day.is_empty() {
+            self.insight.day = chrono::Local::now().format("%Y-%m-%d").to_string();
+        }
+        let mut fetch = false;
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.insight.day)
+                    .desired_width(110.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            if ui.button("today").clicked() {
+                self.insight.day = chrono::Local::now().format("%Y-%m-%d").to_string();
+                fetch = true;
+            }
+            if ui.button("yesterday").clicked() {
+                self.insight.day = (chrono::Local::now() - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                fetch = true;
+            }
+            if ui.button("load").clicked() {
+                fetch = true;
+            }
+            if self.insight.digest_pending {
+                ui.label(dim("reading…"));
+            }
+        });
+        let stale = self
+            .insight
+            .digest
+            .as_ref()
+            .map(|d| d.day != self.insight.day)
+            .unwrap_or(true);
+        if fetch || (stale && !self.insight.digest_pending) {
+            self.insight.digest_pending = true;
+            self.net.send(ClientMsg::FetchDigest {
+                day: self.insight.day.clone(),
+            });
+        }
+        let Some(d) = &self.insight.digest else { return };
+        if d.sessions.is_empty() {
+            ui.label(dim(format!("no session activity on {}", d.day)));
+            return;
+        }
+        ui.label(dim(
+            "what the transcripts show — counts and files, never the agents' own summaries",
+        ));
+        for sd in &d.sessions {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(sd.title.clone().unwrap_or_else(|| sd.session_id.clone()))
+                        .size(12.5)
+                        .strong(),
+                );
+                ui.label(dim(&sd.repo));
+            });
+            ui.label(dim(format!(
+                "  {} turn(s) · {} tool call(s) · {} error(s) · {} in / {} out",
+                sd.turns,
+                sd.tool_calls,
+                sd.errors,
+                tokens(sd.tokens_in),
+                tokens(sd.tokens_out)
+            )));
+            if !sd.files_touched.is_empty() {
+                ui.label(mono(truncate(&sd.files_touched.join("  "), 200)).size(10.5));
+            }
+        }
+    }
+
+    /// `R-F5` + `R-G3`. Prompt-history analytics beside the burn tables the
+    /// usage scanner already computes — tokens, never dollars.
+    fn insight_analytics_view(&mut self, ui: &mut egui::Ui) {
+        if !self.insight.analytics_asked {
+            self.insight.analytics_asked = true;
+            self.net.send(ClientMsg::FetchAnalytics);
+            self.net.send(ClientMsg::FetchUsage);
+        }
+
+        if let Some(u) = &self.usage {
+            ui.label(RichText::new("token burn").strong().size(12.5));
+            ui.label(dim(
+                "from the transcripts' own usage records; the window estimate is derived \
+                 from past limit hits, never a published quota",
+            ));
+            ui.label(mono(format!(
+                "trailing 5h: {} in / {} out{}",
+                tokens(u.window_tokens_in),
+                tokens(u.window_tokens_out),
+                u.window_fraction()
+                    .map(|f| format!("  (≈{:.0}% of est. limit)", f * 100.0))
+                    .unwrap_or_default()
+            )));
+            ui.add_space(4.0);
+            ui.label(dim("by day"));
+            for d in u.days.iter().take(14) {
+                ui.label(mono(format!(
+                    "  {}  {:>10} in  {:>9} out  · {} session(s)",
+                    d.day,
+                    tokens(d.tokens_in),
+                    tokens(d.tokens_out),
+                    d.sessions
+                )));
+            }
+            ui.add_space(4.0);
+            ui.label(dim("by repo"));
+            for r in u.repos.iter().take(12) {
+                ui.label(mono(format!(
+                    "  {:<28} {:>10} in  {:>9} out",
+                    truncate(&r.repo, 28),
+                    tokens(r.tokens_in),
+                    tokens(r.tokens_out)
+                )));
+            }
+            ui.add_space(4.0);
+            ui.label(dim("heaviest sessions"));
+            for s in u.sessions.iter().take(8) {
+                ui.label(mono(format!(
+                    "  {}  {:<20} {:>9} out",
+                    &s.session_id[..8.min(s.session_id.len())],
+                    truncate(&s.repo, 20),
+                    tokens(s.tokens_out)
+                )));
+            }
+            if !u.limit_hits.is_empty() {
+                ui.add_space(4.0);
+                ui.label(dim("limit hits"));
+                for h in u.limit_hits.iter().take(6) {
+                    ui.label(mono(format!(
+                        "  {}  {}{}",
+                        h.at.format("%m-%d %H:%M"),
+                        &h.session_id[..8.min(h.session_id.len())],
+                        h.resets
+                            .as_deref()
+                            .map(|r| format!("  resets {r}"))
+                            .unwrap_or_default()
+                    )));
+                }
+            }
+        }
+
+        let Some(a) = &self.insight.analytics else { return };
+        ui.add_space(8.0);
+        ui.label(RichText::new("prompt history").strong().size(12.5));
+        ui.label(dim("prompts per day"));
+        for d in a.prompts_per_day.iter().rev().take(14) {
+            ui.label(mono(format!("  {}  {:>4}", d.day, d.count)));
+        }
+        ui.add_space(4.0);
+        ui.label(dim("by hour of day"));
+        let max = a.hour_histogram.iter().copied().max().unwrap_or(1).max(1);
+        for (h, n) in a.hour_histogram.iter().enumerate() {
+            if *n == 0 {
+                continue;
+            }
+            let width = 30usize * (*n as usize) / max as usize;
+            ui.label(mono(format!("  {h:02}  {:<30} {n}", "=".repeat(width.max(1)))));
+        }
+    }
+
+    /// `R-F6`.
+    fn insight_prompts_view(&mut self, ui: &mut egui::Ui) {
+        if !self.insight.prompts_asked {
+            self.insight.prompts_asked = true;
+            self.net.send(ClientMsg::FetchPromptLibrary);
+        }
+        let Some(clusters) = &self.insight.prompts else {
+            ui.label(dim("reading prompt history…"));
+            return;
+        };
+        if clusters.is_empty() {
+            ui.label(dim("no prompt has been reused yet"));
+            return;
+        }
+        ui.label(dim("most-reused prompts — click to copy"));
+        for c in clusters.iter().take(50) {
+            let row = ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("×{}", c.count)).size(11.5).color(BLUE));
+                ui.add(
+                    egui::Label::new(RichText::new(truncate(&c.representative, 160)).size(11.5))
+                        .truncate(),
+                );
+            });
+            if row
+                .response
+                .interact(egui::Sense::click())
+                .on_hover_text("copy the full prompt")
+                .clicked()
+            {
+                ui.ctx().copy_text(c.representative.clone());
+            }
+        }
+    }
+
+    /// `R-F4`.
+    fn insight_failures_view(&mut self, ui: &mut egui::Ui) {
+        if !self.insight.failures_asked {
+            self.insight.failures_asked = true;
+            self.net.send(ClientMsg::FetchRecurring);
+        }
+        let Some(failures) = &self.insight.failures else {
+            ui.label(dim("scanning transcripts…"));
+            return;
+        };
+        if failures.is_empty() {
+            ui.label(dim("no error shape recurs across sessions"));
+            return;
+        }
+        ui.label(dim(
+            "error shapes seen in two or more sessions — the normalised key is shown so the \
+             grouping can be audited",
+        ));
+        for f in failures {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!("×{} in {} session(s)", f.count, f.sessions.len()))
+                    .size(11.5)
+                    .color(AMBER),
+            );
+            ui.label(mono(truncate(&f.example, 200)).size(11.0));
+            ui.label(dim(format!("  key: {}", truncate(&f.normalized, 160))));
+            ui.label(dim(format!(
+                "  sessions: {}",
+                f.sessions
+                    .iter()
+                    .map(|s| &s[..8.min(s.len())])
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+
+    /// `R-F7`. Candidates for a human to skim — the pattern that matched is
+    /// on every row, and the copy-out is a skeleton, not an ADR.
+    fn insight_decisions_view(&mut self, ui: &mut egui::Ui) {
+        let Some(s) = self.selected_session().cloned() else {
+            ui.label(dim("select a session — decisions are read per transcript"));
+            return;
+        };
+        if !self.insight.decisions_asked.contains(&s.id) {
+            self.insight.decisions_asked.insert(s.id.clone());
+            self.net.send(ClientMsg::FetchDecisions {
+                session_id: s.id.clone(),
+            });
+        }
+        let Some(cands) = self.insight.decisions.get(&s.id) else {
+            ui.label(dim("reading transcript…"));
+            return;
+        };
+        if cands.is_empty() {
+            ui.label(dim("no decision-shaped sentences found"));
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(dim(format!(
+                "{} candidate(s) in {} — pattern-matched, not judged",
+                cands.len(),
+                s.label()
+            )));
+            if ui
+                .button("copy as ADR skeleton")
+                .on_hover_text("a docs/decisions draft with these as raw material")
+                .clicked()
+            {
+                let mut md = String::from(
+                    "---\ntitle: <decision>\nstatus: draft\nupdated: <date>\n---\n\n\
+                     # <NNNN> — <decision>\n\n## Context\n\n## Decision\n\n\
+                     ## Raw material (pattern-extracted, verify before trusting)\n\n",
+                );
+                for c in cands {
+                    md.push_str(&format!("- {} _(matched: {})_\n", c.text, c.pattern));
+                }
+                ui.ctx().copy_text(md);
+            }
+        });
+        for c in cands {
+            ui.add_space(3.0);
+            ui.label(RichText::new(&c.text).size(11.5));
+            ui.label(dim(format!("  L{} · matched: {}", c.line, c.pattern)));
+        }
+    }
+
+    /// `R-F2`. Prompt-blame: which sessions touched a file, and what they
+    /// were told. Heuristic, and each row names its match rule.
+    fn insight_file_view(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.insight.file_query)
+                    .hint_text("a file path (or suffix, e.g. src/state.rs) — Enter to look up")
+                    .desired_width(420.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let go = (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                || ui.button("who touched this").clicked();
+            if go && !self.insight.file_query.trim().is_empty() {
+                self.net.send(ClientMsg::FetchFileSessions {
+                    path: self.insight.file_query.trim().to_string(),
+                });
+            }
+        });
+        let mut select: Option<String> = None;
+        if let Some((path, entries)) = &self.insight.file_results {
+            if entries.is_empty() {
+                ui.label(dim(format!(
+                    "no watched session's edit tools named {path} — sessions predating \
+                     mogeung, or edits made outside an agent, are invisible here (A8)"
+                )));
+            }
+            for e in entries {
+                ui.add_space(4.0);
+                let row = ui.horizontal(|ui| {
+                    ui.label(RichText::new(&e.label).size(12.0).strong());
+                    if let Some(at) = e.at {
+                        ui.label(dim(at.format("%m-%d %H:%M").to_string()));
+                    }
+                });
+                if let Some(p) = &e.prompt {
+                    ui.label(RichText::new(format!("  \"{}\"", truncate(p, 160))).size(11.5));
+                }
+                ui.label(dim(format!("  {}", e.matched)));
+                if row
+                    .response
+                    .interact(egui::Sense::click())
+                    .on_hover_text("select this session")
+                    .clicked()
+                {
+                    select = Some(e.session_id.clone());
+                }
+            }
+        }
+        if let Some(sid) = select {
+            if self.sessions.contains_key(&sid) {
+                self.selected = Some(sid);
+            }
+        }
+    }
+
+    /// `R-H1`–`R-H5`. Read-only from end to end: proposals and copy-out,
+    /// never a write.
+    fn insight_docs_view(&mut self, ui: &mut egui::Ui) {
+        let repos = {
+            let mut v: Vec<String> = self
+                .sessions
+                .values()
+                .filter_map(|s| s.repo_root.clone())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        if repos.is_empty() {
+            ui.label(dim("no watched session is inside a git repo"));
+            return;
+        }
+        if self.insight.docs_repo.is_empty() {
+            self.insight.docs_repo = repos[0].clone();
+        }
+        let mut fetch = false;
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("insight-docs-repo")
+                .selected_text(truncate(&self.insight.docs_repo, 50))
+                .show_ui(ui, |ui| {
+                    for r in &repos {
+                        if ui
+                            .selectable_label(self.insight.docs_repo == *r, r)
+                            .clicked()
+                        {
+                            self.insight.docs_repo = r.clone();
+                            fetch = true;
+                        }
+                    }
+                });
+            if ui.button("scan").clicked() {
+                fetch = true;
+            }
+            if self.insight.docs_pending {
+                ui.label(dim("scanning…"));
+            }
+        });
+        let stale = self
+            .insight
+            .docs
+            .as_ref()
+            .map(|(r, _)| r != &self.insight.docs_repo)
+            .unwrap_or(true);
+        if fetch || (stale && !self.insight.docs_pending) {
+            self.insight.docs_pending = true;
+            self.net.send(ClientMsg::FetchDocScan {
+                repo: self.insight.docs_repo.clone(),
+            });
+        }
+        let Some((_, inv)) = &self.insight.docs else { return };
+
+        ui.label(dim(format!(
+            "{} markdown file(s){} — proposals only; mogeung never touches them",
+            inv.docs.len(),
+            if inv.truncated { " (walk capped)" } else { "" }
+        )));
+
+        if !inv.stale.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new(format!("stale ({})", inv.stale.len())).strong().size(12.0));
+            for st in inv.stale.iter().take(30) {
+                ui.label(mono(format!("  {}", st.doc)).size(11.0));
+                ui.label(dim(format!(
+                    "    references {} — {} commit(s) since the doc's last edit",
+                    st.referenced_path, st.commits_since
+                )));
+            }
+        }
+
+        if !inv.gc.is_empty() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("gc candidates ({})", inv.gc.len())).strong().size(12.0),
+            );
+            for g in inv.gc.iter().take(30) {
+                ui.horizontal(|ui| {
+                    let (word, col) = match g.action {
+                        mogeung_core::docs::GcAction::Archive => ("archive", AMBER),
+                        mogeung_core::docs::GcAction::Merge => ("merge", BLUE),
+                        mogeung_core::docs::GcAction::Review => ("review", DIM),
+                    };
+                    ui.label(RichText::new(word).size(10.5).color(col));
+                    ui.label(mono(&g.path).size(11.0));
+                });
+                ui.label(dim(format!("    {}", g.evidence)));
+            }
+        }
+
+        if !inv.plans.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new("plans vs evidence").strong().size(12.0));
+            for p in &inv.plans {
+                ui.label(mono(format!(
+                    "  {} — {} checked / {} open",
+                    p.doc, p.checked, p.unchecked
+                ))
+                .size(11.0));
+                for it in p.items.iter().filter(|i| i.claimed_unevidenced).take(10) {
+                    ui.label(
+                        RichText::new(format!("    ☐ claimed, unevidenced: {}", truncate(&it.text, 120)))
+                            .size(11.0)
+                            .color(AMBER),
+                    );
+                }
+            }
+        }
+
+        if let Some(drift) = &inv.instruction_drift {
+            if !drift.pairs.is_empty() {
+                ui.add_space(6.0);
+                ui.label(RichText::new("instruction files").strong().size(12.0));
+                for pair in &drift.pairs {
+                    ui.label(mono(format!(
+                        "  {} vs {} — {:.0}% shared",
+                        pair.a,
+                        pair.b,
+                        pair.shared_ratio * 100.0
+                    ))
+                    .size(11.0));
+                    for l in pair.only_in_a.iter().take(8) {
+                        ui.label(dim(format!("    only in {}: {}", pair.a, truncate(l, 110))));
+                    }
+                    for l in pair.only_in_b.iter().take(8) {
+                        ui.label(dim(format!("    only in {}: {}", pair.b, truncate(l, 110))));
+                    }
+                }
+                for f in &drift.files {
+                    if ui
+                        .button(format!("copy {} for hand-pasting", f.path))
+                        .on_hover_text(
+                            "reads the file from this machine; mogeung writes nothing anywhere",
+                        )
+                        .clicked()
+                    {
+                        let full = std::path::Path::new(&self.insight.docs_repo).join(&f.path);
+                        match std::fs::read_to_string(&full) {
+                            Ok(text) => ui.ctx().copy_text(text),
+                            Err(_) => self.errors.push(format!(
+                                "could not read {} from this machine — remote daemon?",
+                                full.display()
+                            )),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -5984,6 +7753,110 @@ impl App {
 /// `crates/mogeungd/src/state.rs` → `…/src/state.rs`. The tail is what
 /// identifies a file; the leading directories are the same for most of the
 /// list and just push the useful part off the edge. Full path is on hover.
+/// The commit file tree (`R-D18`): directories as collapsible headers,
+/// files as selectable rows colored the IntelliJ way — green added, blue
+/// modified, red deleted, amber renamed. A click lands in `pick`; the
+/// root "all files" row lives with the caller.
+fn render_file_tree(
+    ui: &mut egui::Ui,
+    nodes: &[crate::gitview::TreeNode],
+    files: &[mogeung_core::change::FileChange],
+    focus_idx: Option<usize>,
+    path: &str,
+    pick: &mut Option<Option<usize>>,
+) {
+    use mogeung_core::change::FileStatus;
+    for n in nodes {
+        match n.file {
+            None => {
+                let full = format!("{path}/{}", n.label);
+                egui::CollapsingHeader::new(dim(format!("{}/", n.label)))
+                    .id_salt(("git-tree", &full))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        render_file_tree(ui, &n.children, files, focus_idx, &full, pick);
+                    });
+            }
+            Some(i) => {
+                let f = &files[i];
+                let color = match f.status {
+                    FileStatus::Added => GREEN,
+                    FileStatus::Modified => BLUE,
+                    FileStatus::Deleted => RED,
+                    FileStatus::Renamed => AMBER,
+                };
+                let row = ui.horizontal(|ui| {
+                    let resp = ui.selectable_label(
+                        focus_idx == Some(i),
+                        RichText::new(&n.label).monospace().size(11.5).color(color),
+                    );
+                    ui.label(dim(format!("+{} −{}", f.insertions, f.deletions)));
+                    if !f.hunks.is_empty() && f.hunks.iter().all(|h| h.reviewed) {
+                        ui.label(RichText::new(icon::READ).size(10.0).color(GREEN))
+                            .on_hover_text("every hunk marked read");
+                    }
+                    resp
+                });
+                if row.inner.on_hover_text(&f.path).clicked() {
+                    *pick = Some(Some(i));
+                }
+            }
+        }
+    }
+}
+
+/// New-side line numbers a diff's hunks touched — the Editor's gutter data.
+/// Parses the hunk header (`@@ -a,b +c,d @@`) and walks the signed lines,
+/// the same arithmetic the daemon's coverage intersection uses. `R-B27`.
+fn changed_lines_of(files: &[mogeung_core::FileChange]) -> Vec<u32> {
+    let mut out = Vec::new();
+    for f in files {
+        for h in &f.hunks {
+            let Some(start) = h
+                .header
+                .split('+')
+                .nth(1)
+                .and_then(|p| p.split([',', ' ', '@']).next())
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let mut line = start;
+            for l in &h.lines {
+                match l.as_bytes().first() {
+                    Some(b'+') => {
+                        out.push(line);
+                        line += 1;
+                    }
+                    Some(b'-') => {}
+                    _ => line += 1,
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The identifier around a char index, for click-to-highlight. `R-B28`.
+fn word_at_char_index(content: &str, idx: usize) -> Option<String> {
+    let chars: Vec<char> = content.chars().collect();
+    let is_word = |c: &char| c.is_alphanumeric() || *c == '_';
+    let at = chars.get(idx).filter(|c| is_word(c))?;
+    let _ = at;
+    let mut start = idx;
+    while start > 0 && is_word(&chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = idx;
+    while end + 1 < chars.len() && is_word(&chars[end + 1]) {
+        end += 1;
+    }
+    let word: String = chars[start..=end].iter().collect();
+    (word.chars().count() >= 2).then_some(word)
+}
+
 fn short_path(path: &str) -> (String, &str) {
     let (dir, base) = match path.rfind('/') {
         Some(i) => (&path[..i], &path[i + 1..]),
@@ -6111,8 +7984,14 @@ fn styled_line(
     let fg = line_fg(line);
     let size = diff_size(ui);
 
-    ui.horizontal_wrapped(|ui| {
+    // Not wrapped, since `R-J2`: a wrapped line is of unknown height, and a row
+    // of unknown height cannot be skipped without laying it out — which is the
+    // whole cost being avoided. Long lines run off the side and the pane
+    // scrolls to them, which is what a diff viewer does and what the panes
+    // around this one already did (`8795688`).
+    ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 
         // Word-diff emphasis takes precedence: knowing *what changed* beats
         // knowing what is a keyword.
@@ -6181,18 +8060,99 @@ fn diff_size(ui: &egui::Ui) -> f32 {
         * (11.5 / 12.0)
 }
 
-/// Unified view, with word-level emphasis on runs that look like replacements.
-fn render_unified(ui: &mut egui::Ui, lines: &[String], syntax: bool, words: bool) {
-    let pairs = replacement_pairs(lines, words);
-    for (i, line) in lines.iter().enumerate() {
-        styled_line(ui, line, syntax, pairs.get(&i).map(|v| v.as_slice()));
+/// One diff row's height, known without laying the row out.
+///
+/// Exact rather than estimated, which is what makes `visible_range` safe:
+/// diff rows hold a single line of monospace text and never wrap, so the row
+/// height is the font's and nothing else. Vertical item spacing is zeroed by
+/// the renderers, so `n` lines occupy exactly `n * row_height`.
+fn diff_row_height(ui: &egui::Ui) -> f32 {
+    let font = egui::FontId::monospace(diff_size(ui));
+    ui.fonts_mut(|f| f.row_height(&font))
+}
+
+/// Which of `n` rows can be seen, given where the cursor sits inside the
+/// enclosing scroll area. `R-J2`.
+///
+/// Two rows of margin either side, so a scroll that lands between frames
+/// cannot show a gap. Returns an empty range when the block is entirely
+/// off-screen — a diff whose file is scrolled past costs nothing at all.
+fn visible_range(ui: &egui::Ui, n: usize, row_h: f32) -> std::ops::Range<usize> {
+    let clip = ui.clip_rect();
+    // An unbounded clip rect means nothing is clipping — draw everything, or a
+    // measuring pass would silently render nothing.
+    if !clip.is_finite() {
+        return 0..n;
     }
+    visible_window(ui.cursor().top(), clip.height(), clip.top(), n, row_h)
+}
+
+/// The arithmetic behind `visible_range`, without a `Ui` in the way.
+///
+/// `top` is where row zero sits, in the same coordinates as `view_top` — which
+/// means it goes negative as the pane scrolls down past it.
+fn visible_window(
+    top: f32,
+    view_height: f32,
+    view_top: f32,
+    n: usize,
+    row_h: f32,
+) -> std::ops::Range<usize> {
+    if n == 0 || row_h <= 0.0 || !top.is_finite() {
+        return 0..0;
+    }
+    let first = ((view_top - top) / row_h).floor() as i64 - 2;
+    let last = ((view_top + view_height - top) / row_h).ceil() as i64 + 2;
+    let n = n as i64;
+    let start = first.clamp(0, n) as usize;
+    let end = last.clamp(0, n) as usize;
+    start..end.max(start)
+}
+
+/// Unified view, with word-level emphasis on runs that look like replacements.
+///
+/// Draws only the rows the pane can show, and reserves the rest as empty
+/// space. Before `R-J2` this laid out every line of every hunk each frame —
+/// 30ms on the largest commit in this repo, which is 33fps while scrolling the
+/// diff of a session that touched a lot of files.
+fn render_unified(ui: &mut egui::Ui, lines: &[String], syntax: bool, words: bool) {
+    let partners = replacement_partners(lines, words);
+    let row_h = diff_row_height(ui);
+    ui.spacing_mut().item_spacing.y = 0.0;
+
+    let range = visible_range(ui, lines.len(), row_h);
+    if range.start > 0 {
+        ui.add_space(range.start as f32 * row_h);
+    }
+    for i in range.clone() {
+        // The word diff is computed for drawn lines only. Computing it for the
+        // whole hunk was most of the old per-frame cost on a large replacement
+        // run, and all of it was thrown away for lines nobody could see.
+        let emphasis = partners.get(&i).map(|&j| word_emphasis(lines, i, j));
+        styled_line(ui, &lines[i], syntax, emphasis.as_deref());
+    }
+    if range.end < lines.len() {
+        ui.add_space((lines.len() - range.end) as f32 * row_h);
+    }
+}
+
+/// The word-diff spans for line `i`, whose replacement counterpart is `j`.
+fn word_emphasis(lines: &[String], i: usize, j: usize) -> Vec<crate::diff::Span> {
+    let (del, add) = if lines[i].starts_with('-') { (i, j) } else { (j, i) };
+    let (l, r) = crate::diff::word_diff(&lines[del], &lines[add]);
+    if i == del { l } else { r }
 }
 
 fn render_side_by_side(ui: &mut egui::Ui, lines: &[String], syntax: bool, words: bool) {
     let rows = crate::diff::side_by_side(lines);
     let half = (ui.available_width() - 12.0).max(160.0) / 2.0;
-    for row in &rows {
+    let row_h = diff_row_height(ui);
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let range = visible_range(ui, rows.len(), row_h);
+    if range.start > 0 {
+        ui.add_space(range.start as f32 * row_h);
+    }
+    for row in &rows[range.clone()] {
         // Compute the word diff once per row, not once per side.
         let pair = match (&row.left, &row.right) {
             (Some(a), Some(b)) if words && a.starts_with('-') && b.starts_with('+') => {
@@ -6222,17 +8182,23 @@ fn render_side_by_side(ui: &mut egui::Ui, lines: &[String], syntax: bool, words:
             }
         });
     }
+    if range.end < rows.len() {
+        ui.add_space((rows.len() - range.end) as f32 * row_h);
+    }
 }
 
-/// Index → word-diff spans, for lines that are half of a replacement pair.
+/// Index → the index of its counterpart, for lines that are half of a
+/// replacement pair.
 ///
 /// A run of N removals followed by N additions is treated as N replacements;
 /// anything lopsided is left alone, because pairing lines that are not really
 /// counterparts produces noise rather than insight.
-fn replacement_pairs(
-    lines: &[String],
-    enabled: bool,
-) -> HashMap<usize, Vec<crate::diff::Span>> {
+///
+/// This used to return the word-diff spans themselves, computed for every pair
+/// in the hunk. It now returns only the pairing, which is an index scan: the
+/// spans are computed at draw time for the handful of lines actually on
+/// screen. `R-J2`.
+fn replacement_partners(lines: &[String], enabled: bool) -> HashMap<usize, usize> {
     let mut out = HashMap::new();
     if !enabled {
         return out;
@@ -6255,9 +8221,8 @@ fn replacement_pairs(
         let adds = i - add_start;
         if dels > 0 && dels == adds {
             for k in 0..dels {
-                let (l, r) = crate::diff::word_diff(&lines[del_start + k], &lines[add_start + k]);
-                out.insert(del_start + k, l);
-                out.insert(add_start + k, r);
+                out.insert(del_start + k, add_start + k);
+                out.insert(add_start + k, del_start + k);
             }
         }
     }
@@ -6530,10 +8495,19 @@ impl App {
             });
 
         if go {
-            self.net.send(ClientMsg::LaunchTerminal {
-                dir: self.launch_dir.trim().to_string(),
-                worktree: self.launch_worktree,
-            });
+            // R-I4: against a remote daemon this would open a terminal on
+            // the other machine — refuse rather than surprise.
+            if self.remote_daemon() {
+                self.errors.push(
+                    "remote daemon — launching a terminal would open it on the other machine"
+                        .into(),
+                );
+            } else {
+                self.net.send(ClientMsg::LaunchTerminal {
+                    dir: self.launch_dir.trim().to_string(),
+                    worktree: self.launch_worktree,
+                });
+            }
             self.show_launch = false;
         }
         if !open {
@@ -7334,6 +9308,33 @@ impl App {
                     )));
                 }
 
+                // R-I1: present-but-empty is information, absence is silence.
+                if h.codex_present {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Codex").strong().size(12.5));
+                    match &h.codex_error {
+                        Some(e) => {
+                            ui.label(RichText::new(format!("  index unreadable: {e}"))
+                                .size(11.5)
+                                .color(RED));
+                        }
+                        None => {
+                            ui.label(dim(format!(
+                                "  present, watched — {} session(s)",
+                                h.codex_threads
+                            )));
+                            ui.label(dim(
+                                "  waiting/working derived from the rollout tail — a heuristic",
+                            ));
+                        }
+                    }
+                    for (kind, n) in &h.codex_unknown {
+                        ui.label(RichText::new(format!("  unknown kind {kind} ×{n}"))
+                            .size(11.5)
+                            .color(AMBER));
+                    }
+                }
+
                 ui.add_space(10.0);
                 ui.label(RichText::new("History limits").strong().size(12.5));
                 ui.label(dim(format!(
@@ -7565,4 +9566,127 @@ mod tests {
             "the row also claimed the click, so the cursor would jump instead of rebinding"
         );
     }
+
+    /// `R-J2`. A diff must cost what is on screen, not what is in the file.
+    ///
+    /// Measured before this: 30ms per frame for the largest commit in this
+    /// repo (7,399 lines), which is 33fps while scrolling. The renderer laid
+    /// out every line of every hunk, visible or not, and computed a word diff
+    /// for every replacement pair to throw almost all of it away.
+    ///
+    /// Drives the real renderer headlessly and counts the text it actually
+    /// paints. A regression here is silent — the diff still looks right, it is
+    /// merely slow — so the count is the only thing that catches it.
+    #[test]
+    fn a_diff_paints_only_the_rows_the_pane_can_show() {
+        fn text_shapes(shapes: &[egui::epaint::ClippedShape]) -> usize {
+            fn count(s: &egui::Shape) -> usize {
+                match s {
+                    egui::Shape::Text(_) => 1,
+                    egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                    _ => 0,
+                }
+            }
+            shapes.iter().map(|c| count(&c.shape)).sum()
+        }
+
+        let lines: Vec<String> = (0..4000)
+            .map(|i| format!("+    let value_{i} = compute(i);"))
+            .collect();
+        let ctx = egui::Context::default();
+        let mut painted = 0;
+        let mut content_height = 0.0f32;
+        for _ in 0..2 {
+            // Twice: the first frame has no scroll state, and it is the second
+            // that reports the geometry the user actually scrolls.
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let r = egui::ScrollArea::both()
+                        .max_height(600.0)
+                        .show(ui, |ui| super::render_unified(ui, &lines, false, true));
+                    content_height = r.content_size.y;
+                },
+            );
+            painted = text_shapes(&out.shapes);
+        }
+
+        // 600px of pane over a ~14px row is about 43 rows, plus the two rows
+        // of margin either side. An order of magnitude of slack, because the
+        // exact number moves with the default font and is not the point.
+        assert!(
+            painted < 200,
+            "{painted} text shapes for 4000 lines — the renderer is drawing what \
+             nobody can see"
+        );
+        assert!(painted > 10, "nothing was drawn at all: {painted}");
+
+        // And the space skipped rows leave behind is real: the scrollbar must
+        // describe the whole diff, not the visible slice.
+        assert!(
+            content_height > 4000.0 * 8.0,
+            "content height {content_height} does not account for 4000 rows"
+        );
+    }
+
+    /// The rows drawn must be the rows under the viewport. Scrolled to the
+    /// bottom, the last line is on screen and the first is not — the failure
+    /// this guards against is culling that always keeps the top of the list,
+    /// which looks fine until you scroll.
+    #[test]
+    fn the_visible_window_follows_the_scroll() {
+        let row_h = 14.0;
+        let n = 1000;
+
+        // Top of the list: the window starts at zero and covers the viewport.
+        let top = super::visible_window(0.0, 600.0, 0.0, n, row_h);
+        assert_eq!(top.start, 0);
+        assert!(top.end >= 42 && top.end < 60, "{top:?}");
+
+        // Scrolled past 500 rows: the window has moved with it, and the rows
+        // above are not drawn.
+        let mid = super::visible_window(-500.0 * row_h, 600.0, 0.0, n, row_h);
+        assert!(mid.start >= 495 && mid.start <= 500, "{mid:?}");
+        assert!(mid.end > mid.start && mid.end <= 550, "{mid:?}");
+
+        // Entirely scrolled past: nothing to draw, and no panic on the
+        // out-of-range arithmetic that gets there.
+        let gone = super::visible_window(-100_000.0, 600.0, 0.0, n, row_h);
+        assert!(gone.is_empty(), "{gone:?}");
+        assert!(gone.end <= n, "range must stay inside the slice: {gone:?}");
+    }
+
+    /// Pairing is an index scan now; the spans come later, per drawn line.
+    /// Both halves must still point at each other, or the word diff on screen
+    /// compares a line with the wrong counterpart.
+    #[test]
+    fn replacement_runs_pair_both_ways_and_lopsided_ones_do_not_pair() {
+        let lines: Vec<String> = ["-a", "-b", "+A", "+B", " ctx", "-only"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let p = super::replacement_partners(&lines, true);
+        assert_eq!(p.get(&0), Some(&2));
+        assert_eq!(p.get(&2), Some(&0));
+        assert_eq!(p.get(&1), Some(&3));
+        assert_eq!(p.get(&3), Some(&1));
+        assert_eq!(p.get(&5), None, "a removal with no addition has no partner");
+        assert!(super::replacement_partners(&lines, false).is_empty());
+
+        // And the spans land on the right side: the deletion gets the left.
+        let del = super::word_emphasis(&lines, 0, 2);
+        let add = super::word_emphasis(&lines, 2, 0);
+        assert!(!del.is_empty() && !add.is_empty());
+        assert_ne!(
+            del.iter().map(|s| s.text.clone()).collect::<String>(),
+            add.iter().map(|s| s.text.clone()).collect::<String>(),
+        );
+    }
 }
+

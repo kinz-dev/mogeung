@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-07-28
+updated: 2026-07-29
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -236,3 +236,15 @@ For a tmux session that limitation no longer bites, because attaching (`R-B18`)
 replaces focusing rather than depending on it. A session started with a bare
 `claude` in an unscriptable terminal remains genuinely unreachable, and mogeung
 says so.
+
+## The insight layer (2026-07-29)
+
+Collision detection and notifications were the first cross-session
+signals; pillar F generalised the idea into `insight.rs`: literal search
+across every transcript and `history.jsonl`, per-day digests counted
+from evidence (never assistant self-reports), recurring-failure grouping
+with an auditable normalised key, prompt reuse clusters, hour-of-day
+analytics, subagent trees, decision-candidate extraction (pattern named
+on every row), and prompt-blame for a file from `touched_files` — each
+answer stating how it matched, because A8 says attribution cannot be
+certain and the UI must not pretend otherwise.

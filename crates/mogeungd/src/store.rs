@@ -45,7 +45,13 @@ impl Store {
                 PRIMARY KEY (run_id, anchor)
             );
 
-            
+            -- Per-repo signal command and its last run (R-E2). The command
+            -- is the user's own, run only on an explicit click.
+            CREATE TABLE IF NOT EXISTS signals (
+                repo     TEXT PRIMARY KEY,
+                command  TEXT NOT NULL,
+                last_run TEXT
+            );
             "#,
         )?;
         Ok(Store {
@@ -150,6 +156,49 @@ impl Store {
         Ok(out)
     }
 
+    /// The signal command configured for a repo, if any. `R-E2`.
+    pub fn signal_command(&self, repo: &str) -> Option<String> {
+        let c = self.conn.lock().unwrap();
+        c.query_row(
+            "SELECT command FROM signals WHERE repo = ?1",
+            params![repo],
+            |r| r.get(0),
+        )
+        .ok()
+    }
 
+    /// Set (or, with an empty command, clear) a repo's signal command.
+    pub fn set_signal_command(&self, repo: &str, command: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        if command.trim().is_empty() {
+            c.execute("DELETE FROM signals WHERE repo = ?1", params![repo])?;
+        } else {
+            c.execute(
+                "INSERT INTO signals (repo, command) VALUES (?1, ?2)
+                 ON CONFLICT(repo) DO UPDATE SET command = excluded.command",
+                params![repo, command],
+            )?;
+        }
+        Ok(())
+    }
 
+    pub fn save_signal_run(&self, repo: &str, run_json: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "UPDATE signals SET last_run = ?2 WHERE repo = ?1",
+            params![repo, run_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn signal_last_run(&self, repo: &str) -> Option<String> {
+        let c = self.conn.lock().unwrap();
+        c.query_row(
+            "SELECT last_run FROM signals WHERE repo = ?1",
+            params![repo],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    }
 }

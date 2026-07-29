@@ -107,6 +107,88 @@ pub struct Prefs {
     /// levels are stored, so the file stays quiet until you zoom.
     #[serde(default)]
     pub zoom: BTreeMap<String, f32>,
+
+    /// Paths whose Editor tab wraps long lines — per file, because wrap is a
+    /// property of prose files, not a mode you live in. `R-B29`.
+    #[serde(default)]
+    pub editor_wrap: BTreeSet<String>,
+    /// Bookmarks: `(session, path, 1-based line)`, insertion order — which
+    /// *is* the jump list. `R-B29`.
+    #[serde(default)]
+    pub bookmarks: Vec<(String, String, u64)>,
+
+    /// Where the window was, last time it closed. `R-J1`.
+    ///
+    /// Here rather than in eframe's own persistence, which stores a second
+    /// copy of view state in a second format: two stores holding the same kind
+    /// of thing is how they drift.
+    #[serde(default)]
+    pub window: Option<Window>,
+}
+
+/// A remembered window: outer position and inner size, in logical points.
+///
+/// Position is optional and size is not, because they fail differently. A size
+/// is always usable; a position belongs to a monitor arrangement that may not
+/// exist at the next launch, and restoring it blindly puts the window
+/// somewhere you cannot reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Window {
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub x: Option<f32>,
+    #[serde(default)]
+    pub y: Option<f32>,
+}
+
+/// The smallest window we will restore to, matching `--min-inner-size`. A
+/// stored size below this came from a corrupt file or a resize we mis-sampled,
+/// and honouring it would open a window too small to use.
+pub const MIN_SIZE: (f32, f32) = (900.0, 600.0);
+
+impl Window {
+    /// The stored geometry, minus anything unusable.
+    ///
+    /// Returns the size only when the position cannot be trusted: a window in
+    /// the wrong place is a nuisance you fix by dragging it, and a window
+    /// off-screen is one you cannot fix at all. `monitor` is the total desktop
+    /// area in logical points, or `None` when the platform will not say — in
+    /// which case the position is kept, since we have no grounds to drop it.
+    pub fn usable(&self, monitor: Option<(f32, f32)>) -> Option<Window> {
+        if !self.width.is_finite() || !self.height.is_finite() {
+            return None;
+        }
+        if self.width < MIN_SIZE.0 || self.height < MIN_SIZE.1 {
+            return None;
+        }
+        let mut out = *self;
+        if let (Some(x), Some(y)) = (self.x, self.y) {
+            let visible = match monitor {
+                // A title bar needs to be on-screen to be grabbed, so the
+                // test is that the window's top-left corner sits inside the
+                // desktop with room to grab — not that the whole window fits,
+                // which would refuse a deliberately oversized window.
+                Some((w, h)) => {
+                    x.is_finite()
+                        && y.is_finite()
+                        && x > -self.width + 120.0
+                        && y >= 0.0
+                        && x < w - 120.0
+                        && y < h - 40.0
+                }
+                None => x.is_finite() && y.is_finite(),
+            };
+            if !visible {
+                out.x = None;
+                out.y = None;
+            }
+        } else {
+            out.x = None;
+            out.y = None;
+        }
+        Some(out)
+    }
 }
 
 fn yes() -> bool {
@@ -133,6 +215,9 @@ impl Default for Prefs {
             markdown: true,
             show_thinking: true,
             zoom: BTreeMap::new(),
+            editor_wrap: BTreeSet::new(),
+            bookmarks: Vec::new(),
+            window: None,
         }
     }
 }
@@ -286,6 +371,101 @@ impl Prefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole point of `R-J1`: geometry survives the round trip through the
+    /// file, rather than being remembered only in memory.
+    #[test]
+    fn geometry_round_trips_through_the_stored_form() {
+        let mut p = Prefs::default();
+        assert!(p.window.is_none(), "a fresh install has no remembered window");
+        p.window = Some(Window {
+            width: 1600.0,
+            height: 1000.0,
+            x: Some(120.0),
+            y: Some(64.0),
+        });
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.window, p.window);
+    }
+
+    /// A file written before `R-J1` has no `window` key at all, and must still
+    /// load — the same tolerance every other field here has.
+    #[test]
+    fn a_prefs_file_from_before_geometry_still_loads() {
+        let old = r#"{"hidden":[],"pinned":[],"scope":"needs_you"}"#;
+        let p: Prefs = serde_json::from_str(old).unwrap();
+        assert!(p.window.is_none());
+    }
+
+    /// The case that loses a window: it was closed on a second monitor that is
+    /// no longer attached, so the stored position names a place that does not
+    /// exist. Size is still worth keeping — only the position is suspect.
+    #[test]
+    fn a_position_off_the_monitor_is_dropped_and_the_size_kept() {
+        let w = Window {
+            width: 1600.0,
+            height: 1000.0,
+            x: Some(3000.0),
+            y: Some(200.0),
+        };
+        let got = w.usable(Some((1920.0, 1080.0))).expect("size stays usable");
+        assert_eq!((got.width, got.height), (1600.0, 1000.0));
+        assert_eq!((got.x, got.y), (None, None), "unreachable position dropped");
+
+        // And the ordinary case is left alone.
+        let ok = Window { x: Some(80.0), y: Some(40.0), ..w };
+        assert_eq!(ok.usable(Some((1920.0, 1080.0))), Some(ok));
+    }
+
+    /// Partly off-screen to the left is normal and must survive — a window
+    /// whose title bar is still grabbable is where the user put it. Fully off
+    /// to the left is not.
+    #[test]
+    fn a_window_hanging_off_an_edge_is_kept_while_its_title_bar_is_reachable() {
+        let base = Window { width: 1000.0, height: 700.0, x: Some(-60.0), y: Some(0.0) };
+        let monitor = Some((1920.0, 1080.0));
+        assert!(base.usable(monitor).unwrap().x.is_some(), "still grabbable");
+
+        let gone = Window { x: Some(-1000.0), ..base };
+        assert_eq!(gone.usable(monitor).unwrap().x, None, "entirely off-screen");
+    }
+
+    /// Nonsense in the file must not open a window nobody can use. A size
+    /// below the minimum is refused outright rather than clamped: the stored
+    /// value is not trustworthy, so the built-in default is the better answer.
+    #[test]
+    fn an_impossible_size_falls_back_to_the_default() {
+        for bad in [
+            Window { width: 10.0, height: 10.0, x: None, y: None },
+            Window { width: f32::NAN, height: 900.0, x: None, y: None },
+            Window { width: 1400.0, height: f32::INFINITY, x: None, y: None },
+        ] {
+            assert_eq!(bad.usable(Some((1920.0, 1080.0))), None, "{bad:?}");
+        }
+    }
+
+    /// A size with no position is a whole answer, not a broken one.
+    ///
+    /// This is what Wayland gives us: `outer_position()` is unsupported there,
+    /// so there is never a position to store and the compositor places the
+    /// window itself. Treating a positionless geometry as unusable would mean
+    /// the window forgot its size on every Linux desktop running Wayland —
+    /// which is the machine this was written on.
+    #[test]
+    fn a_size_without_a_position_is_still_worth_restoring() {
+        let w = Window { width: 1180.0, height: 742.0, x: None, y: None };
+        assert_eq!(w.usable(Some((1920.0, 1080.0))), Some(w));
+        assert_eq!(w.usable(None), Some(w));
+    }
+
+    /// With no monitor reported — a platform that will not say, which is the
+    /// state at startup before the window exists — a stored position is kept.
+    /// Dropping it there would break the ordinary case to guard the rare one.
+    #[test]
+    fn an_unknown_monitor_keeps_the_stored_position() {
+        let w = Window { width: 1400.0, height: 900.0, x: Some(3000.0), y: Some(10.0) };
+        assert_eq!(w.usable(None), Some(w));
+    }
 
     #[test]
     fn defaults_are_the_opinionated_ones() {

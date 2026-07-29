@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-07-28
+updated: 2026-07-29
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs

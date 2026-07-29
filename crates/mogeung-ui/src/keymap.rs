@@ -52,6 +52,7 @@ pub enum Action {
     TabExplorer,
     /// Commits, uncommitted changes and diffs of the session's repo. `R-D10`.
     TabGit,
+    TabInsight,
     NextTab,
     PrevTab,
     /// Toggle whether the keyboard belongs to the embedded terminal.
@@ -138,6 +139,7 @@ impl Action {
         Action::TabTerminal,
         Action::TabExplorer,
         Action::TabGit,
+        Action::TabInsight,
         Action::NextTab,
         Action::PrevTab,
         Action::LeaveTerminal,
@@ -192,6 +194,7 @@ impl Action {
             | Action::TabTerminal
             | Action::TabExplorer
             | Action::TabGit
+            | Action::TabInsight
             | Action::NextTab
             | Action::PrevTab
             | Action::LeaveTerminal => "Tabs",
@@ -242,6 +245,7 @@ impl Action {
             Action::TabTerminal => "Show the Terminal tab",
             Action::TabExplorer => "Show the Editor tab — browse and read the session's files",
             Action::TabGit => "Show the Git tab — commits, changes and diffs",
+            Action::TabInsight => "Show the Insight tab — cross-session search, digest, analytics, docs",
             Action::NextTab => "Next tab",
             Action::PrevTab => "Previous tab",
             Action::LeaveTerminal => "Focus the terminal, or give the keyboard back",
@@ -426,6 +430,7 @@ impl Default for Keymap {
         set(Action::TabExplorer, &["X"]);
         // V as in VCS — g means "first" and G is taken with it.
         set(Action::TabGit, &["V"]);
+        set(Action::TabInsight, &["Y"]);
         set(Action::NextTab, &["Ctrl+Tab"]);
         set(Action::PrevTab, &["Ctrl+Shift+Tab"]);
 

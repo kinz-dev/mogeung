@@ -9,6 +9,7 @@ use crate::git;
 use crate::health::HealthTracker;
 use crate::notify::{NotifyConfig, Notifier};
 use crate::store::Store;
+use crate::usage::UsageScanner;
 use crate::watcher::{self, Tailer};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -16,6 +17,7 @@ use mogeung_core::attention::{rank, AttentionConfig, AttentionItem};
 use mogeung_core::health::Health;
 use mogeung_core::review::{BlastRadius, DebtFile, ReviewDebt};
 use mogeung_core::session::{Collision, OpenTool, Session, SessionId, Touch};
+use mogeung_core::verify::{Claim, VerifyRun};
 use mogeung_core::{Change, EventKind, ServerMsg, TranscriptEvent};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,11 +66,18 @@ pub struct AppState {
     seqs: Mutex<HashMap<SessionId, u64>>,
     /// Root of the Claude Code state directory this daemon watches.
     pub claude_home: PathBuf,
+    /// Root of the Codex CLI state directory, watched the same read-only way
+    /// when it exists. `R-I1`.
+    pub codex_home: PathBuf,
     pub attention: AttentionConfig,
     /// What we have and have not managed to read. See `health.rs`.
     health: Mutex<HealthTracker>,
     /// Tells you a session needs attention when the window is not in front.
     notifier: Mutex<Notifier>,
+    /// Incremental token-burn scanner. Pillar G; reused by pillar F analytics.
+    usage: Mutex<UsageScanner>,
+    /// Repos with a signal run in flight — one at a time per repo. `R-E2`.
+    signal_running: Mutex<std::collections::HashSet<String>>,
 }
 
 impl AppState {
@@ -77,6 +86,14 @@ impl AppState {
     }
 
     pub fn with_home(store: Store, claude_home: PathBuf) -> Result<Arc<Self>> {
+        Self::with_homes(store, claude_home, crate::codex::default_home())
+    }
+
+    pub fn with_homes(
+        store: Store,
+        claude_home: PathBuf,
+        codex_home: PathBuf,
+    ) -> Result<Arc<Self>> {
         let loaded = store.load_sessions()?;
         let mut sessions = HashMap::new();
         let mut seqs = HashMap::new();
@@ -98,9 +115,12 @@ impl AppState {
             tailer: Mutex::new(Tailer::default()),
             seqs: Mutex::new(seqs),
             claude_home,
+            codex_home,
             attention: AttentionConfig::default(),
             health: Mutex::new(HealthTracker::new(MAX_TRANSCRIPT_BYTES)),
             notifier: Mutex::new(Notifier::default()),
+            usage: Mutex::new(UsageScanner::default()),
+            signal_running: Mutex::new(std::collections::HashSet::new()),
         }))
     }
 
@@ -113,6 +133,245 @@ impl AppState {
     /// What mogeung can currently see, and what it cannot.
     pub async fn health(&self) -> Health {
         self.health.lock().await.snapshot()
+    }
+
+    /// Token burn per session/day/repo, the trailing window, and known limit
+    /// hits. Incremental — the first call pays for the corpus, later calls
+    /// read only appended bytes. `R-G1`–`R-G3`.
+    pub async fn usage_report(&self) -> mogeung_core::usage::UsageReport {
+        let root = self.claude_home.join("projects");
+        let mut guard = self.usage.lock().await;
+        let mut scanner = std::mem::take(&mut *guard);
+        match tokio::task::spawn_blocking(move || {
+            let report = scanner.report(&root, Utc::now());
+            (scanner, report)
+        })
+        .await
+        {
+            Ok((scanner, report)) => {
+                *guard = scanner;
+                report
+            }
+            // A panicked scan loses its cache, not the daemon.
+            Err(e) => {
+                tracing::warn!("usage scan failed: {e}");
+                Default::default()
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Insight (pillar F) and docs (pillar H)
+    // -----------------------------------------------------------------------
+
+    fn projects_root(&self) -> PathBuf {
+        self.claude_home.join("projects")
+    }
+
+    fn history_path(&self) -> PathBuf {
+        self.claude_home.join("history.jsonl")
+    }
+
+    /// `R-F1`. A full pass over the corpus per call — honest and cache-free;
+    /// the client sends on Enter, not per keystroke.
+    pub async fn insight_search(&self, query: String) -> mogeung_core::insight::SearchResults {
+        let (root, hist) = (self.projects_root(), self.history_path());
+        tokio::task::spawn_blocking(move || crate::insight::search(&root, &hist, &query, 500))
+            .await
+            .unwrap_or_default()
+    }
+
+    pub async fn day_digest(&self, day: String) -> mogeung_core::insight::DayDigest {
+        let root = self.projects_root();
+        tokio::task::spawn_blocking(move || crate::insight::digest(&root, &day))
+            .await
+            .unwrap_or_default()
+    }
+
+    pub async fn recurring_failures(&self) -> Vec<mogeung_core::insight::RecurringFailure> {
+        let root = self.projects_root();
+        tokio::task::spawn_blocking(move || crate::insight::recurring_failures(&root, 2))
+            .await
+            .unwrap_or_default()
+    }
+
+    pub async fn prompt_library(&self) -> Vec<mogeung_core::insight::PromptCluster> {
+        let hist = self.history_path();
+        tokio::task::spawn_blocking(move || {
+            let h = crate::insight::history(&hist);
+            crate::insight::prompt_library(&h.entries)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    pub async fn analytics(&self) -> mogeung_core::insight::Analytics {
+        let (root, hist) = (self.projects_root(), self.history_path());
+        tokio::task::spawn_blocking(move || {
+            let h = crate::insight::history(&hist);
+            crate::insight::analytics(&h.entries, &root)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    pub async fn subagent_tree(
+        &self,
+        session_id: &str,
+    ) -> Vec<mogeung_core::insight::SubagentNode> {
+        let root = self.projects_root();
+        let id = session_id.to_string();
+        tokio::task::spawn_blocking(move || crate::insight::subagent_tree(&root, &id))
+            .await
+            .unwrap_or_default()
+    }
+
+    pub async fn decision_candidates(
+        &self,
+        session_id: &str,
+    ) -> Vec<mogeung_core::insight::DecisionCandidate> {
+        let Some(s) = self.get(session_id).await else {
+            return Vec::new();
+        };
+        let path = PathBuf::from(s.transcript_path);
+        tokio::task::spawn_blocking(move || crate::insight::decision_candidates(&path))
+            .await
+            .unwrap_or_default()
+    }
+
+    /// `R-F2` — prompt-blame from what the daemon already knows: sessions
+    /// whose edit tools named the file, each row carrying its match rule.
+    pub async fn file_sessions(&self, path: &str) -> Vec<mogeung_core::insight::FileSession> {
+        let needle = path.trim();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let sessions = self.sessions.read().await;
+        let mut out: Vec<mogeung_core::insight::FileSession> = sessions
+            .values()
+            .filter_map(|s| {
+                let hit = s
+                    .touched_files
+                    .iter()
+                    .find(|f| f.as_str() == needle || f.ends_with(needle))?;
+                let at = s
+                    .recent_touches
+                    .iter()
+                    .rev()
+                    .find(|t| &t.path == hit)
+                    .map(|t| t.at);
+                Some(mogeung_core::insight::FileSession {
+                    session_id: s.id.clone(),
+                    label: s.label(),
+                    prompt: s.last_prompt.clone(),
+                    at: at.or(Some(s.last_event_at)),
+                    matched: if hit.as_str() == needle {
+                        "edit-tool path match (exact)".to_string()
+                    } else {
+                        "edit-tool path match (suffix)".to_string()
+                    },
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| b.at.cmp(&a.at));
+        out
+    }
+
+    /// `R-H1`–`R-H5`. Only repos the daemon already knows (a session's) may
+    /// be scanned — this is not a general filesystem endpoint.
+    pub async fn doc_scan(&self, repo: &str) -> Result<mogeung_core::docs::DocInventory> {
+        let known = {
+            let sessions = self.sessions.read().await;
+            sessions.values().any(|s| {
+                s.repo_root.as_deref() == Some(repo) || s.cwd == repo
+            })
+        };
+        if !known {
+            return Err(anyhow!("not a repo of any watched session: {repo}"));
+        }
+        let root = PathBuf::from(repo);
+        Ok(
+            tokio::task::spawn_blocking(move || crate::docscan::scan(&root))
+                .await
+                .unwrap_or_default(),
+        )
+    }
+
+    /// A repo's signal state: configured command, in-flight flag, last run.
+    pub async fn signal_status(&self, repo: &str) -> ServerMsg {
+        let running = self.signal_running.lock().await.contains(repo);
+        let command = self.store.signal_command(repo);
+        let last = self
+            .store
+            .signal_last_run(repo)
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .map(Box::new);
+        ServerMsg::SignalStatus {
+            repo: repo.to_string(),
+            command,
+            running,
+            last,
+        }
+    }
+
+    pub async fn set_signal_command(&self, repo: &str, command: &str) {
+        if let Err(e) = self.store.set_signal_command(repo, command) {
+            tracing::warn!("could not store signal command: {e}");
+        }
+        let status = self.signal_status(repo).await;
+        self.broadcast(status);
+    }
+
+    /// Run a repo's configured signal command. Reached only from an explicit
+    /// client action — there is deliberately no timer or watcher that can
+    /// call this. `R-E2`/`R-E5`.
+    pub async fn run_signal(self: &Arc<Self>, session_id: &str) -> Result<()> {
+        let s = self
+            .get(session_id)
+            .await
+            .ok_or_else(|| anyhow!("unknown session"))?;
+        let repo = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
+        if repo.is_empty() {
+            return Err(anyhow!("session has no working directory yet"));
+        }
+        let Some(command) = self.store.signal_command(&repo) else {
+            return Err(anyhow!("no signal command configured for {repo}"));
+        };
+        {
+            let mut running = self.signal_running.lock().await;
+            if !running.insert(repo.clone()) {
+                return Err(anyhow!("a signal run is already in flight for {repo}"));
+            }
+        }
+        let status = self.signal_status(&repo).await;
+        self.broadcast(status);
+
+        // The session's diff, for coverage-on-changed-lines. Cloned now: the
+        // run may take minutes and the diff should be the one you clicked on.
+        let changed: Vec<mogeung_core::change::FileChange> = self
+            .changes
+            .read()
+            .await
+            .get(session_id)
+            .map(|c| c.files.clone())
+            .unwrap_or_default();
+
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            let run = crate::runner::run(&repo, &command, &changed).await;
+            match serde_json::to_string(&run) {
+                Ok(json) => {
+                    if let Err(e) = state.store.save_signal_run(&repo, &json) {
+                        tracing::warn!("could not store signal run: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("could not encode signal run: {e}"),
+            }
+            state.signal_running.lock().await.remove(&repo);
+            let status = state.signal_status(&repo).await;
+            state.broadcast(status);
+        });
+        Ok(())
     }
 
     async fn publish_health(&self) {
@@ -247,6 +506,12 @@ impl AppState {
             let Some(mut s) = self.get(&id).await else {
                 continue;
             };
+            // Codex sessions have no entry in Claude Code's live registry;
+            // their liveness belongs to `scan_codex`. Left here they would be
+            // marked dead every pass.
+            if s.source == mogeung_core::session::SessionSource::Codex {
+                continue;
+            }
             let before = (s.alive, s.live_status, s.tmux_target.clone());
             match live_by_id.get(&id) {
                 Some(e) => {
@@ -299,6 +564,7 @@ impl AppState {
             self.recompute_change(&id).await;
         }
 
+        self.scan_codex().await;
         self.refresh_collisions().await;
 
         {
@@ -397,6 +663,11 @@ impl AppState {
             // Filled by the scan's liveness pass, which is where the pid it
             // needs becomes known.
             tmux_target: None,
+            limit_hit_at: None,
+            limit_resets: None,
+            verify_runs: Vec::new(),
+            claims: Vec::new(),
+            source: Default::default(),
         };
         self.sessions.write().await.insert(s.id.clone(), s);
 
@@ -491,6 +762,16 @@ impl AppState {
             if p.error.is_some() {
                 s.error = p.error;
             }
+            // A limit hit pins the session until something moves again: a new
+            // human turn (you came back after the reset) or real assistant
+            // output (the CLI resumed on its own). `R-G1`.
+            if p.limit_hit {
+                s.limit_hit_at = Some(p.ts.unwrap_or_else(Utc::now));
+                s.limit_resets = p.limit_resets.clone();
+            } else if p.is_turn || p.tokens_out > 0 {
+                s.limit_hit_at = None;
+                s.limit_resets = None;
+            }
             s.tool_calls += p.tool_calls;
             s.tokens_in = s.tokens_in.max(p.tokens_in);
             s.tokens_out += p.tokens_out;
@@ -509,6 +790,22 @@ impl AppState {
             if s.recent_touches.len() > MAX_RECENT_TOUCHES {
                 let excess = s.recent_touches.len() - MAX_RECENT_TOUCHES;
                 s.recent_touches.drain(..excess);
+            }
+
+            // Verification-shaped commands become evidence rows, paired with
+            // their results below by tool_use id. `R-E1`.
+            for (id, kind, cmd) in &p.verify_cmds {
+                s.verify_runs.push(VerifyRun {
+                    kind: *kind,
+                    command: cmd.clone(),
+                    at,
+                    ok: None,
+                    tool_use_id: id.clone(),
+                });
+            }
+            if s.verify_runs.len() > 30 {
+                let excess = s.verify_runs.len() - 30;
+                s.verify_runs.drain(..excess);
             }
 
             // Open tool calls: a `tool_use` with no matching `tool_result` is
@@ -537,11 +834,62 @@ impl AppState {
                             s.recent_tools.drain(..excess);
                         }
                     }
-                    EventKind::ToolResult { tool_use_id, .. } => {
+                    EventKind::ToolResult {
+                        tool_use_id,
+                        is_error,
+                        ..
+                    } => {
                         s.open_tools.retain(|t| &t.id != tool_use_id);
+                        // A verify command's outcome is its tool result's
+                        // error flag — the exit code, one layer up. `R-E1`.
+                        if let Some(r) = s
+                            .verify_runs
+                            .iter_mut()
+                            .rev()
+                            .find(|r| r.tool_use_id == *tool_use_id && r.ok.is_none())
+                        {
+                            r.ok = Some(!is_error);
+                        }
                     }
                     _ => {}
                 }
+            }
+
+            // Claims bind to the newest completed run of their kind — the
+            // binding itself is stated on the claim, never implied. `R-E3`.
+            for (kind, text) in &p.claims {
+                let bound = s
+                    .verify_runs
+                    .iter()
+                    .rev()
+                    .find(|r| r.kind == *kind && r.ok.is_some());
+                let (evidence, contradicted) = match bound {
+                    Some(r) => (
+                        format!(
+                            "matched: {} — exited {}",
+                            r.command,
+                            if r.ok == Some(true) { "ok" } else { "nonzero" }
+                        ),
+                        r.ok == Some(false),
+                    ),
+                    None => (
+                        format!("no {} run seen before this claim", kind.label()),
+                        false,
+                    ),
+                };
+                if !s.claims.iter().any(|c| c.text == *text) {
+                    s.claims.push(Claim {
+                        text: text.clone(),
+                        at,
+                        kind: *kind,
+                        evidence,
+                        contradicted,
+                    });
+                }
+            }
+            if s.claims.len() > 20 {
+                let excess = s.claims.len() - 20;
+                s.claims.drain(..excess);
             }
             events.extend(p.events);
         }
@@ -567,6 +915,189 @@ impl AppState {
 
         self.put(s).await;
         self.emit(id, events, last_ts).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Codex (R-I1)
+    // -----------------------------------------------------------------------
+
+    /// One read-only pass over the Codex install, mapping its threads into
+    /// the same Session model. Absent install → absent from health, quietly;
+    /// present-but-empty → reported as exactly that.
+    async fn scan_codex(&self) {
+        use crate::codex::{CodexInstall, CodexStatus};
+        use mogeung_core::session::SessionSource;
+
+        let Some(install) = CodexInstall::discover(&self.codex_home) else {
+            return;
+        };
+        let result = tokio::task::spawn_blocking(move || {
+            let index = install.list_threads();
+            let details: Vec<_> = index
+                .threads
+                .iter()
+                .filter(|t| !t.archived)
+                .map(|t| {
+                    let roll = install.read_thread_rollout(t);
+                    (t.clone(), roll)
+                })
+                .collect();
+            (index.error, details)
+        })
+        .await;
+        let Ok((index_error, details)) = result else {
+            return;
+        };
+
+        // The Codex canary: unknown rollout kinds, merged across threads and
+        // replaced wholesale (rollouts are re-read each scan; accumulating
+        // would inflate, the skipped-history trap again).
+        let mut unknown: std::collections::BTreeMap<String, u64> = Default::default();
+        for (_, roll) in &details {
+            if let Some(r) = roll {
+                for (kind, n) in &r.counts.unknown_kinds {
+                    *unknown.entry(kind.clone()).or_insert(0) += n;
+                }
+            }
+        }
+        self.health.lock().await.set_codex(
+            true,
+            details.len() as u32,
+            index_error,
+            unknown.into_iter().collect(),
+        );
+
+        let now = Utc::now();
+        for (t, roll) in details {
+            let status = roll.as_ref().map(|r| r.status());
+            let recent = t
+                .recency()
+                .map(|r| (now - r).num_minutes() < 10)
+                .unwrap_or(false);
+            // No pid registry exists for Codex; "alive" is recency plus an
+            // unfinished turn — a heuristic, and labelled one in the docs.
+            let alive = recent && !matches!(status, Some(CodexStatus::Done) | None);
+            let live_status = match status {
+                Some(CodexStatus::Working) => Some(mogeung_core::LiveStatus::Busy),
+                Some(CodexStatus::Waiting) => Some(mogeung_core::LiveStatus::Idle),
+                _ => None,
+            };
+
+            let existing = self.get(&t.id).await;
+            let mut s = existing.unwrap_or_else(|| Session {
+                id: t.id.clone(),
+                title: None,
+                name: None,
+                last_prompt: None,
+                cwd: String::new(),
+                repo_root: None,
+                git_branch: None,
+                pid: None,
+                alive: false,
+                live_status: None,
+                version: None,
+                started_at: t.created_at.unwrap_or(now),
+                last_event_at: t.updated_at.unwrap_or(now),
+                status_since: None,
+                turns: 0,
+                tool_calls: 0,
+                tokens_in: 0,
+                tokens_out: 0,
+                last_activity: None,
+                touched_files: Vec::new(),
+                base_sha: None,
+                files_changed: 0,
+                insertions: 0,
+                deletions: 0,
+                error: None,
+                transcript_path: String::new(),
+                reviewed: false,
+                open_tools: Vec::new(),
+                snoozed_until: None,
+                collisions: Vec::new(),
+                loop_signal: None,
+                recent_touches: Vec::new(),
+                recent_tools: Vec::new(),
+                tmux_target: None,
+                limit_hit_at: None,
+                limit_resets: None,
+                verify_runs: Vec::new(),
+                claims: Vec::new(),
+                source: SessionSource::Codex,
+            });
+
+            let before = serde_json::to_string(&s).unwrap_or_default();
+            s.source = SessionSource::Codex;
+            s.title = t.title.clone().or(t.name.clone()).or(s.title);
+            s.last_prompt = t
+                .first_user_message
+                .clone()
+                .or(t.preview.clone())
+                .filter(|p| !p.is_empty())
+                .or(s.last_prompt);
+            if let Some(cwd) = &t.cwd {
+                if !cwd.is_empty() {
+                    s.cwd = cwd.clone();
+                }
+            }
+            s.git_branch = t.git_branch.clone().filter(|b| !b.is_empty()).or(s.git_branch);
+            s.version = t.cli_version.clone().or(s.version);
+            if let Some(u) = t.updated_at {
+                s.last_event_at = u;
+            }
+            s.alive = alive;
+            if s.live_status != live_status {
+                s.status_since = Some(now);
+            }
+            s.live_status = live_status;
+            if let Some(r) = &roll {
+                s.last_activity = r.last_activity.clone().or(s.last_activity);
+                s.tool_calls = r.tool_calls as u32;
+                if let Some(u) = &r.last_usage {
+                    // Codex reports cumulative totals; adopt, don't add.
+                    s.tokens_in = u.total_in();
+                    s.tokens_out = u.total_out();
+                } else if let Some(total) = t.tokens_used {
+                    // Index-only fallback. One combined figure exists; calling
+                    // it input (the dominant share) beats inventing a split.
+                    s.tokens_in = total;
+                }
+                if let Some(p) = &t.rollout_path {
+                    s.transcript_path = p.to_string_lossy().to_string();
+                }
+                // A trailing approval request is a permission prompt in Codex
+                // clothing — same tier, same reason (`R-B4`'s distinction).
+                if matches!(status, Some(CodexStatus::Waiting)) {
+                    if s.open_tools.is_empty() {
+                        s.open_tools.push(OpenTool {
+                            id: "codex-approval".into(),
+                            name: "approval".into(),
+                            summary: r.last_activity.clone().unwrap_or_default(),
+                            at: s.last_event_at,
+                        });
+                    }
+                } else {
+                    s.open_tools.retain(|o| o.id != "codex-approval");
+                }
+            }
+
+            // Pin the diff base exactly like a Claude session — the git
+            // observer generalises for free, which is half of A23's answer.
+            if s.repo_root.is_none() && !s.cwd.is_empty() {
+                let cwd = PathBuf::from(&s.cwd);
+                if git::is_repo(&cwd) {
+                    s.repo_root =
+                        git::repo_root(&cwd).ok().map(|p| p.to_string_lossy().to_string());
+                    if s.base_sha.is_none() {
+                        s.base_sha = git::base_for_session(&cwd, s.started_at).ok();
+                    }
+                }
+            }
+
+            if serde_json::to_string(&s).unwrap_or_default() != before {
+                self.put(s).await;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1104,9 +1635,14 @@ impl AppState {
     /// session needs you, and this puts you in front of it. It moves *your*
     /// window and types nothing — the agent is untouched.
     ///
-    /// Resolves the session's pid to its controlling tty, works out which
-    /// terminal application owns that process by walking its ancestry, and asks
-    /// that application to focus the matching tab.
+    /// On macOS: resolves the session's pid to its controlling tty, works out
+    /// which terminal application owns that process by walking its ancestry,
+    /// and asks that application (over AppleScript) to focus the matching tab.
+    ///
+    /// On Linux/X11: walks the pid's ancestry to the process that owns a
+    /// window and activates it with wmctrl or xdotool, whichever exists. On
+    /// Wayland it refuses honestly — no protocol lets one application raise
+    /// another's window, and pretending otherwise would fail mutely. `R-I3`.
     pub async fn focus_terminal(&self, id: &str) -> Result<()> {
         let session = self
             .get(id)
@@ -1117,43 +1653,13 @@ impl AppState {
             .filter(|_| session.alive)
             .ok_or_else(|| anyhow!("session is not running, so it has no terminal"))?;
 
-        let tty = tty_of(pid)
-            .ok_or_else(|| anyhow!("pid {pid} has no controlling terminal"))?;
-        // `ps` prints "ttys004"; every terminal reports "/dev/ttys004".
-        let dev = format!("/dev/{}", tty.trim_start_matches("/dev/"));
-
-        // Ask the process tree rather than guessing. Trying every terminal in
-        // turn would work, but it raises applications that do not own the tab.
-        let detected = terminal_app_of(pid);
-        let candidates: Vec<TerminalApp> = match detected {
-            Some(app) => vec![app],
-            // Unknown ancestry (a multiplexer, a wrapper, an app we do not
-            // know). Fall back to asking the ones we can drive; the scripts
-            // only activate on a match, so a miss is silent.
-            None => TerminalApp::ALL.to_vec(),
-        };
-
-        for app in &candidates {
-            if app.focus(&dev)? {
-                return Ok(());
-            }
+        // Runtime-selected rather than cfg-gated so both halves compile — and
+        // stay testable — on every platform.
+        if cfg!(target_os = "macos") {
+            focus_terminal_macos(pid)
+        } else {
+            focus_terminal_linux(pid)
         }
-
-        Err(match detected {
-            Some(app) => anyhow!(
-                "{} is running this session on {dev}, but has no tab reporting that tty — \
-                 if it is inside tmux or screen, mogeung cannot see the individual pane",
-                app.name()
-            ),
-            None => anyhow!(
-                "could not work out which terminal owns {dev}. Supported: {}",
-                TerminalApp::ALL
-                    .iter()
-                    .map(|a| a.name())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        })
     }
 
     /// Open a terminal running interactive `claude` in `dir`.
@@ -1162,6 +1668,10 @@ impl AppState {
     /// CLI, in your terminal, with nothing wrapped. It exists because the other
     /// half of v0.1's failure was that reaching three or four parallel sessions
     /// was awkward.
+    ///
+    /// macOS drives Terminal.app over AppleScript; Linux walks the candidate
+    /// table in [`linux_terminal_attempts`], preferring a session under tmux
+    /// (ADR-0010) so what it starts is hostable, not merely visible. `R-I3`.
     pub async fn launch_terminal(&self, dir: &str, worktree: bool) -> Result<()> {
         let dir = PathBuf::from(shellexpand(dir));
         if !dir.exists() {
@@ -1180,28 +1690,351 @@ impl AppState {
             dir
         };
 
-        // `open -a Terminal` cannot carry a command, so drive Terminal.app
-        // directly. Failing that, fall back to just opening the directory.
-        let script = format!(
-            "tell application \"Terminal\"\n activate\n do script \"cd {} && claude\"\nend tell",
-            shell_quote(&target.to_string_lossy())
-        );
-        let status = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .status();
-
-        match status {
-            Ok(s) if s.success() => Ok(()),
-            _ => {
-                std::process::Command::new("open")
-                    .arg(target.as_os_str())
-                    .spawn()
-                    .map(|_| ())
-                    .map_err(|e| anyhow!("could not open a terminal: {e}"))
-            }
+        // Runtime-selected, like `focus_terminal`, so both compile everywhere.
+        if cfg!(target_os = "macos") {
+            launch_terminal_macos(&target)
+        } else {
+            launch_terminal_linux(&target)
         }
     }
+}
+
+/// The macOS launch path, byte-for-byte the original: `open -a Terminal`
+/// cannot carry a command, so drive Terminal.app directly. Failing that, fall
+/// back to just opening the directory.
+fn launch_terminal_macos(target: &Path) -> Result<()> {
+    let script = format!(
+        "tell application \"Terminal\"\n activate\n do script \"cd {} && claude\"\nend tell",
+        shell_quote(&target.to_string_lossy())
+    );
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        _ => {
+            std::process::Command::new("open")
+                .arg(target.as_os_str())
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| anyhow!("could not open a terminal: {e}"))
+        }
+    }
+}
+
+/// The Linux launch path: first terminal emulator that spawns wins, each
+/// handed the same argv — no shell ever sees an interpolated string.
+fn launch_terminal_linux(target: &Path) -> Result<()> {
+    let dir = target.to_string_lossy();
+    // tmux preference is decided here, at runtime, and passed into the pure
+    // composition so tests can pin both shapes on any machine.
+    let tmux = std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let stamp = Utc::now().format("%m%d-%H%M%S").to_string();
+    let cmd = in_terminal_command(&dir, tmux, &stamp);
+
+    let mut tried: Vec<String> = Vec::new();
+    for (program, args, cwd) in linux_terminal_attempts(&dir, &cmd) {
+        let mut c = std::process::Command::new(&program);
+        c.args(&args);
+        if let Some(d) = &cwd {
+            c.current_dir(d);
+        }
+        match c.spawn() {
+            Ok(mut child) => {
+                // Reaped off-frame, or every launch leaves a zombie behind.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            // Not installed is the ordinary case for most rows; move on.
+            Err(_) => tried.push(program),
+        }
+    }
+    Err(anyhow!(
+        "no terminal emulator found — tried, in order: {}",
+        tried.join(", ")
+    ))
+}
+
+/// One way a terminal might launch: program, arguments, and an optional
+/// working directory for emulators whose only "start here" is inheritance.
+/// The same shape as `ui.rs::attempts`, for the same reason.
+type LaunchAttempt = (String, Vec<String>, Option<String>);
+
+/// The command a freshly launched terminal runs, as argv.
+///
+/// With tmux installed the session starts under it — what `yolomo` does, and
+/// why (ADR-0010): tmux owns the pty, so mogeung can host the session in a
+/// pane instead of only pointing at it. Without tmux it is a bare `claude`,
+/// visible but not hostable. The stamp keeps names unique without probing the
+/// server, and the name is sanitised the way `yolomo` does it — `:` and `.`
+/// are tmux target separators, so a raw directory name could be unaddressable.
+fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<String> {
+    if !tmux_available {
+        return vec!["claude".to_string()];
+    }
+    let safe: String = Path::new(dir)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
+        .collect();
+    vec![
+        "tmux".to_string(),
+        "new-session".to_string(),
+        "-s".to_string(),
+        format!("mogeung-{safe}-{stamp}"),
+        "-c".to_string(),
+        dir.to_string(),
+        "claude".to_string(),
+    ]
+}
+
+/// The Linux terminal candidates, in order — the first program that spawns
+/// wins. The Debian alternatives symlink goes first because it is the user's
+/// own choice; it and xterm have no workdir flag, so they get the directory
+/// by inheritance. `cmd` is appended as argv, never joined into a string.
+fn linux_terminal_attempts(dir: &str, cmd: &[String]) -> Vec<LaunchAttempt> {
+    let with_cmd = |mut pre: Vec<String>| -> Vec<String> {
+        pre.extend(cmd.iter().cloned());
+        pre
+    };
+    vec![
+        ("x-terminal-emulator".to_string(), with_cmd(vec!["-e".into()]), Some(dir.to_string())),
+        ("gnome-terminal".to_string(), with_cmd(vec![format!("--working-directory={dir}"), "--".into()]), None),
+        ("konsole".to_string(), with_cmd(vec!["--workdir".into(), dir.into(), "-e".into()]), None),
+        // `-x` takes the remainder as argv; `-e` would want one shell-parsed
+        // string, which is exactly the interpolation this table exists to avoid.
+        ("xfce4-terminal".to_string(), with_cmd(vec![format!("--working-directory={dir}"), "-x".into()]), None),
+        ("alacritty".to_string(), with_cmd(vec!["--working-directory".into(), dir.into(), "-e".into()]), None),
+        ("kitty".to_string(), with_cmd(vec!["--directory".into(), dir.into()]), None),
+        ("xterm".to_string(), with_cmd(vec!["-e".into()]), Some(dir.to_string())),
+    ]
+}
+
+/// The macOS focus path: pid → controlling tty → the terminal application
+/// that owns it, asked over AppleScript to raise the matching tab.
+fn focus_terminal_macos(pid: u32) -> Result<()> {
+    let tty = tty_of(pid)
+        .ok_or_else(|| anyhow!("pid {pid} has no controlling terminal"))?;
+    // `ps` prints "ttys004"; every terminal reports "/dev/ttys004".
+    let dev = format!("/dev/{}", tty.trim_start_matches("/dev/"));
+
+    // Ask the process tree rather than guessing. Trying every terminal in
+    // turn would work, but it raises applications that do not own the tab.
+    let detected = terminal_app_of(pid);
+    let candidates: Vec<TerminalApp> = match detected {
+        Some(app) => vec![app],
+        // Unknown ancestry (a multiplexer, a wrapper, an app we do not
+        // know). Fall back to asking the ones we can drive; the scripts
+        // only activate on a match, so a miss is silent.
+        None => TerminalApp::ALL.to_vec(),
+    };
+
+    for app in &candidates {
+        if app.focus(&dev)? {
+            return Ok(());
+        }
+    }
+
+    Err(match detected {
+        Some(app) => anyhow!(
+            "{} is running this session on {dev}, but has no tab reporting that tty — \
+             if it is inside tmux or screen, mogeung cannot see the individual pane",
+            app.name()
+        ),
+        None => anyhow!(
+            "could not work out which terminal owns {dev}. Supported: {}",
+            TerminalApp::ALL
+                .iter()
+                .map(|a| a.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
+}
+
+/// The Linux focus path. X11 only, and honestly so: Wayland has no protocol
+/// for one application to raise another's window, so the refusal says that
+/// instead of failing mutely. `R-I3`.
+///
+/// The window search walks the pid's ancestry — the session's pid is
+/// `claude`, whose window (if any) belongs to a terminal several parents up.
+/// A session under tmux dead-ends at the tmux *server*, a daemon with no
+/// window; the thing actually on screen is whichever client is attached, so
+/// the walk starts from that client instead — see [`linux_focus_pid`].
+fn focus_terminal_linux(pid: u32) -> Result<()> {
+    if let Some(msg) = wayland_refusal(std::env::var("XDG_SESSION_TYPE").ok().as_deref()) {
+        return Err(anyhow!(msg));
+    }
+
+    let focus_pid = linux_focus_pid(pid)?;
+    let chain = ancestor_chain(focus_pid, &process_parents());
+
+    // wmctrl first: one call lists every window with its owning pid.
+    match std::process::Command::new("wmctrl").args(["-l", "-p"]).output() {
+        Ok(out) if out.status.success() => {
+            let windows = parse_wmctrl_windows(&String::from_utf8_lossy(&out.stdout));
+            let id = window_for(&chain, &windows).ok_or_else(|| {
+                anyhow!(
+                    "no window claims pid {focus_pid} or its ancestors — \
+                     the terminal may not report its pid to the window manager"
+                )
+            })?;
+            let st = std::process::Command::new("wmctrl")
+                .args(["-i", "-a", &id])
+                .status()
+                .map_err(|e| anyhow!("wmctrl failed: {e}"))?;
+            return if st.success() {
+                Ok(())
+            } else {
+                Err(anyhow!("wmctrl could not activate window {id}"))
+            };
+        }
+        // Not installed, or the X connection failed — try the next tool.
+        _ => {}
+    }
+
+    // xdotool: no all-windows-with-pids listing, so search per ancestor,
+    // closest first.
+    let mut xdotool_present = false;
+    for p in &chain {
+        match std::process::Command::new("xdotool")
+            .args(["search", "--pid", &p.to_string()])
+            .output()
+        {
+            Ok(out) => {
+                xdotool_present = true;
+                let id = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .find_map(|l| (!l.trim().is_empty()).then(|| l.trim().to_string()));
+                if let Some(id) = id {
+                    let st = std::process::Command::new("xdotool")
+                        .args(["windowactivate", &id])
+                        .status()
+                        .map_err(|e| anyhow!("xdotool failed: {e}"))?;
+                    return if st.success() {
+                        Ok(())
+                    } else {
+                        Err(anyhow!("xdotool could not activate window {id}"))
+                    };
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    if xdotool_present {
+        Err(anyhow!(
+            "no window claims pid {focus_pid} or its ancestors — \
+             the terminal may not report its pid to the window manager"
+        ))
+    } else {
+        Err(anyhow!(
+            "focusing a window needs wmctrl or xdotool, and neither is \
+             installed — install one and jump-to-terminal works on X11"
+        ))
+    }
+}
+
+/// The honest Wayland refusal, split out so the words are testable. `None`
+/// means "not Wayland — carry on".
+fn wayland_refusal(session_type: Option<&str>) -> Option<String> {
+    (session_type == Some("wayland")).then(|| {
+        "this desktop runs Wayland, which has no protocol for one application \
+         to raise another's window — the X11 tools (wmctrl, xdotool) cannot \
+         help here. mogeung can only point you at the session"
+            .to_string()
+    })
+}
+
+/// The pid whose window should be raised. A bare session is its own answer;
+/// a tmux session's visible surface is the attached client's terminal, so
+/// focus that — and when nothing is attached, say so usefully rather than
+/// hunting for a window the tmux server does not have.
+fn linux_focus_pid(pid: u32) -> Result<u32> {
+    let Some(target) = tmux_target_of(pid) else {
+        return Ok(pid);
+    };
+    let session = target.split(':').next().unwrap_or(&target).to_string();
+    tmux_client_pids(&session).into_iter().next().ok_or_else(|| {
+        anyhow!(
+            "this session runs under tmux ({target}) with no terminal attached — \
+             attach one with `tmux attach -t '{session}'`, or use mogeung's Terminal tab"
+        )
+    })
+}
+
+/// The pids of clients attached to a tmux session. Empty when tmux is absent,
+/// the server is down, or nothing is attached — all ordinary, none an error.
+fn tmux_client_pids(session: &str) -> Vec<u32> {
+    let Ok(out) = std::process::Command::new("tmux")
+        .args(["list-clients", "-t", &format!("={session}"), "-F", "#{client_pid}"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    parse_pid_lines(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_pid_lines(stdout: &str) -> Vec<u32> {
+    stdout.lines().filter_map(|l| l.trim().parse().ok()).collect()
+}
+
+/// Parse `wmctrl -lp` into `(owning pid, window id)` pairs. Lines look like
+/// `0x03c00003 -1 2233 host title…`; a window that does not report its pid
+/// shows 0, which no real process chain contains, so it can never match.
+fn parse_wmctrl_windows(stdout: &str) -> Vec<(u32, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let mut it = line.split_whitespace();
+            let id = it.next()?.to_string();
+            let _desktop = it.next()?;
+            let pid: u32 = it.next()?.parse().ok()?;
+            Some((pid, id))
+        })
+        .collect()
+}
+
+/// `pid` and its ancestors, closest first, walked in the given table.
+/// Bounded and cycle-proof for the same reason [`tmux_target_in`] is: a
+/// corrupt table must not spin the daemon.
+fn ancestor_chain(pid: u32, parents: &HashMap<u32, u32>) -> Vec<u32> {
+    let mut chain = vec![pid];
+    let mut current = pid;
+    for _ in 0..24 {
+        let Some(&parent) = parents.get(&current) else { break };
+        if parent <= 1 || parent == current || chain.contains(&parent) {
+            break;
+        }
+        chain.push(parent);
+        current = parent;
+    }
+    chain
+}
+
+/// The window belonging to the closest ancestor that owns one. Closest-first
+/// matters: on a nested desktop the far ancestry can reach the compositor,
+/// whose window is very much not the one to raise.
+fn window_for(chain: &[u32], windows: &[(u32, String)]) -> Option<String> {
+    chain.iter().find_map(|pid| {
+        windows
+            .iter()
+            .find(|(p, _)| p == pid)
+            .map(|(_, id)| id.clone())
+    })
 }
 
 /// Is this session repeating itself rather than making progress?
@@ -1600,6 +2433,124 @@ mod terminal_tests {
     #[test]
     fn a_process_outside_tmux_has_no_target() {
         assert_eq!(tmux_target_of(1), None);
+    }
+
+    /// The Linux launch table must speak Linux — no `open`, no `osascript` —
+    /// and every row must both carry the directory (flag or inherited cwd)
+    /// and end with the command it was given, as argv, never joined.
+    #[test]
+    fn linux_launch_attempts_carry_dir_and_command_as_argv() {
+        let cmd = vec!["claude".to_string()];
+        let list = linux_terminal_attempts("/some/repo", &cmd);
+        assert!(!list.is_empty());
+        // The Debian alternatives symlink is the user's own choice; it leads.
+        assert_eq!(list[0].0, "x-terminal-emulator");
+        assert_eq!(list[0].2.as_deref(), Some("/some/repo"), "no flag means inherit the cwd");
+        for (program, args, cwd) in &list {
+            assert_ne!(*program, "open", "`open -a` is macOS-speak");
+            assert_ne!(*program, "osascript", "AppleScript is macOS-speak");
+            let in_args = args.iter().any(|a| a.contains("/some/repo"));
+            let in_cwd = cwd.as_deref() == Some("/some/repo");
+            assert!(in_args || in_cwd, "{program} would launch without the directory");
+            assert_eq!(
+                &args[args.len() - cmd.len()..],
+                cmd.as_slice(),
+                "{program} must receive the command verbatim as trailing argv"
+            );
+            // The command is argv all the way down; nothing may re-parse it.
+            assert!(
+                !args.iter().any(|a| a == "sh" || a == "bash" || a == "-c"),
+                "{program} would hand the command to a shell"
+            );
+        }
+        for name in ["gnome-terminal", "konsole", "xfce4-terminal", "alacritty", "kitty", "xterm"] {
+            assert!(list.iter().any(|(p, _, _)| p == name), "{name} missing from the table");
+        }
+    }
+
+    /// ADR-0010: with tmux present, what launch starts must be hostable, not
+    /// merely visible — so the in-terminal command is a tmux session, named
+    /// safely (`:` and `.` are tmux target separators) and started in `dir`.
+    #[test]
+    fn launch_prefers_tmux_when_available() {
+        let cmd = in_terminal_command("/home/me/my proj.v2", true, "0729-101500");
+        assert_eq!(cmd[0], "tmux");
+        assert_eq!(cmd[1], "new-session");
+        let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
+        assert_eq!(name, "mogeung-my-proj-v2-0729-101500");
+        let dir = &cmd[cmd.iter().position(|a| a == "-c").unwrap() + 1];
+        assert_eq!(dir, "/home/me/my proj.v2", "the directory itself must stay verbatim");
+        assert_eq!(cmd.last().unwrap(), "claude");
+
+        // Without tmux: bare claude, same as the macOS command has always run.
+        assert_eq!(in_terminal_command("/x", false, "s"), vec!["claude".to_string()]);
+    }
+
+    /// The spec's words: on Wayland the answer is an honest refusal that says
+    /// why and names the tools that cannot help — never a mute failure, and
+    /// never a claimed success.
+    #[test]
+    fn wayland_is_an_honest_refusal() {
+        let msg = wayland_refusal(Some("wayland")).expect("wayland must refuse");
+        assert!(msg.contains("Wayland"));
+        assert!(msg.contains("wmctrl") && msg.contains("xdotool"), "must name the tools");
+        assert_eq!(wayland_refusal(Some("x11")), None);
+        assert_eq!(wayland_refusal(None), None, "no session type is not proof of Wayland");
+    }
+
+    /// `wmctrl -lp` lines are `id desktop pid host title…`; pid 0 (a window
+    /// that reports none) must parse but can never match a real chain, and a
+    /// malformed line is skipped, not fatal.
+    #[test]
+    fn wmctrl_window_list_parses_and_junk_is_dropped() {
+        let windows = parse_wmctrl_windows(
+            "0x03c00003 -1 2233 host konsole — ~/proj\n\
+             0x04000007  0 0 host no-pid window\n\
+             0x05000001  2 4455 host tilix: two  spaced  title\n\
+             garbage line\n",
+        );
+        assert_eq!(
+            windows,
+            vec![
+                (2233, "0x03c00003".to_string()),
+                (0, "0x04000007".to_string()),
+                (4455, "0x05000001".to_string()),
+            ]
+        );
+        assert_eq!(window_for(&[9999, 4455], &windows), Some("0x05000001".to_string()));
+        assert_eq!(window_for(&[1], &windows), None);
+    }
+
+    /// The ancestor walk is closest-first — on a nested desktop the far end
+    /// of the chain is the compositor, the wrong window to raise — and a
+    /// cyclic parent table must terminate, not spin the daemon.
+    #[test]
+    fn ancestor_chain_is_closest_first_and_cycle_proof() {
+        let mut parents = HashMap::new();
+        parents.insert(100, 50); // claude → shell
+        parents.insert(50, 20); //  shell → terminal (owns a window)
+        parents.insert(20, 10); //  terminal → compositor (also owns one)
+        parents.insert(10, 1);
+        assert_eq!(ancestor_chain(100, &parents), vec![100, 50, 20, 10]);
+
+        let windows = vec![(10, "0xcompositor".to_string()), (20, "0xterminal".to_string())];
+        assert_eq!(
+            window_for(&ancestor_chain(100, &parents), &windows),
+            Some("0xterminal".to_string()),
+            "the closest ancestor's window wins"
+        );
+
+        let mut cyclic = HashMap::new();
+        cyclic.insert(3, 2);
+        cyclic.insert(2, 3);
+        assert_eq!(ancestor_chain(3, &cyclic), vec![3, 2]);
+    }
+
+    /// tmux client pids arrive one per line; anything unparseable is skipped.
+    #[test]
+    fn tmux_client_pid_lines_parse() {
+        assert_eq!(parse_pid_lines("4210\n\n5311\nnotapid\n"), vec![4210, 5311]);
+        assert!(parse_pid_lines("").is_empty());
     }
 
     /// The real shape is `tmux pane → shell → claude`, and it is *claude's* pid

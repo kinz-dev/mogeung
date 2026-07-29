@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 270 passing |
-| Rust | 26272 lines |
-| Docs | 46 files, 10 ADRs |
+| Tests | 422 passing |
+| Rust | 39864 lines |
+| Docs | 56 files, 10 ADRs |
 
 ## Assumptions
 
-Untested: **6** · At risk: **2** · Supported: 10 · Refuted: 1
+Untested: **10** · At risk: **3** · Supported: 11 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -34,4 +34,14 @@ Untested: **6** · At risk: **2** · Supported: 10 · Refuted: 1
 | [Git depth — reading parity with a commercial client](docs/features/0011-git-depth.md) | `shipped` | [A13, A18, A19] |
 | [Git table stakes — commit details, log filtering, file history](docs/features/0012-git-table-stakes.md) | `shipped` | [A13, A18, A19] |
 | [Git reach — forensics, ergonomics, refs, conflicts, review-state](docs/features/0013-git-reach.md) | `shipped` | [A13, A18, A19] |
+| [IntelliJ-style commit view — file tree, one file's diff, details](docs/features/0014-intellij-commit-view.md) | `in-progress` | [A13] |
+| [Rate limits and token burn](docs/features/0015-rate-limits.md) | `in-progress` | [A4, A20] |
+| [Verification — claims against evidence](docs/features/0016-verification.md) | `in-progress` | [A4, A7, A21] |
+| [Cross-session intelligence](docs/features/0017-cross-session.md) | `in-progress` | [A1, A4, A22] |
+| [Editor reach — git ergonomics, navigation, comforts](docs/features/0018-editor-reach.md) | `in-progress` | [A13, A15, A16] |
+| [Waiting count in the tray](docs/features/0019-waiting-count-tray.md) | `in-progress` | [A25] |
+| [Codex adapter](docs/features/0020-codex-adapter.md) | `in-progress` | [A4, A23] |
+| [Linux reach and remote daemon](docs/features/0021-linux-and-remote.md) | `in-progress` | [A13, A24] |
+| [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `in-progress` | [A10] |
+| [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `in-progress` | [A19] |
 

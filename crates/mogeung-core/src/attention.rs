@@ -17,6 +17,11 @@ pub enum AttentionReason {
     Stalled,
     /// Exited, and left changes nobody has read.
     NeedsReview,
+    /// Hit the five-hour rate limit and cannot proceed until it resets.
+    ///
+    /// Below `Failed`: a failure might be fixable right now, a limit is not —
+    /// but you still need to know four sessions just went dark at once. `R-G1`.
+    RateLimited,
     /// Hit an API error or ended badly.
     Failed,
     /// Alive and idle: it is waiting for you to type something.
@@ -41,6 +46,7 @@ impl AttentionReason {
             AttentionReason::AwaitingPermission => 1100,
             AttentionReason::AwaitingInput => 1000,
             AttentionReason::Failed => 900,
+            AttentionReason::RateLimited => 850,
             AttentionReason::NeedsReview => 800,
             AttentionReason::Stalled => 700,
             AttentionReason::Running => 100,
@@ -53,6 +59,7 @@ impl AttentionReason {
             AttentionReason::AwaitingPermission => "APPROVE",
             AttentionReason::AwaitingInput => "WAITING",
             AttentionReason::Failed => "FAILED",
+            AttentionReason::RateLimited => "LIMIT",
             AttentionReason::NeedsReview => "REVIEW",
             AttentionReason::Stalled => "STALLED",
             AttentionReason::Running => "running",
@@ -66,6 +73,7 @@ impl AttentionReason {
             AttentionReason::AwaitingPermission
                 | AttentionReason::AwaitingInput
                 | AttentionReason::Failed
+                | AttentionReason::RateLimited
                 | AttentionReason::NeedsReview
                 | AttentionReason::Stalled
         )
@@ -117,6 +125,19 @@ pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> Atten
         (AttentionReason::Failed, err.clone())
     } else if s.alive {
         match s.live_status {
+            // A limit-hit session looks idle to the registry, but "waiting for
+            // you" would be a lie — no amount of typing helps until the reset.
+            _ if s.limit_hit_at.is_some() => {
+                let resets = s
+                    .limit_resets
+                    .as_deref()
+                    .map(|r| format!(" — resets {r}"))
+                    .unwrap_or_default();
+                (
+                    AttentionReason::RateLimited,
+                    format!("hit the session limit{resets}"),
+                )
+            }
             // An unanswered tool call means it is blocked on a prompt, not
             // merely finished. Checked before the plain-idle case.
             Some(LiveStatus::Idle) if s.awaiting_permission().is_some() => {
@@ -242,6 +263,11 @@ mod tests {
             recent_touches: vec![],
             recent_tools: vec![],
             tmux_target: None,
+            limit_hit_at: None,
+            limit_resets: None,
+            verify_runs: Vec::new(),
+            claims: Vec::new(),
+            source: Default::default(),
         }
     }
 
@@ -357,6 +383,36 @@ mod tests {
             AttentionReason::Running
         );
         assert!(s.awaiting_permission().is_none());
+    }
+
+    /// R-G1. A limit-hit session must not masquerade as "waiting for you" —
+    /// typing at it does nothing until the reset — but it must not be silent
+    /// either, because several sessions usually go dark at once.
+    #[test]
+    fn a_limit_hit_session_is_neither_waiting_nor_idle() {
+        let now = Utc::now();
+        let cfg = AttentionConfig::default();
+        let mut s = sess(true, Some(LiveStatus::Idle), 30, now);
+        s.limit_hit_at = Some(now);
+        s.limit_resets = Some("8pm (Europe/London)".into());
+
+        let item = classify(&s, now, &cfg);
+        assert_eq!(item.reason, AttentionReason::RateLimited);
+        assert_eq!(item.reason.label(), "LIMIT");
+        assert!(item.reason.needs_human());
+        assert!(
+            item.detail.contains("resets 8pm"),
+            "the queue must say when it comes back: {}",
+            item.detail
+        );
+
+        // Below a failure (maybe fixable now), above unread review.
+        let mut failed = sess(false, None, 30, now);
+        failed.error = Some("boom".into());
+        let mut review = sess(false, None, 30, now);
+        review.files_changed = 2;
+        assert!(classify(&failed, now, &cfg).score > item.score);
+        assert!(item.score > classify(&review, now, &cfg).score);
     }
 
     /// R-B5. Snooze has to beat *everything*, or you would never trust it.

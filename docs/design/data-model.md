@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-07-26
+updated: 2026-07-29
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -82,3 +82,22 @@ dies. A stale one would offer a terminal tab that attaches to nothing. It lives
 on `Session` rather than behind its own endpoint so a client can decide whether
 to *offer* the tab without asking a second question
 ([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)).
+
+## Session fields added 2026-07-29
+
+All `#[serde(default)]`, so rows persisted by older builds still load:
+
+- `limit_hit_at` / `limit_resets` — the five-hour limit, recognised from
+  the CLI's synthetic assistant message; cleared by the next human turn
+  or real assistant output (`R-G1`).
+- `verify_runs` — build/test/typecheck-shaped commands with outcomes,
+  paired to their `tool_result` by id; `claims` — "tests pass"-shaped
+  prose bound to that evidence, `contradicted` when the run said
+  otherwise (`R-E1`/`R-E3`). Both capped.
+- `source` — which CLI wrote the session (`claude_code` default,
+  `codex`); the Codex scan maps `~/.codex`'s thread index into this same
+  struct, which is A23's test (`R-I1`).
+
+The store also grew a `signals` table (per-repo signal command and its
+last run, `R-E2`) — a real table rather than a blob because it is keyed
+by repo, not session.

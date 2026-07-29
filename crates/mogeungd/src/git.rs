@@ -798,7 +798,7 @@ pub fn show_commit(
     args.extend(unified.iter().map(String::as_str));
     args.extend(["--format=", sha, "--"]);
     let out = run_git_diff(cwd, &args)?;
-    let detail = run_git(
+    let mut detail = run_git(
         cwd,
         &[
             "show",
@@ -810,7 +810,36 @@ pub fn show_commit(
     )
     .ok()
     .and_then(|d| parse_commit_detail(&d));
+    // "Which branches contain this?" — the question the header exists to
+    // answer when checking whether a fix has reached main. `R-D18`. A
+    // separate call so its failure (or slowness on a huge repo) costs the
+    // branch line, never the header.
+    if let Some(d) = detail.as_mut() {
+        if let Ok(out) = run_git(
+            cwd,
+            &[
+                "branch",
+                "-a",
+                "--contains",
+                sha,
+                "--format=%(refname:short)",
+            ],
+        ) {
+            d.branches = parse_containing_branches(&out);
+        }
+    }
     Ok((parse_unified(&out, reviewed), detail))
+}
+
+/// One branch name per line. A detached HEAD prints as
+/// `(HEAD detached at …)` — parenthesised lines are states, not refs, and
+/// are dropped.
+fn parse_containing_branches(out: &str) -> Vec<String> {
+    out.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('('))
+        .map(|l| l.to_string())
+        .collect()
 }
 
 /// Parse the `-s` header record. `%B` is multiline and last, so `splitn`
@@ -835,6 +864,8 @@ fn parse_commit_detail(out: &str) -> Option<CommitDetail> {
             .map(|s| s.trim().to_string())
             .collect(),
         message: f.next().unwrap_or("").trim_end().to_string(),
+        // Filled by the separate `--contains` call in `show_commit`.
+        branches: Vec::new(),
     })
 }
 
@@ -1846,6 +1877,18 @@ copy to src/b.rs
         assert_eq!(bare.message, "subject only");
         assert!(bare.parents.is_empty(), "a root commit has no parents");
         assert!(parse_commit_detail("").is_none(), "a truncated record degrades to no header");
+    }
+
+    /// `branch -a --contains` answers one name per line; a detached HEAD's
+    /// parenthesised state line is not a branch. `R-D18`.
+    #[test]
+    fn containing_branches_drop_the_detached_state_line() {
+        let out = "main\norigin/main\n(HEAD detached at abc1234)\n  feature/x\n\n";
+        assert_eq!(
+            parse_containing_branches(out),
+            vec!["main", "origin/main", "feature/x"]
+        );
+        assert!(parse_containing_branches("").is_empty());
     }
 
     /// Filter text is joined with `=` so it cannot open a new argument;

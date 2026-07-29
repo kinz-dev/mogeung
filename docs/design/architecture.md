@@ -1,12 +1,18 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-28
+updated: 2026-07-29
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
   - crates/mogeung-ui/src/main.rs
   - crates/mogeung-ui/src/net.rs
+  - crates/mogeungd/src/usage.rs
+  - crates/mogeungd/src/runner.rs
+  - crates/mogeungd/src/insight.rs
+  - crates/mogeungd/src/docscan.rs
+  - crates/mogeungd/src/codex.rs
+  - crates/mogeung-tray/src/main.rs
 ---
 
 # Architecture
@@ -124,3 +130,18 @@ the whole UI synchronous and immediate-mode with no async colouring.
 
 No supervisor, no child processes, no writes to `~/.claude`. See
 [ADR-0003](../decisions/0003-observe-do-not-spawn.md).
+
+## Modules added 2026-07-29
+
+The daemon grew five read-side modules, each behind the existing scan or
+an on-demand endpoint: `usage.rs` (incremental token-burn scanner, byte
+offsets + hour/day buckets), `runner.rs` (the signal runner — the one
+deliberate executor, click-only), `insight.rs` (cross-session search /
+digest / analytics engines), `docscan.rs` (markdown inventory,
+staleness, GC proposals), `codex.rs` (the `~/.codex` adapter; its scan
+pass maps threads into the same `Session`). A fourth binary,
+`mogeung-tray`, subscribes to the queue over the wire and shows the
+WAITING count — a client like every other, no local authority. The
+terminal focus/launch and notification paths gained Linux siblings
+(attempts tables, Wayland refuses honestly), and the server takes
+`--token` for the remote case.

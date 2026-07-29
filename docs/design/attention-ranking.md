@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-07-26
+updated: 2026-07-29
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -81,3 +81,12 @@ silence, not a stuck agent.
 Every item carries a `detail` string stating why it ranks where it does
 (`waiting for you — 4m12s`, `busy but silent for 8m30s`). The ranking must never
 be a black box.
+
+## RateLimited (2026-07-29)
+
+A new tier between `Failed` (900) and `NeedsReview` (800): score 850,
+label `LIMIT`. A limit-hit session is deliberately neither `Failed`
+(nothing to fix) nor `AwaitingInput` (typing does not help); it usually
+means several sessions went dark at once, and the queue should look like
+exactly that. Cleared when a new human turn or real assistant output
+shows the session moving again.

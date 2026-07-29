@@ -28,4 +28,4 @@ egui_commonmark = { version = "0.24.0", default-features = false, features = ["p
 egui_tiles = "0.16"
 # Grammar-based highlighting for the explorer's viewer (R-B24). First-party and
 # version-locked to egui, same argument that picked egui_tiles.
-egui_extras = { version = "0.35", features = ["syntect"] }
+egui_extras = { version = "0.35", features = ["syntect", "image"] }

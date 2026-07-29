@@ -23,6 +23,9 @@ pub struct Options {
     pub notify: NotifyConfig,
     /// Root of the Claude Code state directory. `None` means the default.
     pub claude_home: Option<PathBuf>,
+    /// Shared token required on every request when set — the `R-I4` remote
+    /// bet (A24): token on a trusted network, no TLS until that bet fails.
+    pub token: Option<String>,
 }
 
 impl Default for Options {
@@ -32,6 +35,7 @@ impl Default for Options {
             poll_ms: 1500,
             notify: NotifyConfig::default(),
             claude_home: None,
+            token: None,
         }
     }
 }
@@ -105,15 +109,21 @@ where
     tracing::info!("mogeungd listening on http://{addr} (db {})", opts.db.display());
     tracing::info!("web client at http://{addr}/");
     if !addr.ip().is_loopback() {
-        // Worth shouting about: there is no authentication, by design and by
-        // omission. See docs/design/wire-protocol.md.
-        tracing::warn!(
-            "listening beyond localhost with NO AUTHENTICATION — anyone who can \
-             reach {addr} can read your transcripts and open terminals on this machine"
-        );
+        match &opts.token {
+            Some(t) if !t.is_empty() => tracing::warn!(
+                "listening beyond localhost with a shared token and NO TLS — \
+                 the token and everything after it travel in clear text; \
+                 trusted networks only (A24)"
+            ),
+            _ => tracing::warn!(
+                "listening beyond localhost with NO AUTHENTICATION — anyone who can \
+                 reach {addr} can read your transcripts and open terminals on this machine \
+                 (start with --token to require one)"
+            ),
+        }
     }
 
-    axum::serve(listener, api::router(state))
+    axum::serve(listener, api::router_with_token(state, opts.token.clone()))
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())

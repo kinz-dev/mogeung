@@ -10,6 +10,7 @@
 //! this process or another one.
 
 mod app;
+mod cli;
 mod daemon;
 mod diff;
 mod explorer;
@@ -21,6 +22,7 @@ mod layout;
 mod net;
 mod palette;
 mod prefs;
+mod symbols;
 mod term;
 mod ui;
 
@@ -29,6 +31,9 @@ use std::path::PathBuf;
 struct Args {
     addr: String,
     url: Option<String>,
+    /// Shared token a remote daemon requires (`R-I4`); rides the ws URL as a
+    /// query parameter.
+    token: Option<String>,
     /// System-wide shortcut that raises this window. `None` disables it.
     hotkey: Option<String>,
     /// Start a daemon if none is running.
@@ -47,6 +52,7 @@ impl Default for Args {
         Args {
             addr: "127.0.0.1:7717".into(),
             url: None,
+            token: None,
             hotkey: Some(hotkey::DEFAULT.to_string()),
             start_daemon: true,
             db: None,
@@ -58,9 +64,36 @@ impl Default for Args {
     }
 }
 
+/// The file's answers, under the built-in ones. `R-J3`.
+///
+/// The merge is this way round — file first, command line over it — because
+/// `parse_args` only ever *writes* what it is given, so anything the user
+/// typed lands on top for free. A field is a preference or an invocation:
+/// `--foreground`, `--log` and `--no-daemon` are the latter and stay out of
+/// the file deliberately.
+fn args_from_config(cfg: &mogeung_core::config::Config) -> Args {
+    let mut args = Args::default();
+    if let Some(addr) = &cfg.addr {
+        args.addr = addr.clone();
+    }
+    args.url = cfg.url.clone().or(args.url);
+    args.token = cfg.token.clone().or(args.token);
+    args.db = cfg.db.clone().or(args.db);
+    args.push_url = cfg.push_url.clone().or(args.push_url);
+    args.notify |= cfg.notify.unwrap_or(false);
+    if let Some(h) = cfg.hotkey_setting() {
+        args.hotkey = h;
+    }
+    args
+}
+
 /// Tiny argument parsing, so the UI does not pull in clap.
 fn parse_args() -> Args {
-    let mut args = Args::default();
+    let (cfg, warning) = mogeung_core::config::Config::load();
+    if let Some(w) = warning {
+        eprintln!("{w}");
+    }
+    let mut args = args_from_config(&cfg);
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -70,6 +103,7 @@ fn parse_args() -> Args {
                 }
             }
             "--url" => args.url = it.next(),
+            "--token" => args.token = it.next(),
             "--hotkey" => {
                 if let Some(v) = it.next() {
                     args.hotkey = Some(v);
@@ -97,6 +131,8 @@ discarded unless --log names a file.
 Options:
   --addr HOST:PORT daemon address (default 127.0.0.1:7717)
   --url URL        connect to this websocket instead, and never start a daemon
+  --token TOKEN    shared token the daemon requires (see mogeungd --token);
+                   sent as a query parameter — clear text, trusted networks only
   --no-daemon      attach only; do not start one
   --db PATH        database for a daemon we start (default ~/.mogeung/mogeung.db)
   --notify         desktop notifications, for a daemon we start
@@ -159,6 +195,21 @@ fn detach(_log: Option<&std::path::Path>) -> std::io::Result<u32> {
 }
 
 fn main() -> eframe::Result<()> {
+    // Before anything else, including detaching: a subcommand is an answer on
+    // stdout, and detaching would take the terminal away from it. `R-J4`.
+    match cli::parse(std::env::args().skip(1)) {
+        cli::Outcome::Window => {}
+        cli::Outcome::Say(msg, code) => {
+            if code == 0 {
+                println!("{msg}");
+            } else {
+                eprintln!("{msg}");
+            }
+            std::process::exit(code);
+        }
+        cli::Outcome::Run(cmd, opts) => std::process::exit(cli::run(cmd, opts)),
+    }
+
     let args = parse_args();
 
     // Hand the window over to a detached copy of ourselves and give the
@@ -189,7 +240,7 @@ fn main() -> eframe::Result<()> {
     // An explicit --url means "talk to that", full stop: the user has pointed
     // us somewhere, possibly another machine, and starting a local daemon would
     // be answering a question nobody asked.
-    let (mode, ws_url) = match &args.url {
+    let (mode, mut ws_url) = match &args.url {
         Some(url) => (daemon::Mode::None, url.clone()),
         None => {
             let (mode, listener) = daemon::acquire(&args.addr, args.start_daemon);
@@ -206,6 +257,12 @@ fn main() -> eframe::Result<()> {
             (mode, format!("ws://{}/ws", args.addr))
         }
     };
+    if let Some(t) = &args.token {
+        // Query parameter, not a header: the ws client cannot set headers,
+        // and the daemon accepts either (R-I4).
+        ws_url.push_str(if ws_url.contains('?') { "&token=" } else { "?token=" });
+        ws_url.push_str(t);
+    }
     eprintln!("{}", mode.detail(&args.addr));
 
     let (hk, hk_error) = match &args.hotkey {
@@ -227,19 +284,84 @@ fn main() -> eframe::Result<()> {
     // scripts/install.sh puts in place.
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/mogeung.png"))
         .expect("embedded icon is a valid PNG");
+
+    // Geometry is read here rather than in `App::new`, which runs after the
+    // window already exists: restoring a size *after* the first frame is a
+    // visible jump. The App loads prefs again for everything else — two reads
+    // of one file, a millisecond apart, rather than a second store. `R-J1`.
+    let geometry = prefs::Prefs::load().0.window.and_then(|w| w.usable(None));
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(match geometry {
+            Some(w) => [w.width, w.height],
+            None => [1440.0, 900.0],
+        })
+        .with_min_inner_size([prefs::MIN_SIZE.0, prefs::MIN_SIZE.1])
+        .with_title("mogeung")
+        .with_app_id("mogeung")
+        .with_icon(icon);
+    if let Some(w) = geometry {
+        if let (Some(x), Some(y)) = (w.x, w.y) {
+            viewport = viewport.with_position([x, y]);
+        }
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([900.0, 600.0])
-            .with_title("mogeung")
-            .with_app_id("mogeung")
-            .with_icon(icon),
+        viewport,
         ..Default::default()
     };
-    let addr = args.addr.clone();
+    // What the App displays and reasons about: an explicit --url is the
+    // address that matters (it may be another machine — R-I4's remote check
+    // reads this), otherwise the local addr.
+    let addr = args.url.clone().unwrap_or_else(|| args.addr.clone());
     eframe::run_native(
         "mogeung",
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, ws_url, hk, hk_error, mode, addr)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mogeung_core::config::Config;
+
+    /// `R-J3`. The file supplies what the command line did not, and nothing
+    /// more. A config that quietly won over a flag would be the worst kind of
+    /// bug here: everything looks configured, and the thing you typed is
+    /// ignored.
+    #[test]
+    fn the_file_fills_in_defaults_and_a_flag_still_wins() {
+        let cfg = Config {
+            addr: Some("10.0.0.4:7717".into()),
+            hotkey: Some("Ctrl+Alt+K".into()),
+            notify: Some(true),
+            ..Config::default()
+        };
+        let from_file = args_from_config(&cfg);
+        assert_eq!(from_file.addr, "10.0.0.4:7717");
+        assert_eq!(from_file.hotkey.as_deref(), Some("Ctrl+Alt+K"));
+        assert!(from_file.notify);
+        // Untouched by the file, so still the built-in answer.
+        assert!(from_file.start_daemon);
+        assert!(!from_file.foreground, "an invocation flag is not a preference");
+
+        // What `parse_args` does with a flag afterwards: overwrite. The order
+        // is the whole mechanism, so assert it rather than trusting it.
+        let mut args = from_file;
+        args.addr = "127.0.0.1:9999".into();
+        assert_eq!(args.addr, "127.0.0.1:9999");
+    }
+
+    /// An empty `hotkey` in the file means off — the file's `--no-hotkey`.
+    /// Without this, disabling the global shortcut needs a flag every launch,
+    /// which is exactly what a config file exists to stop.
+    #[test]
+    fn an_empty_hotkey_in_the_file_disables_it() {
+        let cfg = Config { hotkey: Some(String::new()), ..Config::default() };
+        assert_eq!(args_from_config(&cfg).hotkey, None);
+        // And saying nothing leaves the default shortcut alone.
+        assert_eq!(
+            args_from_config(&Config::default()).hotkey.as_deref(),
+            Some(hotkey::DEFAULT)
+        );
+    }
 }

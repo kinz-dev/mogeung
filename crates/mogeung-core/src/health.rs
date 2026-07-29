@@ -139,6 +139,22 @@ pub struct Health {
     pub max_transcript_bytes: u64,
 
     pub alerts: Vec<Alert>,
+
+    // -- Codex (R-I1). Defaulted so an older daemon's snapshot still parses.
+    /// A `~/.codex` install exists and is being watched.
+    #[serde(default)]
+    pub codex_present: bool,
+    /// Unarchived Codex threads seen in its index. Zero with `codex_present`
+    /// is itself information: present, watched, empty.
+    #[serde(default)]
+    pub codex_threads: u32,
+    /// The index could not be read; the string says why.
+    #[serde(default)]
+    pub codex_error: Option<String>,
+    /// Rollout line kinds the Codex parser did not recognise — its canary,
+    /// same philosophy as `unknown_types`. Replaced wholesale each scan.
+    #[serde(default)]
+    pub codex_unknown: Vec<(String, u64)>,
 }
 
 impl Health {

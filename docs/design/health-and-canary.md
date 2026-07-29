@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-07-25
+updated: 2026-07-29
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -122,3 +122,18 @@ whether the new type matters and adds it to `HANDLED` or `KNOWN_IGNORED`.
 Counters are in-memory and reset when the daemon restarts. Persisting them would
 make "have I seen this type before?" survive restarts, which matters more once
 the alert has been dismissed a few times — not yet built.
+
+## Codex and rate limits (2026-07-29)
+
+The canary now watches two corpora. Codex rollout lines classify through
+the same outcome shape (`codex.rs` mirrors `LineOutcome`); unknown kinds
+surface as `codex/<kind>` alerts and in `Health.codex_unknown`, replaced
+wholesale each scan because rollouts are re-read per pass — accumulation
+would be the skipped-history trap again. `codex_present` with zero
+threads is reported as exactly that: present, watched, empty.
+
+`rate_limit_event` sits in `HANDLED` as a capture-shape arm although no
+real transcript has ever carried one (A20): if a future CLI emits it,
+the first specimen is recorded as a notice instead of raising an
+unknown-type alert. The real limit signal is the synthetic assistant
+message, folded in `state.rs`.

@@ -1,0 +1,27 @@
+[package]
+name = "mogeung-tray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mogeung-tray"
+path = "src/main.rs"
+
+[dependencies]
+mogeung-core.workspace = true
+serde_json.workspace = true
+
+# The same client stack the window uses (net.rs), minus egui: a small
+# current-thread runtime holding one websocket.
+tokio = { version = "1", features = ["rt", "time", "net"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
+
+# Pure-Rust StatusNotifierItem. Linux-only by nature; the macOS menu-bar
+# half is future work the spec notes as untested.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.3"
+
+[dev-dependencies]
+chrono.workspace = true

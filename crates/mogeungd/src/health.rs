@@ -50,6 +50,11 @@ pub struct HealthTracker {
     skipped: BTreeMap<String, u64>,
 
     max_transcript_bytes: u64,
+
+    /// Codex watch state, replaced wholesale each scan — rollouts are
+    /// re-read per scan, so accumulation would inflate like the
+    /// skipped-history trap this file already documents. `R-I1`.
+    codex: Option<(bool, u32, Option<String>, Vec<(String, u64)>)>,
 }
 
 impl HealthTracker {
@@ -107,6 +112,17 @@ impl HealthTracker {
             }
             None => self.current = Some((version.to_string(), at)),
         }
+    }
+
+    /// One scan's view of the Codex install. `R-I1`.
+    pub fn set_codex(
+        &mut self,
+        present: bool,
+        threads: u32,
+        error: Option<String>,
+        unknown: Vec<(String, u64)>,
+    ) {
+        self.codex = Some((present, threads, error, unknown));
     }
 
     /// Record that a transcript was too large to read whole.
@@ -175,6 +191,20 @@ impl HealthTracker {
             });
         }
 
+        // Codex drift is the same canary one directory over; the prefix keeps
+        // the two corpora tellable-apart in one alert list. `R-I1`.
+        if let Some((_, _, error, unknown)) = &self.codex {
+            for (kind, count) in unknown {
+                alerts.push(Alert::UnknownEventType {
+                    event_type: format!("codex/{kind}"),
+                    count: *count,
+                });
+            }
+            // An unreadable index travels in `codex_error`, not as a fake
+            // line-count alert — the field is the honest shape for it.
+            let _ = error;
+        }
+
         Health {
             last_scan: self.last_scan,
             scans: self.scans,
@@ -193,6 +223,10 @@ impl HealthTracker {
             history_skipped_bytes: self.skipped.values().sum(),
             max_transcript_bytes: self.max_transcript_bytes,
             alerts,
+            codex_present: self.codex.as_ref().map(|c| c.0).unwrap_or(false),
+            codex_threads: self.codex.as_ref().map(|c| c.1).unwrap_or(0),
+            codex_error: self.codex.as_ref().and_then(|c| c.2.clone()),
+            codex_unknown: self.codex.as_ref().map(|c| c.3.clone()).unwrap_or_default(),
         }
     }
 }

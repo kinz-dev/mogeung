@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mogeung-core", "crates/mogeungd", "crates/mogeung-ui", "crates/egui-term"]
+members = ["crates/mogeung-core", "crates/mogeungd", "crates/mogeung-ui", "crates/egui-term", "crates/mogeung-tray"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,6 +22,9 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The config file (R-J3). A real parser rather than a hand-rolled one: the
+# format is the user's to write, so its error messages are part of the product.
+toml = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

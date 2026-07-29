@@ -117,9 +117,12 @@ pub struct GitView {
     /// pending scroll request consumed by the render.
     pub hunk_cursor: usize,
     pub hunk_goto: Option<usize>,
-    /// A file the diff panel's index asked to scroll to; consumed by the
-    /// render when that file's header appears.
-    pub goto_file: Option<String>,
+    /// The file the diff panel is narrowed to (`R-D18`) — `None` shows the
+    /// whole diff. Owned by [`GitView::focus_for`], which forgets it when
+    /// the selection moves.
+    pub focus_file: Option<String>,
+    /// The selection `focus_file` belongs to.
+    focus_owner: Selection,
 }
 
 /// The context widths the ± control cycles through; the last is "all of
@@ -560,18 +563,120 @@ pub fn patch_text(files: &[FileChange]) -> String {
     out
 }
 
-/// Group a diff's files by their directory for the panel's file index —
-/// (dir, indices into `files`), dirs sorted, root files under "".
-pub fn group_by_dir(files: &[FileChange]) -> Vec<(String, Vec<usize>)> {
-    let mut map: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
-    for (i, f) in files.iter().enumerate() {
-        let dir = match f.path.rsplit_once('/') {
-            Some((d, _)) => d.to_string(),
-            None => String::new(),
-        };
-        map.entry(dir).or_default().push(i);
+impl GitView {
+    /// The diff panel's file focus for `sel`, forgetting it the moment the
+    /// selection moves — a file picked on one commit must not silently
+    /// narrow the next. `R-D18`.
+    pub fn focus_for(&mut self, sel: &Selection) -> Option<String> {
+        if self.focus_owner != *sel {
+            self.focus_owner = sel.clone();
+            self.focus_file = None;
+        }
+        self.focus_file.clone()
     }
-    map.into_iter().collect()
+}
+
+/// One row of the commit file tree (`R-D18`): a directory holding
+/// children, or a leaf holding its index into the diff's file list.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TreeNode {
+    /// A path segment — or several joined with `/` where a chain of
+    /// single-child directories was flattened, IntelliJ-style.
+    pub label: String,
+    pub children: Vec<TreeNode>,
+    /// `Some(index into files)` for a leaf; `None` for a directory.
+    pub file: Option<usize>,
+}
+
+/// A diff's files as a directory tree: directories first, each level
+/// sorted, single-child directory chains flattened to one `a/b/c` row.
+pub fn file_tree(files: &[FileChange]) -> Vec<TreeNode> {
+    fn insert(nodes: &mut Vec<TreeNode>, parts: &[&str], idx: usize) {
+        let (head, rest) = match parts.split_first() {
+            Some(x) => x,
+            None => return,
+        };
+        if rest.is_empty() {
+            nodes.push(TreeNode { label: head.to_string(), children: Vec::new(), file: Some(idx) });
+            return;
+        }
+        let dir = match nodes.iter_mut().find(|n| n.file.is_none() && n.label == *head) {
+            Some(d) => d,
+            None => {
+                nodes.push(TreeNode {
+                    label: head.to_string(),
+                    children: Vec::new(),
+                    file: None,
+                });
+                nodes.last_mut().unwrap()
+            }
+        };
+        insert(&mut dir.children, rest, idx);
+    }
+    fn tidy(nodes: &mut Vec<TreeNode>) {
+        for n in nodes.iter_mut() {
+            tidy(&mut n.children);
+            // Flatten `a` → `b` → … while each holds exactly one directory.
+            while n.file.is_none()
+                && n.children.len() == 1
+                && n.children[0].file.is_none()
+            {
+                let child = n.children.pop().unwrap();
+                n.label = format!("{}/{}", n.label, child.label);
+                n.children = child.children;
+            }
+        }
+        nodes.sort_by(|a, b| {
+            a.file.is_some().cmp(&b.file.is_some()).then(a.label.cmp(&b.label))
+        });
+    }
+    let mut roots = Vec::new();
+    for (i, f) in files.iter().enumerate() {
+        let parts: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+        insert(&mut roots, &parts, i);
+    }
+    tidy(&mut roots);
+    roots
+}
+
+/// One `n`/`p` step through a diff read file-at-a-time (`R-D18`):
+/// `counts` is hunks per file, the position is (file, hunk within it).
+/// Walks within the file, crosses into the next/previous file with hunks
+/// at the edges, wraps at the ends — IntelliJ's behavior. `None` when no
+/// file has any hunks.
+pub fn step_hunk(
+    counts: &[usize],
+    file: usize,
+    hunk: usize,
+    forward: bool,
+) -> Option<(usize, usize)> {
+    if counts.iter().all(|&c| c == 0) {
+        return None;
+    }
+    let file = file.min(counts.len() - 1);
+    if forward {
+        if hunk + 1 < counts[file] {
+            return Some((file, hunk + 1));
+        }
+        let mut f = file;
+        loop {
+            f = (f + 1) % counts.len();
+            if counts[f] > 0 {
+                return Some((f, 0));
+            }
+        }
+    } else {
+        if hunk > 0 && counts[file] > 0 {
+            return Some((file, (hunk - 1).min(counts[file] - 1)));
+        }
+        let mut f = file;
+        loop {
+            f = (f + counts.len() - 1) % counts.len();
+            if counts[f] > 0 {
+                return Some((f, counts[f] - 1));
+            }
+        }
+    }
 }
 
 /// Is `path` (repo-relative, no trailing slash) under any ignored prefix?
@@ -1041,9 +1146,11 @@ mod tests {
         assert!(patch_text(&[f]).contains("+++ /dev/null"));
     }
 
-    /// The file index groups by directory, root files under "".
+    /// The commit file tree (`R-D18`): single-child directory chains
+    /// flatten to one row, directories sort before files, and no file is
+    /// ever lost on the way in.
     #[test]
-    fn file_index_groups_by_directory() {
+    fn the_file_tree_flattens_chains_and_loses_nothing() {
         let file = |p: &str| FileChange {
             path: p.into(),
             old_path: None,
@@ -1055,11 +1162,60 @@ mod tests {
             flags: Vec::new(),
             truncated: false,
         };
-        let files = vec![file("src/a.rs"), file("README.md"), file("src/b.rs"), file("docs/x.md")];
-        let groups = group_by_dir(&files);
-        assert_eq!(groups[0].0, "", "root files group under the empty dir");
-        assert_eq!(groups[0].1, vec![1]);
-        assert_eq!(groups.iter().find(|(d, _)| d == "src").unwrap().1, vec![0, 2]);
+        let files = vec![
+            file("src/deep/only/child.rs"),
+            file("README.md"),
+            file("src/a.rs"),
+            file("docs/x.md"),
+        ];
+        let tree = file_tree(&files);
+        // Roots: dirs (docs, src) before the root file.
+        let labels: Vec<&str> = tree.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(labels, ["docs", "src", "README.md"]);
+        // `src` keeps two children, so it does not flatten; its lone-chain
+        // child does: `deep/only` as one row.
+        let src = &tree[1];
+        assert_eq!(src.children[0].label, "deep/only");
+        assert_eq!(src.children[0].children[0].file, Some(0));
+        // Every index surfaces exactly once.
+        fn leaves(nodes: &[TreeNode], out: &mut Vec<usize>) {
+            for n in nodes {
+                if let Some(i) = n.file {
+                    out.push(i);
+                }
+                leaves(&n.children, out);
+            }
+        }
+        let mut seen = Vec::new();
+        leaves(&tree, &mut seen);
+        seen.sort();
+        assert_eq!(seen, vec![0, 1, 2, 3]);
+    }
+
+    /// `n`/`p` file-at-a-time (`R-D18`): walk within the file, cross into
+    /// the next file with hunks at the edge, wrap at the ends, and answer
+    /// `None` only when there is nothing to walk.
+    #[test]
+    fn the_hunk_walk_crosses_files_and_wraps() {
+        let counts = [2, 0, 1];
+        assert_eq!(step_hunk(&counts, 0, 0, true), Some((0, 1)), "within the file first");
+        assert_eq!(step_hunk(&counts, 0, 1, true), Some((2, 0)), "skips the hunkless file");
+        assert_eq!(step_hunk(&counts, 2, 0, true), Some((0, 0)), "wraps forward");
+        assert_eq!(step_hunk(&counts, 0, 0, false), Some((2, 0)), "wraps backward");
+        assert_eq!(step_hunk(&counts, 2, 0, false), Some((0, 1)), "enters at the last hunk");
+        assert_eq!(step_hunk(&[0, 0], 0, 0, true), None, "nothing to walk");
+    }
+
+    /// A file focus belongs to the selection it was made on; moving the
+    /// selection forgets it. `R-D18`.
+    #[test]
+    fn a_file_focus_dies_with_its_selection() {
+        let mut g = GitView::default();
+        let commit_a = Selection::Commit("a".into());
+        g.focus_for(&commit_a);
+        g.focus_file = Some("src/a.rs".into());
+        assert_eq!(g.focus_for(&commit_a), Some("src/a.rs".into()), "stable on the same commit");
+        assert_eq!(g.focus_for(&Selection::Commit("b".into())), None, "gone on another");
     }
 
     /// Changing the diff options invalidates every cached diff and drops

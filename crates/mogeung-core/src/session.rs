@@ -1,9 +1,29 @@
+use crate::verify::{Claim, VerifyRun};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Claude Code's own session id. mogeung does not mint identifiers any more —
 /// it observes sessions you started yourself, so their identity is theirs.
 pub type SessionId = String;
+
+/// Which agent CLI a session belongs to. `R-I1` — the test of whether the
+/// Session model generalises (A23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSource {
+    #[default]
+    ClaudeCode,
+    Codex,
+}
+
+impl SessionSource {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SessionSource::ClaudeCode => "claude",
+            SessionSource::Codex => "codex",
+        }
+    }
+}
 
 /// First-party liveness, read from `~/.claude/sessions/<pid>.json`.
 ///
@@ -160,6 +180,31 @@ pub struct Session {
     /// Recent `tool:path` keys, newest last, capped. Feeds loop detection.
     #[serde(default)]
     pub recent_tools: Vec<String>,
+
+    /// When the session last hit the five-hour rate limit, recognised by the
+    /// synthetic assistant message the CLI writes. Cleared by the next human
+    /// turn or the next real assistant output — either means it is moving
+    /// again. `R-G1`.
+    #[serde(default)]
+    pub limit_hit_at: Option<DateTime<Utc>>,
+    /// The reset phrase from that message, verbatim (e.g. `8pm
+    /// (Europe/London)`). Prose from the CLI, not a parsed clock time.
+    #[serde(default)]
+    pub limit_resets: Option<String>,
+
+    /// Build/test/typecheck-shaped commands this session ran, with outcomes.
+    /// Newest last, capped. `R-E1`.
+    #[serde(default)]
+    pub verify_runs: Vec<VerifyRun>,
+    /// "Tests pass"-shaped assertions in assistant prose, each bound to the
+    /// evidence that supports it — or visibly to none. `R-E3`.
+    #[serde(default)]
+    pub claims: Vec<Claim>,
+
+    /// Which CLI wrote this session. Defaults to Claude Code so every row
+    /// persisted before `R-I1` still loads as what it was.
+    #[serde(default)]
+    pub source: SessionSource,
 }
 
 impl Session {
@@ -222,6 +267,13 @@ impl Session {
         self.snoozed_until
             .filter(|t| *t > now)
             .map(|t| (t - now).num_seconds())
+    }
+
+    /// Changed code and never saw a build/test/typecheck command complete.
+    /// A pending-forever run does not count as verification; a *failed* one
+    /// does — they checked, and the answer was no. `R-E4`.
+    pub fn unverified(&self) -> bool {
+        !self.touched_files.is_empty() && !self.verify_runs.iter().any(|r| r.ok.is_some())
     }
 
     /// Files touched within the last `window_secs`.

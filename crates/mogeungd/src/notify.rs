@@ -17,7 +17,7 @@ use std::collections::HashMap;
 /// Where a notification should go.
 #[derive(Debug, Clone, Default)]
 pub struct NotifyConfig {
-    /// Post a macOS banner via osascript.
+    /// Post a desktop banner: osascript on macOS, notify-send on Linux.
     pub desktop: bool,
     /// POST the message to this URL (ntfy.sh style: the body *is* the message).
     pub push_url: Option<String>,
@@ -102,15 +102,36 @@ impl Notifier {
     /// never disturb the scan loop.
     pub fn send(&self, n: &Notification) {
         if self.cfg.desktop {
-            let script = format!(
-                "display notification {} with title {}",
-                applescript_string(&n.body),
-                applescript_string(&format!("mogeung — {}", n.title))
-            );
-            let _ = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(script)
-                .status();
+            // Runtime-selected (`cfg!`, not `#[cfg]`) so both platforms'
+            // argument builders compile — and stay testable — everywhere.
+            if cfg!(target_os = "macos") {
+                let script = format!(
+                    "display notification {} with title {}",
+                    applescript_string(&n.body),
+                    applescript_string(&format!("mogeung — {}", n.title))
+                );
+                let _ = std::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(script)
+                    .status();
+            } else {
+                // notify-send takes arguments, not code: no shell is involved
+                // and nothing is escaped, because nothing is interpreted.
+                match std::process::Command::new("notify-send")
+                    .args(notify_send_args(&n.title, &n.body))
+                    .spawn()
+                {
+                    // Reaped off-thread so a slow notification daemon cannot
+                    // stall the scan loop, and no zombie is left behind.
+                    Ok(mut child) => {
+                        std::thread::spawn(move || {
+                            let _ = child.wait();
+                        });
+                    }
+                    // notify-send absent (a headless box) is ordinary.
+                    Err(_) => {}
+                }
+            }
         }
         if let Some(url) = &self.cfg.push_url {
             // curl rather than an HTTP client dependency: this is one POST on a
@@ -129,6 +150,22 @@ impl Notifier {
                 .output();
         }
     }
+}
+
+/// The argv for a Linux desktop banner. Pure, so the hostile-title test can
+/// pin the shape without a desktop.
+///
+/// The `--` matters: titles come from session labels and transcript detail,
+/// and a label starting with `-` would otherwise be read as an option. After
+/// it, title and body ride as two verbatim arguments — notify-send has no
+/// code to inject into, which is the whole safety argument here.
+fn notify_send_args(title: &str, body: &str) -> Vec<String> {
+    vec![
+        "--app-name=mogeung".to_string(),
+        "--".to_string(),
+        format!("mogeung — {title}"),
+        body.to_string(),
+    ]
 }
 
 /// Quote a string for AppleScript. Backslashes first, then quotes.
@@ -205,6 +242,33 @@ mod tests {
             item("b", AttentionReason::Idle),
         ];
         assert!(n.diff(&q, label).is_empty());
+    }
+
+    /// notify-send receives arguments, not code — so a hostile title must
+    /// arrive *verbatim*, one string, inside a single argv slot. Any escaping,
+    /// splitting, or shell in the path would show up here as a mismatch.
+    #[test]
+    fn notify_send_gets_hostile_text_verbatim_with_no_shell() {
+        let title = r#"$(rm -rf /) `touch /pwned` "quoted" 'single'"#;
+        let body = r#"`id` $(reboot) ; rm -rf / # "all" of it"#;
+        let args = notify_send_args(title, body);
+
+        assert_eq!(args.len(), 4, "app-name, --, title, body — nothing more");
+        assert_eq!(args[0], "--app-name=mogeung");
+        assert_eq!(args[1], "--", "a title starting with `-` must not become an option");
+        assert_eq!(args[2], format!("mogeung — {title}"), "title verbatim, one arg");
+        assert_eq!(args[3], body, "body verbatim, one arg");
+
+        // No argument is a shell or asks one to interpret anything.
+        for a in &args {
+            assert_ne!(a, "sh");
+            assert_ne!(a, "bash");
+            assert_ne!(a, "-c");
+        }
+        // The hostile text was not escaped into something else: exactly one
+        // argument contains each payload, character for character.
+        assert_eq!(args.iter().filter(|a| a.contains("$(rm -rf /)")).count(), 1);
+        assert_eq!(args.iter().filter(|a| a.contains("`touch /pwned`")).count(), 1);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ---
 title: Attached terminal
 status: shipped
-updated: 2026-07-27
+updated: 2026-07-29
 roadmap: [R-B18]
 depends_on: [A11, A12]
 ---
@@ -168,6 +168,48 @@ multi-line input was impossible. Rather than guess between `\n`, `\x1b\r` and
 `com.googlecode.iterm2.plist`, where `/terminal-setup` had already written `\n`.
 Overridden from `term.rs` via the widget's public `add_bindings`, so this is not
 a fifth local patch to the vendored crate.
+
+**Mouse selection was dead, and copying went to the wrong clipboard**
+(reported 2026-07-29): upstream hands the left button to the application
+whenever it enables mouse reporting — and Claude Code always does, with tmux
+passing the mode through — so left-drag could never start a selection, and
+double-clicks fell through to tmux copy-mode, whose "copied to buffer, paste
+with prefix ]" is unreachable from the system clipboard (the widget speaks no
+OSC 52). Since mogeung observes, a click means the person wants the text, not
+the agent: the primary button now always drives local selection (drag,
+double-click word, triple-click line), and releasing it copies the selection
+to the system clipboard, PuTTY-style — no keystroke needed, though
+Ctrl+Shift+C still works and now reads the live selection rather than the
+previous frame's render cache. Fourth local change to the vendored crate; see
+`VENDORED_FROM`.
+
+**The pane inherited a `TERM` it had no business inheriting** (reported
+2026-07-29, once the tray could launch the window): the tab flashed
+`open terminal failed: terminal does not support clear` and re-drew it forever.
+Two independent faults, and the second is what made it look like a rendering
+bug rather than a failure.
+
+- alacritty_terminal sets **no `TERM` at all**, so the tmux client got whatever
+  the *window* process had. Started from a shell that is `tmux-256color` and
+  everything works; started from a launcher, a `.app` or the tray, `TERM` is
+  simply absent — and tmux with an empty `TERM` reports a missing capability
+  rather than a missing variable, which sends you looking at terminfo and fonts.
+  The pane now names itself explicitly. Not `alacritty`, which is what the
+  emulator actually is: that entry ships with alacritty rather than ncurses, so
+  it is missing on most machines and fails identically. Fifth local change to
+  the vendored crate; see `VENDORED_FROM`.
+- **An exited terminal was re-attached on the next frame.** Intended for the
+  session that restarts; in practice, any failure that recurs became a spawn
+  per frame at the refresh rate. A refusal is now remembered against its target
+  and offers *Try again*, and an exit keeps the dead grid on screen — whatever
+  tmux printed on the way out is the only explanation the user gets, and the old
+  loop was destroying it sixty times a second.
+
+Verified by attaching for real from a `TERM`-less environment: without the fix
+the client is gone within 1.5s, with it the pane stays live. That probe was a
+throwaway rather than a committed test — it needs a tmux server and 1.5s of
+sleep, and what it proves is now covered by asserting the pane sets a `TERM`
+whose terminfo entry exists and carries `clear`.
 
 **Two existing tab-cycling tests broke** on the fifth tab because they hardcoded
 `Debt` as last. Rewritten against the ends of `TAB_ORDER`, so the next tab does

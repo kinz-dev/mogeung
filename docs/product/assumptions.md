@@ -1,7 +1,7 @@
 ---
 title: Assumption ledger
 status: active
-updated: 2026-07-27
+updated: 2026-07-29
 ---
 
 # Assumption ledger
@@ -53,6 +53,12 @@ assumption — not to build the feature.**
 | A17 | Hand-applied session labels beat derived titles for triage, and will keep being applied | `SUPPORTED` | Asked for directly, 2026-07-27, badge design included — a specific ask is stronger than a vague one. The failure mode is not week one but week two: labels are cheap to add and cost a hand-edit each to *maintain*, so the honest test is whether any label applied in the dogfooding week is still accurate at the end of it | [feature 0009](../features/0009-session-labels.md) |
 | A18 | Commit history, per-commit diffs and blame are worth a pane beyond the Changes tab's session diff | `SUPPORTED` | Asked for directly, 2026-07-27, with features named and IntelliJ's changelist given as the reference — though the presentation was explicitly left open (*"I don't have a good idea how should we show it"*), so the spec carries open questions rather than answers. Weaker than the other asks in exactly that way | [feature 0010](../features/0010-git-view.md) |
 | A19 | The git pane earns commercial-grade reading depth — branches, stashes, graph, re-blame — beyond log and status | `SUPPORTED` | Asked for as *"on-par with a commercial product"*, then — offered priority tiers — an explicit *"build P1 & P2 in one-go"*, 2026-07-28. The A16 shape: a deliberate one-go commitment, stronger than a wish, weaker than use. The dogfooding week judges each section separately; an unused section is a removal candidate, and the read-only fence is restated in the spec precisely because this is where "just add staging" pressure will arrive | [feature 0011](../features/0011-git-depth.md) |
+| A20 | Limit-hit evidence in transcripts suffices to warn about the five-hour window | `AT RISK` | 2026-07-29 sweep of all 235 local transcripts: **no `rate_limit_event` exists** — the roadmap's premise for `R-G1` — only a synthetic assistant line (`model: "<synthetic>"`, *"You've hit your session limit · resets 8pm"*; 3 found). No quota telemetry at all, so any pre-exhaustion warning is an estimate from burn history and must say so | — |
+| A21 | Transcripts carry enough evidence to check an agent's claims — tests ran, edits verified | `SUPPORTED` | `tool_use`/`tool_result` pairs are fully parsed already; "did a Bash call actually run the tests" is answerable from data on disk (17,849 assistant lines in the local corpus). Whether seeing the check changes behaviour is A7's question, not this one's | — |
+| A22 | Cross-session mining — transcripts plus `history.jsonl` — yields triage-worthy signal | `UNTESTED` | The material exists (2,076 prompts, 471 sessions, 54 projects on disk) and nobody has ever looked at it crosswise. Built at the 2026-07-29 *"finish the R-\* items in one-go"* ask (A16/A19 shape); the dogfooding week judges | — |
+| A23 | The Session model generalises beyond Claude Code — Codex first | `UNTESTED` | Building the adapter is the stated test (`R-I1`). Local `~/.codex` is a fresh install: the schema is real and readable (`state_5.sqlite`, 42 migrations) but holds zero sessions, so structure is verifiable and end-to-end mapping is not until Codex sees real use | — |
+| A24 | A read-only daemon is safe to reach over a trusted network with a shared token, without TLS | `UNTESTED` | Non-loopback binds already work and log a loud warning; there is no auth at all today. The remote feature adds the token and keeps the warning — TLS stays out until the assumption fails | — |
+| A25 | A glanceable waiting count outliving the window earns its keep against notifications | `UNTESTED` | The roadmap itself flags `R-C1` banners as possibly making `R-C2` redundant, and left it open deliberately. Built at the one-go ask; if unglanced in the week it is a removal candidate | — |
 
 ## Notes on the most dangerous ones
 

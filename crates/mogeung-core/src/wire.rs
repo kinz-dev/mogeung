@@ -4,6 +4,7 @@ use crate::health::Health;
 use crate::review::{BlastRadius, ReviewDebt};
 use crate::session::{Session, SessionId};
 use crate::transcript::TranscriptEvent;
+use crate::usage::UsageReport;
 use serde::{Deserialize, Serialize};
 
 /// What a client asks the daemon to do.
@@ -183,6 +184,45 @@ pub enum ClientMsg {
         sha: String,
         path: String,
     },
+    /// Token burn per session/day/repo, the trailing five-hour window, and
+    /// known limit hits. Computed from the transcripts on demand and cached
+    /// incrementally daemon-side. Tokens, never dollars. `R-G1`–`R-G3`.
+    FetchUsage,
+    /// Configure a repo's signal command (tests/typecheck); empty clears it.
+    /// The command is the user's own — mogeung never invents one. `R-E2`.
+    SetSignalCommand { repo: String, command: String },
+    /// Run the configured signal command for this session's repo. Fires only
+    /// on an explicit human action, never automatically — running *checks*
+    /// is allowed, re-acquiring a conversation loop is not (ADR-0003).
+    RunSignal { session_id: SessionId },
+    /// Current signal state for a repo: command, whether a run is in flight,
+    /// and the last result.
+    FetchSignal { repo: String },
+    /// Literal search across every transcript and all prompt history.
+    /// `R-F1`. Sent on Enter, not per keystroke — the corpus is tens of MB.
+    InsightSearch { query: String },
+    /// Every session's measurable activity on one local day (`YYYY-MM-DD`).
+    /// Evidence only, never assistant self-reports. `R-F3`.
+    FetchDigest { day: String },
+    /// Error shapes recurring across sessions. `R-F4`.
+    FetchRecurring,
+    /// Prompt-history reuse clusters. `R-F6`.
+    FetchPromptLibrary,
+    /// Prompt-history analytics (sessions/day, hour histogram, per-project).
+    /// Token burn per day rides `FetchUsage` instead. `R-F5`.
+    FetchAnalytics,
+    /// The nested subagent transcripts of one session. `R-F8`.
+    FetchSubagents { session_id: SessionId },
+    /// Decision-shaped sentences from one session's transcript — candidates
+    /// for a human to skim, never authority. `R-F7`.
+    FetchDecisions { session_id: SessionId },
+    /// Sessions whose edits touched a file, with the prompts that drove
+    /// them — the heuristic is named in each answer row. `R-F2`.
+    FetchFileSessions { path: String },
+    /// A repo's markdown inventory: kinds, staleness, GC proposals, plan
+    /// evidence, instruction drift. Proposals only — the daemon never
+    /// writes to a watched repo. `R-H1`–`R-H5`.
+    FetchDocScan { repo: String },
 }
 
 /// One entry of a [`ClientMsg::ListDir`] answer.
@@ -236,6 +276,11 @@ pub struct CommitDetail {
     /// The full message — subject line first, body after. Agents write
     /// long bodies, and the body is often the only honest record of why.
     pub message: String,
+    /// Branches (local and remote) containing this commit — "has the fix
+    /// reached main?". Defaulted so a detail from an older daemon still
+    /// parses. `R-D18`.
+    #[serde(default)]
+    pub branches: Vec<String>,
 }
 
 /// One entry of a [`ClientMsg::GitStatus`] answer.
@@ -559,6 +604,60 @@ pub enum ServerMsg {
         ours: String,
         theirs: String,
         truncated: bool,
+    },
+    /// The burn and limit picture. Any warning threshold inside is an
+    /// estimate derived from observed limit hits, and clients must label it
+    /// as one — the CLI publishes no quota. `R-G1`–`R-G3`.
+    UsageStats { report: Box<UsageReport> },
+    /// A repo's signal state — sent on fetch, when a run starts, and when it
+    /// ends. `R-E2`/`R-E5`.
+    SignalStatus {
+        repo: String,
+        command: Option<String>,
+        running: bool,
+        last: Option<Box<crate::verify::SignalRun>>,
+    },
+    /// Search hits, echoing the query so stale answers drop. `R-F1`.
+    InsightSearchResults {
+        query: String,
+        results: Box<crate::insight::SearchResults>,
+    },
+    /// One day's digest, echoing the day. `R-F3`.
+    DayDigestReport {
+        day: String,
+        digest: Box<crate::insight::DayDigest>,
+    },
+    /// Recurring failures across sessions. `R-F4`.
+    RecurringFailures {
+        failures: Vec<crate::insight::RecurringFailure>,
+    },
+    /// Prompt reuse clusters, most-reused first. `R-F6`.
+    PromptLibrary {
+        clusters: Vec<crate::insight::PromptCluster>,
+    },
+    /// Prompt-history analytics. `R-F5`.
+    AnalyticsReport {
+        analytics: Box<crate::insight::Analytics>,
+    },
+    /// One session's subagent transcripts. `R-F8`.
+    SubagentTreeReport {
+        session_id: SessionId,
+        nodes: Vec<crate::insight::SubagentNode>,
+    },
+    /// Decision candidates from one session. `R-F7`.
+    DecisionReport {
+        session_id: SessionId,
+        candidates: Vec<crate::insight::DecisionCandidate>,
+    },
+    /// Sessions that touched a file, echoing the path. `R-F2`.
+    FileSessions {
+        path: String,
+        entries: Vec<crate::insight::FileSession>,
+    },
+    /// A repo's doc inventory, echoing the repo. `R-H1`–`R-H5`.
+    DocReport {
+        repo: String,
+        inventory: Box<crate::docs::DocInventory>,
     },
     Error { message: String },
 }
