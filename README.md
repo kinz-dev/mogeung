@@ -1,3 +1,5 @@
+<img src="crates/mogeung-ui/assets/mogeung.png" alt="mogeung" width="200" align="right">
+
 # mogeung
 
 A supervision layer over the Claude Code sessions you already run.

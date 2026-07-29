@@ -1,4 +1,5 @@
 use crate::net::Net;
+use crate::theme::{on_accent_for, pal};
 use crate::ui::{self, *};
 use chrono::Utc;
 use egui::{Color32, RichText};
@@ -119,14 +120,13 @@ const TRANSCRIPT_PAGE: usize = 150;
 
 /// Lane colours for the log graph, cycled — distinct enough to follow a
 /// line by eye, few enough to stay quiet.
-const GRAPH_COLORS: [egui::Color32; 6] = [
-    BLUE,
-    GREEN,
-    AMBER,
-    egui::Color32::from_rgb(0xB0, 0x6A, 0xD8),
-    egui::Color32::from_rgb(0x3F, 0xB3, 0xB3),
-    egui::Color32::from_rgb(0xD8, 0x6A, 0x9A),
-];
+///
+/// A function rather than the `const` array this was: a `const` cannot ask
+/// which theme is running, and the light palette needs its own lanes (the
+/// dark ones are mid-tone and vanish against a white page).
+fn graph_colors() -> [egui::Color32; 6] {
+    pal().graph
+}
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Pane {
@@ -425,6 +425,14 @@ impl App {
         daemon_mode: crate::daemon::Mode,
         daemon_addr: String,
     ) -> Self {
+        // Before the first frame is styled: the palette has to be in force
+        // when `apply_theme` reads it, or the window flashes the wrong theme.
+        let (prefs_for_theme, _) = crate::prefs::Prefs::load();
+        crate::theme::set(
+            prefs_for_theme
+                .theme
+                .resolve(cc.egui_ctx.input(|i| i.raw.system_theme)),
+        );
         ui::apply_theme(&cc.egui_ctx);
         // R-B29: PNG/JPEG decoding for the Editor's image preview.
         egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -908,6 +916,22 @@ impl App {
         self.selected.as_ref().and_then(|id| self.sessions.get(id))
     }
 
+    /// Keep the window's styling in step with the theme preference. `R-J6`.
+    ///
+    /// Checked every frame rather than only when the setting is touched,
+    /// because `system` mode has a third party in it: the desktop can change
+    /// underneath us — most visibly on a machine that switches at sunset — and
+    /// nothing tells the app but the next frame's input.
+    ///
+    /// `theme::set` reports whether anything moved, so the styles are rebuilt
+    /// on the frame the answer changes and never on the thousands in between.
+    fn follow_theme(&mut self, ui: &egui::Ui) {
+        let system = ui.ctx().input(|i| i.raw.system_theme);
+        if crate::theme::set(self.prefs.theme.resolve(system)) {
+            ui::apply_theme(ui.ctx());
+        }
+    }
+
     /// Remember where the window is, and rescue it if it came back somewhere
     /// unreachable. `R-J1`.
     ///
@@ -1048,6 +1072,7 @@ impl eframe::App for App {
 
         // Before the write below, so a move lands in the same save.
         self.track_geometry(ui);
+        self.follow_theme(ui);
 
         if self.prefs_dirty {
             self.prefs_dirty = false;
@@ -1091,12 +1116,12 @@ impl App {
         egui::Panel::top("top")
             .frame(
                 egui::Frame::NONE
-                    .fill(BG)
+                    .fill(pal().bg)
                     .inner_margin(egui::Margin::symmetric(10, 5)),
             )
             .show(root, |ui| {
             ui.horizontal(|ui| {
-                let title = ui.label(RichText::new("mogeung").strong().size(15.0).color(TEXT_STRONG));
+                let title = ui.label(RichText::new("mogeung").strong().size(15.0).color(pal().text_strong));
                 match &self.hotkey {
                     Some(h) => {
                         title.on_hover_text(format!("{} brings this window forward", h.accel));
@@ -1107,10 +1132,10 @@ impl App {
                 }
 
                 let (dot, tip) = if self.net.connected {
-                    (RichText::new(icon::DOT).color(GREEN), "connected".to_string())
+                    (RichText::new(icon::DOT).color(pal().green), "connected".to_string())
                 } else {
                     (
-                        RichText::new(icon::DOT).color(RED),
+                        RichText::new(icon::DOT).color(pal().red),
                         self.net
                             .last_error
                             .clone()
@@ -1143,9 +1168,9 @@ impl App {
                 let live = self.sessions.values().filter(|s| s.alive).count();
 
                 if waiting > 0 {
-                    ui.label(badge(&format!("{waiting} waiting for you"), RED));
+                    ui.label(badge(&format!("{waiting} waiting for you"), pal().red));
                 } else if needing > 0 {
-                    ui.label(badge(&format!("{needing} need you"), AMBER));
+                    ui.label(badge(&format!("{needing} need you"), pal().amber));
                 } else {
                     ui.label(dim("queue clear"));
                 }
@@ -1161,7 +1186,7 @@ impl App {
                     // it stays grey and small until there is something to say.
                     let urgent = self.health.urgent_alerts();
                     let (glyph, tint) = if urgent > 0 {
-                        (icon::WARN, Some(AMBER))
+                        (icon::WARN, Some(pal().amber))
                     } else {
                         (icon::HEALTH, None)
                     };
@@ -1184,7 +1209,7 @@ impl App {
                         }
                     }
                     if urgent > 0 {
-                        ui.label(RichText::new(urgent.to_string()).color(AMBER).size(11.0));
+                        ui.label(RichText::new(urgent.to_string()).color(pal().amber).size(11.0));
                     }
 
                     if icon_button(
@@ -1258,10 +1283,10 @@ impl App {
 
             if !self.errors.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("!").color(RED).strong());
+                    ui.label(RichText::new("!").color(pal().red).strong());
                     ui.label(
                         RichText::new(self.errors.last().unwrap())
-                            .color(RED)
+                            .color(pal().red)
                             .size(12.0),
                     );
                     if ui.small_button("dismiss").clicked() {
@@ -1777,6 +1802,20 @@ impl App {
             A::ToggleRead => self.toggle_first_unread(),
             A::NextUnread => self.jump_to_next_unread(),
             A::FlagHunk => self.flag_first_unread(),
+            A::CycleTheme => {
+                use crate::theme::Mode;
+                self.prefs.theme = match self.prefs.theme {
+                    Mode::Dark => Mode::Light,
+                    Mode::Light => Mode::System,
+                    Mode::System => Mode::Dark,
+                };
+                self.prefs_dirty = true;
+                self.errors.push(format!(
+                    "theme: {} — {} cycles",
+                    self.prefs.theme.label(),
+                    self.keymap.describe(crate::keymap::Action::CycleTheme)
+                ));
+            }
             A::ToggleAmbient => self.ambient = !self.ambient,
             A::ToggleHealth => {
                 self.show_health = !self.show_health;
@@ -2207,13 +2246,13 @@ impl App {
                 .exact_size(30.0)
                 .frame(
                     egui::Frame::NONE
-                        .fill(BG)
+                        .fill(pal().bg)
                         .inner_margin(egui::Margin::symmetric(4, 8)),
                 )
                 .show(root, |ui| {
                     ui.vertical_centered(|ui| {
                         if ui
-                            .add(egui::Button::new(RichText::new("»").size(14.0).color(DIM)).frame(false))
+                            .add(egui::Button::new(RichText::new("»").size(14.0).color(pal().dim)).frame(false))
                             .on_hover_text(format!("show the queue  ({key})"))
                             .clicked()
                         {
@@ -2221,7 +2260,7 @@ impl App {
                         }
                         ui.add_space(6.0);
                         if needing > 0 {
-                            ui.label(RichText::new(needing.to_string()).size(13.0).color(AMBER).strong())
+                            ui.label(RichText::new(needing.to_string()).size(13.0).color(pal().amber).strong())
                                 .on_hover_text(format!("{needing} session(s) need you"));
                         }
                         ui.add_space(6.0);
@@ -2287,13 +2326,13 @@ impl App {
                     ui.label(
                         RichText::new("ATTENTION")
                             .size(11.0)
-                            .color(if focused { BLUE } else { DIM })
+                            .color(if focused { pal().blue } else { pal().dim })
                             .strong(),
                     )
                     .on_hover_text("Alt+1");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .add(egui::Button::new(RichText::new("«").size(13.0).color(DIM)).frame(false))
+                            .add(egui::Button::new(RichText::new("«").size(13.0).color(pal().dim)).frame(false))
                             .on_hover_text(format!(
                                 "collapse the queue  ({})",
                                 self.keymap.describe(crate::keymap::Action::ToggleQueuePanel)
@@ -2357,7 +2396,7 @@ impl App {
                         ui.painter().rect_stroke(
                             field.rect.expand(1.0),
                             4.0,
-                            egui::Stroke::new(1.0, BLUE),
+                            egui::Stroke::new(1.0, pal().blue),
                             egui::StrokeKind::Outside,
                         );
                     }
@@ -2406,7 +2445,7 @@ impl App {
                     ui.label(
                         RichText::new("j/k move   ↩ open   / filter")
                             .size(10.5)
-                            .color(DIM),
+                            .color(pal().dim),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
@@ -2421,7 +2460,7 @@ impl App {
                                             .unwrap_or_else(|| "palette".into())
                                     ))
                                     .size(10.5)
-                                    .color(BLUE),
+                                    .color(pal().blue),
                                 )
                                 .frame(false),
                             )
@@ -2554,7 +2593,7 @@ impl App {
                                             icon::EXPANDED
                                         })
                                             .size(11.0)
-                                            .color(DIM),
+                                            .color(pal().dim),
                                     );
                                     ui.label(RichText::new(&repo).size(12.0).strong());
                                     ui.label(dim(format!(
@@ -2696,7 +2735,7 @@ impl App {
                                     ui.painter().rect_stroke(
                                         card.rect,
                                         4.0,
-                                        egui::Stroke::new(1.0, DIM),
+                                        egui::Stroke::new(1.0, pal().dim),
                                         egui::StrokeKind::Inside,
                                     );
                                 }
@@ -2909,7 +2948,7 @@ impl egui_tiles::Behavior<Tab> for DetailPanes<'_> {
             ui.painter().rect_stroke(
                 rect.shrink(1.0),
                 5.0,
-                egui::Stroke::new(1.0, BLUE.linear_multiply(0.5)),
+                egui::Stroke::new(1.0, pal().blue.linear_multiply(0.5)),
                 egui::StrokeKind::Inside,
             );
         }
@@ -3004,7 +3043,7 @@ impl egui_tiles::Behavior<Tab> for DetailPanes<'_> {
     }
 
     fn tab_bar_color(&self, _visuals: &egui::Visuals) -> Color32 {
-        BG
+        pal().bg
     }
 
     fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
@@ -3029,7 +3068,7 @@ impl egui_tiles::Behavior<Tab> for DetailPanes<'_> {
 /// size would be a lot of shouting for facts that are mostly reference.
 fn stat(ui: &mut egui::Ui, glyph: &str, value: &str, tint: Color32) {
     ui.label(RichText::new(glyph).size(11.0).color(tint));
-    ui.label(RichText::new(value).size(11.5).color(TEXT));
+    ui.label(RichText::new(value).size(11.5).color(pal().text));
     ui.add_space(4.0);
 }
 
@@ -3076,7 +3115,7 @@ fn keymap_row(
                     RichText::new(binding)
                         .monospace()
                         .size(11.5)
-                        .color(if capturing { AMBER } else { BLUE }),
+                        .color(if capturing { pal().amber } else { pal().blue }),
                 ),
             );
             if btn.clicked() {
@@ -3161,7 +3200,7 @@ fn palette_row(
             egui::Align2::RIGHT_CENTER,
             binding,
             egui::FontId::monospace(11.0),
-            if binding == "unbound" { DIM } else { BLUE },
+            if binding == "unbound" { pal().dim } else { pal().blue },
         )
         .width();
     painter.text(
@@ -3169,7 +3208,7 @@ fn palette_row(
         egui::Align2::RIGHT_CENTER,
         action.group(),
         egui::FontId::proportional(10.5),
-        DIM,
+        pal().dim,
     );
     resp
 }
@@ -3194,25 +3233,27 @@ fn session_chip(
         egui::Align2::CENTER_CENTER,
         ch,
         egui::FontId::monospace(12.5),
-        Color32::WHITE,
+        // Chosen against the chip it sits on, not fixed white: see
+        // `theme::on_accent_for`, and the amber badge nobody could read.
+        on_accent_for(color),
     );
     // The dot outranks the letter: the strip's first job is still "which
     // ones need me", and colour alone must not be asked to carry it.
     if needs_human {
-        painter.circle_filled(rect.right_top() + egui::vec2(-2.0, 2.0), 3.0, RED);
+        painter.circle_filled(rect.right_top() + egui::vec2(-2.0, 2.0), 3.0, pal().red);
     }
     if selected {
         painter.rect_stroke(
             rect.expand(1.5),
             6.0,
-            egui::Stroke::new(1.5, TEXT_STRONG),
+            egui::Stroke::new(1.5, pal().text_strong),
             egui::StrokeKind::Outside,
         );
     } else if resp.hovered() {
         painter.rect_stroke(
             rect.expand(1.5),
             6.0,
-            egui::Stroke::new(1.0, DIM),
+            egui::Stroke::new(1.0, pal().dim),
             egui::StrokeKind::Outside,
         );
     }
@@ -3259,7 +3300,7 @@ fn file_palette_row(ui: &mut egui::Ui, path: &str, picked: bool) -> egui::Respon
             egui::Align2::LEFT_CENTER,
             dir,
             egui::FontId::proportional(11.0),
-            DIM,
+            pal().dim,
         );
     }
     resp
@@ -3294,7 +3335,7 @@ fn search_palette_row(
             egui::Align2::LEFT_CENTER,
             format!("{}:{}", m.path, m.line),
             egui::FontId::monospace(11.5),
-            BLUE,
+            pal().blue,
         )
         .width();
     painter.text(
@@ -3431,20 +3472,20 @@ fn queue_card(
             }
         }
         if pinned {
-            ui.label(badge("PIN", BLUE));
+            ui.label(badge("PIN", pal().blue));
         }
         if hidden {
-            ui.label(badge("HIDDEN", DIM));
+            ui.label(badge("HIDDEN", pal().dim));
         }
         ui.label(badge(item.reason.label(), reason_color(item.reason)));
         if s.is_snoozed(now) {
-            ui.label(badge(icon::SNOOZE, DIM));
+            ui.label(badge(icon::SNOOZE, pal().dim));
         }
         if s.alive {
             let (txt, col) = match s.live_status {
-                Some(LiveStatus::Busy) => ("live·busy", BLUE),
-                Some(LiveStatus::Idle) => ("live·idle", AMBER),
-                _ => ("live", DIM),
+                Some(LiveStatus::Busy) => ("live·busy", pal().blue),
+                Some(LiveStatus::Idle) => ("live·idle", pal().amber),
+                _ => ("live", pal().dim),
             };
             ui.label(RichText::new(txt).size(10.5).color(col));
         }
@@ -3456,7 +3497,7 @@ fn queue_card(
                 && !hidden
                 && ui
                     .add(
-                        egui::Button::new(RichText::new(icon::HIDE).size(11.0).color(DIM))
+                        egui::Button::new(RichText::new(icon::HIDE).size(11.0).color(pal().dim))
                             .frame(false),
                     )
                     .on_hover_text("hide it from the queue — reversible (h)")
@@ -3485,7 +3526,7 @@ fn queue_card(
         // R-I1: sessions from another CLI say so; Claude Code stays unmarked
         // as the default it has always been.
         if s.source == mogeung_core::session::SessionSource::Codex {
-            ui.label(RichText::new("codex").size(10.5).color(PURPLE));
+            ui.label(RichText::new("codex").size(10.5).color(pal().purple));
         }
         if s.files_changed > 0 {
             ui.label(dim(format!(
@@ -3498,7 +3539,7 @@ fn queue_card(
         }
         // R-E4. Quiet — a mark, not an alarm; the Info tab has the long form.
         if !s.alive && s.unverified() {
-            ui.label(RichText::new("unverified").size(10.5).color(AMBER))
+            ui.label(RichText::new("unverified").size(10.5).color(pal().amber))
                 .on_hover_text("edited files; no build/test/typecheck completed");
         }
     });
@@ -3517,7 +3558,7 @@ fn queue_card(
             v
         };
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("⚠ COLLISION").size(10.5).color(RED).strong());
+            ui.label(RichText::new("⚠ COLLISION").size(10.5).color(pal().red).strong());
             ui.label(
                 RichText::new(format!(
                     "{} also being edited by {}",
@@ -3525,7 +3566,7 @@ fn queue_card(
                     truncate(&others.join(", "), 40)
                 ))
                 .size(11.0)
-                .color(RED),
+                .color(pal().red),
             );
         });
     }
@@ -3535,7 +3576,7 @@ fn queue_card(
         ui.label(
             RichText::new(format!("↻ {}", truncate(sig, 80)))
                 .size(11.0)
-                .color(PURPLE),
+                .color(pal().purple),
         );
     }
     hit
@@ -3564,7 +3605,7 @@ impl App {
         egui::Panel::bottom("status")
             .frame(
                 egui::Frame::NONE
-                    .fill(BG)
+                    .fill(pal().bg)
                     .inner_margin(egui::Margin::symmetric(10, 4)),
             )
             .show(root, |ui| {
@@ -3593,9 +3634,9 @@ impl App {
                     return;
                 };
 
-                stat(ui, icon::FOLDER, &s.repo_name(), BLUE);
+                stat(ui, icon::FOLDER, &s.repo_name(), pal().blue);
                 if let Some(b) = &s.git_branch {
-                    stat(ui, icon::BRANCH, b, BLUE);
+                    stat(ui, icon::BRANCH, b, pal().blue);
                 }
                 // Amber once it has been waiting on you: the one tint here
                 // that means something rather than merely separating.
@@ -3604,16 +3645,16 @@ impl App {
                     ui,
                     icon::CLOCK,
                     &fmt_dur(s.duration_secs(now)),
-                    if waiting { AMBER } else { DIM },
+                    if waiting { pal().amber } else { pal().dim },
                 );
-                stat(ui, icon::TURNS, &s.turns.to_string(), PURPLE);
-                stat(ui, icon::TOOLS, &s.tool_calls.to_string(), GREEN);
-                stat(ui, icon::TOKENS, &tokens(s.tokens_out), DIM);
+                stat(ui, icon::TURNS, &s.turns.to_string(), pal().purple);
+                stat(ui, icon::TOOLS, &s.tool_calls.to_string(), pal().green);
+                stat(ui, icon::TOKENS, &tokens(s.tokens_out), pal().dim);
                 // Only while alive: a dead session's remembered pid now
                 // belongs to its `/clear` successor, and printing it here
                 // would name the wrong process.
                 if let Some(pid) = s.pid.filter(|_| s.alive) {
-                    stat(ui, "#", &pid.to_string(), DIM);
+                    stat(ui, "#", &pid.to_string(), pal().dim);
                 }
                 self.burn_stat(ui);
 
@@ -3638,12 +3679,12 @@ impl App {
         let base = format!("5h {}", tokens(u.window_tokens_out));
         match u.window_fraction() {
             Some(f) if f >= 0.8 => {
-                stat(ui, icon::TOKENS, &format!("{base} ≈{:.0}% of est. limit", f * 100.0), RED)
+                stat(ui, icon::TOKENS, &format!("{base} ≈{:.0}% of est. limit", f * 100.0), pal().red)
             }
             Some(f) if f >= 0.5 => {
-                stat(ui, icon::TOKENS, &format!("{base} ≈{:.0}% of est. limit", f * 100.0), AMBER)
+                stat(ui, icon::TOKENS, &format!("{base} ≈{:.0}% of est. limit", f * 100.0), pal().amber)
             }
-            _ => stat(ui, icon::TOKENS, &base, DIM),
+            _ => stat(ui, icon::TOKENS, &base, pal().dim),
         }
         ui.label(dim("")).on_hover_text(
             "output tokens in the trailing five hours; the limit fraction is \
@@ -3670,20 +3711,20 @@ impl App {
                     // A limit-hit session must not claim to be waiting on you
                     // — typing at it does nothing until the reset. `R-G1`.
                     let (txt, col) = if s.limit_hit_at.is_some() {
-                        ("RATE LIMITED", AMBER)
+                        ("RATE LIMITED", pal().amber)
                     } else {
                         match s.live_status {
-                            Some(LiveStatus::Idle) => ("WAITING FOR YOU", RED),
-                            Some(LiveStatus::Busy) => ("BUSY", BLUE),
-                            _ => ("LIVE", DIM),
+                            Some(LiveStatus::Idle) => ("WAITING FOR YOU", pal().red),
+                            Some(LiveStatus::Busy) => ("BUSY", pal().blue),
+                            _ => ("LIVE", pal().dim),
                         }
                     };
                     ui.label(badge(txt, col));
                 } else {
-                    ui.label(badge("ended", DIM));
+                    ui.label(badge("ended", pal().dim));
                     // R-E4: the header twin of the queue-row mark.
                     if s.unverified() {
-                        ui.label(RichText::new("unverified").size(10.5).color(AMBER))
+                        ui.label(RichText::new("unverified").size(10.5).color(pal().amber))
                             .on_hover_text(
                                 "edited files; no build/test/typecheck completed — see Info",
                             );
@@ -3758,7 +3799,7 @@ impl App {
             });
 
             if let Some(err) = &s.error {
-                ui.label(RichText::new(err).color(RED).size(12.0));
+                ui.label(RichText::new(err).color(pal().red).size(12.0));
             }
             if let Some(w) = s.waiting_secs(now) {
                 ui.label(
@@ -3766,7 +3807,7 @@ impl App {
                         "This session has been waiting for your input for {}.",
                         fmt_dur(w)
                     ))
-                    .color(AMBER)
+                    .color(pal().amber)
                     .size(12.5),
                 );
             }
@@ -3781,13 +3822,13 @@ impl App {
                     ui.label(
                         RichText::new("drag a tab out to split the pane")
                             .size(10.5)
-                            .color(DIM),
+                            .color(pal().dim),
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !self.flagged.is_empty()
                         && ui
-                            .button(RichText::new(format!("{} {} flagged", icon::FLAG, self.flagged.len())).color(AMBER))
+                            .button(RichText::new(format!("{} {} flagged", icon::FLAG, self.flagged.len())).color(pal().amber))
                             .on_hover_text("build a follow-up prompt from what you flagged")
                             .clicked()
                     {
@@ -3958,7 +3999,7 @@ impl App {
             self.git_header(ui);
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(RichText::new("LOCAL CHANGES").size(11.0).color(DIM).strong());
+                ui.label(RichText::new("LOCAL CHANGES").size(11.0).color(pal().dim).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .small_button("↻")
@@ -4004,7 +4045,7 @@ impl App {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     self.git_ref_sections(ui);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("LOG").size(11.0).color(DIM).strong());
+                        ui.label(RichText::new("LOG").size(11.0).color(pal().dim).strong());
                         if let Some(rev) = self.gitview.log_rev.clone() {
                             if ui
                                 .small_button(format!("{} {rev} ×", icon::BRANCH))
@@ -4051,7 +4092,7 @@ impl App {
                         }
                         let dot = self.gitview.attribution_only;
                         if ui
-                            .selectable_label(dot, RichText::new(icon::DOT).size(10.0).color(GREEN))
+                            .selectable_label(dot, RichText::new(icon::DOT).size(10.0).color(pal().green))
                             .on_hover_text(
                                 "only commits that look like this session's work — \
                                  the graph hides while this is on",
@@ -4093,7 +4134,7 @@ impl App {
                     ui.label(
                         RichText::new(format!("{} detached @ {}", icon::BRANCH, refs.head_sha))
                             .size(12.0)
-                            .color(AMBER),
+                            .color(pal().amber),
                     )
                     .on_hover_text("HEAD points at a commit, not a branch");
                 }
@@ -4137,7 +4178,7 @@ impl App {
                 egui::CollapsingHeader::new(
                     RichText::new(format!("BRANCHES ({})", refs.branches.len()))
                         .size(11.0)
-                        .color(DIM)
+                        .color(pal().dim)
                         .strong(),
                 )
                 .id_salt("git-branches")
@@ -4153,7 +4194,7 @@ impl App {
                         }
                         let mut rich = RichText::new(text).monospace();
                         if b.current {
-                            rich = rich.color(GREEN);
+                            rich = rich.color(pal().green);
                         }
                         let row = ui
                             .selectable_label(scoped, rich)
@@ -4202,7 +4243,7 @@ impl App {
                 egui::CollapsingHeader::new(
                     RichText::new(format!("REMOTE BRANCHES ({})", refs.remote_branches.len()))
                         .size(11.0)
-                        .color(DIM)
+                        .color(pal().dim)
                         .strong(),
                 )
                 .id_salt("git-remote-branches")
@@ -4247,7 +4288,7 @@ impl App {
                 egui::CollapsingHeader::new(
                     RichText::new(format!("TAGS ({})", refs.tags.len()))
                         .size(11.0)
-                        .color(DIM)
+                        .color(pal().dim)
                         .strong(),
                 )
                 .id_salt("git-tags")
@@ -4274,7 +4315,7 @@ impl App {
             egui::CollapsingHeader::new(
                 RichText::new(format!("STASHES ({})", self.gitview.stashes.len()))
                     .size(11.0)
-                    .color(DIM)
+                    .color(pal().dim)
                     .strong(),
             )
             .id_salt("git-stashes")
@@ -4305,7 +4346,7 @@ impl App {
         }
         if !self.gitview.reflog.is_empty() {
             egui::CollapsingHeader::new(
-                RichText::new("REFLOG").size(11.0).color(DIM).strong(),
+                RichText::new("REFLOG").size(11.0).color(pal().dim).strong(),
             )
             .id_salt("git-reflog")
             .show(ui, |ui| {
@@ -4349,7 +4390,7 @@ impl App {
             egui::CollapsingHeader::new(
                 RichText::new(format!("WORKTREES ({})", self.gitview.worktrees.len()))
                     .size(11.0)
-                    .color(DIM)
+                    .color(pal().dim)
                     .strong(),
             )
             .id_salt("git-worktrees")
@@ -4368,7 +4409,7 @@ impl App {
                         )
                         .on_hover_text(&w.path);
                         if let Some(label) = session_of(&w.path) {
-                            ui.label(RichText::new(label).size(10.0).color(GREEN))
+                            ui.label(RichText::new(label).size(10.0).color(pal().green))
                                 .on_hover_text("the session running in this worktree");
                         }
                     });
@@ -4379,16 +4420,16 @@ impl App {
             egui::CollapsingHeader::new(
                 RichText::new(format!("SUBMODULES ({})", self.gitview.submodules.len()))
                     .size(11.0)
-                    .color(DIM)
+                    .color(pal().dim)
                     .strong(),
             )
             .id_salt("git-submodules")
             .show(ui, |ui| {
                 for sub in &self.gitview.submodules {
                     let (mark, color, meaning) = match sub.state.as_str() {
-                        "+" => ("+", Some(AMBER), "checked out at a different commit than recorded"),
-                        "-" => ("-", Some(DIM), "not initialised"),
-                        "U" => ("U", Some(RED), "merge conflicts"),
+                        "+" => ("+", Some(pal().amber), "checked out at a different commit than recorded"),
+                        "-" => ("-", Some(pal().dim), "not initialised"),
+                        "U" => ("U", Some(pal().red), "merge conflicts"),
                         _ => (" ", None, "in sync"),
                     };
                     let mut rich =
@@ -4452,15 +4493,15 @@ impl App {
             let picked =
                 self.gitview.selection == crate::gitview::Selection::Local(e.path.clone());
             let color = if e.conflicted {
-                RED
+                pal().red
             } else if e.staged && !e.unstaged {
-                GREEN
+                pal().green
             } else if e.staged {
-                AMBER
+                pal().amber
             } else if e.state == "??" {
-                DIM
+                pal().dim
             } else {
-                BLUE
+                pal().blue
             };
             let label = if e.conflicted {
                 format!("{} {}  ⚠ conflict", e.state, e.path)
@@ -4556,7 +4597,7 @@ impl App {
                 if let Some(row) = graph.get(i) {
                     let painter = ui.painter();
                     let x_of = |lane: usize| rect.left() + lane as f32 * lane_w + lane_w / 2.0;
-                    let color_of = |lane: usize| GRAPH_COLORS[lane % GRAPH_COLORS.len()];
+                    let color_of = |lane: usize| graph_colors()[lane % graph_colors().len()];
                     for (lane, occ) in row.occupied.iter().enumerate().take(8) {
                         if *occ {
                             painter.line_segment(
@@ -4602,12 +4643,12 @@ impl App {
                         }
                     ));
                 if c.touches_session {
-                    ui.label(RichText::new(icon::DOT).size(9.0).color(GREEN)).on_hover_text(
+                    ui.label(RichText::new(icon::DOT).size(9.0).color(pal().green)).on_hover_text(
                         "probably this session's work — its files and timing match. A hint, not a fact",
                     );
                 }
                 for r in c.refs.iter().take(3) {
-                    let color = if r.starts_with("tag: ") { AMBER } else { BLUE };
+                    let color = if r.starts_with("tag: ") { pal().amber } else { pal().blue };
                     ui.label(RichText::new(r).size(10.0).color(color));
                 }
                 // R-D18: IntelliJ's author and date columns, adapted to a
@@ -4619,7 +4660,7 @@ impl App {
                         crate::gitview::age(now, c.epoch)
                     ))
                     .size(10.0)
-                    .color(DIM),
+                    .color(pal().dim),
                 );
                 // R-D17: once this commit's diff has been fetched, we know
                 // whether a human has read its hunks — say so, quietly.
@@ -4631,10 +4672,10 @@ impl App {
                         .filter(|h| h.reviewed)
                         .count();
                     if total > 0 && read == total {
-                        ui.label(RichText::new("✔read").size(9.0).color(DIM))
+                        ui.label(RichText::new("✔read").size(9.0).color(pal().dim))
                             .on_hover_text("every hunk of this commit has been marked read");
                     } else if read > 0 {
-                        ui.label(RichText::new(format!("{read}/{total}")).size(9.0).color(DIM))
+                        ui.label(RichText::new(format!("{read}/{total}")).size(9.0).color(pal().dim))
                             .on_hover_text("hunks of this commit marked read");
                     }
                 }
@@ -4996,7 +5037,7 @@ impl App {
                                                 "· {read} of {total} hunks read"
                                             ))
                                             .size(11.0)
-                                            .color(GREEN),
+                                            .color(pal().green),
                                         );
                                     }
                                 });
@@ -5011,7 +5052,7 @@ impl App {
                                                 RichText::new(p)
                                                     .monospace()
                                                     .size(11.5)
-                                                    .color(BLUE),
+                                                    .color(pal().blue),
                                             )
                                             .on_hover_text("show this parent commit")
                                             .clicked()
@@ -5021,7 +5062,7 @@ impl App {
                                     }
                                     for r in &d.refs {
                                         let color =
-                                            if r.starts_with("tag: ") { AMBER } else { BLUE };
+                                            if r.starts_with("tag: ") { pal().amber } else { pal().blue };
                                         ui.label(RichText::new(r).size(10.0).color(color));
                                     }
                                 });
@@ -5039,7 +5080,7 @@ impl App {
                                             named.join(", ")
                                         )
                                     };
-                                    ui.label(RichText::new(text).size(10.0).color(BLUE))
+                                    ui.label(RichText::new(text).size(10.0).color(pal().blue))
                                         .on_hover_text(d.branches.join("\n"));
                                 }
                             }
@@ -5076,7 +5117,7 @@ impl App {
                             ui.label(dim(fl.label()));
                         }
                         if f.truncated {
-                            ui.label(RichText::new("binary or too large").size(11.0).color(AMBER));
+                            ui.label(RichText::new("binary or too large").size(11.0).color(pal().amber));
                         }
                         if !f.hunks.is_empty()
                             && ui
@@ -5104,13 +5145,13 @@ impl App {
                         let current = hunk_idx == hunk_cursor && total_all > 0;
                         let mut header = dim(&h.header);
                         if current {
-                            header = RichText::new(&h.header).size(12.0).color(BLUE);
+                            header = RichText::new(&h.header).size(12.0).color(pal().blue);
                         }
                         let hr = ui.horizontal(|ui| {
                             ui.label(header);
                             // R-D17: a hunk a human has read says so.
                             if h.reviewed {
-                                ui.label(RichText::new(icon::READ).size(10.0).color(GREEN))
+                                ui.label(RichText::new(icon::READ).size(10.0).color(pal().green))
                                     .on_hover_text("marked read (R-D8's marks, by content)");
                             }
                         });
@@ -5148,7 +5189,7 @@ impl App {
             ui.label(
                 RichText::new("merge conflict — base · ours · theirs")
                     .size(11.0)
-                    .color(RED),
+                    .color(pal().red),
             );
         });
         let Some((base, ours, theirs, truncated)) = self.gitview.conflicts.get(path).cloned()
@@ -5163,7 +5204,7 @@ impl App {
             ui.label(
                 RichText::new("cut short — a stage went on past the size cap")
                     .size(11.0)
-                    .color(AMBER),
+                    .color(pal().amber),
             );
         }
         ui.separator();
@@ -5178,7 +5219,7 @@ impl App {
                         ("ours — the current branch", &ours),
                         ("theirs — the branch being merged", &theirs),
                     ]) {
-                        col.label(RichText::new(name).size(11.0).color(DIM).strong());
+                        col.label(RichText::new(name).size(11.0).color(pal().dim).strong());
                         if body.is_empty() {
                             col.label(dim("(this side has no version — added or deleted)"));
                         } else {
@@ -5276,7 +5317,7 @@ impl App {
         let root_label = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
         egui::Panel::left("explorer-tree").default_size(280.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("WORKTREE").size(11.0).color(DIM).strong())
+                ui.label(RichText::new("WORKTREE").size(11.0).color(pal().dim).strong())
                     .on_hover_text(&root_label);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
@@ -5367,7 +5408,7 @@ impl App {
                                 r.chars().take(8).collect::<String>()
                             ))
                             .size(12.0)
-                            .color(AMBER),
+                            .color(pal().amber),
                             None => RichText::new(name.to_string()).size(12.0),
                         };
                         if !pinned {
@@ -5410,7 +5451,7 @@ impl App {
                             self.explorer.activate(*i);
                         }
                         if ui
-                            .small_button(RichText::new("×").size(10.0).color(DIM))
+                            .small_button(RichText::new("×").size(10.0).color(pal().dim))
                             .on_hover_text("close (middle-click the tab also works)")
                             .clicked()
                         {
@@ -5512,7 +5553,7 @@ impl App {
                 ui.label(
                     RichText::new("history — the file as of this revision")
                         .size(11.0)
-                        .color(AMBER),
+                        .color(pal().amber),
                 )
                 .on_hover_text(format!(
                     "git show {r}:{path} — nothing here can edit the past (or the present)"
@@ -5522,7 +5563,7 @@ impl App {
                 ui.label(
                     RichText::new("cut short — the file goes on past the size cap")
                         .size(11.0)
-                        .color(AMBER),
+                        .color(pal().amber),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -5654,7 +5695,7 @@ impl App {
             let symbols = crate::symbols::outline(&content, &language);
             let mut goto_sym: Option<u64> = None;
             egui::Panel::right(egui::Id::new(("outline", group)))
-                .frame(egui::Frame::NONE.fill(BG_PANEL).inner_margin(6))
+                .frame(egui::Frame::NONE.fill(pal().bg_panel).inner_margin(6))
                 .default_size(220.0)
                 .show(ui, |ui| {
                     ui.add(
@@ -5878,7 +5919,7 @@ impl App {
             0.0,
             egui::TextFormat {
                 font_id: code_font.clone(),
-                color: DIM,
+                color: pal().dim,
                 ..Default::default()
             },
         );
@@ -5922,7 +5963,7 @@ impl App {
                     0.0,
                     egui::TextFormat {
                         font_id: code_font.clone(),
-                        color: DIM,
+                        color: pal().dim,
                         ..Default::default()
                     },
                 );
@@ -5964,7 +6005,7 @@ impl App {
                             egui::vec2(band_w, row.rect().height()),
                         ),
                         0.0,
-                        AMBER.linear_multiply(if current == Some(*l) { 0.28 } else { 0.10 }),
+                        pal().amber.linear_multiply(if current == Some(*l) { 0.28 } else { 0.10 }),
                     );
                 }
             }
@@ -5986,7 +6027,7 @@ impl App {
                             egui::vec2(band_w, row.rect().height()),
                         ),
                         0.0,
-                        BLUE.linear_multiply(0.10),
+                        pal().blue.linear_multiply(0.10),
                     );
                 }
             }
@@ -6099,10 +6140,10 @@ impl App {
                         }
                     };
                     for l in &changed_head {
-                        bar(*l, BLUE, 3.0);
+                        bar(*l, pal().blue, 3.0);
                     }
                     for l in &changed_session {
-                        bar(*l, PURPLE, 2.0);
+                        bar(*l, pal().purple, 2.0);
                     }
                 }
                 // Selectable and highlighted, and structurally unable to
@@ -6286,11 +6327,11 @@ impl App {
             let mut row_text = RichText::new(format!("{glyph}{}", e.name))
                 .monospace()
                 .color(if ignored {
-                    DIM
+                    pal().dim
                 } else if e.is_dir {
-                    TEXT
+                    pal().text
                 } else {
-                    BLUE
+                    pal().blue
                 });
             if ignored {
                 row_text = row_text.weak();
@@ -6379,7 +6420,7 @@ impl App {
         // pane failing sixty times a second.
         if let Some((_, err)) = self.term_failed.clone() {
             ui.add_space(8.0);
-            ui.colored_label(RED, format!("could not attach to {target}: {err}"));
+            ui.colored_label(pal().red, format!("could not attach to {target}: {err}"));
             ui.add_space(8.0);
             if ui.button("Try again").clicked() {
                 self.term_failed = None;
@@ -6416,7 +6457,7 @@ impl App {
                     reattach = ui.button("Re-attach").clicked();
                     ui.label(
                         RichText::new("the tmux client ended — the session itself is untouched")
-                            .color(RED),
+                            .color(pal().red),
                     );
                     return;
                 }
@@ -6596,7 +6637,7 @@ impl App {
             return;
         };
         if let Some(err) = &change.error {
-            ui.label(RichText::new(err).color(AMBER).size(12.0));
+            ui.label(RichText::new(err).color(pal().amber).size(12.0));
         }
         if change.files.is_empty() {
             ui.label(dim("no file changes attributed to this session"));
@@ -6663,7 +6704,7 @@ impl App {
                 ui.label(
                     RichText::new("FILES")
                         .size(11.0)
-                        .color(if focused { BLUE } else { DIM })
+                        .color(if focused { pal().blue } else { pal().dim })
                         .strong(),
                 )
                 .on_hover_text("Alt+2");
@@ -6811,7 +6852,7 @@ impl App {
                                 });
                             }
                             ui.label(badge(hunk.risk().label(), risk_color(hunk.risk())));
-                            ui.label(mono(&hunk.header).color(DIM));
+                            ui.label(mono(&hunk.header).color(pal().dim));
                             for fl in hunk.flags.iter().take(4) {
                                 ui.label(dim(fl.label()));
                             }
@@ -6825,7 +6866,7 @@ impl App {
                                         format!("{} flag", icon::FLAG)
                                     };
                                     let btn = if flagged {
-                                        ui.small_button(RichText::new(label).color(AMBER))
+                                        ui.small_button(RichText::new(label).color(pal().amber))
                                     } else {
                                         ui.small_button(label)
                                     };
@@ -6888,7 +6929,7 @@ impl App {
             return;
         };
         ui.horizontal(|ui| {
-            ui.label(mono(&repo).color(DIM));
+            ui.label(mono(&repo).color(pal().dim));
             if ui.small_button("refresh").clicked() {
                 self.net.send(ClientMsg::FetchReviewDebt { repo: repo.clone() });
             }
@@ -6920,7 +6961,7 @@ impl App {
 
         ui.add_space(10.0);
         if debt.worst_files.is_empty() {
-            ui.label(RichText::new("Nothing outstanding.").color(GREEN));
+            ui.label(RichText::new("Nothing outstanding.").color(pal().green));
             return;
         }
         ui.label(RichText::new("Riskiest unread files").strong().size(12.5));
@@ -7002,7 +7043,7 @@ impl App {
             ui.label(
                 RichText::new("UNVERIFIED — edited files; no build/test/typecheck completed")
                     .size(11.5)
-                    .color(AMBER),
+                    .color(pal().amber),
             );
         }
         if s.verify_runs.is_empty() {
@@ -7010,9 +7051,9 @@ impl App {
         }
         for r in s.verify_runs.iter().rev().take(12) {
             let (mark, col, word) = match r.ok {
-                Some(true) => (icon::READ, GREEN, "ok"),
-                Some(false) => (icon::HIDE, RED, "failed"),
-                None => ("…", DIM, "no result"),
+                Some(true) => (icon::READ, pal().green, "ok"),
+                Some(false) => (icon::HIDE, pal().red, "failed"),
+                None => ("…", pal().dim, "no result"),
             };
             ui.horizontal(|ui| {
                 ui.label(RichText::new(mark).size(11.5).color(col));
@@ -7029,7 +7070,7 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     if c.contradicted {
                         ui.label(
-                            RichText::new("CONTRADICTED").size(10.0).color(RED).strong(),
+                            RichText::new("CONTRADICTED").size(10.0).color(pal().red).strong(),
                         )
                         .on_hover_text(
                             "the run this claim matches ended in failure",
@@ -7079,9 +7120,9 @@ impl App {
             });
             if let Some(last) = &st.last {
                 let (word, col) = match last.exit {
-                    Some(0) => ("exited ok".to_string(), GREEN),
-                    Some(c) => (format!("exited {c}"), RED),
-                    None => ("did not run".to_string(), RED),
+                    Some(0) => ("exited ok".to_string(), pal().green),
+                    Some(c) => (format!("exited {c}"), pal().red),
+                    None => ("did not run".to_string(), pal().red),
                 };
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(word).size(11.5).color(col));
@@ -7106,7 +7147,7 @@ impl App {
                     ui.label(dim("coverage on changed lines"));
                     for fc in last.coverage.iter().take(20) {
                         let total = fc.changed_covered + fc.changed_missed;
-                        let col = if fc.changed_missed == 0 { GREEN } else { AMBER };
+                        let col = if fc.changed_missed == 0 { pal().green } else { pal().amber };
                         ui.horizontal(|ui| {
                             ui.label(mono(truncate(&fc.path, 60)).size(11.0));
                             ui.label(
@@ -7434,7 +7475,7 @@ impl App {
         ui.label(dim("most-reused prompts — click to copy"));
         for c in clusters.iter().take(50) {
             let row = ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("×{}", c.count)).size(11.5).color(BLUE));
+                ui.label(RichText::new(format!("×{}", c.count)).size(11.5).color(pal().blue));
                 ui.add(
                     egui::Label::new(RichText::new(truncate(&c.representative, 160)).size(11.5))
                         .truncate(),
@@ -7474,7 +7515,7 @@ impl App {
             ui.label(
                 RichText::new(format!("×{} in {} session(s)", f.count, f.sessions.len()))
                     .size(11.5)
-                    .color(AMBER),
+                    .color(pal().amber),
             );
             ui.label(mono(truncate(&f.example, 200)).size(11.0));
             ui.label(dim(format!("  key: {}", truncate(&f.normalized, 160))));
@@ -7676,9 +7717,9 @@ impl App {
             for g in inv.gc.iter().take(30) {
                 ui.horizontal(|ui| {
                     let (word, col) = match g.action {
-                        mogeung_core::docs::GcAction::Archive => ("archive", AMBER),
-                        mogeung_core::docs::GcAction::Merge => ("merge", BLUE),
-                        mogeung_core::docs::GcAction::Review => ("review", DIM),
+                        mogeung_core::docs::GcAction::Archive => ("archive", pal().amber),
+                        mogeung_core::docs::GcAction::Merge => ("merge", pal().blue),
+                        mogeung_core::docs::GcAction::Review => ("review", pal().dim),
                     };
                     ui.label(RichText::new(word).size(10.5).color(col));
                     ui.label(mono(&g.path).size(11.0));
@@ -7700,7 +7741,7 @@ impl App {
                     ui.label(
                         RichText::new(format!("    ☐ claimed, unevidenced: {}", truncate(&it.text, 120)))
                             .size(11.0)
-                            .color(AMBER),
+                            .color(pal().amber),
                     );
                 }
             }
@@ -7780,10 +7821,10 @@ fn render_file_tree(
             Some(i) => {
                 let f = &files[i];
                 let color = match f.status {
-                    FileStatus::Added => GREEN,
-                    FileStatus::Modified => BLUE,
-                    FileStatus::Deleted => RED,
-                    FileStatus::Renamed => AMBER,
+                    FileStatus::Added => pal().green,
+                    FileStatus::Modified => pal().blue,
+                    FileStatus::Deleted => pal().red,
+                    FileStatus::Renamed => pal().amber,
                 };
                 let row = ui.horizontal(|ui| {
                     let resp = ui.selectable_label(
@@ -7792,7 +7833,7 @@ fn render_file_tree(
                     );
                     ui.label(dim(format!("+{} −{}", f.insertions, f.deletions)));
                     if !f.hunks.is_empty() && f.hunks.iter().all(|h| h.reviewed) {
-                        ui.label(RichText::new(icon::READ).size(10.0).color(GREEN))
+                        ui.label(RichText::new(icon::READ).size(10.0).color(pal().green))
                             .on_hover_text("every hunk marked read");
                     }
                     resp
@@ -7906,19 +7947,15 @@ fn file_row(f: &mogeung_core::FileChange, max_width: f32) -> egui::text::LayoutJ
 
     // Marker carries two facts at once: read or not, and how risky.
     let (marker, marker_color) = if read {
-        (icon::READ, GREEN)
+        (icon::READ, pal().green)
     } else {
         (icon::UNREAD, risk_color(risk))
     };
     job.append(&format!("{marker} "), 0.0, mono_fmt(11.0, marker_color));
 
     let (dir, base) = short_path(&f.path);
-    let dim_text = if read { Color32::from_gray(0x60) } else { DIM };
-    let base_text = if read {
-        Color32::from_gray(0x7A)
-    } else {
-        Color32::from_gray(0xDC)
-    };
+    let dim_text = if read { pal().read_dim } else { pal().dim };
+    let base_text = if read { pal().read_base } else { pal().unread_base };
     if !dir.is_empty() {
         job.append(&dir, 0.0, fmt(12.0, dim_text));
     }
@@ -7937,11 +7974,11 @@ fn file_row(f: &mogeung_core::FileChange, max_width: f32) -> egui::text::LayoutJ
 fn tok_color(t: crate::diff::Tok, base: Color32) -> Color32 {
     use crate::diff::Tok;
     match t {
-        Tok::Keyword => Color32::from_rgb(0xC5, 0x92, 0xE8),
-        Tok::Str => Color32::from_rgb(0xB6, 0xD7, 0x8B),
-        Tok::Comment => Color32::from_rgb(0x77, 0x7C, 0x88),
-        Tok::Number => Color32::from_rgb(0xE8, 0xB0, 0x75),
-        Tok::Type => Color32::from_rgb(0x7E, 0xC0, 0xE0),
+        Tok::Keyword => pal().syn_keyword,
+        Tok::Str => pal().syn_string,
+        Tok::Comment => pal().syn_comment,
+        Tok::Number => pal().syn_number,
+        Tok::Type => pal().syn_type,
         Tok::Plain => base,
     }
 }
@@ -7953,20 +7990,20 @@ fn line_bg(line: &str) -> Option<Color32> {
     if body.starts_with("<<<<<<<") || body.starts_with(">>>>>>>")
         || body.starts_with("=======") || body.starts_with("|||||||")
     {
-        return Some(Color32::from_rgb(0x6B, 0x25, 0x3C));
+        return Some(pal().conflict_bg);
     }
     match line.chars().next() {
-        Some('+') => Some(ADD_BG),
-        Some('-') => Some(DEL_BG),
+        Some('+') => Some(pal().add_bg),
+        Some('-') => Some(pal().del_bg),
         _ => None,
     }
 }
 
 fn line_fg(line: &str) -> Color32 {
     match line.chars().next() {
-        Some('+') => Color32::from_rgb(0x8F, 0xE0, 0xA6),
-        Some('-') => Color32::from_rgb(0xF0, 0x9C, 0xA0),
-        _ => Color32::from_rgb(0xA8, 0xA8, 0xB0),
+        Some('+') => pal().add_fg,
+        Some('-') => pal().del_fg,
+        _ => pal().ctx_fg,
     }
 }
 
@@ -8000,9 +8037,9 @@ fn styled_line(
                 let mut t = RichText::new(&sp.text).monospace().size(size).color(fg);
                 if sp.changed {
                     t = t.background_color(if line.starts_with('+') {
-                        Color32::from_rgb(0x25, 0x6B, 0x3C)
+                        pal().add_emph
                     } else {
-                        Color32::from_rgb(0x74, 0x2B, 0x30)
+                        pal().del_emph
                     });
                 } else if let Some(b) = bg {
                     t = t.background_color(b);
@@ -8262,9 +8299,9 @@ fn blast_panel(ui: &mut egui::Ui, b: &BlastRadius) {
                 for r in refs.iter().take(60) {
                     ui.horizontal(|ui| {
                         if r.is_test {
-                            ui.label(badge("test", GREEN));
+                            ui.label(badge("test", pal().green));
                         }
-                        ui.label(mono(format!("{}:{}", r.path, r.line)).color(DIM));
+                        ui.label(mono(format!("{}:{}", r.path, r.line)).color(pal().dim));
                         ui.label(RichText::new(truncate(&r.text, 90)).monospace().size(11.0));
                     });
                 }
@@ -8328,17 +8365,17 @@ fn event_row(
         } => {
             ui.horizontal_wrapped(|ui| {
                 ui.label(dim(time));
-                ui.label(badge("init", DIM));
+                ui.label(badge("init", pal().dim));
                 ui.label(dim(format!("{model} · {tool_count} tools · {cwd}")));
             });
         }
         EventKind::UserPrompt { text } => {
-            message_header(ui, &time, "you", BLUE, text);
+            message_header(ui, &time, "you", pal().blue, text);
             ui.indent(ev.seq, |ui| prose(ui, text, cache, prefs));
             ui.add_space(4.0);
         }
         EventKind::AssistantText { text } => {
-            message_header(ui, &time, "agent", GREEN, text);
+            message_header(ui, &time, "agent", pal().green, text);
             ui.indent(ev.seq, |ui| prose(ui, text, cache, prefs));
             ui.add_space(4.0);
         }
@@ -8353,7 +8390,7 @@ fn event_row(
         EventKind::ToolUse { name, summary, .. } => {
             ui.horizontal_wrapped(|ui| {
                 ui.label(dim(time));
-                ui.label(badge(name, PURPLE));
+                ui.label(badge(name, pal().purple));
                 ui.label(mono(truncate(summary, 150)));
             });
         }
@@ -8361,7 +8398,7 @@ fn event_row(
             is_error, preview, ..
         } => {
             let head = if *is_error { "error" } else { "result" };
-            let color = if *is_error { RED } else { DIM };
+            let color = if *is_error { pal().red } else { pal().dim };
             egui::CollapsingHeader::new(
                 RichText::new(format!("{time}  {head}: {}", truncate(preview, 90)))
                     .size(11.5)
@@ -8386,7 +8423,7 @@ fn event_row(
                 ui.label(dim(time));
                 ui.label(badge(
                     if *is_error { "failed" } else { "done" },
-                    if *is_error { RED } else { GREEN },
+                    if *is_error { pal().red } else { pal().green },
                 ));
                 ui.label(dim(format!(
                     "{terminal_reason} · {num_turns} turns · {}",
@@ -8399,9 +8436,9 @@ fn event_row(
         }
         EventKind::Notice { level, message } => {
             let color = match level {
-                NoticeLevel::Info => DIM,
-                NoticeLevel::Warn => AMBER,
-                NoticeLevel::Error => RED,
+                NoticeLevel::Info => pal().dim,
+                NoticeLevel::Warn => pal().amber,
+                NoticeLevel::Error => pal().red,
             };
             ui.horizontal_wrapped(|ui| {
                 ui.label(dim(time));
@@ -8593,7 +8630,7 @@ impl App {
                             egui::Frame::group(ui.style()).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
-                                    ui.label(mono(&f.path).color(DIM));
+                                    ui.label(mono(&f.path).color(pal().dim));
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
@@ -8668,14 +8705,14 @@ impl App {
                 if needing.is_empty() {
                     ui.add_space(60.0);
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new("All clear").size(48.0).color(GREEN));
+                        ui.label(RichText::new("All clear").size(48.0).color(pal().green));
                         ui.label(
                             RichText::new(format!(
                                 "{} live session(s) working",
                                 self.sessions.values().filter(|s| s.alive).count()
                             ))
                             .size(20.0)
-                            .color(DIM),
+                            .color(pal().dim),
                         );
                     });
                     return;
@@ -8711,7 +8748,7 @@ impl App {
                                                         .unwrap_or_else(|| s.duration_secs(now)),
                                                 ))
                                                 .size(24.0)
-                                                .color(DIM),
+                                                .color(pal().dim),
                                             );
                                         },
                                     );
@@ -8723,11 +8760,11 @@ impl App {
                                         truncate(&item.detail, 80)
                                     ))
                                     .size(16.0)
-                                    .color(DIM),
+                                    .color(pal().dim),
                                 );
                                 if !s.collisions.is_empty() {
                                     ui.label(
-                                        RichText::new("⚠ COLLISION").size(18.0).color(RED).strong(),
+                                        RichText::new("⚠ COLLISION").size(18.0).color(pal().red).strong(),
                                     );
                                 }
                             });
@@ -8855,7 +8892,7 @@ impl App {
                                 ui.label(
                                     RichText::new("cut short at the match cap — narrow the query")
                                         .size(11.0)
-                                        .color(AMBER),
+                                        .color(pal().amber),
                                 );
                             }
                         }
@@ -8928,7 +8965,7 @@ impl App {
                                     Mode::Search => "⬆⬇ move   ↩ search / open   esc close",
                                 })
                                 .size(10.5)
-                                .color(DIM),
+                                .color(pal().dim),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -8938,7 +8975,7 @@ impl App {
                                             if len == 0 { 0 } else { self.palette.cursor + 1 },
                                             len))
                                             .size(10.5)
-                                            .color(DIM),
+                                            .color(pal().dim),
                                     );
                                 },
                             );
@@ -9007,6 +9044,27 @@ impl App {
                      everywhere instead of three you have to remember.",
                 ));
                 ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Theme:").size(12.5));
+                    for m in crate::theme::Mode::ALL {
+                        if ui
+                            .selectable_value(&mut self.prefs.theme, m, m.label())
+                            .changed()
+                        {
+                            self.prefs_dirty = true;
+                        }
+                    }
+                    ui.label(dim(format!(
+                        "· {} cycles",
+                        self.keymap.describe(crate::keymap::Action::CycleTheme)
+                    )));
+                });
+                ui.label(dim(
+                    "system follows the desktop, and falls back to dark where the \
+                     desktop will not say — which is most Linux sessions.",
+                ));
+
+                ui.add_space(6.0);
                 ui.checkbox(&mut self.prefs.preview_on_select, "show a file as soon as it is selected")
                     .on_hover_text(
                         "off: moving the cursor only highlights, and the diff changes on Activate",
@@ -9032,14 +9090,14 @@ impl App {
                         if self.capturing.is_some() {
                             ui.label(
                                 RichText::new("press the combination…  esc cancels")
-                                    .color(AMBER)
+                                    .color(pal().amber)
                                     .strong(),
                             );
                         } else {
                             ui.label(
                                 RichText::new("⬆⬇ move   ↩ rebind   backspace reset   / search")
                                     .size(11.0)
-                                    .color(DIM),
+                                    .color(pal().dim),
                             );
                         }
                     });
@@ -9215,10 +9273,10 @@ impl App {
                 // Alerts first. If something is wrong, it should not be below
                 // the fold under a table of healthy-looking numbers.
                 if h.alerts.is_empty() {
-                    ui.label(RichText::new("Nothing unaccounted for.").color(GREEN));
+                    ui.label(RichText::new("Nothing unaccounted for.").color(pal().green));
                 } else {
                     for a in &h.alerts {
-                        let colour = if a.is_urgent() { AMBER } else { DIM };
+                        let colour = if a.is_urgent() { pal().amber } else { pal().dim };
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(if a.is_urgent() { "⚠" } else { "·" }).color(colour));
                             ui.label(RichText::new(a.message()).color(colour).size(12.5));
@@ -9279,8 +9337,8 @@ impl App {
                         row("read", h.lines_parsed, None);
                         row("ignored", h.lines_ignored, None);
                         row("yielded nothing", h.lines_barren, None);
-                        row("unknown type", h.lines_unknown, Some(AMBER));
-                        row("unreadable", h.lines_malformed, Some(RED));
+                        row("unknown type", h.lines_unknown, Some(pal().amber));
+                        row("unreadable", h.lines_malformed, Some(pal().red));
                         ui.label(dim("total seen"));
                         ui.label(mono(h.lines_seen.to_string()));
                         ui.end_row();
@@ -9288,9 +9346,9 @@ impl App {
 
                 if !h.unknown_types.is_empty() {
                     ui.add_space(10.0);
-                    ui.label(RichText::new("Types mogeung does not understand").color(AMBER).strong().size(12.5));
+                    ui.label(RichText::new("Types mogeung does not understand").color(pal().amber).strong().size(12.5));
                     for (ty, n) in &h.unknown_types {
-                        ui.label(mono(format!("  {ty}  ×{n}")).color(AMBER));
+                        ui.label(mono(format!("  {ty}  ×{n}")).color(pal().amber));
                     }
                 }
 
@@ -9316,7 +9374,7 @@ impl App {
                         Some(e) => {
                             ui.label(RichText::new(format!("  index unreadable: {e}"))
                                 .size(11.5)
-                                .color(RED));
+                                .color(pal().red));
                         }
                         None => {
                             ui.label(dim(format!(
@@ -9331,7 +9389,7 @@ impl App {
                     for (kind, n) in &h.codex_unknown {
                         ui.label(RichText::new(format!("  unknown kind {kind} ×{n}"))
                             .size(11.5)
-                            .color(AMBER));
+                            .color(pal().amber));
                     }
                 }
 

@@ -55,6 +55,8 @@ pub enum Action {
     TabInsight,
     NextTab,
     PrevTab,
+    /// Cycle dark → light → system → dark. `R-J6`.
+    CycleTheme,
     /// Toggle whether the keyboard belongs to the embedded terminal.
     ///
     /// One chord both ways — into the agent and back out — because reaching
@@ -178,6 +180,7 @@ impl Action {
         Action::ToggleAmbient,
         Action::ToggleHealth,
         Action::OpenKeymap,
+        Action::CycleTheme,
         Action::Rescan,
     ];
 
@@ -228,6 +231,7 @@ impl Action {
             | Action::ToggleAmbient
             | Action::ToggleHealth
             | Action::OpenKeymap
+            | Action::CycleTheme
             | Action::Rescan => "Windows",
         }
     }
@@ -284,6 +288,7 @@ impl Action {
             Action::ToggleAmbient => "Show or hide the ambient board",
             Action::ToggleHealth => "Show or hide the health panel",
             Action::OpenKeymap => "Open this keyboard settings window",
+            Action::CycleTheme => "Theme — dark, light, or follow the desktop",
             Action::Rescan => "Rescan sessions now",
         }
     }
@@ -493,6 +498,9 @@ impl Default for Keymap {
         set(Action::ToggleHealth, &["Alt+H"]);
         set(Action::OpenKeymap, &["Alt+K"]);
         set(Action::Rescan, &["Alt+R"]);
+        // Alt+T rather than a bare letter: switching theme mid-review is a
+        // once-in-a-while act, and the letters belong to triage.
+        set(Action::CycleTheme, &["Alt+T"]);
 
         Keymap { bindings: b }
     }

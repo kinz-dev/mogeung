@@ -282,7 +282,10 @@ are sequenced last. See [feature 0023](../features/0023-polish.md).
 `R-J1`–`R-J5` were built the same day they were numbered. `R-J2` was gated on
 a measurement and the measurement said build it: 30ms per frame on the largest
 commit in this repo, 0.28ms after, and flat in diff size rather than linear.
-`R-J6` is not started, deliberately.
+`R-J6` followed, and found a defect in the palette it was extending: white
+lettering on an amber badge is 2.36:1, which had shipped, on the two badges
+most often on screen. The pillar is now built end to end and awaits the same
+verdict as everything else.
 
 | # | Item | Effort | |
 |---|---|---|---|
@@ -291,7 +294,7 @@ commit in this repo, 0.28ms after, and flat in diff size rather than linear.
 | R-J3 | **Config file** — `~/.mogeung/config.toml` for both binaries, flags still winning. A malformed file degrades to defaults rather than refusing to start | S | ⏳ |
 | R-J4 | **`mogeung` CLI subcommands** — `queue`, `sessions`, `health`, `rescan`, `diff`, `search`, each with `--json`. Six of the forty endpoints, chosen; wrapping all of them would be a worse tool, not a more complete one | M | ⏳ |
 | R-J5 | **Empty states** — seventeen sites where "nothing here" cannot be told apart from a failed fetch | S | ⏳ |
-| R-J6 | **Light theme** — fourteen palette constants, 232 reference sites, and six inline colours that never went through the palette. Last, deliberately: the only row that touches every pane | L | |
+| R-J6 | **Light theme** — two hand-written palettes behind one lookup, a `dark`/`light`/`system` preference, and contrast tests over every pair that has to hold. Built last, deliberately: the only row that touches every pane | L | ⏳ |
 
 ## K. Explicitly not
 

@@ -117,6 +117,10 @@ pub struct Prefs {
     #[serde(default)]
     pub bookmarks: Vec<(String, String, u64)>,
 
+    /// Dark, light, or whatever the desktop says. `R-J6`.
+    #[serde(default)]
+    pub theme: crate::theme::Mode,
+
     /// Where the window was, last time it closed. `R-J1`.
     ///
     /// Here rather than in eframe's own persistence, which stores a second
@@ -217,6 +221,7 @@ impl Default for Prefs {
             zoom: BTreeMap::new(),
             editor_wrap: BTreeSet::new(),
             bookmarks: Vec::new(),
+            theme: crate::theme::Mode::default(),
             window: None,
         }
     }
@@ -442,6 +447,21 @@ mod tests {
         ] {
             assert_eq!(bad.usable(Some((1920.0, 1080.0))), None, "{bad:?}");
         }
+    }
+
+    /// `R-J6`. The theme has to survive a restart — a preference that resets
+    /// every launch is not a preference — and a file written before the theme
+    /// existed must still load, defaulting to the dark it was drawn in.
+    #[test]
+    fn the_theme_round_trips_and_an_older_file_defaults_to_dark() {
+        let mut p = Prefs::default();
+        assert_eq!(p.theme, crate::theme::Mode::Dark, "dark stays the default");
+        p.theme = crate::theme::Mode::Light;
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.theme, crate::theme::Mode::Light);
+
+        let older: Prefs = serde_json::from_str(r#"{"hidden":[],"scope":"live"}"#).unwrap();
+        assert_eq!(older.theme, crate::theme::Mode::Dark);
     }
 
     /// A size with no position is a whole answer, not a broken one.

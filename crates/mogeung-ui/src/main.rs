@@ -24,6 +24,7 @@ mod palette;
 mod prefs;
 mod symbols;
 mod term;
+mod theme;
 mod ui;
 
 use std::path::PathBuf;
@@ -323,6 +324,27 @@ fn main() -> eframe::Result<()> {
 mod tests {
     use super::*;
     use mogeung_core::config::Config;
+
+    /// The window icon is `include_bytes!`d and decoded with an `expect`, so a
+    /// file that is not a PNG is a panic on launch rather than a build error.
+    /// That is a live risk here: the artwork arrives as a `.jpg`, and copying
+    /// one to `mogeung.png` would look right in every file listing and crash
+    /// the window for everyone.
+    #[test]
+    fn the_embedded_window_icon_is_a_png_eframe_can_decode() {
+        let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/mogeung.png"))
+            .expect("assets/mogeung.png must be a real PNG");
+        assert_eq!(icon.width, icon.height, "an app icon has to be square");
+        assert!(icon.width >= 256, "too small to install as a 512px icon: {}", icon.width);
+        assert_eq!(
+            icon.rgba.len(),
+            (icon.width * icon.height * 4) as usize,
+            "RGBA, so the transparent background survives"
+        );
+        // The corner is transparent: the source art is a sticker on white, and
+        // a white square is exactly what an icon must not be on a dark dock.
+        assert_eq!(icon.rgba[3], 0, "the top-left pixel must be transparent");
+    }
 
     /// `R-J3`. The file supplies what the command line did not, and nothing
     /// more. A config that quietly won over a flag would be the worst kind of

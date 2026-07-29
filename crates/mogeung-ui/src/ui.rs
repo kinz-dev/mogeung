@@ -1,6 +1,7 @@
 //! Small shared presentation helpers: colours, badges, formatting, and the
 //! "open this somewhere else" actions.
 
+use crate::theme::{on_accent_for, pal};
 use egui::{Color32, RichText};
 use mogeung_core::attention::AttentionReason;
 use mogeung_core::change::RiskLevel;
@@ -21,35 +22,22 @@ use mogeung_core::change::RiskLevel;
 // so depth comes from value rather than from borders. Borders are then free to
 // mean something (focus, selection) instead of merely drawing boxes.
 
-/// Behind everything.
-pub const BG: Color32 = Color32::from_rgb(0x14, 0x15, 0x18);
-/// Panels and the top bar.
-pub const BG_PANEL: Color32 = Color32::from_rgb(0x1A, 0x1C, 0x20);
-/// Cards and popups: the layer that sits *on* a panel.
-pub const BG_RAISED: Color32 = Color32::from_rgb(0x22, 0x25, 0x2A);
-/// Hover, and zebra striping.
-pub const BG_FAINT: Color32 = Color32::from_rgb(0x2A, 0x2D, 0x33);
-/// Body text.
-pub const TEXT: Color32 = Color32::from_rgb(0xD4, 0xD7, 0xDD);
-/// Headings and anything that must win the eye.
-pub const TEXT_STRONG: Color32 = Color32::from_rgb(0xF0, 0xF2, 0xF6);
-
-pub const RED: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4F);
-pub const AMBER: Color32 = Color32::from_rgb(0xE0, 0x9B, 0x24);
-pub const BLUE: Color32 = Color32::from_rgb(0x4C, 0x8E, 0xDA);
-pub const GREEN: Color32 = Color32::from_rgb(0x3F, 0xA8, 0x5E);
-pub const DIM: Color32 = Color32::from_rgb(0x8A, 0x8A, 0x90);
-pub const PURPLE: Color32 = Color32::from_rgb(0x9A, 0x6F, 0xD0);
-
-/// Diff line tints, kept dark enough to read white text on in the default theme.
-pub const ADD_BG: Color32 = Color32::from_rgb(0x14, 0x3A, 0x21);
-pub const DEL_BG: Color32 = Color32::from_rgb(0x45, 0x1A, 0x1D);
+// The palette itself now lives in `crate::theme`, which holds two of them and
+// the switch between them (`R-J6`). What is left here is presentation built
+// *on* a palette: badges, the egui style, and the semantic mappings.
 
 /// The badge colours a user label can land on. `R-B26`.
 ///
 /// Deliberately none of the semantic colours: a label must not be mistakable
-/// for a state (`RED` = waiting, `AMBER` = needs you), so these hues sit
+/// for a state (`red` = waiting, `amber` = needs you), so these hues sit
 /// between them — all dark enough to carry the badge's white text.
+///
+/// The one set of colours that does **not** move with the theme (`R-J6`), and
+/// that is a decision rather than an omission: a label is a name the user
+/// chose, so having it change hue between dark and light would weaken the
+/// thing it exists to be — a stable identifier. All eight are mid-dark, so
+/// `on_accent_for` letters them white in both palettes; the test in this file
+/// is what keeps that true.
 const LABEL_COLORS: [Color32; 8] = [
     Color32::from_rgb(0x2E, 0x8B, 0x8B), // teal
     Color32::from_rgb(0x5B, 0x6A, 0xC4), // indigo
@@ -101,63 +89,78 @@ pub fn chip_char(name: &str) -> char {
 pub fn apply_theme(ctx: &egui::Context) {
     use egui::{CornerRadius, FontFamily, FontId, Stroke, TextStyle};
 
-    let mut visuals = egui::Visuals::dark();
+    let p = pal();
+    // The base matters beyond the colours we then overwrite: egui derives
+    // shadows, disabled states and text-selection tints from it, and a light
+    // window built on `Visuals::dark()` gets black shadows over white panels.
+    let mut visuals = match crate::theme::active() {
+        crate::theme::Theme::Dark => egui::Visuals::dark(),
+        crate::theme::Theme::Light => egui::Visuals::light(),
+    };
     let radius = CornerRadius::same(5);
 
-    visuals.panel_fill = BG_PANEL;
-    visuals.window_fill = BG_RAISED;
-    visuals.extreme_bg_color = BG;
-    visuals.faint_bg_color = BG_FAINT;
-    visuals.code_bg_color = BG;
+    visuals.panel_fill = pal().bg_panel;
+    visuals.window_fill = pal().bg_raised;
+    visuals.extreme_bg_color = pal().bg;
+    visuals.faint_bg_color = pal().bg_faint;
+    visuals.code_bg_color = pal().bg;
     visuals.override_text_color = None;
     visuals.window_corner_radius = CornerRadius::same(9);
-    visuals.window_stroke = Stroke::new(1.0, Color32::from_rgb(0x33, 0x37, 0x3E));
-    visuals.hyperlink_color = BLUE;
-    visuals.warn_fg_color = AMBER;
-    visuals.error_fg_color = RED;
+    visuals.window_stroke = Stroke::new(1.0, p.window_stroke);
+    visuals.hyperlink_color = pal().blue;
+    visuals.warn_fg_color = pal().amber;
+    visuals.error_fg_color = pal().red;
 
     // Selection is the accent, and the only saturated thing in the chrome.
-    visuals.selection.bg_fill = BLUE.linear_multiply(0.55);
-    visuals.selection.stroke = Stroke::new(1.0, TEXT_STRONG);
+    // A palette value rather than a multiplied blue: multiplying darkens, which
+    // is right on a dark ground and gives a navy block with black text on it
+    // under light.
+    visuals.selection.bg_fill = p.selection_bg;
+    visuals.selection.stroke = Stroke::new(1.0, p.selection_stroke);
 
     let w = &mut visuals.widgets;
-    w.noninteractive.bg_fill = BG_PANEL;
-    w.noninteractive.weak_bg_fill = BG_PANEL;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x2C, 0x2F, 0x35));
-    w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+    w.noninteractive.bg_fill = pal().bg_panel;
+    w.noninteractive.weak_bg_fill = pal().bg_panel;
+    w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    w.noninteractive.fg_stroke = Stroke::new(1.0, pal().text);
     w.noninteractive.corner_radius = radius;
 
-    w.inactive.bg_fill = BG_RAISED;
-    w.inactive.weak_bg_fill = BG_RAISED;
+    w.inactive.bg_fill = pal().bg_raised;
+    w.inactive.weak_bg_fill = pal().bg_raised;
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.fg_stroke = Stroke::new(1.0, TEXT);
+    w.inactive.fg_stroke = Stroke::new(1.0, pal().text);
     w.inactive.corner_radius = radius;
 
-    w.hovered.bg_fill = BG_FAINT;
-    w.hovered.weak_bg_fill = BG_FAINT;
-    w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x43, 0x48, 0x52));
-    w.hovered.fg_stroke = Stroke::new(1.0, TEXT_STRONG);
+    w.hovered.bg_fill = pal().bg_faint;
+    w.hovered.weak_bg_fill = pal().bg_faint;
+    w.hovered.bg_stroke = Stroke::new(1.0, p.border_hover);
+    w.hovered.fg_stroke = Stroke::new(1.0, pal().text_strong);
     w.hovered.corner_radius = radius;
     // Stock egui grows a widget on hover. It reads as the layout twitching.
     w.hovered.expansion = 0.0;
 
-    w.active.bg_fill = BLUE.linear_multiply(0.45);
-    w.active.weak_bg_fill = BLUE.linear_multiply(0.45);
-    w.active.bg_stroke = Stroke::new(1.0, BLUE);
-    w.active.fg_stroke = Stroke::new(1.0, TEXT_STRONG);
+    w.active.bg_fill = p.selection_bg;
+    w.active.weak_bg_fill = p.selection_bg;
+    w.active.bg_stroke = Stroke::new(1.0, pal().blue);
+    w.active.fg_stroke = Stroke::new(1.0, pal().text_strong);
     w.active.corner_radius = radius;
     w.active.expansion = 0.0;
 
-    w.open.bg_fill = BG_FAINT;
-    w.open.weak_bg_fill = BG_FAINT;
+    w.open.bg_fill = pal().bg_faint;
+    w.open.weak_bg_fill = pal().bg_faint;
     w.open.corner_radius = radius;
 
-    // Pinned to dark rather than following the system: the diff tints, the
-    // reason badges and the risk colours are all chosen against a dark ground,
-    // and a light theme would need its own set rather than the same values
-    // reused.
-    ctx.set_theme(egui::ThemePreference::Dark);
-    ctx.set_visuals_of(egui::Theme::Dark, visuals);
+    // It *was* pinned to dark, with the note that a light theme would need
+    // its own set of values rather than the same ones reused. That turned out
+    // to be exactly right, and `crate::theme` is that second set. Both are
+    // installed so egui does not fall back to stock styling if something asks
+    // for the other one.
+    let (preference, theme) = match crate::theme::active() {
+        crate::theme::Theme::Dark => (egui::ThemePreference::Dark, egui::Theme::Dark),
+        crate::theme::Theme::Light => (egui::ThemePreference::Light, egui::Theme::Light),
+    };
+    ctx.set_theme(preference);
+    ctx.set_visuals_of(theme, visuals);
 
     ctx.all_styles_mut(|style| {
         style.text_styles = [
@@ -188,23 +191,23 @@ pub fn reason_color(r: AttentionReason) -> Color32 {
     match r {
         // Blocked on a permission prompt: the most urgent thing on the board,
         // and visually distinct from "finished, waiting for a new task".
-        AttentionReason::AwaitingPermission => Color32::from_rgb(0xFF, 0x6B, 0x35),
-        AttentionReason::AwaitingInput => RED,
-        AttentionReason::Failed => RED,
-        AttentionReason::RateLimited => AMBER,
-        AttentionReason::NeedsReview => AMBER,
-        AttentionReason::Stalled => PURPLE,
-        AttentionReason::Running => BLUE,
-        AttentionReason::Idle => DIM,
+        AttentionReason::AwaitingPermission => pal().urgent,
+        AttentionReason::AwaitingInput => pal().red,
+        AttentionReason::Failed => pal().red,
+        AttentionReason::RateLimited => pal().amber,
+        AttentionReason::NeedsReview => pal().amber,
+        AttentionReason::Stalled => pal().purple,
+        AttentionReason::Running => pal().blue,
+        AttentionReason::Idle => pal().dim,
     }
 }
 
 pub fn risk_color(r: RiskLevel) -> Color32 {
     match r {
-        RiskLevel::High => RED,
-        RiskLevel::Medium => AMBER,
-        RiskLevel::Low => DIM,
-        RiskLevel::Noise => Color32::from_rgb(0x5A, 0x5A, 0x60),
+        RiskLevel::High => pal().red,
+        RiskLevel::Medium => pal().amber,
+        RiskLevel::Low => pal().dim,
+        RiskLevel::Noise => pal().noise,
     }
 }
 
@@ -322,7 +325,7 @@ pub fn icon_button(
     active: bool,
     tint: Option<Color32>,
 ) -> egui::Response {
-    let color = tint.unwrap_or(if active { Color32::WHITE } else { DIM });
+    let color = tint.unwrap_or(if active { pal().text_strong } else { pal().dim });
     let text = RichText::new(glyph).size(15.0).color(color);
     let button = egui::Button::new(text)
         .min_size(egui::vec2(28.0, 24.0))
@@ -332,14 +335,14 @@ pub fn icon_button(
 
 pub fn badge(text: &str, color: Color32) -> RichText {
     RichText::new(format!(" {text} "))
-        .color(Color32::WHITE)
+        .color(on_accent_for(color))
         .background_color(color)
         .monospace()
         .size(11.0)
 }
 
 pub fn dim(text: impl Into<String>) -> RichText {
-    RichText::new(text.into()).color(DIM).size(12.0)
+    RichText::new(text.into()).color(pal().dim).size(12.0)
 }
 
 pub fn mono(text: impl Into<String>) -> RichText {
@@ -852,5 +855,27 @@ mod tests {
         assert_eq!(chip_char("42-experiments"), '4');
         assert_eq!(chip_char("—"), '?');
         assert_eq!(chip_char(""), '?');
+    }
+
+    /// Label badges keep one set of fills across both themes, and that is a
+    /// decision rather than an oversight: a label is a name the user chose,
+    /// and having it change hue with the theme would make it a worse
+    /// identifier. What has to hold is that its lettering still reads — the
+    /// fills are mid-dark, so `on_accent_for` picks white in both.
+    #[test]
+    fn label_badges_are_readable_under_both_palettes() {
+        use crate::theme::{relative_luminance, Theme};
+        for theme in [Theme::Dark, Theme::Light] {
+            crate::theme::set(theme);
+            for label in ["api", "ui", "docs", "spike", "hotfix", "review", "a", "zzz"] {
+                let fill = super::label_color(label);
+                let ink = super::on_accent_for(fill);
+                let (a, b) = (relative_luminance(fill), relative_luminance(ink));
+                let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+                let ratio = (hi + 0.05) / (lo + 0.05);
+                assert!(ratio >= 4.0, "{theme:?}: {label} badge is {ratio:.2}:1");
+            }
+        }
+        crate::theme::set(Theme::Dark);
     }
 }

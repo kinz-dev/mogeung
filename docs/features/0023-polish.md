@@ -59,11 +59,20 @@ here tests anything.
 - [x] Every empty state says which of "no data" and "could not load" it is
 - [x] A large real diff scrolls without dropping frames — or the measurement
       shows it already did, and `R-J2` closes unbuilt
-- [ ] (`R-J6`) The light theme is legible in every pane, diffs included
+- [x] (`R-J6`) The light theme is legible in every pane, diffs included
+- [x] (`R-J6`) Switching theme takes effect without restarting, and survives one
 
-The first six are built and installed; like everything else awaiting
+All six are built and installed; like everything else awaiting
 [item 0](../product/roadmap.md#0-the-non-feature), they are ticked as *done*,
-not as *judged*. `R-J6` is deliberately last and not started.
+not as *judged*.
+
+"Legible" is asserted by contrast tests over every pair the palettes promise —
+text on each of four surfaces, accents on panels, diff text on its own tint and
+on the word-diff band, syntax tokens on both tints, badge lettering on every
+fill, read against unread, and each graph lane against its neighbours. It is
+also *looked at*: both themes were captured from a running window. What was not
+visually confirmed is the diff pane specifically, because synthetic input never
+reached egui through XWayland — the tests cover it, a screenshot does not.
 
 ### Explicitly out of scope
 
@@ -113,6 +122,13 @@ opens the window; a leading bare word dispatches instead. `queue`, `sessions`,
 **`R-J5`, `R-J6` — last.** Both scale with pane count, and the dogfooding week
 may delete panes.
 
+`R-J6`'s shape: a `Palette` struct of ~35 fields, two `const` instances, and a
+process-global `pal()` behind them. The names survived — `RED` became
+`pal().red` — so the 232 call sites changed mechanically and read the same
+afterwards. A preference (`dark`/`light`/`system`) lives in `prefs.json` beside
+the rest of the view state, with `Alt+T` to cycle and a selector in the
+settings window.
+
 ### Files touched
 
 - `crates/mogeung-ui/src/prefs.rs` — geometry field
@@ -120,6 +136,10 @@ may delete panes.
   dispatch, config file
 - `crates/mogeung-ui/src/app.rs` — geometry capture, empty states, palette
 - `crates/mogeung-ui/src/ui.rs` — palette
+- `crates/mogeung-ui/src/theme.rs` — the two palettes and the switch (`R-J6`)
+- `crates/mogeung-ui/src/cli.rs` — subcommands (`R-J4`)
+- `crates/mogeung-ui/src/keymap.rs` — `CycleTheme`
+- `crates/mogeung-core/src/config.rs` — the config file both binaries read
 - `crates/mogeungd/src/main.rs` — config file
 
 ### Risks and unknowns
@@ -202,6 +222,40 @@ overwrite a good remembered one with a placeholder.
 Rust backtrace — found in the first minute of using the thing, not in any test,
 because the unit tests call the renderers directly and never touch stdout. It
 now treats `EPIPE` as the end of the job.
+
+**`R-J6` found a defect in the palette it was extending.** The first run of the
+contrast tests failed three times, and every failure was in the *dark* theme —
+the one that had already shipped. Two were my thresholds being arbitrary and
+were argued down in the test comments. The third was real: white lettering on
+an amber badge is **2.36:1**, and amber is `NeedsReview` and `RateLimited`, so
+it is the badge most often on screen. Badge ink is now chosen by the fill's
+luminance.
+
+That rule is narrower than it first looks. Picking *maximum* contrast would
+flip nearly every dark badge to dark ink — the dark accents are all mid-tone,
+so dark lettering wins on all of them — which is a redesign of a theme this
+work was not asked to touch. The line is drawn at luminance 0.30, which catches
+amber (2.36 → 7.8) and urgent (2.84 → 6.5) and leaves the rest as they shipped.
+
+The remaining gap is stated rather than hidden: badge text is 11px, so AA wants
+4.5:1, and the dark palette's mid-tone accents sit at 3.0–3.9 with white
+lettering. The light palette clears 5:1 on every fill. Closing the dark gap
+means either darkening every accent or inverting every badge, and both are
+redesigns rather than fixes.
+
+**Two palettes, hand-written, because inverting one does not work.** Lightness
+inversion is the shortcut that produces the washed-out look giving "light mode
+added later" away. Concretely: a 55%-multiplied blue selection becomes a navy
+block with black text on it; the dark diff tints become garish mints; amber
+becomes unreadable. Each wanted a decision, not a formula.
+
+Three things only a running window showed. `Visuals::light()` has to be the
+base rather than `Visuals::dark()` with colours overwritten, because egui
+derives shadows and disabled states from it — a light window on a dark base
+gets black shadows over white panels. `graph_colors` had to stop being a
+`const` array, since a `const` cannot ask which theme is running. And the light
+graph lanes needed re-picking: the first attempt put teal 76 channel-steps from
+blue, and two lanes that close cannot be told apart where they cross.
 
 **The daemon's flags had to lose their clap defaults.** `default_value` makes a
 value you typed indistinguishable from one you did not, so the file could never
