@@ -270,6 +270,10 @@ pub struct App {
     explorer_find_cursor: usize,
     explorer_find_focus: bool,
 
+    /// Ctrl+F while the Git pane holds the keyboard: a one-frame "grab the
+    /// log filter" flag, the git twin of `explorer_find_focus`.
+    git_filter_focus: bool,
+
     /// The attached terminal, when the Terminal tab has been opened for a
     /// session that runs under tmux. One at a time: a second attach costs a
     /// pty and a tmux client for a pane nobody is looking at.
@@ -358,6 +362,7 @@ impl App {
             explorer_find: String::new(),
             explorer_find_cursor: 0,
             explorer_find_focus: false,
+            git_filter_focus: false,
             term: None,
             term_focused: false,
             explorer,
@@ -795,10 +800,10 @@ impl App {
                 }
 
                 let (dot, tip) = if self.net.connected {
-                    (RichText::new("●").color(GREEN), "connected".to_string())
+                    (RichText::new(icon::DOT).color(GREEN), "connected".to_string())
                 } else {
                     (
-                        RichText::new("●").color(RED),
+                        RichText::new(icon::DOT).color(RED),
                         self.net
                             .last_error
                             .clone()
@@ -1517,10 +1522,16 @@ impl App {
                 }
             }),
             A::PinFileTab => self.with_explorer(|app| app.explorer.toggle_pin_active()),
-            A::FindInFile => self.with_explorer(|app| {
-                app.explorer_find_open = true;
-                app.explorer_find_focus = true;
-            }),
+            A::FindInFile => match find_target(self.tab) {
+                FindTarget::GitFilter => {
+                    self.set_tab(Tab::Git); // surface the pane if it was buried
+                    self.git_filter_focus = true;
+                }
+                FindTarget::EditorFind => self.with_explorer(|app| {
+                    app.explorer_find_open = true;
+                    app.explorer_find_focus = true;
+                }),
+            },
             A::MoveFileTabSplit => self.with_explorer(|app| {
                 let focus = app.explorer.current().focus;
                 if let Some(i) = app.explorer.current().active_of(focus) {
@@ -1992,7 +2003,7 @@ impl App {
                         egui::TextEdit::singleline(&mut self.filter)
                             .id(filter_id())
                             .hint_text(if filtering {
-                                "type to narrow  ·  ↑↓ choose  ·  ⏎ accept  ·  esc clear"
+                                "type to narrow  ·  ⬆⬇ choose  ·  ↩ accept  ·  esc clear"
                             } else {
                                 "filter  (/)   repo: branch: file: label:"
                             })
@@ -2053,7 +2064,7 @@ impl App {
                 // six of them and was wrong about which six mattered.
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("j/k move   ⏎ open   / filter")
+                        RichText::new("j/k move   ↩ open   / filter")
                             .size(10.5)
                             .color(DIM),
                     );
@@ -2197,7 +2208,11 @@ impl App {
                                 ui.add_space(4.0);
                                 let head = ui.horizontal(|ui| {
                                     ui.label(
-                                        RichText::new(if collapsed { "▸" } else { "▾" })
+                                        RichText::new(if collapsed {
+                                            icon::COLLAPSED
+                                        } else {
+                                            icon::EXPANDED
+                                        })
                                             .size(11.0)
                                             .color(DIM),
                                     );
@@ -2494,12 +2509,12 @@ impl App {
                 ui.horizontal(|ui| {
                     let trimmed = text.trim();
                     if trimmed.is_empty() {
-                        ui.label(dim("⏎ removes the label · esc cancels"));
+                        ui.label(dim("↩ removes the label · esc cancels"));
                     } else {
                         // The badge exactly as the card will wear it, colour
                         // included — the preview is the promise.
                         ui.label(badge(&truncate(trimmed, 24), label_color(trimmed)));
-                        ui.label(dim("⏎ saves · esc cancels"));
+                        ui.label(dim("↩ saves · esc cancels"));
                     }
                 });
                 let (enter, escape) = ui.input(|i| {
@@ -3018,6 +3033,28 @@ fn may_toggle_hidden(alive: bool, hidden: bool) -> bool {
     hidden || !alive
 }
 
+/// Where Ctrl+F lands, decided by the pane the keyboard is aimed at
+/// (`self.tab` — a click in any pane aims it there).
+///
+/// Find used to mean "raise the Editor and open its find bar" from anywhere,
+/// which read as a misfire when the Git pane was focused: the pane you were
+/// searching vanished behind another tab. In the Git pane, find is the log
+/// filter — it already speaks `find:` pickaxe, `author:` and `path:`.
+/// Everywhere else the Editor behaviour stands, because no other pane has a
+/// search of its own to offer instead.
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum FindTarget {
+    GitFilter,
+    EditorFind,
+}
+
+fn find_target(tab: Tab) -> FindTarget {
+    match tab {
+        Tab::Git => FindTarget::GitFilter,
+        _ => FindTarget::EditorFind,
+    }
+}
+
 /// What the user asked for by clicking inside a card, as opposed to clicking
 /// the card itself.
 #[derive(Default)]
@@ -3026,7 +3063,7 @@ struct CardHit {
     filter_repo: Option<String>,
     /// The label badge was clicked: narrow the queue to that label.
     filter_label: Option<String>,
-    /// The corner `✕` was clicked.
+    /// The corner `×` was clicked.
     hide: bool,
 }
 
@@ -3262,7 +3299,7 @@ impl App {
                 .on_hover_text(s.label());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button("⋯", |ui| {
+                    ui.menu_button("…", |ui| {
                         if ui.button("Refresh diff").clicked() {
                             self.net.send(ClientMsg::RefreshChange {
                                 session_id: s.id.clone(),
@@ -3298,7 +3335,7 @@ impl App {
                     .response
                     .on_hover_text("refresh, reset layout, forget");
 
-                    // The editor handoffs, visible again. They lived in the ⋯
+                    // The editor handoffs, visible again. They lived in the …
                     // menu for one release and earned their way back out: the
                     // handoff to a real editor is the roadmap's own answer to
                     // "not an editor", and an answer behind a menu costs two
@@ -3575,7 +3612,7 @@ impl App {
                         ui.label(RichText::new("LOG").size(11.0).color(DIM).strong());
                         if let Some(rev) = self.gitview.log_rev.clone() {
                             if ui
-                                .small_button(format!("⌥ {rev} ✕"))
+                                .small_button(format!("{} {rev} ×", icon::BRANCH))
                                 .on_hover_text("scoped to this ref — click to go back to HEAD")
                                 .clicked()
                             {
@@ -3593,6 +3630,10 @@ impl App {
                                 .hint_text("filter: text · author:… · path:… · find:…")
                                 .desired_width(ui.available_width() - 24.0),
                         );
+                        if self.git_filter_focus {
+                            field.request_focus();
+                            self.git_filter_focus = false;
+                        }
                         let entered =
                             field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if entered {
@@ -3606,7 +3647,7 @@ impl App {
                             || self.gitview.log_pickaxe.is_some();
                         if active
                             && ui
-                                .small_button("✕")
+                                .small_button("×")
                                 .on_hover_text("clear the filter")
                                 .clicked()
                         {
@@ -3615,7 +3656,7 @@ impl App {
                         }
                         let dot = self.gitview.attribution_only;
                         if ui
-                            .selectable_label(dot, RichText::new("●").size(10.0).color(GREEN))
+                            .selectable_label(dot, RichText::new(icon::DOT).size(10.0).color(GREEN))
                             .on_hover_text(
                                 "only commits that look like this session's work — \
                                  the graph hides while this is on",
@@ -3647,7 +3688,7 @@ impl App {
             match &refs.head {
                 Some(branch) => {
                     ui.label(
-                        RichText::new(format!("⎇ {branch}"))
+                        RichText::new(format!("{} {branch}", icon::BRANCH))
                             .size(12.0)
                             .strong(),
                     )
@@ -3655,7 +3696,7 @@ impl App {
                 }
                 None => {
                     ui.label(
-                        RichText::new(format!("⎇ detached @ {}", refs.head_sha))
+                        RichText::new(format!("{} detached @ {}", icon::BRANCH, refs.head_sha))
                             .size(12.0)
                             .color(AMBER),
                     )
@@ -3666,13 +3707,13 @@ impl App {
                 if let Some(up) = &cur.upstream {
                     let mut track = String::new();
                     if cur.ahead > 0 {
-                        track.push_str(&format!(" ↑{}", cur.ahead));
+                        track.push_str(&format!(" ⬆{}", cur.ahead));
                     }
                     if cur.behind > 0 {
-                        track.push_str(&format!(" ↓{}", cur.behind));
+                        track.push_str(&format!(" ⬇{}", cur.behind));
                     }
                     ui.label(dim(format!("{up}{track}"))).on_hover_text(
-                        "commits ahead ↑ / behind ↓ the upstream, as of the last fetch",
+                        "commits ahead ⬆ / behind ⬇ the upstream, as of the last fetch",
                     );
                 }
             }
@@ -3710,10 +3751,10 @@ impl App {
                         let scoped = self.gitview.log_rev.as_deref() == Some(b.name.as_str());
                         let mut text = format!("{} {}", b.sha, b.name);
                         if b.ahead > 0 {
-                            text.push_str(&format!(" ↑{}", b.ahead));
+                            text.push_str(&format!(" ⬆{}", b.ahead));
                         }
                         if b.behind > 0 {
-                            text.push_str(&format!(" ↓{}", b.behind));
+                            text.push_str(&format!(" ⬇{}", b.behind));
                         }
                         let mut rich = RichText::new(text).monospace();
                         if b.current {
@@ -4160,13 +4201,13 @@ impl App {
                         crate::gitview::age(now, c.epoch),
                         c.sha,
                         if c.touches_session {
-                            "\n● probably this session's work (files + timing match)"
+                            "\n⚫ probably this session's work (files + timing match)"
                         } else {
                             ""
                         }
                     ));
                 if c.touches_session {
-                    ui.label(RichText::new("●").size(9.0).color(GREEN)).on_hover_text(
+                    ui.label(RichText::new(icon::DOT).size(9.0).color(GREEN)).on_hover_text(
                         "probably this session's work — its files and timing match. A hint, not a fact",
                     );
                 }
@@ -4184,7 +4225,7 @@ impl App {
                         .filter(|h| h.reviewed)
                         .count();
                     if total > 0 && read == total {
-                        ui.label(RichText::new("✓read").size(9.0).color(DIM))
+                        ui.label(RichText::new("✔read").size(9.0).color(DIM))
                             .on_hover_text("every hunk of this commit has been marked read");
                     } else if read > 0 {
                         ui.label(RichText::new(format!("{read}/{total}")).size(9.0).color(DIM))
@@ -4242,7 +4283,7 @@ impl App {
                         Some(marked) if marked != c.sha => {
                             if ui
                                 .button("Diff against marked commit")
-                                .on_hover_text("older → newer, decided by commit time")
+                                .on_hover_text("older to newer, decided by commit time")
                                 .clicked()
                             {
                                 // Older first, so the diff reads forward in
@@ -4358,7 +4399,7 @@ impl App {
                 self.gitview.set_diff_opts(step, !ws);
             }
             if ui
-                .selectable_label(self.prefs.side_by_side, "⫼")
+                .selectable_label(self.prefs.side_by_side, icon::SIDE_BY_SIDE)
                 .on_hover_text("side-by-side (shared with the Changes tab)")
                 .clicked()
             {
@@ -4368,7 +4409,7 @@ impl App {
             if let Some(files) = files.as_ref() {
                 if !files.is_empty()
                     && ui
-                        .small_button("⧉ patch")
+                        .small_button(format!("{} patch", icon::COPY))
                         .on_hover_text(
                             "copy this whole diff as unified patch text — \
                              paste into a terminal or a prompt",
@@ -4544,7 +4585,7 @@ impl App {
                         }
                         if !f.hunks.is_empty()
                             && ui
-                                .small_button("⧉")
+                                .small_button(icon::COPY)
                                 .on_hover_text("copy this file's diff as patch text")
                                 .clicked()
                         {
@@ -4577,7 +4618,7 @@ impl App {
                             ui.label(header);
                             // R-D17: a hunk a human has read says so.
                             if h.reviewed {
-                                ui.label(RichText::new("✓").size(10.0).color(GREEN))
+                                ui.label(RichText::new(icon::READ).size(10.0).color(GREEN))
                                     .on_hover_text("marked read (R-D8's marks, by content)");
                             }
                         });
@@ -4876,7 +4917,7 @@ impl App {
                             self.explorer.activate(*i);
                         }
                         if ui
-                            .small_button(RichText::new("✕").size(10.0).color(DIM))
+                            .small_button(RichText::new("×").size(10.0).color(DIM))
                             .on_hover_text("close (middle-click the tab also works)")
                             .clicked()
                         {
@@ -5008,10 +5049,10 @@ impl App {
                         format!("{} of {}", self.explorer_find_cursor + 1, matches.len())
                     }));
                 }
-                if ui.small_button("‹").on_hover_text("previous match (Shift+⏎)").clicked() {
+                if ui.small_button("‹").on_hover_text("previous match (Shift+↩)").clicked() {
                     jump = Some(-1);
                 }
-                if ui.small_button("›").on_hover_text("next match (⏎)").clicked() {
+                if ui.small_button("›").on_hover_text("next match (↩)").clicked() {
                     jump = Some(1);
                 }
                 ui.label(dim("esc closes"));
@@ -5322,9 +5363,9 @@ impl App {
             let glyph = if !e.is_dir {
                 "  "
             } else if open {
-                "▾ "
+                "⏷ "
             } else {
-                "▸ "
+                "⏵ "
             };
             let picked = !e.is_dir && active_path.as_deref() == Some(path.as_str());
             let ignored = crate::gitview::is_ignored(
@@ -5584,7 +5625,7 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .selectable_label(self.prefs.side_by_side, "⇹")
+                    .selectable_label(self.prefs.side_by_side, icon::SIDE_BY_SIDE)
                     .on_hover_text("side by side (R-D6)")
                     .clicked()
                 {
@@ -5592,7 +5633,7 @@ impl App {
                     self.prefs_dirty = true;
                 }
                 if ui
-                    .selectable_label(!self.prefs.side_by_side, "≡")
+                    .selectable_label(!self.prefs.side_by_side, icon::UNIFIED)
                     .on_hover_text("unified")
                     .clicked()
                 {
@@ -6582,7 +6623,7 @@ impl App {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            if ui.small_button("✕").clicked() {
+                                            if ui.small_button("×").clicked() {
                                                 remove = Some(i);
                                             }
                                         },
@@ -6798,7 +6839,7 @@ impl App {
                                 .hint_text(match mode {
                                     Mode::Actions => "run anything…",
                                     Mode::Files => "go to file…",
-                                    Mode::Search => "search in files — ⏎ runs it…",
+                                    Mode::Search => "search in files — ↩ runs it…",
                                 })
                                 .font(egui::TextStyle::Heading)
                                 .desired_width(f32::INFINITY)
@@ -6818,7 +6859,7 @@ impl App {
                             Mode::Search => match &search {
                                 Some((_, _, true, _)) => Some("searching…"),
                                 Some((_, _, false, _)) => Some("no lines match that"),
-                                None => Some("type a query and press ⏎"),
+                                None => Some("type a query and press ↩"),
                             },
                         };
                         if let Some(hint) = empty_hint {
@@ -6834,7 +6875,7 @@ impl App {
                         if let Some((m, truncated, in_flight, answered)) = &search {
                             if !in_flight && answered.trim() != self.palette.query.trim() && !m.is_empty()
                             {
-                                ui.label(dim(format!("showing \"{answered}\" — ⏎ searches again")));
+                                ui.label(dim(format!("showing \"{answered}\" — ↩ searches again")));
                             }
                             if *truncated {
                                 ui.label(
@@ -6908,9 +6949,9 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(match mode {
-                                    Mode::Actions => "↑↓ move   ⏎ run   esc close",
-                                    Mode::Files => "↑↓ move   ⏎ open   esc close",
-                                    Mode::Search => "↑↓ move   ⏎ search / open   esc close",
+                                    Mode::Actions => "⬆⬇ move   ↩ run   esc close",
+                                    Mode::Files => "⬆⬇ move   ↩ open   esc close",
+                                    Mode::Search => "⬆⬇ move   ↩ search / open   esc close",
                                 })
                                 .size(10.5)
                                 .color(DIM),
@@ -7022,7 +7063,7 @@ impl App {
                             );
                         } else {
                             ui.label(
-                                RichText::new("↑↓ move   ⏎ rebind   ⌫ reset   / search")
+                                RichText::new("⬆⬇ move   ↩ rebind   backspace reset   / search")
                                     .size(11.0)
                                     .color(DIM),
                             );
@@ -7325,7 +7366,7 @@ impl App {
 mod tests {
     use super::{keymap_row, may_toggle_hidden, short_path};
 
-    use super::ScrollRequest;
+    use super::{find_target, FindTarget, ScrollRequest, Tab};
 
     /// The point of the rule: you cannot dismiss an agent that is still
     /// running. Everything else about hiding is a preference; this one is a
@@ -7344,6 +7385,19 @@ mod tests {
     fn a_hidden_session_can_always_be_unhidden() {
         assert!(may_toggle_hidden(true, true));
         assert!(may_toggle_hidden(false, true));
+    }
+
+    /// Ctrl+F follows the keyboard. With the Git pane focused it must reach
+    /// the log filter, not yank the Editor forward — that misfire is exactly
+    /// what got reported. Every other pane keeps the Editor find, including
+    /// the Editor itself.
+    #[test]
+    fn find_goes_where_the_keyboard_is_aimed() {
+        assert_eq!(find_target(Tab::Git), FindTarget::GitFilter);
+        assert_eq!(find_target(Tab::Explorer), FindTarget::EditorFind);
+        for other in [Tab::Changes, Tab::Transcript, Tab::Info, Tab::Debt, Tab::Terminal] {
+            assert_eq!(find_target(other), FindTarget::EditorFind);
+        }
     }
 
     /// The sign is the whole trick and it is inverted: `ScrollArea` applies

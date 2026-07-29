@@ -288,7 +288,7 @@ mod tests {
             "s = 'it\\'s escaped'",
             "",
             "   ",
-            "→ unicode ✓ and emoji 🎉",
+            "➡ unicode ✔ and emoji 🎉",
             "let s = \"unterminated",
         ] {
             let rebuilt: String = highlight(line).into_iter().map(|(_, s)| s).collect();

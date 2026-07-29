@@ -207,17 +207,23 @@ pub fn risk_color(r: RiskLevel) -> Color32 {
     }
 }
 
-/// Glyphs that egui's bundled fonts can actually draw.
+/// Glyphs that egui's bundled fonts can actually draw — in **every** family.
 ///
-/// egui ships Ubuntu-Light, Hack, NotoEmoji and emoji-icon-font. Anything
-/// outside their combined coverage renders as an empty box, **silently** — the
-/// layout is fine, the click works, and only a human looking at the window can
-/// tell. Four glyphs shipped that way before this list existed: `✎`, `⌁`, `✓`
-/// and `⑂`, including the read-marker in the file list.
+/// egui ships Ubuntu-Light, Hack, NotoEmoji and emoji-icon-font, but the
+/// families matter more than the union: the Proportional family (every
+/// label, button and hint) is only Ubuntu-Light + the two emoji fonts.
+/// Hack joins for Monospace alone. A glyph that lives only in Hack — `⇹`,
+/// `⋯`, `●`, the plain arrows — draws fine in a diff body and as an empty
+/// box on a button, **silently**: the layout is fine, the click works, and
+/// only a human looking at the window can tell. Two waves shipped that way:
+/// `✎ ⌁ ✓ ⑂` (in no font at all), then the git panel's `⫼ ⧉ ⏎ ⌥ ⌫` — and
+/// the first fix replaced them with Hack-only glyphs, which was the same
+/// bug wearing a different codepoint.
 ///
-/// So icons come from here and nowhere else, and `icons_are_renderable` in
-/// `tests` checks every one against the real font files. Adding a glyph
-/// straight into a widget is how the boxes come back.
+/// So icons come from here and nowhere else, everything here must be in
+/// the *proportional* fonts (a superset of nothing — Monospace includes
+/// all three, so proportional-safe is safe everywhere), and the tests
+/// check every icon and every source glyph against the real font files.
 pub mod icon {
     pub const RESCAN: &str = "🔄";
     pub const AMBIENT: &str = "🖥";
@@ -228,26 +234,45 @@ pub mod icon {
     pub const FLAG: &str = "⚑";
     pub const BLAST: &str = "🔍";
     pub const READ: &str = "✔";
-    pub const UNREAD: &str = "●";
-    pub const BRANCH: &str = "⎇";
+    pub const UNREAD: &str = "⚫";
+    pub const BRANCH: &str = "🔀";
     pub const CLIPBOARD: &str = "📋";
     pub const SNOOZE: &str = "🕐";
-    pub const TERMINAL: &str = "→";
+    pub const TERMINAL: &str = "➡";
     /// Dismiss a finished session from the queue.
-    pub const HIDE: &str = "✕";
+    pub const HIDE: &str = "×";
+    /// A status dot — tint it with the meaning.
+    pub const DOT: &str = "⚫";
+    /// Collapsed / expanded, for tree rows and group headers.
+    pub const COLLAPSED: &str = "⏵";
+    pub const EXPANDED: &str = "⏷";
 
     // -- status bar. Short, unambiguous, and each one earns its place by
     // replacing a word that was being repeated on every session.
     /// How long the session has been going.
     pub const CLOCK: &str = "🕐";
     /// Conversation turns.
-    pub const TURNS: &str = "⇄";
+    pub const TURNS: &str = "🔁";
     /// Tool calls.
     pub const TOOLS: &str = "⚙";
     /// Tokens out.
-    pub const TOKENS: &str = "◆";
+    pub const TOKENS: &str = "🔹";
     /// Working directory.
     pub const FOLDER: &str = "🗀";
+
+    // -- diff reading controls, shared by the Git and Changes tabs.
+    /// Side-by-side diff layout: two upright bars, two columns. One glyph
+    /// for both tabs — they toggle the same preference, and the Git panel
+    /// shipping `⫼` (no font) then `⇹` (Hack-only) is how this constant
+    /// came to exist.
+    pub const SIDE_BY_SIDE: &str = "⏸";
+    /// Unified (stacked) diff layout.
+    pub const UNIFIED: &str = "☰";
+    /// Copy something to the clipboard as text.
+    pub const COPY: &str = "📋";
+    /// The Enter key, for hint lines. `⏎` is the obvious pick and is in no
+    /// bundled font; `↵` is the second-obvious pick and is Hack-only.
+    pub const ENTER: &str = "↩";
 
     /// Every icon, for the test that proves they render.
     ///
@@ -275,6 +300,13 @@ pub mod icon {
         ("TOOLS", TOOLS),
         ("TOKENS", TOKENS),
         ("FOLDER", FOLDER),
+        ("SIDE_BY_SIDE", SIDE_BY_SIDE),
+        ("UNIFIED", UNIFIED),
+        ("COPY", COPY),
+        ("ENTER", ENTER),
+        ("DOT", DOT),
+        ("COLLAPSED", COLLAPSED),
+        ("EXPANDED", EXPANDED),
     ];
 }
 
@@ -537,6 +569,14 @@ mod tests {
 
     fn font_files() -> Vec<std::path::PathBuf> {
         // epaint's default fonts live beside it in the cargo registry.
+        //
+        // Hack is deliberately excluded: it is only in the Monospace family,
+        // while every label, button and hint renders Proportional
+        // (Ubuntu-Light + NotoEmoji + emoji-icon-font — see epaint's
+        // `FontDefinitions::default`). A glyph that only Hack carries is an
+        // empty box on every button, so coverage is judged against the
+        // proportional set; Monospace contains all three, so passing here
+        // means rendering everywhere.
         let Ok(reg) = std::env::var("CARGO_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".cargo")))
@@ -562,7 +602,9 @@ mod tests {
                     continue;
                 };
                 for f in files.flatten() {
-                    if f.path().extension().and_then(|e| e.to_str()) == Some("ttf") {
+                    if f.path().extension().and_then(|e| e.to_str()) == Some("ttf")
+                        && !f.file_name().to_string_lossy().starts_with("Hack")
+                    {
                         out.push(f.path());
                     }
                 }
@@ -572,6 +614,12 @@ mod tests {
     }
 
     /// Minimal TrueType cmap reader: formats 4 and 12 are all these fonts use.
+    ///
+    /// It resolves the actual glyph id per codepoint rather than trusting
+    /// segment ranges — emoji-icon-font has format-4 segments whose glyph
+    /// array entries are 0 (`.notdef`, the box), so a range-based read
+    /// claims coverage the font does not have. `⎇` slipped through exactly
+    /// that gap.
     fn cmap_codepoints(path: &std::path::Path) -> std::collections::HashSet<u32> {
         let mut out = std::collections::HashSet::new();
         let Ok(d) = std::fs::read(path) else {
@@ -612,15 +660,39 @@ mod tests {
             }
             match u16at(&d, sub) {
                 4 => {
-                    let seg = u16at(&d, sub + 6) / 2;
+                    let seg_x2 = u16at(&d, sub + 6);
+                    let seg = seg_x2 / 2;
                     for s in 0..seg {
                         let end = u16at(&d, sub + 14 + s * 2);
-                        let start = u16at(&d, sub + 16 + seg * 2 + s * 2);
-                        if end == 0xFFFF {
+                        let start = u16at(&d, sub + 16 + seg_x2 + s * 2);
+                        if end == 0xFFFF || start > end {
                             continue;
                         }
+                        let delta = u16at(&d, sub + 16 + 2 * seg_x2 + s * 2);
+                        let ro_at = sub + 16 + 3 * seg_x2 + s * 2;
+                        if ro_at + 2 > d.len() {
+                            break;
+                        }
+                        let range_offset = u16at(&d, ro_at);
                         for c in start..=end {
-                            out.insert(c as u32);
+                            let glyph = if range_offset == 0 {
+                                (c + delta) & 0xFFFF
+                            } else {
+                                // The entry lives in the glyph-id array,
+                                // addressed relative to this segment's own
+                                // idRangeOffset slot. 0 there means .notdef.
+                                let at = ro_at + range_offset + (c - start) * 2;
+                                if at + 2 > d.len() {
+                                    continue;
+                                }
+                                match u16at(&d, at) {
+                                    0 => 0,
+                                    g => (g + delta) & 0xFFFF,
+                                }
+                            };
+                            if glyph != 0 {
+                                out.insert(c as u32);
+                            }
                         }
                     }
                 }
@@ -636,8 +708,11 @@ mod tests {
                         if end < start || end - start > 0x10000 {
                             continue;
                         }
+                        let start_glyph = u32at(&d, o + 8);
                         for c in start..=end {
-                            out.insert(c as u32);
+                            if start_glyph + (c - start) != 0 {
+                                out.insert(c as u32);
+                            }
                         }
                     }
                 }
@@ -658,12 +733,97 @@ mod tests {
         if covered.is_empty() {
             return; // fonts not vendored here; the other test reports that
         }
-        for bad in ['✎', '⌁', '✓', '⑂'] {
+        // The second wave (`⏎` through `⫼`) shipped with the Git panel: the
+        // side-by-side toggle, both copy-as-patch buttons, the ref-scope
+        // chip, and every `⏎` hint line drew as boxes.
+        //
+        // The third wave is the subtle one: glyphs that ARE in a bundled
+        // font — Hack — but Hack is Monospace-only, so on buttons and
+        // labels they box exactly like the others. `⇹` was the "fix" for
+        // `⫼` and boxed identically; `●`, `⎇`, `✕`, `⇄`, `◆`, `▸`, `▾`,
+        // `⋯`, `↵` and the plain arrows had been shipping that way all
+        // along.
+        for bad in [
+            '✎', '⌁', '✓', '⑂', '⏎', '⌥', '⌫', '⧉', '⫼', //
+            '⇹', '⋯', '↵', '⎇', '✕', '●', '⇄', '◆', '▸', '▾', '↑', '↓', '→',
+        ] {
             assert!(
                 !covered.contains(&(bad as u32)),
                 "{bad} renders now — it can go back into the icon list"
             );
         }
+    }
+
+    /// Every non-ASCII character anywhere in this crate's source must be
+    /// drawable by the bundled fonts.
+    ///
+    /// `icons_are_renderable` only guards `icon::ALL` — and the Git panel
+    /// proved that glyphs typed straight into a widget (`⫼`, `⧉`, and the
+    /// `⏎` in a dozen hint lines) sail past it and ship as boxes. This scans
+    /// the source itself, so an inline glyph fails the build the same day it
+    /// is written.
+    ///
+    /// Comment-only lines are skipped (the icon-module doc names the broken
+    /// glyphs on purpose) and so are non-ASCII char literals (the regression
+    /// list above holds them as `char`s). Everything else — labels, buttons,
+    /// hover text, hints, test fixtures — must render.
+    #[test]
+    fn no_source_glyph_escapes_the_fonts() {
+        let mut covered = std::collections::HashSet::new();
+        for f in font_files() {
+            covered.extend(cmap_codepoints(&f));
+        }
+        if covered.is_empty() {
+            return; // fonts not vendored here; icons_are_renderable reports that
+        }
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = vec![src];
+        let mut missing = Vec::new();
+        while let Some(dir) = files.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    files.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (num, line) in text.lines().enumerate() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    // Drop char literals like '⫼' so the regression list can
+                    // name the broken glyphs without tripping this test.
+                    let chars: Vec<char> = line.chars().collect();
+                    for (i, &ch) in chars.iter().enumerate() {
+                        if ch.is_ascii() || covered.contains(&(ch as u32)) {
+                            continue;
+                        }
+                        let in_char_literal = i > 0
+                            && chars[i - 1] == '\''
+                            && chars.get(i + 1) == Some(&'\'');
+                        if in_char_literal {
+                            continue;
+                        }
+                        missing.push(format!(
+                            "{}:{} {ch} (U+{:04X})",
+                            path.file_name().unwrap().to_string_lossy(),
+                            num + 1,
+                            ch as u32
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these characters would render as empty boxes — \
+             use a glyph from `icon` or one the bundled fonts cover: {}",
+            missing.join(", ")
+        );
     }
 
     /// The whole contract of `label_color`: deterministic per text, always

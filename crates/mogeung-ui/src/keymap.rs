@@ -271,7 +271,7 @@ impl Action {
             Action::PrevFileTab => "Previous open file in the Editor",
             Action::CloseFileTab => "Close the active Editor file",
             Action::PinFileTab => "Pin or unpin the active Editor file",
-            Action::FindInFile => "Find in the open file",
+            Action::FindInFile => "Find — the Git log filter when the Git pane is focused, else in the Editor's open file",
             Action::MoveFileTabSplit => "Open the file on the other side, side by side",
             Action::ToggleAnnotate => "Toggle git blame in the Editor's gutter",
             Action::OpenInExplorer => "Open the selected changed file in the Editor",
