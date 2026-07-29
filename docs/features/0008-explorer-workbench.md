@@ -1,7 +1,7 @@
 ---
 title: Explorer workbench
-status: in-progress
-updated: 2026-07-27
+status: shipped
+updated: 2026-07-28
 roadmap: [R-B25]
 depends_on: [A13, A15, A16]
 ---
@@ -57,60 +57,60 @@ here and in [A16](../product/assumptions.md), not a drift.
 
 Remember and reveal:
 
-- [ ] Switching away from a session and back shows the explorer exactly as it
+- [x] Switching away from a session and back shows the explorer exactly as it
       was left: same directories expanded, same tabs open, same active file
-- [ ] Restarting mogeung restores expanded directories and open tabs per
+- [x] Restarting mogeung restores expanded directories and open tabs per
       session; content is re-fetched, never stored
-- [ ] When a file opens, every ancestor directory expands and the tree scrolls
+- [x] When a file opens, every ancestor directory expands and the tree scrolls
       to make the file's row visible
-- [ ] A file named in the Changes tab can be opened in the Explorer with one
+- [x] A file named in the Changes tab can be opened in the Explorer with one
       action, which focuses the pane with that file revealed
 
 Side by side (added 2026-07-27, asked for after first use — *"I can't move
 them dockable side-by-side"*):
 
-- [ ] A tab can be sent to the other side of a resizable split — context
+- [x] A tab can be sent to the other side of a resizable split — context
       menu on the tab, or `Alt+S` for the active one — and moving the last
       right-hand tab back collapses the split
-- [ ] Each side keeps its own active tab and its own preview slot; keyboard
+- [x] Each side keeps its own active tab and its own preview slot; keyboard
       tab actions follow the side last touched
 
 Multiple open files:
 
-- [ ] Files open into tabs inside the pane; switching tabs is instant, with
+- [x] Files open into tabs inside the pane; switching tabs is instant, with
       no re-fetch
-- [ ] A single click previews (the next single click replaces the tab); an
+- [x] A single click previews (the next single click replaces the tab); an
       explicit action pins, and pinned tabs are never replaced
-- [ ] Next-tab, previous-tab and close-tab are bindable keys, and a
+- [x] Next-tab, previous-tab and close-tab are bindable keys, and a
       recent-files switcher lists open files most-recent-first
 
 Find by name:
 
-- [ ] Typing a partial name into a palette mode filters the session's files
+- [x] Typing a partial name into a palette mode filters the session's files
       as-you-type and opens the pick on `enter`
-- [ ] Ignored trees (`node_modules`, build output) do not drown the results
+- [x] Ignored trees (`node_modules`, build output) do not drown the results
 
 Find in the open file (added 2026-07-27, asked for after first use —
 *"Add the \<ctrl+f\> search in open files"*):
 
-- [ ] `Ctrl+F` in the viewer opens a find bar; matches highlight as line
+- [x] `Ctrl+F` in the viewer opens a find bar; matches highlight as line
       bands, `⏎`/`Shift+⏎` walk them with a count shown, `esc` closes
-- [ ] The search never touches the wire — the body is already client-side
+- [x] The search never touches the wire — the body is already client-side
 
 Find by content:
 
-- [ ] A query returns matching lines across the worktree as `path:line text`,
+- [x] A query returns matching lines across the worktree as `path:line text`,
       capped and saying so when capped
-- [ ] Picking a result opens the file scrolled to the matching line — which
+- [x] Picking a result opens the file scrolled to the matching line — which
       brings **line numbers** into the viewer, explicitly reversing 0007's
       exclusion for exactly this reason
-- [ ] Binary files are skipped silently; ignored trees are skipped; the
+- [x] Binary files are skipped silently; ignored trees are skipped; the
       daemon refuses paths outside the session root, same as `ListDir`
 
 Everywhere:
 
-- [ ] Nothing anywhere in the feature writes to the worktree
-- [ ] All listing, walking and searching happens in the daemon; clients stay
+- [x] Nothing anywhere in the feature writes to the worktree
+- [x] All listing, walking and searching happens in the daemon; clients stay
       projections ([ADR-0001])
 
 ### Explicitly out of scope

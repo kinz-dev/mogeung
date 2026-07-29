@@ -1,6 +1,6 @@
 ---
 title: Git table stakes — commit details, log filtering, file history
-status: in-progress
+status: shipped
 updated: 2026-07-28
 roadmap: [R-D12]
 depends_on: [A13, A18, A19]
@@ -44,17 +44,17 @@ Unchanged from [feature 0011]. Everything here reads.
 
 ### Acceptance
 
-- [ ] Selecting a commit shows its full message (subject and body),
+- [x] Selecting a commit shows its full message (subject and body),
       author, committer when different, absolute date, clickable parent
       shas, ref decorations, and a files/±lines diffstat
-- [ ] A filter over the log narrows it by message text, `author:` and
+- [x] A filter over the log narrows it by message text, `author:` and
       `path:` — combined freely, cleared in one gesture, paging still
       works while filtered
-- [ ] Filtering by a single path follows renames, so a file's history
+- [x] Filtering by a single path follows renames, so a file's history
       survives the agent moving it
-- [ ] The Editor offers "history" on the open file, which lands in the
+- [x] The Editor offers "history" on the open file, which lands in the
       Git pane already filtered to that path
-- [ ] Everything works over the wire with REST twins; nothing writes
+- [x] Everything works over the wire with REST twins; nothing writes
 
 ### Explicitly out of scope
 

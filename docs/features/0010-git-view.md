@@ -1,7 +1,7 @@
 ---
 title: Git view
-status: in-progress
-updated: 2026-07-27
+status: shipped
+updated: 2026-07-28
 roadmap: [R-D10]
 depends_on: [A13, A18]
 ---
@@ -82,17 +82,17 @@ Inside the pane, the IntelliJ reading layout:
 
 ### Acceptance (provisional until the open questions settle)
 
-- [ ] A Git pane exists, reachable by key and palette, dockable anywhere
+- [x] A Git pane exists, reachable by key and palette, dockable anywhere
       including the bottom
-- [ ] It lists recent commits with subject, author, time and sha, pages
+- [x] It lists recent commits with subject, author, time and sha, pages
       further back on demand, and shows a selected commit's files and diffs
-- [ ] It lists uncommitted changes (staged and unstaged, distinguished) and
+- [x] It lists uncommitted changes (staged and unstaged, distinguished) and
       shows their diffs against HEAD
-- [ ] The Editor pane can toggle per-line annotation for the open file, and
+- [x] The Editor pane can toggle per-line annotation for the open file, and
       an annotated line links to its commit in the Git pane
-- [ ] Everything works over the wire (commands + REST twins); the web
+- [x] Everything works over the wire (commands + REST twins); the web
       client could grow the same view unchanged
-- [ ] Nothing anywhere writes to the repository
+- [x] Nothing anywhere writes to the repository
 
 ### Explicitly out of scope
 

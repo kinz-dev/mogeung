@@ -1,6 +1,6 @@
 ---
 title: Git depth — reading parity with a commercial client
-status: in-progress
+status: shipped
 updated: 2026-07-28
 roadmap: [R-D11]
 depends_on: [A13, A18, A19]
@@ -56,31 +56,31 @@ last-known state only. The fence of [feature 0010] is unchanged.
 
 ### Acceptance
 
-- [ ] The pane header names the current branch (or detached HEAD), its
+- [x] The pane header names the current branch (or detached HEAD), its
       upstream, ahead/behind counts, the remote, and how stale the last
       fetch is
-- [ ] A branch list shows local branches with their tips; selecting one
+- [x] A branch list shows local branches with their tips; selecting one
       scopes the log to it, without checking anything out
-- [ ] Log rows carry ref decorations (branch heads, tags, HEAD) and a
+- [x] Log rows carry ref decorations (branch heads, tags, HEAD) and a
       graph column showing branch/merge topology
-- [ ] A commit the selected session is believed to have produced is marked
+- [x] A commit the selected session is believed to have produced is marked
       as such in the log
-- [ ] Two commits can be marked and diffed as a range, rendered by the
+- [x] Two commits can be marked and diffed as a range, rendered by the
       same diff pipeline
-- [ ] A log row offers copy-sha, copy-subject, and open-on-host (when the
+- [x] A log row offers copy-sha, copy-subject, and open-on-host (when the
       remote URL is recognisably GitHub/GitLab-shaped)
-- [ ] Stashes list with their messages and show their diffs; tags list
+- [x] Stashes list with their messages and show their diffs; tags list
       with their targets; submodules list with their state
-- [ ] Conflicted files are unmistakable in local changes, and conflict
+- [x] Conflicted files are unmistakable in local changes, and conflict
       markers stand out in their diffs
-- [ ] Ignored files are dimmed in the explorer tree and absent from local
+- [x] Ignored files are dimmed in the explorer tree and absent from local
       changes
-- [ ] The blame gutter offers, per line: the commit's summary on hover,
+- [x] The blame gutter offers, per line: the commit's summary on hover,
       and re-blame at the parent of that line's commit — walking a line's
       history backwards without leaving the editor
-- [ ] Any file in a commit's diff can be opened read-only as it was at
+- [x] Any file in a commit's diff can be opened read-only as it was at
       that commit, in the Editor pane
-- [ ] Everything works over the wire with REST twins; nothing anywhere
+- [x] Everything works over the wire with REST twins; nothing anywhere
       writes to the repository
 
 ### Explicitly out of scope

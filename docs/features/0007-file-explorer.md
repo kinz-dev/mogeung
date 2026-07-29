@@ -1,7 +1,7 @@
 ---
 title: File explorer
-status: in-progress
-updated: 2026-07-27
+status: shipped
+updated: 2026-07-28
 roadmap: [R-B24]
 depends_on: [A13, A15]
 ---
@@ -48,17 +48,17 @@ wanted, and a future remote daemon (`R-I4`) does not strand the feature.
 
 ### Acceptance
 
-- [ ] An Explorer pane exists in the detail area, reachable by key (`X`), the
+- [x] An Explorer pane exists in the detail area, reachable by key (`X`), the
       palette, and the tab strip, and dockable like any other pane
-- [ ] It shows the session's worktree (repo root when known, else cwd) as a
+- [x] It shows the session's worktree (repo root when known, else cwd) as a
       collapsible tree; directories load lazily on expand
-- [ ] Clicking a file shows its content with real syntax highlighting
+- [x] Clicking a file shows its content with real syntax highlighting
       (grammar-based, not the diff tokenizer)
-- [ ] A file the daemon cannot read (binary, too large, vanished) says so in
+- [x] A file the daemon cannot read (binary, too large, vanished) says so in
       the pane instead of erroring elsewhere
-- [ ] `.git` is not listed; a path outside the session root is refused by the
+- [x] `.git` is not listed; a path outside the session root is refused by the
       daemon even if a client asks for it
-- [ ] Nothing anywhere in the feature writes to disk
+- [x] Nothing anywhere in the feature writes to disk
 
 ### Explicitly out of scope
 

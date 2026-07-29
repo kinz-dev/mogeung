@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 268 passing |
-| Rust | 26058 lines |
+| Tests | 270 passing |
+| Rust | 26272 lines |
 | Docs | 46 files, 10 ADRs |
 
 ## Assumptions
@@ -27,11 +27,11 @@ Untested: **6** · At risk: **2** · Supported: 10 · Refuted: 1
 | [A queue that answers the click](docs/features/0004-a-queue-that-answers-the-click.md) | `shipped` | [A1, A6] |
 | [Reachable by keyboard](docs/features/0005-reachable-by-keyboard.md) | `shipped` | [A1, A13] |
 | [Dockable panes](docs/features/0006-dockable-panes.md) | `shipped` | [A14] |
-| [File explorer](docs/features/0007-file-explorer.md) | `in-progress` | [A13, A15] |
-| [Explorer workbench](docs/features/0008-explorer-workbench.md) | `in-progress` | [A13, A15, A16] |
-| [Session labels](docs/features/0009-session-labels.md) | `in-progress` | [A13, A17] |
-| [Git view](docs/features/0010-git-view.md) | `in-progress` | [A13, A18] |
-| [Git depth — reading parity with a commercial client](docs/features/0011-git-depth.md) | `in-progress` | [A13, A18, A19] |
-| [Git table stakes — commit details, log filtering, file history](docs/features/0012-git-table-stakes.md) | `in-progress` | [A13, A18, A19] |
-| [Git reach — forensics, ergonomics, refs, conflicts, review-state](docs/features/0013-git-reach.md) | `in-progress` | [A13, A18, A19] |
+| [File explorer](docs/features/0007-file-explorer.md) | `shipped` | [A13, A15] |
+| [Explorer workbench](docs/features/0008-explorer-workbench.md) | `shipped` | [A13, A15, A16] |
+| [Session labels](docs/features/0009-session-labels.md) | `shipped` | [A13, A17] |
+| [Git view](docs/features/0010-git-view.md) | `shipped` | [A13, A18] |
+| [Git depth — reading parity with a commercial client](docs/features/0011-git-depth.md) | `shipped` | [A13, A18, A19] |
+| [Git table stakes — commit details, log filtering, file history](docs/features/0012-git-table-stakes.md) | `shipped` | [A13, A18, A19] |
+| [Git reach — forensics, ergonomics, refs, conflicts, review-state](docs/features/0013-git-reach.md) | `shipped` | [A13, A18, A19] |
 

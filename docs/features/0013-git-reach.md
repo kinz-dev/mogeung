@@ -1,6 +1,6 @@
 ---
 title: Git reach — forensics, ergonomics, refs, conflicts, review-state
-status: in-progress
+status: shipped
 updated: 2026-07-28
 roadmap: [R-D13, R-D14, R-D15, R-D16, R-D17]
 depends_on: [A13, A18, A19]
@@ -36,26 +36,26 @@ Five gaps, all reading-side:
 
 ### Acceptance
 
-- [ ] `find:` in the log filter runs a pickaxe (`-S`) search; `●` next to
+- [x] `find:` in the log filter runs a pickaxe (`-S`) search; `●` next to
       the filter narrows the log to this session's probable commits
-- [ ] A commit's context menu offers "Copy as patch"; each file header
+- [x] A commit's context menu offers "Copy as patch"; each file header
       offers the same for that file — text a terminal or another agent
       can apply
-- [ ] `n`/`p` step through the hunks of the git diff panel
-- [ ] The diff panel can widen context (±3 → ±10 → ±30 → all) and
+- [x] `n`/`p` step through the hunks of the git diff panel
+- [x] The diff panel can widen context (±3 → ±10 → ±30 → all) and
       toggle whitespace-ignore and side-by-side; a multi-file diff opens
       with a by-directory file index that jumps to each file
-- [ ] A branch's context menu offers "Diff against current from the
+- [x] A branch's context menu offers "Diff against current from the
       merge base" (three-dot semantics); remote branches list and scope
       the log like local ones
-- [ ] A reflog section shows where HEAD has been; a worktrees section
+- [x] A reflog section shows where HEAD has been; a worktrees section
       lists `git worktree list`, naming the session running in each
-- [ ] A conflicted file opens as a three-column base/ours/theirs
+- [x] A conflicted file opens as a three-column base/ours/theirs
       read-only view
-- [ ] A viewed commit's diff shows which hunks a human has already read
+- [x] A viewed commit's diff shows which hunks a human has already read
       (R-D8's marks), the details header counts them, and the log row
       wears a quiet "read" badge once known
-- [ ] Everything has REST twins; nothing anywhere writes
+- [x] Everything has REST twins; nothing anywhere writes
 
 ### Explicitly out of scope
 

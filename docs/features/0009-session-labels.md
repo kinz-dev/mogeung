@@ -1,6 +1,6 @@
 ---
 title: Session labels
-status: in-progress
+status: shipped
 updated: 2026-07-28
 roadmap: [R-B26]
 depends_on: [A13, A17]
@@ -46,17 +46,17 @@ not a redesign, and it takes pins and hidden with it or none of them.
 
 ### Acceptance
 
-- [ ] A session can be given a label from its card (right-click) and by key
+- [x] A session can be given a label from its card (right-click) and by key
       (`L`) for the selected session; typing a new label replaces the old;
       saving an empty one removes it
-- [ ] The label shows on the queue card as a colour badge alongside `PIN` and
+- [x] The label shows on the queue card as a colour badge alongside `PIN` and
       the state badge; the colour is stable for a given label text and the
       same for every session sharing that label
-- [ ] `label:x` in the queue filter narrows to sessions whose label contains
+- [x] `label:x` in the queue filter narrows to sessions whose label contains
       `x`; plain free text also matches labels; the filter hint mentions it
-- [ ] Clicking the badge filters the queue to that label, the same gesture as
+- [x] Clicking the badge filters the queue to that label, the same gesture as
       clicking the repo name
-- [ ] Labels survive a restart, and a corrupt prefs file costs the labels
+- [x] Labels survive a restart, and a corrupt prefs file costs the labels
       nothing more than it already cost the pins
 
 ### Explicitly out of scope
