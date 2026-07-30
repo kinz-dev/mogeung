@@ -123,24 +123,25 @@ wrong one is [item 0](#0-the-non-feature) doing exactly what it is for.
 | R-B33 | **Terminal as a workspace panel** — the shell leaves the pane tree for a panel across the bottom, on demand, with a tab per shell and no tie to any session: a terminal is where you *start* an agent, so it must outlast the selection and exist before there is one. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | M | ✅ |
 | R-B34 | **Name a terminal tab** — double-click a tab, or right-click it, to call it what it is doing; blank puts the folder name back. The label only: the tmux session stays keyed by worktree and ordinal, so a rename cannot strand a shell. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ✅ |
 
-## C. Notifications and reach — **shipped; `R-C2` built 2026-07-29, awaiting the verdict**
+## C. Notifications and reach — **shipped and verified end to end; `R-C2`'s verdict landed 2026-07-30**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 `R-C2` — long left open because a fourth binary outweighed the pillar and
 `R-C1` banners might cover it — was built at the one-go ask as
 `mogeung-tray` ([feature 0019](../features/0019-waiting-count-tray.md),
-[A25](assumptions.md)): if it goes unglanced in the week, it is a removal
-candidate, exactly as the doubt was filed.
+[A25](assumptions.md)) and filed with its own removal condition: unglanced in
+the week meant delete it. Used, and kept. The doubt was worth writing down and
+the answer was worth waiting for.
 
 | # | Item | Effort | |
 |---|---|---|---|
 | R-C1 | **macOS notification** when a session flips to `WAITING` | S | ✅ |
-| R-C2 | **Menu-bar item** with the waiting count — glanceable without the window | M | ⏳ |
+| R-C2 | **Menu-bar item** with the waiting count — glanceable without the window | M | ✅ |
 | R-C3 | **Thin web client** — review and unblock from a phone. The daemon already supports it | L | ✅ |
 | R-C4 | **Push** via ntfy/Pushover for away-from-desk | S | ✅ |
 | R-C5 | **Ambient mode** — big-screen board for a second monitor | M | ✅ |
 
-## D. Review depth — **R-D1–R-D17 shipped and verified; R-D18 built, awaiting the dogfooding verdict**
+## D. Review depth — **R-D1–R-D18 shipped and verified; R-D18's verdict landed 2026-07-30**
 
 `R-D1`–`R-D9` delivered by
 [feature 0002](../features/0002-sharpen-triage-and-review.md); `R-D1` is
@@ -158,10 +159,10 @@ whitespace/side-by-side controls, the file index, merge-base branch
 compare, remote branches, reflog, worktrees-with-sessions, the conflict
 three-way view, and read-marks on commit diffs. Dogfooding has since
 cleared the first tranche: `R-D10`–`R-D12` verified in use 2026-07-28,
-then `R-D13` (forensics) and `R-D14` (diff ergonomics) the same day. Acceptance boxes for feature
-0013's remaining rows stay open until the dogfooding week rules
-([A19](assumptions.md)) — day one produced six fixes, which is the
-week doing its job — and an unused section is a removal candidate,
+then `R-D13` (forensics) and `R-D14` (diff ergonomics) the same day.
+Feature 0013's acceptance boxes were held open until the week ruled on
+them ([A19](assumptions.md)) — day one produced six fixes, which is the
+week doing its job — because an unused section is a removal candidate,
 not a foundation. Deliberately descoped, waiting for want: a "commits
 on A not on B" list, read-badges for unviewed log rows, rebindable
 hunk keys. `R-D15`–`R-D17` were verified later the same day, closing
@@ -169,8 +170,8 @@ the pillar as built. `R-D18` — asked for directly during dogfooding,
 then made concrete with an IntelliJ screenshot — was built 2026-07-29
 ([feature 0014](../features/0014-intellij-commit-view.md)): the file
 tree with details beneath it, one file's diff at a time, `n`/`p`
-crossing file edges, branches-containing on the header. Awaiting the
-verdict.
+crossing file edges, branches-containing on the header. Verified in use
+2026-07-30, closing the pillar.
 
 | # | Item | Effort | |
 |---|---|---|---|
@@ -191,7 +192,7 @@ verdict.
 | R-D15 | **Ref reach** — branch-to-branch compare (three-dot from the merge base; the "commits on A not on B" list is descoped per the pillar note above, and the code has ahead/behind counts rather than the list), remote branches in the list, a read-only reflog, and `git worktree list` linked to the sessions running in each. See [feature 0013](../features/0013-git-reach.md) | M | ✅ |
 | R-D16 | **Conflict three-way view** — ours/base/theirs read-only for a conflicted file, beyond the markers-in-a-diff we have. See [feature 0013](../features/0013-git-reach.md) | M | ✅ |
 | R-D17 | **Review-state on the log** — R-D8's read/unread marks surfaced per commit, so "which commits has no human read" is visible where commits live. A step toward `R-F2`. See [feature 0013](../features/0013-git-reach.md) | M | ✅ |
-| R-D18 | **Commit diff, file-at-a-time** — IntelliJ-style: a commit's changed files as a selectable directory tree beside the diff, the pane showing only the chosen file's diff instead of every file in one scroll. R-D14's index jumps within the scroll; this replaces it with selection. Asked for directly 2026-07-28 | M | ⏳ |
+| R-D18 | **Commit diff, file-at-a-time** — IntelliJ-style: a commit's changed files as a selectable directory tree beside the diff, the pane showing only the chosen file's diff instead of every file in one scroll. R-D14's index jumps within the scroll; this replaces it with selection. Asked for directly 2026-07-28 | M | ✅ |
 
 ## E. Verification — **built 2026-07-29 (feature [0016](../features/0016-verification.md)), awaiting the verdict**
 

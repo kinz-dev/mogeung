@@ -1,7 +1,7 @@
 ---
 title: IntelliJ-style commit view — file tree, one file's diff, details
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-D18]
 depends_on: [A13]
 ---
@@ -37,25 +37,25 @@ reached main.
 
 ### Acceptance
 
-- [ ] Selecting a multi-file commit shows its changed files as a
+- [x] Selecting a multi-file commit shows its changed files as a
       directory tree in a sidebar: folders collapsible, single-child
       directory chains flattened to one row (`a/b/c/`), files colored by
       status with churn counts and read marks
-- [ ] Clicking a file shows **only that file's diff**; a root "all
+- [x] Clicking a file shows **only that file's diff**; a root "all
       files" row restores the whole-commit scroll; switching selection
       in the log resets the focus
-- [ ] The commit's details sit under the tree, always visible while
+- [x] The commit's details sit under the tree, always visible while
       reading hunks: full message, author/committer with dates, sha,
       clickable parents, refs, and **the branches that contain it**
-- [ ] `n`/`p` with a file focused walk that file's hunks and then step
+- [x] `n`/`p` with a file focused walk that file's hunks and then step
       into the next/previous file, IntelliJ-style, updating the tree
       selection as they cross file boundaries
-- [ ] Log rows show author and age dimmed at the end of the row, the
+- [x] Log rows show author and age dimmed at the end of the row, the
       IntelliJ columns adapted to a narrow pane
-- [ ] Range and stash diffs get the same tree and focus behavior (they
+- [x] Range and stash diffs get the same tree and focus behavior (they
       are files-lists through the same pane); details remain
       commit-only
-- [ ] Nothing anywhere writes
+- [x] Nothing anywhere writes
 
 ### Explicitly out of scope
 

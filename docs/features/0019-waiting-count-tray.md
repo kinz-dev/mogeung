@@ -1,7 +1,7 @@
 ---
 title: Waiting count in the tray
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-C2]
 depends_on: [A25]
 ---
@@ -23,15 +23,15 @@ the exact failure the product exists to end.
 
 ### Acceptance
 
-- [ ] A `mogeung-tray` binary shows a tray/menu-bar item with the
+- [x] A `mogeung-tray` binary shows a tray/menu-bar item with the
       current WAITING count, updating without the window running
 - [x] It reads the daemon over the existing wire only — no `~/.claude`
       access, no local authority, reconnects quietly when the daemon
       restarts, shows a distinct "daemon unreachable" state rather than
       a stale count
-- [ ] Its menu lists waiting sessions by name; activating one raises or
+- [x] Its menu lists waiting sessions by name; activating one raises or
       launches the window
-- [ ] Works on this Linux box's tray (StatusNotifierItem); the macOS
+- [x] Works on this Linux box's tray (StatusNotifierItem); the macOS
       menu-bar half rides the same crate and is noted untested here
 
 ### Explicitly out of scope
