@@ -1,7 +1,7 @@
 ---
 title: Rate limits and token burn
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-G1, R-G2, R-G3]
 depends_on: [A4, A20]
 ---

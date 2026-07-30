@@ -1,7 +1,7 @@
 ---
 title: Doc sprawl — inventory, staleness, GC, derived progress
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-H1, R-H2, R-H3, R-H4, R-H5]
 depends_on: [A10]
 ---

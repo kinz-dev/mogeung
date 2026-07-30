@@ -1,7 +1,7 @@
 ---
 title: Cross-session intelligence
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-F1, R-F2, R-F3, R-F4, R-F5, R-F6, R-F7, R-F8, R-F9]
 depends_on: [A1, A4, A22]
 ---

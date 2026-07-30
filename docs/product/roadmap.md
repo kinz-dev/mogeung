@@ -15,12 +15,16 @@ the dogfooding verdict ([A19](assumptions.md)) · blank = not started.
 The distinction exists because a blank box on built work read as "not
 done" and got R-D10 asked for twice.
 
-Pillars `A`–`D` and `J` are shipped. `E`–`I` (bar the two descopes in `I`) were
-**built 2026-07-29 in one pass** at an explicit *"finish the R-\* items in
-one-go"* ask — a deliberate override of the item-0 gate, recorded per spec
-(features 0015–0022) and in the ledger (A20–A25). Every row from that pass
-is ⏳: built, installed, and worth nothing until
-[item 0](#0-the-non-feature) judges it.
+Pillars `A`–`H` and `J` are shipped and verified. `E`–`I` (bar the two descopes
+in `I`) were **built 2026-07-29 in one pass** at an explicit *"finish the R-\*
+items in one-go"* ask — a deliberate override of the item-0 gate, recorded per
+spec (features 0015–0022) and in the ledger (A20–A25). That gamble was settled
+on 2026-07-30: `E`–`H` were used and passed, so those rows are ✅.
+
+**`I` is the exception, and stays ⏳ on purpose.** Its rows reach machines and
+tools this desk does not have — Codex with no real sessions on disk, a remote
+daemon, a second OS — so nothing here has judged them and a ✅ would be a
+claim about a machine nobody ran.
 
 ## Identifiers
 
@@ -194,7 +198,7 @@ crossing file edges, branches-containing on the header. Verified in use
 | R-D17 | **Review-state on the log** — R-D8's read/unread marks surfaced per commit, so "which commits has no human read" is visible where commits live. A step toward `R-F2`. See [feature 0013](../features/0013-git-reach.md) | M | ✅ |
 | R-D18 | **Commit diff, file-at-a-time** — IntelliJ-style: a commit's changed files as a selectable directory tree beside the diff, the pane showing only the chosen file's diff instead of every file in one scroll. R-D14's index jumps within the scroll; this replaces it with selection. Asked for directly 2026-07-28 | M | ✅ |
 
-## E. Verification — **built 2026-07-29 (feature [0016](../features/0016-verification.md)), awaiting the verdict**
+## E. Verification — **shipped and verified 2026-07-30 (feature [0016](../features/0016-verification.md))**
 
 The observer pivot made this *easier*: the full transcript is on disk.
 Claims bind to evidence and say how; the signal runner fires on an
@@ -202,32 +206,33 @@ explicit click only ([A21](assumptions.md), A7 still the open question).
 
 | # | Item | Effort | |
 |---|---|---|---|
-| R-E1 | **"Did it actually run the tests?"** — the agent claims they pass; check whether a Bash call ran them | M | ⏳ |
-| R-E2 | **Signal runner** — run tests/typecheck per repo, attach results to the session | L | ⏳ |
-| R-E3 | **Claim ledger** — extract assertions from assistant text, bind each to evidence | L | ⏳ |
-| R-E4 | **Edit-without-verify** — flag sessions that changed code and never built or tested | S | ⏳ |
-| R-E5 | **Coverage delta** on changed lines only | L | ⏳ |
+| R-E1 | **"Did it actually run the tests?"** — the agent claims they pass; check whether a Bash call ran them | M | ✅ |
+| R-E2 | **Signal runner** — run tests/typecheck per repo, attach results to the session | L | ✅ |
+| R-E3 | **Claim ledger** — extract assertions from assistant text, bind each to evidence | L | ✅ |
+| R-E4 | **Edit-without-verify** — flag sessions that changed code and never built or tested | S | ✅ |
+| R-E5 | **Coverage delta** on changed lines only | L | ✅ |
 
-## F. Cross-session intelligence — **built 2026-07-29 (feature [0017](../features/0017-cross-session.md)), awaiting the verdict**
+## F. Cross-session intelligence — **shipped and verified 2026-07-30 (feature [0017](../features/0017-cross-session.md))**
 
 The material measured at build time: 235 transcripts (149 top-level + 86
 nested subagent files) and 2,076 prompts in `~/.claude/history.jsonl`.
-Lives in the Insight pane; each view is judged separately by the week and
-an unused one is a removal candidate ([A22](assumptions.md)).
+Lives in the Insight pane. Each view was filed to be judged separately, an
+unused one a removal candidate ([A22](assumptions.md)); the verdict kept all
+nine.
 
 | # | Item | Effort | |
 |---|---|---|---|
-| R-F1 | **Global search** across transcripts and prompt history | M | ⏳ |
-| R-F2 | **Prompt-blame** — for a file or line, find the session and prompt that produced it | M | ⏳ |
-| R-F3 | **Daily digest** — what happened across all repos, from evidence not self-reports | M | ⏳ |
-| R-F4 | **Recurring-failure detection** — the same error across many sessions | M | ⏳ |
-| R-F5 | **Personal analytics** — sessions/day, token burn, repos, time of day | S | ⏳ |
-| R-F6 | **Prompt library** — most-reused prompts, mined from history | S | ⏳ |
-| R-F7 | **Decision extraction** — pull architectural decisions out of transcripts into ADRs | L | ⏳ |
-| R-F8 | **Subagent trees** — visualise `isSidechain` work | M | ⏳ |
-| R-F9 | **Blame → transcript** — from a session-attributed commit, open that session's transcript at the turns that produced it. The cheap precursor to `R-F2`, riding `R-D11`'s attribution | M | ⏳ |
+| R-F1 | **Global search** across transcripts and prompt history | M | ✅ |
+| R-F2 | **Prompt-blame** — for a file or line, find the session and prompt that produced it | M | ✅ |
+| R-F3 | **Daily digest** — what happened across all repos, from evidence not self-reports | M | ✅ |
+| R-F4 | **Recurring-failure detection** — the same error across many sessions | M | ✅ |
+| R-F5 | **Personal analytics** — sessions/day, token burn, repos, time of day | S | ✅ |
+| R-F6 | **Prompt library** — most-reused prompts, mined from history | S | ✅ |
+| R-F7 | **Decision extraction** — pull architectural decisions out of transcripts into ADRs | L | ✅ |
+| R-F8 | **Subagent trees** — visualise `isSidechain` work | M | ✅ |
+| R-F9 | **Blame → transcript** — from a session-attributed commit, open that session's transcript at the turns that produced it. The cheap precursor to `R-F2`, riding `R-D11`'s attribution | M | ✅ |
 
-## G. Rate limits and cost — **built 2026-07-29 (feature [0015](../features/0015-rate-limits.md)), awaiting the verdict**
+## G. Rate limits and cost — **shipped and verified 2026-07-30 (feature [0015](../features/0015-rate-limits.md))**
 
 `R-G1`'s premise was wrong on contact with disk: no `rate_limit_event`
 exists in any local transcript — limits arrive as a synthetic assistant
@@ -236,24 +241,27 @@ message, which is what shipped keys on ([A20](assumptions.md), filed
 
 | # | Item | Effort | |
 |---|---|---|---|
-| R-G1 | **Five-hour window status** — the CLI emits `rate_limit_event`; currently discarded. With overage disabled, exhausting it hard-fails sessions | S | ⏳ |
-| R-G2 | **Warn before exhaustion** | S | ⏳ |
-| R-G3 | **Token burn** per session/day/repo | S | ⏳ |
+| R-G1 | **Five-hour window status** — where you are in the window, since with overage disabled exhausting it hard-fails sessions. Written assuming a `rate_limit_event` from the CLI; no such event exists on disk, so what shipped keys on the synthetic assistant message limits really arrive as ([A20](assumptions.md)) | S | ✅ |
+| R-G2 | **Warn before exhaustion** | S | ✅ |
+| R-G3 | **Token burn** per session/day/repo | S | ✅ |
 
-## H. The doc-sprawl thesis — **built 2026-07-29 (feature [0022](../features/0022-doc-inventory.md)); the inventory it produces is A10's test**
+## H. The doc-sprawl thesis — **shipped and verified 2026-07-30 (feature [0022](../features/0022-doc-inventory.md)); the inventory it produces is A10's test**
 
 The original stated pain, finally measured rather than asserted: the Docs
 view inventories a repo's markdown with evidence attached, and what it
 finds across the watched repos is what decides
-[A10](assumptions.md) — honestly, either way.
+[A10](assumptions.md) — honestly, either way. The rows being ✅ says the
+view works and gets used; **it does not say A10 is answered.** That verdict
+belongs to [assumptions.md](assumptions.md), on the evidence this view
+produces, and is a separate judgement from whether the tool is any good.
 
 | # | Item | Effort | |
 |---|---|---|---|
-| R-H1 | **Doc inventory** — classify every markdown artifact, assign lifecycle | M | ⏳ |
-| R-H2 | **Staleness detection** — doc describes module X; X moved 40 commits ago | M | ⏳ |
-| R-H3 | **Doc GC** — propose archive/merge/delete in batch, with evidence | M | ⏳ |
-| R-H4 | **Derived progress** — plan items bound to real diffs | L | ⏳ |
-| R-H5 | **Agent-instruction hub** — `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` from one source | M | ⏳ |
+| R-H1 | **Doc inventory** — classify every markdown artifact, assign lifecycle | M | ✅ |
+| R-H2 | **Staleness detection** — doc describes module X; X moved 40 commits ago | M | ✅ |
+| R-H3 | **Doc GC** — propose archive/merge/delete in batch, with evidence | M | ✅ |
+| R-H4 | **Derived progress** — plan items bound to real diffs | L | ✅ |
+| R-H5 | **Agent-instruction hub** — `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` from one source | M | ✅ |
 
 Note: `scripts/check-docs.sh` and `scripts/gen-status.sh` are `R-H2` and `R-H4`
 built for ourselves first, at toy scale. Worth reading before building the real

@@ -1,7 +1,7 @@
 ---
 title: Verification — claims against evidence
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-E1, R-E2, R-E3, R-E4, R-E5]
 depends_on: [A4, A7, A21]
 ---

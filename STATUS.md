@@ -35,14 +35,14 @@ Untested: **10** · At risk: **3** · Supported: 11 · Refuted: 1
 | [Git table stakes — commit details, log filtering, file history](docs/features/0012-git-table-stakes.md) | `shipped` | [A13, A18, A19] |
 | [Git reach — forensics, ergonomics, refs, conflicts, review-state](docs/features/0013-git-reach.md) | `shipped` | [A13, A18, A19] |
 | [IntelliJ-style commit view — file tree, one file's diff, details](docs/features/0014-intellij-commit-view.md) | `shipped` | [A13] |
-| [Rate limits and token burn](docs/features/0015-rate-limits.md) | `in-progress` | [A4, A20] |
-| [Verification — claims against evidence](docs/features/0016-verification.md) | `in-progress` | [A4, A7, A21] |
-| [Cross-session intelligence](docs/features/0017-cross-session.md) | `in-progress` | [A1, A4, A22] |
+| [Rate limits and token burn](docs/features/0015-rate-limits.md) | `shipped` | [A4, A20] |
+| [Verification — claims against evidence](docs/features/0016-verification.md) | `shipped` | [A4, A7, A21] |
+| [Cross-session intelligence](docs/features/0017-cross-session.md) | `shipped` | [A1, A4, A22] |
 | [Editor reach — git ergonomics, navigation, comforts](docs/features/0018-editor-reach.md) | `shipped` | [A13, A15, A16] |
 | [Waiting count in the tray](docs/features/0019-waiting-count-tray.md) | `shipped` | [A25] |
 | [Codex adapter](docs/features/0020-codex-adapter.md) | `in-progress` | [A4, A23] |
 | [Linux reach and remote daemon](docs/features/0021-linux-and-remote.md) | `in-progress` | [A13, A24] |
-| [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `in-progress` | [A10] |
+| [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `shipped` | [A10] |
 | [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `shipped` | [A19] |
 | [In-app terminal](docs/features/0024-in-app-terminal.md) | `shipped` | [] |
 
