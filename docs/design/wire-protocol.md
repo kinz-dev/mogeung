@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -173,6 +173,39 @@ POST /api/rescan
 the full `detail` object. It is deliberately curl-able: "is the board empty
 because nothing is happening, or because mogeung went blind?" should not require
 a window.
+
+## Who is answering (`R-I5`)
+
+`Snapshot` carries an optional `DaemonIdentity`, and `/api/health` returns the
+same object under `daemon`:
+
+| Field | For |
+|---|---|
+| `machine_id` | **the comparison.** `~/.mogeung/machine-id`, 16 random bytes written once |
+| `host` | display only — "watching devbox" beats "watching 10.0.0.4:7717" |
+| `claude_home` | which world this daemon watches; two homes on one box are two worlds |
+| `pid`, `version` | so a client can name what to blame |
+| `ssh_target` | how to reach this machine, when configured. Declared for `R-I6` |
+
+This exists because the client used to answer *"am I looking at another
+machine?"* with a substring test on the address it had dialled — a question
+about routing standing in for a question about whose filesystem this is. An
+`ssh -L 7717:localhost:7717` tunnel makes a remote daemon answer on
+`127.0.0.1`, so the guess flipped to "local" and re-enabled every action that
+opens an editor or a terminal. That tunnel is the *recommended* way to reach a
+remote daemon, so the guess was wrong exactly where it mattered most.
+
+**Hostnames are not the comparison, and deliberately so** — two VMs off one
+image share a name, and a collision would silently re-enable the actions this
+gates. **Unknown on either side means "not this machine"**: refusing prints a
+sentence, acting on the wrong filesystem opens an editor on a path that is not
+there.
+
+A client older than this field ignores it; a client newer than a daemon that
+does not send it falls back to the address guess rather than refusing
+everything, because daemon and window sit on different machines and upgrade at
+different times. Both directions are pinned by
+`a_snapshot_survives_a_version_gap_in_both_directions`.
 
 ## There is no bundled second client (`R-C3`, removed)
 

@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Roadmap
@@ -346,7 +346,7 @@ everything.
 | R-I2 | **Gemini CLI adapter** — descoped, see above | M |  |
 | R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above | M | ⏳ |
 | R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). Shipped; guide at [guide/remote.md](../guide/remote.md) | M | ⏳ |
-| R-I5 | **Daemon identity** — the daemon names itself in the snapshot: hostname, the `~/.claude` root it watches, its repo roots, and optionally an ssh target. Replaces the window's guess-from-the-address-string check, which an `ssh -L` tunnel silently defeats today, re-enabling four actions that should refuse. Prerequisite for every row below | S | |
+| R-I5 | **Daemon identity** — **built 2026-07-31.** `DaemonIdentity` on the snapshot and on `/api/health`: a stable `machine_id` (`~/.mogeung/machine-id`), hostname, watched `~/.claude`, pid, version, optional ssh target. The window compares ids instead of guessing from the address string, so an `ssh -L` tunnel no longer reads as local. Repo roots were not included — nothing needed them, and the identity comparison did not | S | ⏳ |
 | R-I6 | **Remote terminal** — the in-app terminal panel reaches the daemon's machine over ssh (`ssh -t host tmux attach -t =target`) instead of starting a local shell in a path that only exists over there. Cheap because `term.rs` already builds an argv and spawns it; the cost is credentials, resize and latency, not architecture. Also closes the unguarded-panel gap the guide currently warns about | M | |
 | R-I7 | **Connections in the window** — add, name, switch and forget daemons from the UI instead of a flag and a restart. Needs a `Net` that can be torn down and a full clear of session-keyed state on switch. The natural first step toward `R-I9`: a connection list of length one | M | |
 | R-I8 | **LAN discovery** — the daemon advertises over mDNS (`_mogeung._tcp`), the window browses and offers what it finds. Discovery must never mean auto-connect, and the broadcast itself announces *"this machine is watching Claude Code sessions"* to the segment — which makes `R-I10` more urgent, not less | M | |

@@ -27,6 +27,9 @@ pub struct Options {
     /// Shared token required on every request when set — the `R-I4` remote
     /// bet (A24): token on a trusted network, no TLS until that bet fails.
     pub token: Option<String>,
+    /// How to reach this machine over ssh, published in the daemon's identity
+    /// (`R-I5`). The daemon never uses it; a client does.
+    pub ssh_target: Option<String>,
 }
 
 impl Default for Options {
@@ -37,6 +40,7 @@ impl Default for Options {
             notify: NotifyConfig::default(),
             claude_home: None,
             token: None,
+            ssh_target: None,
         }
     }
 }
@@ -108,6 +112,9 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
         .clone()
         .unwrap_or_else(watcher::default_home);
     let state = AppState::with_home(store, home.clone())?;
+    if let Some(target) = opts.ssh_target.clone().filter(|t| !t.is_empty()) {
+        let _ = state.ssh_target.set(target);
+    }
 
     if opts.notify.enabled() {
         state.configure_notifications(opts.notify.clone()).await;

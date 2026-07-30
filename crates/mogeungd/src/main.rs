@@ -58,6 +58,12 @@ struct Args {
     /// token travels in clear text, so trusted networks only.
     #[arg(long)]
     token: Option<String>,
+
+    /// How to reach this machine over ssh — `user@host`, or a name from
+    /// `~/.ssh/config` (R-I5). Published in the daemon's identity so a client
+    /// watching from elsewhere knows where "here" is. The daemon never uses it.
+    #[arg(long, value_name = "USER@HOST")]
+    ssh_target: Option<String>,
 }
 
 /// Command line over file over default, resolved in one place so the order can
@@ -79,6 +85,7 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             },
             claude_home: None,
             token: args.token.or(cfg.token),
+            ssh_target: args.ssh_target.or(cfg.ssh_target),
         },
     )
 }
@@ -129,6 +136,7 @@ mod tests {
             notify: false,
             push_url: None,
             token: None,
+            ssh_target: None,
         }
     }
 

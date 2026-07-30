@@ -41,6 +41,10 @@ pub struct Config {
     pub push_url: Option<String>,
     /// Both: the shared token a non-loopback daemon requires.
     pub token: Option<String>,
+    /// Daemon: how to reach this machine over ssh — `user@host`, or a name from
+    /// `~/.ssh/config`. Published in the daemon's identity so a client can
+    /// offer to open a shell here (`R-I5`, used by `R-I6`).
+    pub ssh_target: Option<String>,
     /// Window: the global shortcut that raises it. An empty string disables
     /// it, which is the file's way of saying `--no-hotkey`.
     pub hotkey: Option<String>,

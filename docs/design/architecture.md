@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -141,6 +141,23 @@ orphan-holding-the-port problem all at once.
 This does not weaken the client contract below: the window talks over the same
 websocket either way and cannot tell which process the daemon is in.
 [ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md).
+
+**A hosted daemon obeys the same admission rule as a standalone one** (`R-I10`).
+`server::admit` refuses a bind beyond loopback with no token, so
+`mogeung --addr 0.0.0.0:7717` is refused exactly as `mogeungd` would be — and
+the window asks *before* spawning the thread, on the main thread, because a
+refusal printed from a background thread is a line the window opens over. The
+token the window would have presented to a daemon elsewhere is the token it
+requires when it is the daemon; that is why `--token` reaches `daemon::host`.
+
+**The window also asks who it is talking to** (`R-I5`). The daemon publishes a
+`DaemonIdentity` — a stable `machine_id` from `~/.mogeung/machine-id`, plus
+hostname, watched `~/.claude`, pid and version — on every snapshot and on
+`/api/health`. Actions that touch a machine (open-in, jump-to-terminal,
+launch-terminal) compare that id against this machine's, rather than guessing
+from the address dialled. Both ends resolve identity through one function in
+`mogeungd::machine`, deliberately: two processes computing it differently could
+disagree about whether they are on the same desk.
 
 ## Client contract
 

@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Watching a remote machine
@@ -69,30 +69,21 @@ That is the whole setup. The window attaches instead of starting its own daemon
 — that is what `--url` means, and it is the reason to prefer `--url` over
 `--addr` here.
 
-> **One rough edge you must know about on this route.** The window decides
-> whether a daemon is remote by looking at the address it dialled, and through a
-> tunnel that address is `127.0.0.1`. So the window concludes it is local and
-> **re-enables the five actions that should refuse** — "Open in IntelliJ" will
-> open your laptop's IntelliJ at a path that only exists on the dev box, and
-> "Launch terminal" will start a terminal on your laptop.
->
-> Nothing is damaged; the actions simply misfire. Avoid them on this route, or
-> use the workaround below.
+The tunnel does not confuse the window about whose machine it is looking at.
+The daemon says which machine it is on and the window compares (`R-I5`), so the
+local-only actions below refuse correctly even though the address you dialled
+is `127.0.0.1`. Hover the connection dot to see who is answering:
 
-**Workaround — a tunnel that still looks remote.** Forward to a different
-loopback address, which the window does not recognise as local, so the refusals
-work correctly:
-
-```sh
-ssh -N -L 127.0.0.2:7717:localhost:7717 devbox &
-mogeung --url ws://127.0.0.2:7717/ws
+```
+watching /home/dev/.claude on devbox
+mogeungd 0.1.0 · pid 4242
 ```
 
-Linux binds all of `127.0.0.0/8` already. On macOS, add the alias first:
-`sudo ifconfig lo0 alias 127.0.0.2`.
-
-This exploits how the check is written rather than fixing it, so treat it as a
-stopgap.
+> Until 2026-07-31 this was not true — the window guessed from the address
+> string, and a tunnel read as local, silently re-enabling actions that then
+> opened editors and terminals on the wrong machine. If your window predates
+> that, upgrade it; the daemon alone is not enough, since it is the window that
+> does the comparing.
 
 ---
 
@@ -135,6 +126,9 @@ Retyping a token is how tokens end up in shell history. Both binaries read
 # on the dev box
 listen = "0.0.0.0:7717"
 token  = "…"
+# optional: how a client would ssh here. Published in the daemon's identity
+# and shown in the window; nothing uses it to connect yet.
+ssh_target = "dev@devbox"
 
 # on your laptop
 url    = "ws://devbox:7717/ws"
@@ -175,12 +169,13 @@ insight, health, notifications (they fire on the *daemon's* machine, and
 
 | Action | What it says |
 |---|---|
-| Jump to terminal | its terminals are on the other machine |
-| Open in IntelliJ / VS Code / Finder | that path lives on the other machine |
-| Launch terminal | would open a terminal on the other machine |
+| Jump to terminal | its terminals are on `devbox` |
+| Open in IntelliJ / VS Code / Finder | that path lives on `devbox` |
+| Launch terminal | would open a terminal on `devbox` |
 | Screenshot / image preview | the image lives on the other machine |
 
-A refusal is a message in the error strip, not a silent no-op.
+A refusal is a message in the error strip, not a silent no-op, and it names the
+machine — a refusal you cannot act on reads as a bug.
 
 ## Known rough edges
 
@@ -192,8 +187,6 @@ above, the terminal tabs at the bottom of the window are not guarded. They start
 a shell on **your** machine, rooted at a path that exists on the **dev box** —
 so you get a local shell in a directory that is not there. Use ssh in a real
 terminal for now.
-
-**Tunnel-vs-refusal**, as described in Route A.
 
 ## Troubleshooting
 

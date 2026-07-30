@@ -414,6 +414,11 @@ pub struct App {
     /// Where the daemon came from, and how to describe it.
     daemon_mode: crate::daemon::Mode,
     daemon_addr: String,
+    /// Who the daemon says it is (`R-I5`). `None` until the first snapshot, or
+    /// for good against a daemon too old to say.
+    daemon_identity: Option<mogeung_core::wire::DaemonIdentity>,
+    /// This machine's id, resolved once — the other half of the comparison.
+    this_machine: Option<String>,
 
     /// Which pane the keyboard drives, and the editable bindings.
     pane: Pane,
@@ -669,6 +674,8 @@ impl App {
             scroll: None,
             daemon_mode,
             daemon_addr,
+            daemon_identity: None,
+            this_machine: mogeungd::machine::machine_id(),
             pane: Pane::Queue,
             keymap,
             show_keymap: false,
@@ -709,12 +716,21 @@ impl App {
         let mut sessions_changed = false;
         for msg in self.net.drain() {
             match msg {
-                ServerMsg::Snapshot { sessions, queue } => {
+                ServerMsg::Snapshot {
+                    sessions,
+                    queue,
+                    daemon,
+                } => {
                     self.sessions = sessions
                         .into_iter()
                         .map(|s| (s.id.clone(), Rc::new(s)))
                         .collect();
                     self.queue = queue;
+                    // `None` from a daemon older than R-I5; keep whatever we
+                    // were told rather than forgetting who we are talking to.
+                    if daemon.is_some() {
+                        self.daemon_identity = daemon;
+                    }
                     // A reconnect invalidates our transcript cache.
                     self.hydrated.clear();
                     sessions_changed = true;
@@ -1334,10 +1350,11 @@ impl App {
                     )
                 };
                 ui.label(dot).on_hover_text(format!(
-                    "{} — {}\n\n{}\n\n{hotkey_tip}",
+                    "{} — {}\n\n{}{}\n\n{hotkey_tip}",
                     self.net.url,
                     tip,
-                    self.daemon_mode.detail(&self.daemon_addr)
+                    self.daemon_mode.detail(&self.daemon_addr),
+                    self.daemon_provenance()
                 ));
 
                 // Worth a word on screen, not just a tooltip: with a hosted
@@ -2437,10 +2454,61 @@ impl App {
     }
 
     /// A daemon on another machine: local-only actions must refuse rather
-    /// than act on the wrong box. `R-I4`.
+    /// than act on the wrong box. `R-I4`, corrected by `R-I5`.
+    ///
+    /// The daemon now says which machine it is on and we compare ids. What this
+    /// replaces was a substring test on the address we dialled — which answers
+    /// *where did I route this*, not *whose filesystem is on the other end*.
+    /// `ssh -N -L 7717:localhost:7717 devbox` makes a daemon a thousand miles
+    /// away answer on `127.0.0.1`, and the old test read that as local: "Open
+    /// in IntelliJ" would open a path that does not exist here, and "Launch
+    /// terminal" would start a shell on the wrong machine. That tunnel is the
+    /// *recommended* way to reach a remote daemon, so the guess was wrong
+    /// exactly where it mattered most.
     fn remote_daemon(&self) -> bool {
-        let a = &self.daemon_addr;
+        match &self.daemon_identity {
+            Some(id) => !id.is_same_machine_as(self.this_machine.as_deref()),
+            // Nothing has told us yet — either the first snapshot has not
+            // landed or the daemon predates R-I5. Fall back to the old guess:
+            // wrong for tunnels, but no worse than the behaviour it replaces,
+            // and refusing everything against an older daemon would be.
+            None => Self::addr_looks_remote(&self.daemon_addr),
+        }
+    }
+
+    /// The pre-`R-I5` heuristic, kept only as the fallback above.
+    fn addr_looks_remote(a: &str) -> bool {
         !(a.contains("127.0.0.1") || a.contains("localhost") || a.contains("[::1]"))
+    }
+
+    /// What to call the machine on the other end, in a sentence.
+    ///
+    /// Naming it is the point: "its terminals are on the other machine" leaves
+    /// you wondering which, and a refusal you cannot act on reads as a bug.
+    fn other_machine(&self) -> String {
+        match &self.daemon_identity {
+            Some(id) => id.label(),
+            None => "the other machine".into(),
+        }
+    }
+
+    /// The identity block appended to the connection tooltip.
+    fn daemon_provenance(&self) -> String {
+        let Some(id) = &self.daemon_identity else {
+            return String::new();
+        };
+        let here = if self.remote_daemon() { "" } else { " (this machine)" };
+        let ssh = match &id.ssh_target {
+            Some(t) => format!("\nssh: {t}"),
+            None => String::new(),
+        };
+        format!(
+            "\n\nwatching {} on {}{here}\nmogeungd {} · pid {}{ssh}",
+            id.claude_home,
+            id.label(),
+            id.version,
+            id.pid,
+        )
     }
 
     /// Jump-to-terminal, refused against a remote daemon — the terminal it
@@ -2448,9 +2516,11 @@ impl App {
     fn send_focus(&mut self, session_id: SessionId) {
         if self.remote_daemon() {
             self.errors.push(
-                "remote daemon — its terminals are on the other machine; \
-                 jump-to-terminal is not available"
-                    .into(),
+                format!(
+                    "remote daemon — its terminals are on {}; \
+                     jump-to-terminal is not available",
+                    self.other_machine()
+                ),
             );
             return;
         }
@@ -2461,7 +2531,8 @@ impl App {
     fn open_in_local(&mut self, target: ui::OpenTarget, dir: &str) {
         if self.remote_daemon() {
             self.errors.push(format!(
-                "remote daemon — {dir} lives on the other machine; open-in is not available"
+                "remote daemon — {dir} lives on {}; open-in is not available",
+                self.other_machine()
             ));
             return;
         }
@@ -9245,10 +9316,10 @@ impl App {
             // R-I4: against a remote daemon this would open a terminal on
             // the other machine — refuse rather than surprise.
             if self.remote_daemon() {
-                self.errors.push(
-                    "remote daemon — launching a terminal would open it on the other machine"
-                        .into(),
-                );
+                self.errors.push(format!(
+                    "remote daemon — launching a terminal would open it on {}",
+                    self.other_machine()
+                ));
             } else {
                 self.net.send(ClientMsg::LaunchTerminal {
                     dir: self.launch_dir.trim().to_string(),
