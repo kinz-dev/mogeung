@@ -145,3 +145,62 @@ async fn net_loop(
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
+
+#[cfg(test)]
+mod tls_tests {
+    use tokio::io::AsyncReadExt;
+
+    /// The window can actually speak `wss://`.
+    ///
+    /// It could not until 2026-07-31: `tokio-tungstenite` was built with no TLS
+    /// feature, so a `wss://` URL failed with *"TLS support not compiled in"*
+    /// no matter what was on the other end. That closed off the ordinary answer
+    /// to having no TLS of our own — put a reverse proxy in front — because the
+    /// client could not dial the proxy. See `R-I10`.
+    ///
+    /// Proven by what goes on the wire rather than by which error comes back.
+    /// A plain TCP listener accepts, and the first bytes must be a TLS
+    /// handshake record: `0x16` (handshake), then `0x03` (the SSL 3.x-derived
+    /// version byte every TLS ClientHello still carries). Nothing but a real
+    /// TLS client sends that.
+    ///
+    /// **This test is load-bearing beyond the feature flag.** rustls 0.23 picks
+    /// its crypto provider from features, and with none selected it does not
+    /// fail to compile — it *panics at runtime* on the first TLS connection.
+    /// A dependency bump that drops `ring` would therefore turn every `wss://`
+    /// connection into a panic, silently, and this is what catches it.
+    #[test]
+    fn the_window_speaks_wss_not_just_ws() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let first_bytes = rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+
+            let server = tokio::spawn(async move {
+                let (mut sock, _) = listener.accept().await.expect("a connection");
+                let mut buf = [0u8; 2];
+                sock.read_exact(&mut buf).await.ok();
+                buf
+            });
+
+            // Fails — there is no TLS server here — but only after the client
+            // has spoken, which is the whole point.
+            let _ = tokio_tungstenite::connect_async(format!("wss://127.0.0.1:{port}/ws")).await;
+            server.await.expect("server task")
+        });
+
+        assert_eq!(
+            first_bytes[0], 0x16,
+            "expected a TLS handshake record, got {first_bytes:02x?} — \
+             is the tokio-tungstenite TLS feature still enabled?"
+        );
+        assert_eq!(
+            first_bytes[1], 0x03,
+            "expected a TLS version byte, got {first_bytes:02x?}"
+        );
+    }
+}

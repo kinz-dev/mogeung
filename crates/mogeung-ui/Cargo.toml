@@ -21,7 +21,8 @@ eframe = "0.35"
 egui.workspace = true
 egui-term.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
-tokio-tungstenite = "0.30"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 futures-util = "0.3"
 global-hotkey = "0.8.0"
 egui_commonmark = { version = "0.24.0", default-features = false, features = ["pulldown_cmark"] }

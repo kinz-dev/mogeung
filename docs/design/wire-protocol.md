@@ -240,11 +240,25 @@ in a background one.
 
 Two things this still does *not* do, tracked under `R-I10`:
 
-- **No TLS.** The token and everything after it travel in clear text
+- **The daemon serves no TLS of its own.** It speaks plain HTTP and `ws://`, so
+  a token sent straight to it travels in clear text
   ([A24](../product/assumptions.md) is the bet: trusted network, no TLS until
-  the bet fails). A reverse proxy is the obvious answer and does not work yet —
-  the window is built with no TLS feature in `tokio-tungstenite`, so it cannot
-  dial `wss://` at all.
+  the bet fails).
+
+  What changed on 2026-07-31 is the *client* half: both clients are now built
+  with `rustls` and can dial `wss://`, so putting a TLS-terminating reverse
+  proxy in front of the daemon works. That is the recommended way to get
+  encryption without the daemon growing certificate handling, key rotation and
+  a renewal story it has no business owning.
+
+  **The trap this walked into is worth remembering.** Enabling the
+  `tokio-tungstenite` TLS feature alone left rustls with no crypto provider
+  selected — which does not fail the build. It panics on the first TLS
+  connection, inside the network thread. So both binaries name the provider
+  explicitly (`ring`) at start-up, and
+  `the_window_speaks_wss_not_just_ws` asserts a real TLS ClientHello reaches the
+  wire, because the alternative failure is a panic nobody sees until they try
+  the thing this was added for.
 - **Argument hygiene is not authentication.** The shape-checks above stop a
   client spelling a flag; they say nothing about *which* client.
 

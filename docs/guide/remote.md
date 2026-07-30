@@ -139,6 +139,46 @@ to `600` — it now holds a credential.
 
 ---
 
+## Route C — behind a TLS reverse proxy
+
+Route B's token travels in clear text. If that is not good enough and you would
+rather not tunnel, put a TLS terminator in front of the daemon: the clients can
+dial `wss://` as of 2026-07-31.
+
+Keep the daemon on loopback and let the proxy be the only thing listening:
+
+```sh
+mogeungd --token "$(openssl rand -hex 24)"     # 127.0.0.1:7717, as by default
+```
+
+Caddy needs two lines and gets a certificate by itself:
+
+```
+mogeung.example.com {
+    reverse_proxy 127.0.0.1:7717
+}
+```
+
+Then point the window at the proxy:
+
+```sh
+mogeung --url wss://mogeung.example.com/ws --token <the-token>
+```
+
+Keep the token. The proxy encrypts the path; it does not decide who may use it,
+and the daemon behind it will still hand every transcript to whoever asks.
+
+The proxy must forward WebSocket upgrades — Caddy and recent nginx do this
+without being asked; older nginx configs need `Upgrade`/`Connection` headers set
+explicitly.
+
+**Certificates come from the operating system's trust store**, so a private CA
+works if the machine running the window already trusts it. A self-signed
+certificate that nothing trusts will be refused, and there is no flag to skip
+the check.
+
+---
+
 ## Checking that it worked
 
 The window's status line names the daemon it is attached to. Beyond that:

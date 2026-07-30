@@ -347,7 +347,9 @@ daemon, so "adopt ssh as the transport" has stopped being hypothetical — it is
 already half-adopted. The remaining `R-I10` question is therefore narrower than
 it looked: not *TLS or ssh*, but whether the WebSocket should join the terminals
 in the tunnel, or gain `wss://` for people who would rather run a reverse proxy.
-The one-Cargo-flag experiment settles that cheaply and should come first.
+The one-Cargo-flag experiment ran the same day and answered it: `wss://` now
+works, so the reverse-proxy route is real. It also cost more than a flag —
+see `R-I10`.
 
 | # | Item | Effort | |
 |---|---|---|---|
@@ -360,7 +362,7 @@ The one-Cargo-flag experiment settles that cheaply and should come first.
 | R-I7 | **Connections in the window** — add, name, switch and forget daemons from the UI instead of a flag and a restart. Needs a `Net` that can be torn down and a full clear of session-keyed state on switch. The natural first step toward `R-I9`: a connection list of length one | M | |
 | R-I8 | **LAN discovery** — the daemon advertises over mDNS (`_mogeung._tcp`), the window browses and offers what it finds. Discovery must never mean auto-connect, and the broadcast itself announces *"this machine is watching Claude Code sessions"* to the segment — which makes `R-I10` more urgent, not less | M | |
 | R-I9 | **Multi-daemon mix mode** — one window, several daemons, one merged queue. The only row here that changes the data model: `SessionId` is a bare `String` and the whole client keys on it, so every session, review mark, shell tab and layout entry must become origin-qualified. Also makes the window an aggregator, which is a new kind of authority — needs an ADR before code. The cheap alternative it must beat: one window per daemon, which works today and costs nothing | L | |
-| R-I10 | **Remote security** — the ladder past A24's bet. **Rung (b) landed 2026-07-31:** a non-loopback bind with no token now refuses to start (`server::admit`, before the database opens), with no `--insecure` override, and the window applies the same rule to the daemon it hosts. Remaining: decide between TLS and adopting ssh as the supported transport — which `R-I6` may settle by itself. The window cannot speak `wss://` today (`tokio-tungstenite` is built with no TLS feature), so "put it behind a reverse proxy" is one Cargo flag away from working and worth checking before designing anything larger | M | |
+| R-I10 | **Remote security** — the ladder past A24's bet. **Rung (b) landed 2026-07-31:** a non-loopback bind with no token now refuses to start (`server::admit`, before the database opens), with no `--insecure` override, and the window applies the same rule to the daemon it hosts. **Rung (c) landed the same day:** both clients are built with `rustls` and dial `wss://`, so TLS is available through a reverse proxy without the daemon owning certificates or renewals — Route C in [guide/remote.md](../guide/remote.md). It was *not* the one Cargo flag it looked like: the flag alone leaves rustls with no crypto provider selected, which does not fail the build — it panics on the first TLS connection — so both binaries name `ring` explicitly and a test asserts a real ClientHello reaches the wire. Remaining: whether the daemon should ever terminate TLS itself (the answer looks like no), and A24's own verdict | M | ⏳ |
 
 ## J. Polish
 

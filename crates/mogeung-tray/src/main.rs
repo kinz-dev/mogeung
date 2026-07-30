@@ -65,6 +65,11 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn main() {
+    // Named rather than inferred: rustls picks its crypto provider from cargo
+    // features, and anything other than exactly one panics on the first TLS
+    // connection instead of failing the build. See `pin_tls_backend` in the
+    // window, which carries the longer version of this note. `R-I10`.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = parse_args();
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()

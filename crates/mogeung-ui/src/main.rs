@@ -197,7 +197,23 @@ fn detach(_log: Option<&std::path::Path>) -> std::io::Result<u32> {
     Err(std::io::Error::other("detaching is only supported on unix"))
 }
 
+/// Name the TLS backend rather than letting rustls infer one.
+///
+/// rustls 0.23 resolves its crypto provider from cargo features, and when the
+/// answer is not exactly one it does **not** fail to build — it panics on the
+/// first TLS connection, deep inside the network thread. So a future dependency
+/// that happens to pull in a second provider would turn every `wss://` URL into
+/// a crash, with nothing at build time to warn anyone.
+///
+/// Installing it explicitly makes that impossible: this wins regardless of what
+/// else appears in the tree. The `Err` means it is already installed, which is
+/// not a problem worth reporting. `R-I10`.
+fn pin_tls_backend() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 fn main() -> eframe::Result<()> {
+    pin_tls_backend();
     // Before anything else, including detaching: a subcommand is an answer on
     // stdout, and detaching would take the terminal away from it. `R-J4`.
     match cli::parse(std::env::args().skip(1)) {
