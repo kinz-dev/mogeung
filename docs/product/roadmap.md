@@ -234,10 +234,11 @@ nine.
 
 ## G. Rate limits and cost — **shipped and verified 2026-07-30 (feature [0015](../features/0015-rate-limits.md))**
 
-`R-G1`'s premise was wrong on contact with disk: no `rate_limit_event`
-exists in any local transcript — limits arrive as a synthetic assistant
-message, which is what shipped keys on ([A20](assumptions.md), filed
-`AT RISK`). Warnings are estimates from observed hits, labelled so.
+`R-G1`'s premise was wrong on contact with disk: no structured limit
+event exists in any local transcript — limits arrive as a synthetic
+assistant message, which is what shipped keys on
+([A20](assumptions.md), filed `AT RISK`). Warnings are estimates from
+observed hits, labelled so.
 
 | # | Item | Effort | |
 |---|---|---|---|

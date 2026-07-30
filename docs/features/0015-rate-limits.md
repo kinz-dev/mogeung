@@ -24,9 +24,9 @@ is a synthetic assistant line the parser treats as ordinary text.
 
 A4 (`AT RISK`) — everything here reads the undocumented transcript
 format. A20 (`AT RISK`) — **the roadmap's premise for R-G1 was wrong**:
-a 2026-07-29 sweep of all 235 local transcripts found no
-`rate_limit_event` line type anywhere. What exists is a synthetic
-assistant message (`message.model == "<synthetic>"`, all-zero usage,
+a 2026-07-29 sweep of all 235 local transcripts found no structured
+limit event of any name. What exists is a synthetic assistant message
+(`message.model == "<synthetic>"`, all-zero usage,
 text like *"You've hit your session limit · resets 8pm"*). The honest
 build keys on that signature and on nothing else — see the Notes for the
 capture-shape arm that briefly hedged against the wrong premise, and why
@@ -43,9 +43,9 @@ it was deleted.
 - [x] A rolling five-hour burn figure is visible; when past limit-hits
       exist, the warning threshold is derived from them and the UI
       labels it an estimate — never an authoritative quota
-- [x] A line type nobody has observed — `rate_limit_event` included —
-      fires the unknown-type canary rather than being pre-handled on a
-      guess (revised 2026-07-30; it read the opposite way at build time)
+- [x] A line type nobody has observed fires the unknown-type canary
+      rather than being pre-handled on a guess (revised 2026-07-30; it
+      read the opposite way at build time)
 - [x] Health/canary stays quiet across the full local corpus
 
 ### Explicitly out of scope
@@ -58,9 +58,9 @@ it was deleted.
 ### Approach
 
 Adapter: detect the synthetic-limit signature in assistant lines →
-`EventKind::LimitHit { resets: Option<String> }`; add `rate_limit_event`
-to `HANDLED` with a capture-shape arm. State: fold burn into per-day,
-per-repo aggregates (persisted with `#[serde(default)]`); a limit-hit
+`EventKind::LimitHit { resets: Option<String> }`, and nothing added to
+`HANDLED` — see the Notes. State: fold burn into per-day, per-repo
+aggregates (persisted with `#[serde(default)]`); a limit-hit
 sets a session flag + timestamp. Attention: new reason tier for
 limit-hit. Wire: `UsageStats` request/response pair with echo. UI: burn
 table + rolling window figure in the Info/health area; estimate label.
@@ -74,15 +74,16 @@ tests over folded lines; e2e for the stats endpoint.
 ## Notes
 
 **The roadmap's premise died on contact with the corpus.** R-G1 was
-written as "the CLI emits `rate_limit_event`; currently discarded".
-Zero exist across 235 transcripts. What exists is a synthetic assistant
-message (`message.model == "<synthetic>"`) whose *prose* carries the
-reset time. The build keys on that signature, and A20 was filed
+written believing the CLI emits a structured limit event that the daemon
+was discarding. Zero of any such shape exist across 235 transcripts.
+What exists is a synthetic assistant message
+(`message.model == "<synthetic>"`) whose *prose* carries the reset
+time. The build keys on that signature, and A20 was filed
 `AT RISK` to record the gap between the roadmap's belief and disk.
 
-**The hedge was removed on 2026-07-30.** The first build kept
-`rate_limit_event` in `HANDLED` as a capture-shape arm — if a future CLI
-emits one, record the specimen rather than merely alarm on it — plus a
+**The hedge was removed on 2026-07-30.** The first build kept the
+guessed type in `HANDLED` as a capture-shape arm — if a future CLI emits
+one, record the specimen rather than merely alarm on it — plus a
 fabricated corpus line to exercise it. Reviewing the row for sign-off
 made the cost visible: `HANDLED` means *no canary alert*, so the hedge
 spent `R-A1`'s loud unknown-type signal to buy a quiet notice about a

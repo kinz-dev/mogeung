@@ -116,10 +116,11 @@ outcome is counted: see [health-and-canary.md](health-and-canary.md).
 
 ## Learned in the 2026-07-29 sweep
 
-- **Rate limits are prose, not events.** No `rate_limit_event` exists in
-  any of 235 local transcripts; a hit arrives as an assistant message
-  with `message.model == "<synthetic>"` and all-zero usage, its reset
-  time embedded in the text. The parser keys on that signature.
+- **Rate limits are prose, not events.** No structured limit event of any
+  name exists in the 235 local transcripts; a hit arrives as an assistant
+  message with `message.model == "<synthetic>"` and all-zero usage, its
+  reset time embedded in the text. The parser keys on that signature, and
+  on nothing speculative — an unobserved type belongs to the canary.
 - **Subagent transcripts nest**: `<session>/subagents/agent-*.jsonl`,
   plus a sibling `tool-results/` overflow dir. A flat glob undercounts;
   the usage and insight scanners walk recursively and attribute subagent

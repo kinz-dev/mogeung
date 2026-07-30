@@ -132,12 +132,12 @@ wholesale each scan because rollouts are re-read per pass — accumulation
 would be the skipped-history trap again. `codex_present` with zero
 threads is reported as exactly that: present, watched, empty.
 
-**Nothing unobserved sits in `HANDLED`.** `rate_limit_event` did for a
-day — `R-G1` was written believing the CLI emits one, and the arm was
-kept "in case a future CLI does" after the sweep found zero across 235
-transcripts (A20). That is backwards: a handled type raises no alert, so
-pre-handling a guessed shape spends the canary on the one event it was
-built for. The arm is gone, and the corpus line invented to exercise it
-with it; such a line now classifies as `Unknown` and says so loudly. The
-real limit signal is the synthetic assistant message, folded in
-`state.rs`.
+**Nothing unobserved sits in `HANDLED`.** A guessed structured
+rate-limit type did for a day — `R-G1` was written believing the CLI
+emits one, and the arm was kept "in case a future CLI does" after the
+sweep found zero across 235 transcripts (A20). That is backwards: a
+handled type raises no alert, so pre-handling a shape nobody has seen
+spends the canary on exactly the event it was built for. The arm is
+gone, and the corpus line invented to exercise it with it; such a line
+now classifies as `Unknown` and says so loudly. The real limit signal is
+the synthetic assistant message, folded in `state.rs`.
