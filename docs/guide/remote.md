@@ -28,10 +28,11 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 
 > **Read this before you expose a port.**
 >
-> The daemon has **no TLS**. Its `--token` is a shared secret in clear text, and
-> it is **optional** — a daemon started without one accepts anyone who can
-> reach the port. Anyone who can is able to read every transcript on that
-> machine and open terminals on it.
+> A daemon binding beyond loopback **must** have a `--token`; without one it
+> refuses to start rather than serving openly. That is the floor, not safety:
+> the daemon still has **no TLS**, so the token and everything after it travel
+> in clear text, and anyone holding it can read every transcript on that machine
+> and open terminals on it.
 >
 > This is a deliberate, recorded bet ([A24](../product/assumptions.md)): a token
 > on a trusted network, TLS only once the bet fails. If your network is not one
@@ -106,9 +107,13 @@ clear text, so this is for a network you already trust.
 mogeungd --listen 0.0.0.0:7717 --token "$(openssl rand -hex 24)"
 ```
 
-Copy the token it printed. The daemon will warn loudly at startup that it is
-listening beyond localhost — that warning is not boilerplate, and it says
-something different depending on whether you set a token. Read it once.
+Copy the token it printed. Leave `--token` off and the daemon will not start —
+it prints what to do instead and exits. Set it and the daemon still warns at
+startup that the token is travelling in clear text; that warning is not
+boilerplate.
+
+There is no `--insecure`. If you want a listening daemon with no token, the
+answer is Route A: bind loopback and let ssh carry it.
 
 **On your laptop:**
 
@@ -191,6 +196,11 @@ terminal for now.
 **Tunnel-vs-refusal**, as described in Route A.
 
 ## Troubleshooting
+
+**"refusing to listen on … with no token."** Working as intended: a bind beyond
+loopback needs `--token`. The message prints both ways out. Note that it also
+applies to the window — `mogeung --addr 0.0.0.0:7717` hosts a daemon, so it is
+refused on the same terms and exits rather than opening one quietly.
 
 **"could not bind — is a daemon already running?"** on the dev box. One already
 is. That is the design: whoever wins the bind is the daemon. Attach to it.

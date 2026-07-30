@@ -12,7 +12,8 @@
 use crate::notify::NotifyConfig;
 use crate::state::AppState;
 use crate::{api, store, watcher};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,59 @@ impl Default for Options {
             token: None,
         }
     }
+}
+
+/// What a bind address and a token add up to, decided before anything serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Posture {
+    /// Loopback. The operating system is the authentication — reaching the port
+    /// means already being on this machine, as someone who can.
+    Loopback,
+    /// Beyond loopback, with a shared token required on every request.
+    TokenGated,
+}
+
+/// Decide whether this bind is allowed to serve, before it serves anything.
+///
+/// Beyond loopback there is no operating system between the socket and the
+/// network, so the token stops being an option and becomes the only thing left.
+/// This used to be a warning. A warning is the wrong shape for it: it scrolls
+/// past during start-up, it is indistinguishable from the other start-up lines,
+/// and the failure it describes is silent and total — nobody notices an open
+/// daemon, which is exactly why nobody fixes one. `R-I10`.
+///
+/// **There is deliberately no `--insecure` escape hatch.** An override that
+/// exists is an override that becomes the documented workaround, and the safe
+/// route — bind loopback, reach it over ssh — is one already in the guide and
+/// strictly better than a token in clear text.
+pub fn admit(addr: &SocketAddr, token: Option<&str>) -> Result<Posture> {
+    if addr.ip().is_loopback() {
+        return Ok(Posture::Loopback);
+    }
+    if token.is_some_and(|t| !t.is_empty()) {
+        return Ok(Posture::TokenGated);
+    }
+    // `\x20` rather than a plain space: a `\` line continuation eats the
+    // leading whitespace of the next source line, so indentation written as
+    // spaces would silently vanish from the message the user actually reads.
+    Err(anyhow!(
+        "refusing to listen on {addr} with no token.\n\
+         \n\
+         Anyone who could reach that address would be able to read every Claude Code\n\
+         transcript on this machine and open terminals on it. There is no --insecure\n\
+         flag; pick one of these instead:\n\
+         \n\
+         \x20 require a shared secret\n\
+         \x20   --token \"$(openssl rand -hex 24)\"\n\
+         \n\
+         \x20 or stay local, and reach it over ssh\n\
+         \x20   --listen 127.0.0.1:{port}\n\
+         \x20   ssh -N -L {port}:localhost:{port} <this-host>\n\
+         \n\
+         The ssh route needs no token and puts nothing in clear text.\n\
+         See docs/guide/remote.md.",
+        port = addr.port(),
+    ))
 }
 
 pub fn default_db() -> PathBuf {
@@ -89,6 +143,9 @@ where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     let addr = listener.local_addr()?;
+    // Before the database is opened and before a single line is scanned: a
+    // refusal that has already done work is a refusal that leaves a mess.
+    let posture = admit(&addr, opts.token.as_deref())?;
     let state = prepare(&opts).await?;
 
     {
@@ -107,23 +164,78 @@ where
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
     tracing::info!("mogeungd listening on http://{addr} (db {})", opts.db.display());
-    if !addr.ip().is_loopback() {
-        match &opts.token {
-            Some(t) if !t.is_empty() => tracing::warn!(
-                "listening beyond localhost with a shared token and NO TLS — \
-                 the token and everything after it travel in clear text; \
-                 trusted networks only (A24)"
-            ),
-            _ => tracing::warn!(
-                "listening beyond localhost with NO AUTHENTICATION — anyone who can \
-                 reach {addr} can read your transcripts and open terminals on this machine \
-                 (start with --token to require one)"
-            ),
-        }
+    if posture == Posture::TokenGated {
+        tracing::warn!(
+            "listening beyond localhost with a shared token and NO TLS — the token \
+             and everything after it travel in clear text; trusted networks only (A24)"
+        );
     }
 
     axum::serve(listener, api::router_with_token(state, opts.token.clone()))
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(s: &str) -> SocketAddr {
+        s.parse().expect("test address")
+    }
+
+    /// The ordinary case, and the one that must never start demanding a token:
+    /// almost every run of this tool is a window hosting a daemon on loopback.
+    #[test]
+    fn loopback_needs_no_token() {
+        assert_eq!(admit(&at("127.0.0.1:7717"), None).unwrap(), Posture::Loopback);
+        assert_eq!(admit(&at("[::1]:7717"), None).unwrap(), Posture::Loopback);
+    }
+
+    /// The whole point of `R-I10`: this used to log a warning and serve anyway.
+    #[test]
+    fn a_public_bind_without_a_token_is_refused() {
+        for addr in ["0.0.0.0:7717", "192.168.1.5:7717", "[::]:7717"] {
+            assert!(
+                admit(&at(addr), None).is_err(),
+                "{addr} must not serve unauthenticated"
+            );
+        }
+    }
+
+    /// `0.0.0.0` reaches loopback too, but it also reaches the network, and it
+    /// is the network that decides the posture.
+    #[test]
+    fn binding_everything_counts_as_public_not_local() {
+        assert!(admit(&at("0.0.0.0:7717"), None).is_err());
+    }
+
+    #[test]
+    fn a_public_bind_with_a_token_is_gated() {
+        assert_eq!(
+            admit(&at("0.0.0.0:7717"), Some("s3cret")).unwrap(),
+            Posture::TokenGated
+        );
+    }
+
+    /// `--token ""` is how a shell hands over an unset variable, and it must not
+    /// read as consent. The request gate already treats it as absent
+    /// (`router_with_token` filters empties), so admission must agree — the two
+    /// disagreeing would mean a daemon that starts believing it is gated and
+    /// then answers everyone.
+    #[test]
+    fn an_empty_token_is_not_a_token() {
+        assert!(admit(&at("0.0.0.0:7717"), Some("")).is_err());
+    }
+
+    /// A refusal that does not say what to do instead gets worked around by
+    /// whatever the internet suggests first.
+    #[test]
+    fn the_refusal_names_both_ways_out() {
+        let err = admit(&at("0.0.0.0:7717"), None).unwrap_err().to_string();
+        assert!(err.contains("--token"), "must offer the token: {err}");
+        assert!(err.contains("ssh -N -L"), "must offer the tunnel: {err}");
+        assert!(err.contains("127.0.0.1:7717"), "must keep the port: {err}");
+    }
 }

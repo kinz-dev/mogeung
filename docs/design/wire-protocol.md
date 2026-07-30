@@ -190,17 +190,23 @@ the daemon logs a warning at startup when the bind is not a loopback address —
 anyone who can reach a non-loopback port can read every transcript on the
 machine and open terminals on it.
 
-**A shared token, when you set one** (`R-I4`). `--token` gates every HTTP and WS
-request; clients send `Authorization: Bearer …` or `?token=…`, the query form
-existing because a browser socket cannot set headers. Comparison is constant
-time, leaking length only. A wrong token is a clean 401.
+**A shared token, mandatory beyond loopback** (`R-I4`, tightened by `R-I10`).
+`--token` gates every HTTP and WS request; clients send
+`Authorization: Bearer …` or `?token=…`, the query form existing because a
+browser socket cannot set headers. Comparison is constant time, leaking length
+only. A wrong token is a clean 401.
 
-Three things this does *not* yet do, all tracked under `R-I10`:
+`server::admit` decides this **before the daemon serves anything** — before the
+database is opened, before the first scan — and a non-loopback bind with no
+token is an error that stops start-up rather than a warning that scrolls past.
+There is no `--insecure`: an override becomes the documented workaround, and
+binding loopback behind an ssh tunnel is both available and strictly better
+than a token in clear text. The window applies the same rule to the daemon it
+hosts, checked on the main thread so the refusal is visible rather than dying
+in a background one.
 
-- **The token is optional, not mandatory, for a non-loopback bind.** Today that
-  case only warns. It should refuse — more so once
-  [ADR-0012](../decisions/0012-write-locally-never-publish.md)'s write verbs
-  share this socket.
+Two things this still does *not* do, tracked under `R-I10`:
+
 - **No TLS.** The token and everything after it travel in clear text
   ([A24](../product/assumptions.md) is the bet: trusted network, no TLS until
   the bet fails). A reverse proxy is the obvious answer and does not work yet —

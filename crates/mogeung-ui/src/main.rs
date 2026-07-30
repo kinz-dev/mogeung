@@ -248,6 +248,17 @@ fn main() -> eframe::Result<()> {
         None => {
             let (mode, listener) = daemon::acquire(&args.addr, args.start_daemon);
             if let Some(listener) = listener {
+                // The hosted daemon refuses the same binds `mogeungd` refuses
+                // (R-I10), but it refuses them on a background thread, where a
+                // message is a line nobody reads before the window opens over
+                // it. Ask the same question here, while stderr is still the
+                // thing the user is looking at.
+                if let Ok(bound) = listener.local_addr() {
+                    if let Err(e) = mogeungd::server::admit(&bound, args.token.as_deref()) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
                 daemon::host(
                     listener,
                     args.db.clone(),
@@ -255,6 +266,7 @@ fn main() -> eframe::Result<()> {
                         desktop: args.notify,
                         push_url: args.push_url.clone(),
                     },
+                    args.token.clone(),
                 );
             }
             (mode, format!("ws://{}/ws", args.addr))
