@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-07-29
+updated: 2026-07-30
 ---
 
 # Roadmap
@@ -72,9 +72,17 @@ alert of its own that was confidently wrong.
 | R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
 | R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
-## B. Sharpen the queue — **shipped and verified through R-B26 and R-B30; R-B27–29 and R-B31 built 2026-07-29 and R-B32–33 on 2026-07-30, all awaiting the dogfooding verdict**
+## B. Sharpen the queue — **shipped and verified through R-B26 and R-B30; R-B27–29 and R-B31 built 2026-07-29 and R-B32–34 on 2026-07-30, all awaiting the dogfooding verdict**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
+
+The terminal is the moving part here. `R-B31` shipped it as a pane on
+2026-07-29 and the next day's use said the pane was wrong — it followed the
+selection and could not exist before a session did — so `R-B32`–`R-B34` are one
+run: a panel with a tab per shell, a font you choose, and a name per tab. See
+[feature 0024](../features/0024-in-app-terminal.md) and
+[ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md). All four rows stay
+⏳ together; the verdict on the panel is a verdict on the tabs and the names.
 
 | # | Item | Effort | |
 |---|---|---|---|
