@@ -86,6 +86,16 @@ protocol, with client-supplied shas, ref names and filters shape-checked
 before git sees an argument. See
 [wire-protocol.md](wire-protocol.md) for the family and its hygiene rules.
 
+`~/.claude` is read and never written, permanently — that is
+[ADR-0003](../decisions/0003-observe-do-not-spawn.md) and the diagram above.
+The *repository* is a separate question, and was answered differently on
+2026-07-30: [ADR-0012](../decisions/0012-write-locally-never-publish.md)
+admits local git writes and rules out every remote verb. Unbuilt as of this
+writing, and it changes only the git surface — no session, prompt or agent
+is touched by any of it. Note that the daemon already had one repository
+write before that ADR: `git worktree add`, on an explicit launch-with-
+isolation action.
+
 ## The scan loop
 
 Every `--poll-ms` (default 1500):

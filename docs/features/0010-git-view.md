@@ -1,7 +1,7 @@
 ---
 title: Git view
 status: shipped
-updated: 2026-07-28
+updated: 2026-07-30
 roadmap: [R-D10]
 depends_on: [A13, A18]
 ---
@@ -98,6 +98,11 @@ Inside the pane, the IntelliJ reading layout:
 
 - **Any write operation** — staging, committing, reverting, branching. See
   above; permanently, unless a future ADR argues otherwise.
+  *(2026-07-30: that ADR was written —
+  [ADR-0012](../decisions/0012-write-locally-never-publish.md) admits local
+  writes and keeps every remote verb out. This bullet stands as the record of
+  what was decided in 2026-07-27 and of the escape hatch being used as
+  designed; the current rule is the ADR's.)*
 - IntelliJ's changelist *grouping* (named changelists you assign files to).
   It is a staging concept; revisit only if reading-side grouping (by
   session attribution, say) proves wanted.

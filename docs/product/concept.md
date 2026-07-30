@@ -1,7 +1,7 @@
 ---
 title: Concept
 status: active
-updated: 2026-07-25
+updated: 2026-07-30
 ---
 
 # mogeung
@@ -119,7 +119,10 @@ implementation was lost to one that was not. ([assumptions.md](assumptions.md))
 - **Not a chat client.** You already have one, and it is better than anything we
   would build.
 - **Not multi-user or cloud.** Single developer, local-first, localhost-only.
-- **Not a replacement for git.** It reads git; it never writes to your repo.
+- **Not a replacement for git.** It reads git, and — since
+  [ADR-0012](../decisions/0012-write-locally-never-publish.md), 2026-07-30 —
+  may stage, commit, branch, stash and resolve **locally**. It never talks to
+  a remote: no fetch, no pull, no push. The line is the network.
 
 ## 6. What success and failure look like
 

@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-29
+updated: 2026-07-30
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -79,6 +79,18 @@ mutates a repository, and none may be added without an ADR — the observer
 rule, one layer down. `GitCommits` echoes the ref scope and `GitAnnotation`
 the revision it blamed, so a client that has since moved on can drop the
 stray — the stray-session rule, applied to superseded scopes.
+
+That ADR now exists.
+[ADR-0012](../decisions/0012-write-locally-never-publish.md) admits a write
+family — stage, unstage, discard, commit, branch, stash, resolve — and holds
+the line at the **network**, so `fetch`, `pull` and `push` remain absent by
+protocol. **None of it is built**; every shipped `Git…` message is still a
+read, and this paragraph describes the code as it stands. When the write
+family lands it arrives with a dispatch-level guard refusing any write verb
+unless the bind is loopback or a token was presented (`A24`) — the
+"unauthenticated socket must not be able to spell a flag" rule below,
+extended from arguments to verbs. See
+[feature 0025](../features/0025-git-write-local.md).
 
 Client-supplied git arguments are shape-checked before git sees them: shas
 must be hex (one trailing `^` allowed — "the parent of"), ref names are

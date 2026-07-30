@@ -7,11 +7,11 @@
 | Branch | `main` |
 | Tests | 478 passing |
 | Rust | 43265 lines |
-| Docs | 58 files, 11 ADRs |
+| Docs | 61 files, 12 ADRs |
 
 ## Assumptions
 
-Untested: **10** · At risk: **3** · Supported: 11 · Refuted: 1
+Untested: **11** · At risk: **3** · Supported: 11 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -45,4 +45,5 @@ Untested: **10** · At risk: **3** · Supported: 11 · Refuted: 1
 | [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `shipped` | [A10] |
 | [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `shipped` | [A19] |
 | [In-app terminal](docs/features/0024-in-app-terminal.md) | `shipped` | [] |
+| [Local git writes — stage, commit, branch, stash](docs/features/0025-git-write-local.md) | `draft` | [A18, A19, A24, A26] |
 

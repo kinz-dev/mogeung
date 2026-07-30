@@ -1,7 +1,7 @@
 ---
 title: Git depth — reading parity with a commercial client
 status: shipped
-updated: 2026-07-28
+updated: 2026-07-30
 roadmap: [R-D11]
 depends_on: [A13, A18, A19]
 ---
@@ -53,6 +53,12 @@ Everything below reads. The daemon gains no verb that stages, commits,
 switches, stashes, resolves, or fetches — `git fetch` writes `.git`, so
 even "refresh the remote state" stays in the terminal and the pane shows
 last-known state only. The fence of [feature 0010] is unchanged.
+
+*(2026-07-30: still true of everything in this feature. The fence itself
+moved — [ADR-0012](../decisions/0012-write-locally-never-publish.md) admits
+stage, commit, switch, stash and resolve, and holds the line at the network
+so `fetch` stays out for the reason given above. See
+[feature 0025](0025-git-write-local.md).)*
 
 ### Acceptance
 

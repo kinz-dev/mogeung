@@ -145,7 +145,7 @@ the answer was worth waiting for.
 | R-C4 | **Push** via ntfy/Pushover for away-from-desk | S | ✅ |
 | R-C5 | **Ambient mode** — big-screen board for a second monitor | M | ✅ |
 
-## D. Review depth — **R-D1–R-D18 shipped and verified; R-D18's verdict landed 2026-07-30**
+## D. Review depth — **R-D1–R-D18 shipped and verified; the write half (R-D19–R-D23) is planned and not started**
 
 `R-D1`–`R-D9` delivered by
 [feature 0002](../features/0002-sharpen-triage-and-review.md); `R-D1` is
@@ -175,7 +175,21 @@ then made concrete with an IntelliJ screenshot — was built 2026-07-29
 ([feature 0014](../features/0014-intellij-commit-view.md)): the file
 tree with details beneath it, one file's diff at a time, `n`/`p`
 crossing file edges, branches-containing on the header. Verified in use
-2026-07-30, closing the pillar.
+2026-07-30, closing the pillar as a **reading** pillar.
+
+**The fence moved (2026-07-30).** Every row above is read-only, restated in
+each spec because [A19](assumptions.md) predicted that *"just add staging"*
+pressure would arrive here. It arrived, asked directly, and was answered by
+[ADR-0012](../decisions/0012-write-locally-never-publish.md): mogeung may
+write the working tree and the local repository, and may never talk to a
+remote. **The line is the network, not the repo.** `R-D19`–`R-D22` are the
+write verbs that follow, `R-D23` is the counterweight they need, and
+`R-D24` — `push`, the half of the original question this does *not* answer —
+stays unstarted behind a second ADR and behind [A24](assumptions.md) being
+resolved rather than assumed. All of it is
+[feature 0025](../features/0025-git-write-local.md), planned and not built.
+[A26](assumptions.md) is the bet: an unused write verb is liability, not
+decoration, and the removal condition is written down in advance.
 
 | # | Item | Effort | |
 |---|---|---|---|
@@ -197,6 +211,12 @@ crossing file edges, branches-containing on the header. Verified in use
 | R-D16 | **Conflict three-way view** — ours/base/theirs read-only for a conflicted file, beyond the markers-in-a-diff we have. See [feature 0013](../features/0013-git-reach.md) | M | ✅ |
 | R-D17 | **Review-state on the log** — R-D8's read/unread marks surfaced per commit, so "which commits has no human read" is visible where commits live. A step toward `R-F2`. See [feature 0013](../features/0013-git-reach.md) | M | ✅ |
 | R-D18 | **Commit diff, file-at-a-time** — IntelliJ-style: a commit's changed files as a selectable directory tree beside the diff, the pane showing only the chosen file's diff instead of every file in one scroll. R-D14's index jumps within the scroll; this replaces it with selection. Asked for directly 2026-07-28 | M | ✅ |
+| R-D19 | **Working-tree writes** — stage, unstage, discard from Local changes, and the loopback-or-token guard every later write verb passes through. Carries the cost of the whole write half: a fail-loudly posture for git, and temp-repo test fixtures ([ADR-0012](../decisions/0012-write-locally-never-publish.md)). See [feature 0025](../features/0025-git-write-local.md) | M | |
+| R-D20 | **Commit from the pane** — message, amend, and a trailer naming the session whose diff it came from. The trailer is why this is worth building rather than shelling out: it is the concrete step toward `R-F2` prompt-blame. See [feature 0025](../features/0025-git-write-local.md) | M | |
+| R-D21 | **Branch and stash writes** — create, switch, stash push/pop/drop. Small, except that a switch must invalidate the session's pinned diff base ([A9](assumptions.md)) rather than let the Changes tab compare against a branch nobody has checked out | M | |
+| R-D22 | **Conflict resolution** — take ours, take theirs, mark resolved, on top of `R-D16`'s existing three-way read. Small because the reading half is done | S | |
+| R-D23 | **Honest remote staleness** — ahead/behind never rendered as a bare number. ADR-0012 keeps `fetch` out, so those counts can lie indefinitely; they must carry the age of the last fetch or read as unknown. The counterweight to `R-D20`, since committing from the pane means visiting a terminal less | S | |
+| R-D24 | **Publish** — `fetch`, `pull`, `push`. **Not started and not decided.** ADR-0012 draws the line at the network deliberately; this needs its own ADR and needs [A24](assumptions.md) resolved first. Recorded here because it is the half of the 2026-07-30 ask that went unanswered, and that should be visible where the rows live | M | |
 
 ## E. Verification — **shipped and verified 2026-07-30 (feature [0016](../features/0016-verification.md))**
 
@@ -281,12 +301,36 @@ nothing to test it on — the A4 lesson says don't. Revisit when Gemini CLI
 sees real local use. `R-I3`'s Windows half is descoped the same way (no
 machine to verify on); the row covers Linux.
 
+**Remote reach, opened 2026-07-30.** `R-I4` shipped the plumbing — a token, a
+`--url` that never starts a local daemon, and five local-only actions that
+refuse rather than acting on the wrong box — and a walkthrough now exists at
+[guide/remote.md](../guide/remote.md). Using it surfaced a set of questions that
+share one root: **the daemon publishes no identity.** It never says which host
+it is, which `~/.claude` it watches, or how to reach it — so the window infers
+"am I remote?" from the address string it dialled, which an ssh tunnel defeats.
+`R-I5` fixes that and is the prerequisite for the five rows after it: a remote
+terminal needs a target to ssh to, discovery needs a name to show, multi-daemon
+needs an origin to key sessions by, and honest refusals need to know whose
+filesystem is on the other end. Ordered deliberately: `R-I5` first because
+everything else assumes it, then `R-I6` and `R-I7`, which are self-contained
+and immediately useful; `R-I9` (mix mode) last of the build rows, because it is
+the only one that changes the data model rather than adding to it. `R-I10`
+paces the others — its first two steps are overdue already, and how far up its
+ladder we climb depends on whether `R-I6` makes ssh the transport for
+everything.
+
 | # | Item | Effort | |
 |---|---|---|---|
 | R-I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises ([A23](assumptions.md)) | M | ⏳ |
 | R-I2 | **Gemini CLI adapter** — descoped, see above | M |  |
 | R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above | M | ⏳ |
-| R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)) | M | ⏳ |
+| R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). Shipped; guide at [guide/remote.md](../guide/remote.md) | M | ⏳ |
+| R-I5 | **Daemon identity** — the daemon names itself in the snapshot: hostname, the `~/.claude` root it watches, its repo roots, and optionally an ssh target. Replaces the window's guess-from-the-address-string check, which an `ssh -L` tunnel silently defeats today, re-enabling four actions that should refuse. Prerequisite for every row below | S | |
+| R-I6 | **Remote terminal** — the in-app terminal panel reaches the daemon's machine over ssh (`ssh -t host tmux attach -t =target`) instead of starting a local shell in a path that only exists over there. Cheap because `term.rs` already builds an argv and spawns it; the cost is credentials, resize and latency, not architecture. Also closes the unguarded-panel gap the guide currently warns about | M | |
+| R-I7 | **Connections in the window** — add, name, switch and forget daemons from the UI instead of a flag and a restart. Needs a `Net` that can be torn down and a full clear of session-keyed state on switch. The natural first step toward `R-I9`: a connection list of length one | M | |
+| R-I8 | **LAN discovery** — the daemon advertises over mDNS (`_mogeung._tcp`), the window browses and offers what it finds. Discovery must never mean auto-connect, and the broadcast itself announces *"this machine is watching Claude Code sessions"* to the segment — which makes `R-I10` more urgent, not less | M | |
+| R-I9 | **Multi-daemon mix mode** — one window, several daemons, one merged queue. The only row here that changes the data model: `SessionId` is a bare `String` and the whole client keys on it, so every session, review mark, shell tab and layout entry must become origin-qualified. Also makes the window an aggregator, which is a new kind of authority — needs an ADR before code. The cheap alternative it must beat: one window per daemon, which works today and costs nothing | L | |
+| R-I10 | **Remote security** — the ladder past A24's bet: make the token mandatory rather than warned-about for non-loopback binds (more urgent now that [ADR-0012](../decisions/0012-write-locally-never-publish.md) adds write verbs), give the built-in web client a way to carry it (it cannot today, so `--token` breaks it), and decide between TLS and adopting ssh as the supported transport — which `R-I6` may settle by itself | M | |
 
 ## J. Polish
 

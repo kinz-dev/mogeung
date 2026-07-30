@@ -73,6 +73,7 @@ anywhere, which is the other half of that round trip.
 → [The attention queue](docs/guide/the-queue.md) ·
 [Reviewing changes](docs/guide/reviewing.md) ·
 [Away from the desk](docs/guide/away-from-the-desk.md) ·
+[Watching a remote machine](docs/guide/remote.md) ·
 [Troubleshooting](docs/guide/troubleshooting.md)
 
 ## Away from the window
