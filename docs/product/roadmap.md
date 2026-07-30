@@ -11,9 +11,15 @@ The ranked backlog.
 Effort: **S** = hours · **M** = about a day · **L** = multi-day.
 
 Status: **✅** = shipped and proven · **⏳** = built, installed, awaiting
-the dogfooding verdict ([A19](assumptions.md)) · blank = not started.
+the dogfooding verdict ([A19](assumptions.md)) · **🗑** = shipped, then
+removed · blank = not started.
 The distinction exists because a blank box on built work read as "not
 done" and got R-D10 asked for twice.
+
+A removed row keeps its number and stays where it was. Deleting it would
+leave the ledger claiming the idea was never had, and the next person to
+want a web client deserves to find the reason it went rather than the
+silence.
 
 Pillars `A`–`H` and `J` are shipped and verified. `E`–`I` (bar the two descopes
 in `I`) were **built 2026-07-29 in one pass** at an explicit *"finish the R-\*
@@ -137,11 +143,26 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 the week meant delete it. Used, and kept. The doubt was worth writing down and
 the answer was worth waiting for.
 
+**`R-C3` got the opposite verdict, 2026-07-30, and it is the more useful
+result.** The thin web client shipped and was never once opened — *"I won't
+open it from my phone, no one is using this ui page."* It came up while
+auditing the daemon's exposure, and the honest finding was that deleting it
+buys **no** security: the port must stay open for the desktop window, which is
+a WebSocket client on it, and the REST API on that same port serves every
+transcript regardless. So it was removed on maintenance grounds instead — it
+could not carry `R-I4`'s token, it hard-coded `ws://` so it could never sit
+behind a TLS proxy, and it was a second UI to keep in step with every wire
+change. `R-C2` shipped with a written removal condition and survived it;
+`R-C3` never got one, and needed it. **The REST API stays**: a second client
+remains buildable without touching the daemon, which was the architectural
+claim `R-C3` was proving, and that claim is now proven and does not need a
+standing demonstration.
+
 | # | Item | Effort | |
 |---|---|---|---|
 | R-C1 | **macOS notification** when a session flips to `WAITING` | S | ✅ |
 | R-C2 | **Menu-bar item** with the waiting count — glanceable without the window | M | ✅ |
-| R-C3 | **Thin web client** — review and unblock from a phone. The daemon already supports it | L | ✅ |
+| R-C3 | **Thin web client** — review and unblock from a phone. **Removed 2026-07-30, unused.** See the pillar note above | L | 🗑 |
 | R-C4 | **Push** via ntfy/Pushover for away-from-desk | S | ✅ |
 | R-C5 | **Ambient mode** — big-screen board for a second monitor | M | ✅ |
 
@@ -330,7 +351,7 @@ everything.
 | R-I7 | **Connections in the window** — add, name, switch and forget daemons from the UI instead of a flag and a restart. Needs a `Net` that can be torn down and a full clear of session-keyed state on switch. The natural first step toward `R-I9`: a connection list of length one | M | |
 | R-I8 | **LAN discovery** — the daemon advertises over mDNS (`_mogeung._tcp`), the window browses and offers what it finds. Discovery must never mean auto-connect, and the broadcast itself announces *"this machine is watching Claude Code sessions"* to the segment — which makes `R-I10` more urgent, not less | M | |
 | R-I9 | **Multi-daemon mix mode** — one window, several daemons, one merged queue. The only row here that changes the data model: `SessionId` is a bare `String` and the whole client keys on it, so every session, review mark, shell tab and layout entry must become origin-qualified. Also makes the window an aggregator, which is a new kind of authority — needs an ADR before code. The cheap alternative it must beat: one window per daemon, which works today and costs nothing | L | |
-| R-I10 | **Remote security** — the ladder past A24's bet: make the token mandatory rather than warned-about for non-loopback binds (more urgent now that [ADR-0012](../decisions/0012-write-locally-never-publish.md) adds write verbs), give the built-in web client a way to carry it (it cannot today, so `--token` breaks it), and decide between TLS and adopting ssh as the supported transport — which `R-I6` may settle by itself | M | |
+| R-I10 | **Remote security** — the ladder past A24's bet: make the token mandatory rather than warned-about for non-loopback binds (more urgent now that [ADR-0012](../decisions/0012-write-locally-never-publish.md) adds write verbs), and decide between TLS and adopting ssh as the supported transport — which `R-I6` may settle by itself. The window cannot speak `wss://` today either (`tokio-tungstenite` is built with no TLS feature), so "put it behind a reverse proxy" is one Cargo flag away from working and worth checking before designing anything larger | M | |
 
 ## J. Polish
 

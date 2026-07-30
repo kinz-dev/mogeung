@@ -81,7 +81,6 @@ anywhere, which is the other half of that round trip.
 ```sh
 ./target/release/mogeungd --notify                  # macOS banners
 ./target/release/mogeungd --push-url https://ntfy.sh/your-topic
-open http://127.0.0.1:7717/                         # web client
 ```
 
 Notifications fire on the *transition* into needing you, once — never on a state

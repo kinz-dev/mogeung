@@ -81,7 +81,6 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         // The thin web client (R-C3). Same WebSocket, same authority model:
         // the phone is a projection, exactly like the desktop window.
-        .route("/", get(index))
         .route("/api/health", get(health))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
@@ -151,10 +150,6 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "alerts": h.alerts.iter().map(|a| a.message()).collect::<Vec<_>>(),
         "detail": h,
     }))
-}
-
-async fn index() -> impl IntoResponse {
-    axum::response::Html(crate::web::INDEX_HTML)
 }
 
 async fn list_repos(State(state): State<Arc<AppState>>) -> impl IntoResponse {

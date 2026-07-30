@@ -20,7 +20,7 @@ covers:
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  Clients                                                  │
-│  native egui app · (future) thin web client · curl        │
+│  native egui app · curl · anything you care to write      │
 └────────────────────────┬─────────────────────────────────┘
                          │ WebSocket + REST (localhost)
 ┌────────────────────────┴─────────────────────────────────┐
@@ -43,8 +43,15 @@ covers:
 ## The daemon is the product
 
 Every UI is a client. That buys three things: mogeung keeps working with no
-window open, reach from another device is free, and a native shell or web client
-later is a packaging decision rather than a rewrite.
+window open, reach from another device is free, and a second client is a
+packaging decision rather than a rewrite.
+
+The third was demonstrated and then retired. `R-C3` shipped a phone client as a
+self-contained HTML file served from `/`, costing the daemon no change at all —
+which was the point. Nobody used it, so it was removed on 2026-07-30 rather than
+maintained through every wire change. The claim it proved is what remains: the
+REST and WebSocket surfaces are the offer, and taking it up needs nothing added
+here.
 
 The attached terminal (`R-B18`) is the one place a client holds an OS resource
 of its own — a pty running `tmux attach`. It stays inside the rule because the

@@ -48,8 +48,8 @@ struct Args {
 
     /// POST notifications to a URL as well — ntfy.sh, Pushover, a webhook (R-C4).
     ///
-    /// The body is the message. Use with `--listen 0.0.0.0:7717` and the web
-    /// client at `/` to triage away from the desk.
+    /// The body is the message — how you hear about a session while away from
+    /// the desk, now that acting on it means reaching the window.
     #[arg(long, value_name = "URL")]
     push_url: Option<String>,
 

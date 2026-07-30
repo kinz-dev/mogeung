@@ -1,7 +1,7 @@
 ---
 title: Sharpen triage, reach and review
 status: shipped
-updated: 2026-07-25
+updated: 2026-07-30
 roadmap: [R-B1, R-B2, R-B3, R-B4, R-B5, R-B6, R-B7, R-B8, R-B9, R-C1, R-C2, R-C3, R-C4, R-C5, R-D1, R-D2, R-D3, R-D4, R-D5, R-D6, R-D7, R-D8, R-D9]
 depends_on: [A1, A3, A6, A8]
 ---
@@ -97,7 +97,7 @@ parts worth testing are testable without a window.
 | `crates/mogeungd/src/state.rs` | open tools, touches, collisions, loops, snooze, debt, blast, focus |
 | `crates/mogeungd/src/git.rs` | normalised anchors, session-aware base, symbol extraction |
 | `crates/mogeungd/src/notify.rs` | new — transition-only notification |
-| `crates/mogeungd/src/web.rs` | new — the thin web client |
+| `crates/mogeungd/src/web.rs` | new — the thin web client *(deleted 2026-07-30: shipped, never used — see `R-C3`)* |
 | `crates/mogeung-ui/src/diff.rs` | new — highlight, word diff, side-by-side |
 | `crates/mogeung-ui/src/app.rs` | filter, grouping, keys, ambient, prompt, debt, blast |
 

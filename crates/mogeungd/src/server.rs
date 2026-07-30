@@ -107,7 +107,6 @@ where
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
     tracing::info!("mogeungd listening on http://{addr} (db {})", opts.db.display());
-    tracing::info!("web client at http://{addr}/");
     if !addr.ip().is_loopback() {
         match &opts.token {
             Some(t) if !t.is_empty() => tracing::warn!(

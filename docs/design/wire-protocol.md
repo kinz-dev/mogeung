@@ -135,7 +135,6 @@ to reconnect rather than wedging the channel for everyone else.
 ## REST
 
 ```
-GET  /                    # the thin web client (R-C3)
 GET  /api/health          # liveness *and* whether it is still seeing everything
 GET  /api/queue
 GET  /api/repos
@@ -175,29 +174,43 @@ the full `detail` object. It is deliberately curl-able: "is the board empty
 because nothing is happening, or because mogeung went blind?" should not require
 a window.
 
-## The web client (`R-C3`)
+## There is no bundled second client (`R-C3`, removed)
 
-`GET /` serves one self-contained HTML file that speaks the same WebSocket as
-the desktop UI. No build step, no framework, no CDN — a phone client that needed
-`npm install` would never get maintained.
-
-Scope is deliberately "triage from the sofa": see the queue, read a diff, mark
-hunks read, snooze. Anything wanting a keyboard and a real screen stays in the
-desktop client. It is the same authority model — a projection with no local
-state ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)) — which is
-exactly what made it cheap.
+`GET /` used to serve one self-contained HTML file speaking this same protocol —
+a phone client for triage. It shipped, was never opened, and was removed on
+2026-07-30. The point it proved survives it: a client is a projection with no
+local authority ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)), so a
+second one costs no daemon change. The REST surface below is the standing offer;
+nothing needs to be added here to take it up.
 
 ## Security
 
-**No authentication.** The daemon binds localhost and anyone who can reach the
-port can read your transcripts and open terminals on your machine. Do not
-expose it. A remote daemon (roadmap `R-I4`) requires solving this first.
+**Loopback by default.** `127.0.0.1:7717` unless `--listen` says otherwise, and
+the daemon logs a warning at startup when the bind is not a loopback address —
+anyone who can reach a non-loopback port can read every transcript on the
+machine and open terminals on it.
 
-Using the web client from a phone means binding beyond localhost, which means
-**anyone on that network has full control of your machine**. The daemon logs a
-warning at startup when `--listen` is not a loopback address. Treat it as
-suitable for a trusted home network and nothing more; a VPN or SSH tunnel is the
-correct answer until authentication exists.
+**A shared token, when you set one** (`R-I4`). `--token` gates every HTTP and WS
+request; clients send `Authorization: Bearer …` or `?token=…`, the query form
+existing because a browser socket cannot set headers. Comparison is constant
+time, leaking length only. A wrong token is a clean 401.
+
+Three things this does *not* yet do, all tracked under `R-I10`:
+
+- **The token is optional, not mandatory, for a non-loopback bind.** Today that
+  case only warns. It should refuse — more so once
+  [ADR-0012](../decisions/0012-write-locally-never-publish.md)'s write verbs
+  share this socket.
+- **No TLS.** The token and everything after it travel in clear text
+  ([A24](../product/assumptions.md) is the bet: trusted network, no TLS until
+  the bet fails). A reverse proxy is the obvious answer and does not work yet —
+  the window is built with no TLS feature in `tokio-tungstenite`, so it cannot
+  dial `wss://` at all.
+- **Argument hygiene is not authentication.** The shape-checks above stop a
+  client spelling a flag; they say nothing about *which* client.
+
+Until then: loopback, or an ssh tunnel. See
+[guide/remote.md](../guide/remote.md).
 
 ## The 2026-07-29 families
 

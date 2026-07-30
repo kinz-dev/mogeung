@@ -180,12 +180,7 @@ A refusal is a message in the error strip, not a silent no-op.
 ## Known rough edges
 
 Remote support is built but has not been through a dogfooding week (`R-I4`),
-and these are the three things that would find you first.
-
-**The built-in web client cannot be used with a token.** The daemon serves a
-small web client at `/`, but its page requests and its socket carry no token, so
-against a daemon started with `--token` the page itself returns 401. Use the
-window, or run the daemon behind Route A's tunnel where no token is needed.
+and these are the things that would find you first.
 
 **The in-app terminal panel is not remote-aware.** Unlike the four actions
 above, the terminal tabs at the bottom of the window are not guarded. They start

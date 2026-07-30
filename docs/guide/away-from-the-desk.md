@@ -1,7 +1,7 @@
 ---
 title: Away from the desk
 status: active
-updated: 2026-07-25
+updated: 2026-07-30
 ---
 
 # Away from the desk
@@ -48,35 +48,19 @@ webhook, your own endpoint. Uses `curl`, so whatever works there works here.
 Pick an unguessable topic name: anyone who knows it can read your session
 titles.
 
-## The web client
+## Acting on it from elsewhere
 
-The daemon serves a small client at `/`:
+A notification tells you; acting on it needs the window. There used to be a
+small web client served at `/` for triaging from a phone — it was removed on
+2026-07-30, unused (`R-C3`).
 
-```sh
-open http://127.0.0.1:7717/
-```
+What replaced it is the daemon itself: run `mogeungd` on the machine doing the
+work and attach the window from wherever you are. See
+[Watching a remote machine](remote.md), which covers the ssh route and the
+shared token.
 
-Queue, diffs, mark-as-read and snooze — enough to triage from the sofa. Anything
-wanting a keyboard stays in the desktop window.
-
-### Using it from a phone
-
-You have to bind beyond localhost:
-
-```sh
-mogeungd --listen 0.0.0.0:7717 --notify
-```
-
-> **There is no authentication.** Anyone who can reach that port can read every
-> transcript on this machine and open terminals on it. The daemon logs a warning
-> when you do this.
->
-> A trusted home network is the most this is suitable for. On anything else use
-> a VPN or an SSH tunnel:
->
-> ```sh
-> ssh -L 7717:127.0.0.1:7717 your-mac
-> ```
+The REST API is still there if you want to build something — `/api/queue`,
+`/api/health` and the rest are plain JSON over `curl`.
 
 ## Ambient mode
 
