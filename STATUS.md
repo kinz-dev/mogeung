@@ -43,6 +43,6 @@ Untested: **10** · At risk: **3** · Supported: 11 · Refuted: 1
 | [Codex adapter](docs/features/0020-codex-adapter.md) | `in-progress` | [A4, A23] |
 | [Linux reach and remote daemon](docs/features/0021-linux-and-remote.md) | `in-progress` | [A13, A24] |
 | [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `in-progress` | [A10] |
-| [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `in-progress` | [A19] |
+| [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `shipped` | [A19] |
 | [In-app terminal](docs/features/0024-in-app-terminal.md) | `shipped` | [] |
 

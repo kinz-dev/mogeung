@@ -1,7 +1,7 @@
 ---
 title: Polish — geometry, config, CLI, empty states, diff speed
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-J1, R-J2, R-J3, R-J4, R-J5, R-J6]
 depends_on: [A19]
 ---
@@ -62,9 +62,10 @@ here tests anything.
 - [x] (`R-J6`) The light theme is legible in every pane, diffs included
 - [x] (`R-J6`) Switching theme takes effect without restarting, and survives one
 
-All six are built and installed; like everything else awaiting
-[item 0](../product/roadmap.md#0-the-non-feature), they are ticked as *done*,
-not as *judged*.
+All six were built, installed and then *judged* — the pillar was signed off in
+use on 2026-07-29, so these boxes mean judged and not merely done. The
+distinction is [item 0](../product/roadmap.md#0-the-non-feature)'s, and it is
+the only one that decides whether a row survives.
 
 "Legible" is asserted by contrast tests over every pair the palettes promise —
 text on each of four surfaces, accents on panels, diff text on its own tint and
