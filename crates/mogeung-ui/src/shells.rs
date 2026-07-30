@@ -315,7 +315,7 @@ impl Shells {
     /// Polling all of them, not just the visible one: a shell whose process
     /// exited while you were looking at another tab must say so when you come
     /// back, and an undrained channel is how that gets missed.
-    pub fn tick(&mut self, ctx: &egui::Context) {
+    pub fn tick(&mut self, ctx: &egui::Context, reach: &crate::term::Reach) {
         for s in &mut self.tabs {
             if let Some(t) = s.term.as_mut() {
                 t.poll();
@@ -327,7 +327,7 @@ impl Shells {
         if s.term.is_some() || s.failed.is_some() {
             return;
         }
-        match Term::shell(ctx, &s.root, s.ordinal) {
+        match Term::shell(ctx, &s.root, s.ordinal, reach) {
             Ok(t) => s.term = Some(t),
             Err(e) => s.failed = Some(e.to_string()),
         }

@@ -59,6 +59,69 @@ fn child_env() -> HashMap<String, String> {
     HashMap::from([("TERM".to_string(), TERM.to_string())])
 }
 
+/// Which machine the tmux we drive is running on. `R-I6`.
+///
+/// The pane always holds a local pty — that is what a pty is. What changes is
+/// what runs in it: `tmux …` here, or `ssh -t host tmux …` when the daemon
+/// being watched is somewhere else. Before this existed the panel ran tmux
+/// locally regardless, rooted at a path that only existed on the *other*
+/// machine, so a remote session's shell tab opened a local shell in a directory
+/// that was not there.
+///
+/// Nothing about [ADR-0011] changes: it is still tmux that owns the session,
+/// still reachable from any terminal on that host, and still outliving this
+/// window. It simply outlives it over there.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Reach {
+    /// tmux runs on this machine.
+    #[default]
+    Local,
+    /// tmux runs on another machine, reached as this ssh destination —
+    /// `user@host`, or a name from `~/.ssh/config`.
+    Ssh(String),
+}
+
+impl Reach {
+    /// Turn a tmux argv into the program and argv actually spawned.
+    ///
+    /// `-t` forces a pty on the remote side: without it ssh runs the command
+    /// without a terminal and tmux refuses to start, reporting that it is not
+    /// a terminal — which reads like a tmux fault rather than a missing flag.
+    ///
+    /// No `BatchMode`, deliberately. A key passphrase or a host-key prompt
+    /// appears *in the pane* and can be answered there, because the pane is a
+    /// real terminal. Failing fast instead would turn every first connection
+    /// into an error with no way to act on it.
+    fn spawn_as(&self, tmux_args: Vec<String>) -> (String, Vec<String>) {
+        match self {
+            Reach::Local => ("tmux".to_string(), tmux_args),
+            Reach::Ssh(dest) => {
+                let mut args = vec!["-t".to_string(), dest.clone(), "tmux".to_string()];
+                // ssh joins what follows with spaces and hands it to the remote
+                // login shell, so every argument has to survive a second round
+                // of word splitting. A worktree path with a space in it is the
+                // ordinary case, not the exotic one.
+                args.extend(tmux_args.iter().map(|a| shell_quote(a)));
+                ("ssh".to_string(), args)
+            }
+        }
+    }
+
+    /// Where a shell started through this reach can be found afterwards.
+    pub fn host_label(&self) -> Option<&str> {
+        match self {
+            Reach::Local => None,
+            Reach::Ssh(dest) => Some(dest),
+        }
+    }
+}
+
+/// Wrap in single quotes for a POSIX shell, closing and reopening around any
+/// single quote of its own.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// Shift+Enter must insert a newline rather than submit the turn.
 ///
 /// A terminal has no way to express Shift+Enter — Return is one byte, and the
@@ -230,15 +293,9 @@ fn shell_args(name: &str, cwd: &str) -> Vec<String> {
 }
 
 impl Term {
-    pub fn attach(ctx: &egui::Context, target: &str) -> anyhow::Result<Self> {
-        Self::spawn(
-            ctx,
-            target,
-            Kind::Attached,
-            "tmux".to_string(),
-            attach_args(target),
-            None,
-        )
+    pub fn attach(ctx: &egui::Context, target: &str, reach: &Reach) -> anyhow::Result<Self> {
+        let (program, args) = reach.spawn_as(attach_args(target));
+        Self::spawn(ctx, target, Kind::Attached, program, args, None)
     }
 
     /// A shell rooted in `root`. `R-B31`, one per tab in the panel (`R-B33`).
@@ -246,8 +303,21 @@ impl Term {
     /// Under tmux when there is a tmux, on a bare pty when there is not — the
     /// difference is [`Kind`], and the pane reports it, because only one of
     /// the two survives this window closing ([ADR-0011]).
-    pub fn shell(ctx: &egui::Context, root: &str, ordinal: u32) -> anyhow::Result<Self> {
+    pub fn shell(ctx: &egui::Context, root: &str, ordinal: u32, reach: &Reach) -> anyhow::Result<Self> {
         let name = shell_session_name(root, ordinal);
+        if let Reach::Ssh(_) = reach {
+            // `working_directory` stays `None`: `root` names a directory on the
+            // *other* machine, and handing it to the local pty would fail the
+            // spawn for a path that was never meant to be local. tmux's `-c`
+            // does the rooting, over there, where the path exists.
+            //
+            // No bare-pty fallback either. Locally that fallback trades tmux's
+            // survival for a shell; here it would trade the *right machine* for
+            // a shell on the wrong one, silently — which is the bug this row
+            // exists to fix, reintroduced as a degradation.
+            let (program, args) = reach.spawn_as(shell_args(&name, root));
+            return Self::spawn(ctx, &name, Kind::Shell, program, args, None);
+        }
         if tmux_available() {
             Self::spawn(
                 ctx,
@@ -660,3 +730,131 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    /// Local is the identity case: the argv reaches tmux untouched, with no
+    /// quoting applied, because nothing re-parses it.
+    #[test]
+    fn local_spawns_tmux_directly() {
+        let (program, args) = Reach::Local.spawn_as(shell_args("mog-0", "/home/k/repo"));
+        assert_eq!(program, "tmux");
+        assert_eq!(args[0], "new-session");
+        assert!(
+            args.iter().all(|a| !a.starts_with('\'')),
+            "local args must not be quoted: {args:?}"
+        );
+    }
+
+    /// `R-I6`: the same tmux command, carried to the machine that has the files.
+    #[test]
+    fn ssh_wraps_the_same_tmux_command() {
+        let (program, args) = Reach::Ssh("dev@box".into()).spawn_as(shell_args("mog-0", "/srv/w"));
+        assert_eq!(program, "ssh");
+        assert_eq!(args[0], "-t", "tmux needs a pty on the far side");
+        assert_eq!(args[1], "dev@box");
+        assert_eq!(args[2], "tmux");
+        assert!(
+            args.iter().any(|a| a.contains("new-session")),
+            "the tmux verb must survive: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a.contains("/srv/w")),
+            "the remote root must survive: {args:?}"
+        );
+    }
+
+    /// ssh joins its trailing arguments with spaces and hands the result to a
+    /// remote shell, so anything unquoted is word-split over there. A worktree
+    /// path with a space is ordinary, and unquoted it would root the shell in
+    /// the wrong directory — or, with `-c /My` failing, in the wrong place
+    /// entirely.
+    #[test]
+    fn a_path_with_a_space_survives_the_remote_shell() {
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", "/My Code/repo"));
+        assert!(
+            args.iter().any(|a| a == "'/My Code/repo'"),
+            "the path must arrive as one word: {args:?}"
+        );
+    }
+
+    /// The nastier half of quoting: a single quote inside the value must close,
+    /// escape and reopen rather than ending the quoting early.
+    #[test]
+    fn a_single_quote_cannot_break_out_of_the_remote_command() {
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(vec!["a'; rm -rf /; echo '".into()]);
+        let joined = args.join(" ");
+        assert!(
+            !joined.contains("; rm -rf /; echo") || joined.contains(r"'\''"),
+            "an embedded quote must stay quoted: {joined}"
+        );
+        // Every tmux argument arrives wrapped, so nothing in it starts a new word.
+        assert!(args[3].starts_with('\'') && args[3].ends_with('\''));
+    }
+
+    /// Attaching to a session by name has the same problem and the same fix:
+    /// the exact-match `=` prefix must not be eaten by the remote shell.
+    #[test]
+    fn an_attach_target_keeps_its_exact_match_prefix_over_ssh() {
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(attach_args("mog:0.0"));
+        assert!(
+            args.iter().any(|a| a.contains("=mog:0.0")),
+            "the = prefix decides which session: {args:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_remote_reach_names_a_host() {
+        assert_eq!(Reach::Local.host_label(), None);
+        assert_eq!(Reach::Ssh("dev@box".into()).host_label(), Some("dev@box"));
+    }
+}
+
+#[cfg(test)]
+mod remote_shell_tests {
+    use super::*;
+
+    /// Hand the composed command to an actual POSIX shell and count the words
+    /// that come out.
+    ///
+    /// Every other quoting test here asserts what I believe `sh` does with the
+    /// string. This one asks it. The failure being guarded against is silent:
+    /// a mis-split path does not error, it roots the remote shell somewhere
+    /// else, and the tab looks like it worked.
+    #[test]
+    fn the_remote_shell_splits_the_command_the_way_we_intended() {
+        let root = "/My Code/re'po";
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", root));
+
+        // ssh hands everything after the destination to the remote login shell,
+        // joined by spaces. Reproduce exactly that.
+        let remote = args[2..].join(" ");
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s\\n' {remote}"))
+            .output()
+            .expect("sh must exist");
+        assert!(out.status.success(), "shell rejected: {remote}");
+
+        let words: Vec<&str> = std::str::from_utf8(&out.stdout)
+            .expect("utf8")
+            .lines()
+            .collect();
+
+        assert_eq!(words[0], "tmux");
+        assert_eq!(words[1], "new-session");
+        assert_eq!(
+            words.last().copied(),
+            Some(root),
+            "the root must arrive as one word, quote and space intact: {words:?}"
+        );
+        assert_eq!(
+            words.len(),
+            7,
+            "tmux + six tmux arguments, no more and no fewer: {words:?}"
+        );
+    }
+}

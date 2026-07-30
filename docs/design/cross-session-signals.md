@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -233,6 +233,15 @@ is the one that had to be answered, not dodged: a shell is where someone types
 predicted. It runs under tmux for that reason, which keeps the never-trapped
 property for anything started inside it. So the paragraph above stands as
 written; what it rules out is owning the *agent's* loop, not owning a process.
+
+A third turn, 2026-07-31 (`R-I6`): against a remote daemon both panes run
+`ssh -t <target> tmux …` rather than `tmux …`. The never-trapped property is
+unchanged but its *scope* now needs saying out loud — the session is reachable
+from any terminal **on the daemon's machine**, which is where it was always
+going to be, since that is where the files and the agent are. What would have
+broken the property is the thing this replaced: running tmux locally against a
+path that only exists elsewhere, which produced a shell on the wrong machine and
+called it the session's.
 See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md).
 
 ### What still cannot work

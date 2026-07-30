@@ -340,6 +340,15 @@ paces the others — its first two steps are overdue already, and how far up its
 ladder we climb depends on whether `R-I6` makes ssh the transport for
 everything.
 
+**Progress, 2026-07-31**, on the `remote-reach` branch: `R-I10`'s
+mandatory-token rung, then `R-I5`, then `R-I6`. That last one settled
+something. ssh is now a *hard requirement* for terminals against a remote
+daemon, so "adopt ssh as the transport" has stopped being hypothetical — it is
+already half-adopted. The remaining `R-I10` question is therefore narrower than
+it looked: not *TLS or ssh*, but whether the WebSocket should join the terminals
+in the tunnel, or gain `wss://` for people who would rather run a reverse proxy.
+The one-Cargo-flag experiment settles that cheaply and should come first.
+
 | # | Item | Effort | |
 |---|---|---|---|
 | R-I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises ([A23](assumptions.md)) | M | ⏳ |
@@ -347,7 +356,7 @@ everything.
 | R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above | M | ⏳ |
 | R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). Shipped; guide at [guide/remote.md](../guide/remote.md) | M | ⏳ |
 | R-I5 | **Daemon identity** — **built 2026-07-31.** `DaemonIdentity` on the snapshot and on `/api/health`: a stable `machine_id` (`~/.mogeung/machine-id`), hostname, watched `~/.claude`, pid, version, optional ssh target. The window compares ids instead of guessing from the address string, so an `ssh -L` tunnel no longer reads as local. Repo roots were not included — nothing needed them, and the identity comparison did not | S | ⏳ |
-| R-I6 | **Remote terminal** — the in-app terminal panel reaches the daemon's machine over ssh (`ssh -t host tmux attach -t =target`) instead of starting a local shell in a path that only exists over there. Cheap because `term.rs` already builds an argv and spawns it; the cost is credentials, resize and latency, not architecture. Also closes the unguarded-panel gap the guide currently warns about | M | |
+| R-I6 | **Remote terminal** — **built 2026-07-31.** Both terminal panes drive tmux over ssh when the daemon is elsewhere (`Reach::Ssh`), using the `ssh_target` from `R-I5`'s identity; without one they refuse rather than guess a hostname ssh may not want. As predicted, the cost was quoting and credentials rather than architecture — ADR-0010 and ADR-0011 hold unchanged, one layer further out. No bare-pty fallback remotely: it would trade the right machine for a shell on the wrong one | M | ⏳ |
 | R-I7 | **Connections in the window** — add, name, switch and forget daemons from the UI instead of a flag and a restart. Needs a `Net` that can be torn down and a full clear of session-keyed state on switch. The natural first step toward `R-I9`: a connection list of length one | M | |
 | R-I8 | **LAN discovery** — the daemon advertises over mDNS (`_mogeung._tcp`), the window browses and offers what it finds. Discovery must never mean auto-connect, and the broadcast itself announces *"this machine is watching Claude Code sessions"* to the segment — which makes `R-I10` more urgent, not less | M | |
 | R-I9 | **Multi-daemon mix mode** — one window, several daemons, one merged queue. The only row here that changes the data model: `SessionId` is a bare `String` and the whole client keys on it, so every session, review mark, shell tab and layout entry must become origin-qualified. Also makes the window an aggregator, which is a new kind of authority — needs an ADR before code. The cheap alternative it must beat: one window per daemon, which works today and costs nothing | L | |

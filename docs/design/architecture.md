@@ -69,6 +69,18 @@ gives — the shell runs under tmux, so what it holds is again a *view*, and a
 one it owns. Closing the window detaches. The daemon is not told, because there
 is nothing it could correctly do with the information.
 
+Against a remote daemon both panes drive tmux **over ssh** (`R-I6`): the pty is
+still local — that is what a pty is — but what runs in it is
+`ssh -t <target> tmux …` rather than `tmux …`, so the shell opens on the machine
+that has the files. The rule is untouched, one layer further out: tmux still
+owns the session, it still outlives the window, and it is still reachable from
+any terminal — on that host. The ssh destination comes from the daemon's
+published identity (`R-I5`); a remote daemon that has not been told one gets a
+refusal rather than a guess, because the hostname it reports need not resolve
+from here and need not be the name ssh wants. Locally the panel falls back to a
+bare pty when tmux is missing; remotely it does not, because that fallback would
+trade the right machine for a shell on the wrong one.
+
 The file explorer (`R-B24`) gives the daemon a second read surface: on request
 it lists and reads files under a session's *own* root — repo when known, cwd
 otherwise. Same shape as everything else: the client asks over the wire and

@@ -2481,6 +2481,39 @@ impl App {
         !(a.contains("127.0.0.1") || a.contains("localhost") || a.contains("[::1]"))
     }
 
+    /// Where a terminal pane should run its tmux. `R-I6`.
+    ///
+    /// Local while the daemon is on this machine. Otherwise the daemon's
+    /// `ssh_target`, so the pane drives tmux where the files and the sessions
+    /// actually are, rather than starting a local shell in a directory that
+    /// exists somewhere else.
+    ///
+    /// `None` is the case worth naming: a remote daemon that has not been told
+    /// how to be reached. There is no honest guess available — the hostname it
+    /// reports need not resolve from here, and need not be the name ssh wants —
+    /// so callers refuse and say what to configure.
+    fn terminal_reach(&self) -> Option<crate::term::Reach> {
+        if !self.remote_daemon() {
+            return Some(crate::term::Reach::Local);
+        }
+        self.daemon_identity
+            .as_ref()?
+            .ssh_target
+            .as_ref()
+            .map(|t| crate::term::Reach::Ssh(t.clone()))
+    }
+
+    /// Why a terminal cannot be opened against this daemon, in a sentence the
+    /// user can act on.
+    fn no_reach_reason(&self) -> String {
+        format!(
+            "terminals run on {}, and it has not published an ssh target — \
+             start its daemon with --ssh-target user@host (or set ssh_target \
+             in its ~/.mogeung/config.toml)",
+            self.other_machine()
+        )
+    }
+
     /// What to call the machine on the other end, in a sentence.
     ///
     /// Naming it is the point: "its terminals are on the other machine" leaves
@@ -6773,7 +6806,14 @@ impl App {
 
         if self.agent_term.is_none() {
             self.release_pty(PtyPane::Agent);
-            match crate::term::Term::attach(ui.ctx(), &target) {
+            // The session's tmux lives wherever the daemon does. Attaching to
+            // that name locally would either miss or — worse — match an
+            // unrelated session of the same name on this machine.
+            let Some(reach) = self.terminal_reach() else {
+                self.agent_failed = Some((target.clone(), self.no_reach_reason()));
+                return;
+            };
+            match crate::term::Term::attach(ui.ctx(), &target, &reach) {
                 Ok(t) => self.agent_term = Some(t),
                 Err(e) => {
                     self.agent_term = None;
@@ -6871,7 +6911,15 @@ impl App {
 
     fn terminal_body(&mut self, ui: &mut egui::Ui) {
         let font = self.terminal_font(ui, "terminal");
-        self.shells.tick(ui.ctx());
+        // A remote daemon with no ssh target has nowhere to run a shell. Say
+        // so and stop, rather than starting one here — which is what this did
+        // before `R-I6`, in a directory that only exists on the other machine.
+        let Some(reach) = self.terminal_reach() else {
+            ui.add_space(8.0);
+            ui.label(dim(&self.no_reach_reason()));
+            return;
+        };
+        self.shells.tick(ui.ctx(), &reach);
 
         // Read before the shell is borrowed below.
         let leave = self.keymap.describe(crate::keymap::Action::ToggleTerminalFocus);
@@ -6891,13 +6939,26 @@ impl App {
                          Double-click the tab to rename it.",
                         s.root
                     ),
-                    _ => format!(
-                        "{}\n\nA tmux session. It survives mogeung closing, and \
-                         `tmux attach -t {name}` reaches it from any terminal.\n\
-                         Double-click the tab to rename it — the label only, \
-                         never the session.",
-                        s.root
-                    ),
+                    // Naming the host matters here: `tmux attach -t …` is
+                    // advice you act on, and run on the wrong machine it finds
+                    // nothing — or something else entirely.
+                    _ => match reach.host_label() {
+                        Some(host) => format!(
+                            "{}\n\nA tmux session on {host}. It survives mogeung \
+                             closing, and `tmux attach -t {name}` reaches it from \
+                             any terminal *there*.\n\
+                             Double-click the tab to rename it — the label only, \
+                             never the session.",
+                            s.root
+                        ),
+                        None => format!(
+                            "{}\n\nA tmux session. It survives mogeung closing, and \
+                             `tmux attach -t {name}` reaches it from any terminal.\n\
+                             Double-click the tab to rename it — the label only, \
+                             never the session.",
+                            s.root
+                        ),
+                    },
                 };
                 let active = i == self.shells.active;
 

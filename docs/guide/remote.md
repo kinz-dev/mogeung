@@ -126,8 +126,7 @@ Retyping a token is how tokens end up in shell history. Both binaries read
 # on the dev box
 listen = "0.0.0.0:7717"
 token  = "…"
-# optional: how a client would ssh here. Published in the daemon's identity
-# and shown in the window; nothing uses it to connect yet.
+# how a client reaches this machine for terminal panes (R-I6)
 ssh_target = "dev@devbox"
 
 # on your laptop
@@ -163,7 +162,8 @@ If `curl` returns nothing at all, no daemon answered. If it returns
 **Works unchanged** — the queue, session detail, transcripts, diffs and review
 marks, the whole Git pane, the file explorer and go-to-file, content search,
 insight, health, notifications (they fire on the *daemon's* machine, and
-`--push-url` forwards them anywhere).
+`--push-url` forwards them anywhere). The terminal panes work too, over ssh —
+see below.
 
 **Refuses, on purpose** — these act on a machine, and the machine is not yours:
 
@@ -177,16 +177,38 @@ insight, health, notifications (they fire on the *daemon's* machine, and
 A refusal is a message in the error strip, not a silent no-op, and it names the
 machine — a refusal you cannot act on reads as a bug.
 
-## Known rough edges
+## Terminals, when the daemon is elsewhere
 
-Remote support is built but has not been through a dogfooding week (`R-I4`),
-and these are the things that would find you first.
+The terminal panel and the agent pane both drive tmux. Against a remote daemon
+they drive it **over ssh**, on the machine that has the files (`R-I6`), so a
+shell tab opens where the work is rather than on your laptop.
 
-**The in-app terminal panel is not remote-aware.** Unlike the four actions
-above, the terminal tabs at the bottom of the window are not guarded. They start
-a shell on **your** machine, rooted at a path that exists on the **dev box** —
-so you get a local shell in a directory that is not there. Use ssh in a real
-terminal for now.
+For that, the daemon has to say how it is reached:
+
+```sh
+mogeungd --ssh-target dev@devbox        # or ssh_target in its config.toml
+```
+
+Any destination ssh understands — `user@host`, or a `Host` alias from your
+`~/.ssh/config`, which is the tidier option since the alias can carry the port,
+the identity file and a `ProxyJump`.
+
+Without it the panel says so and opens nothing:
+
+> terminals run on devbox, and it has not published an ssh target — start its
+> daemon with `--ssh-target user@host`
+
+That refusal is deliberate. There is no guess available: the hostname a daemon
+reports need not resolve from here, and need not be the name ssh wants.
+
+**Authentication happens in the pane.** A key passphrase or a host-key prompt
+appears in the terminal itself and you answer it there — it is a real terminal,
+so nothing needs to be pre-arranged. Agent forwarding, `ControlMaster` and the
+rest are your ssh config's business; mogeung adds only `-t`, which tmux needs.
+
+Sessions still outlive the window — over there. `tmux attach -t <name>` on the
+dev box reaches the same shell, and the tab's tooltip names the host so you know
+which machine to run that on.
 
 ## Troubleshooting
 
