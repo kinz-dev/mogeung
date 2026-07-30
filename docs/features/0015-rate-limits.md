@@ -28,9 +28,9 @@ a 2026-07-29 sweep of all 235 local transcripts found no
 `rate_limit_event` line type anywhere. What exists is a synthetic
 assistant message (`message.model == "<synthetic>"`, all-zero usage,
 text like *"You've hit your session limit · resets 8pm"*). The honest
-build keys on that signature, and additionally classifies a
-`rate_limit_event` line type as handled-if-it-ever-appears so the
-canary captures its shape instead of alarming.
+build keys on that signature and on nothing else — see the Notes for the
+capture-shape arm that briefly hedged against the wrong premise, and why
+it was deleted.
 
 ### Acceptance
 
@@ -43,8 +43,9 @@ canary captures its shape instead of alarming.
 - [x] A rolling five-hour burn figure is visible; when past limit-hits
       exist, the warning threshold is derived from them and the UI
       labels it an estimate — never an authoritative quota
-- [x] A `rate_limit_event` line, if a future CLI emits one, is captured
-      with its raw shape rather than firing the unknown-type canary
+- [x] A line type nobody has observed — `rate_limit_event` included —
+      fires the unknown-type canary rather than being pre-handled on a
+      guess (revised 2026-07-30; it read the opposite way at build time)
 - [x] Health/canary stays quiet across the full local corpus
 
 ### Explicitly out of scope
@@ -76,10 +77,23 @@ tests over folded lines; e2e for the stats endpoint.
 written as "the CLI emits `rate_limit_event`; currently discarded".
 Zero exist across 235 transcripts. What exists is a synthetic assistant
 message (`message.model == "<synthetic>"`) whose *prose* carries the
-reset time. The build keys on that signature, keeps `rate_limit_event`
-in `HANDLED` as a capture-shape arm anyway (its first real appearance
-should be recorded, not alarmed on), and A20 was filed `AT RISK` to
-record the gap between the roadmap's belief and disk.
+reset time. The build keys on that signature, and A20 was filed
+`AT RISK` to record the gap between the roadmap's belief and disk.
+
+**The hedge was removed on 2026-07-30.** The first build kept
+`rate_limit_event` in `HANDLED` as a capture-shape arm — if a future CLI
+emits one, record the specimen rather than merely alarm on it — plus a
+fabricated corpus line to exercise it. Reviewing the row for sign-off
+made the cost visible: `HANDLED` means *no canary alert*, so the hedge
+spent `R-A1`'s loud unknown-type signal to buy a quiet notice about a
+shape nobody has ever seen. Worse, the corpus is documented as one line
+per **observed** shape, and that line was invented, so the fixture was
+asserting the format contains something it does not. Arm, test and
+fixture line are gone; such a line now reaches the canary. The finding
+itself stays — in A20 and in
+[claude-code-formats](../design/claude-code-formats.md) — because a
+negative result nobody records is a negative result somebody
+re-discovers.
 
 **A limit is not a failure and not "waiting for you".** Both neighbours
 were wrong: `Failed` implies something to fix, `AwaitingInput` implies

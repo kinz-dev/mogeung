@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-07-29
+updated: 2026-07-30
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -132,8 +132,12 @@ wholesale each scan because rollouts are re-read per pass — accumulation
 would be the skipped-history trap again. `codex_present` with zero
 threads is reported as exactly that: present, watched, empty.
 
-`rate_limit_event` sits in `HANDLED` as a capture-shape arm although no
-real transcript has ever carried one (A20): if a future CLI emits it,
-the first specimen is recorded as a notice instead of raising an
-unknown-type alert. The real limit signal is the synthetic assistant
-message, folded in `state.rs`.
+**Nothing unobserved sits in `HANDLED`.** `rate_limit_event` did for a
+day — `R-G1` was written believing the CLI emits one, and the arm was
+kept "in case a future CLI does" after the sweep found zero across 235
+transcripts (A20). That is backwards: a handled type raises no alert, so
+pre-handling a guessed shape spends the canary on the one event it was
+built for. The arm is gone, and the corpus line invented to exercise it
+with it; such a line now classifies as `Unknown` and says so loudly. The
+real limit signal is the synthetic assistant message, folded in
+`state.rs`.

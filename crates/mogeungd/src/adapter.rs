@@ -56,11 +56,6 @@ pub const HANDLED: &[&str] = &[
     "ai-title",
     "last-prompt",
     "file-history-delta",
-    // Never observed in the wild (2026-07-29: zero across 235 transcripts —
-    // the roadmap's premise for R-G1 was wrong; limits arrive as a synthetic
-    // assistant message instead). Handled anyway so that if a future CLI does
-    // emit it, we capture its raw shape instead of just alarming on the name.
-    "rate_limit_event",
 ];
 
 /// The outcome of reading one transcript line.
@@ -485,18 +480,6 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
             }
         }
 
-        // A future CLI's structured rate-limit line. Never yet observed; the
-        // arm exists so its first appearance is captured, not just alarmed on.
-        // The raw shape lands in the transcript as a notice so a human can see
-        // exactly what the format turned out to be.
-        "rate_limit_event" => {
-            out.events.push(EventKind::Notice {
-                level: mogeung_core::transcript::NoticeLevel::Warn,
-                message: format!("rate_limit_event: {}", one_line(&v.to_string(), 500)),
-            });
-            out.limit_hit = true;
-        }
-
         "assistant" => {
             let msg = v.get("message")?;
             // The CLI reports a hit rate limit as a synthetic assistant
@@ -780,19 +763,24 @@ mod tests {
         assert!(!p.limit_hit);
     }
 
-    /// R-G1's future-proofing: the structured event has never been observed,
-    /// but if it appears it must be captured with its shape, not just alarmed
-    /// on as unknown.
+    /// A line type nobody has ever seen must reach the canary, not a guess.
+    ///
+    /// `rate_limit_event` was handled here for a while on the strength of
+    /// `R-G1`'s premise — and that premise was wrong: zero exist across 235
+    /// transcripts (A20). Handling a shape we have never observed costs the
+    /// alert that [`LineClass::Unknown`] exists to raise, which is the one
+    /// mechanism built for a format that moved. The guess is gone; if such a
+    /// line ever appears, the canary says so loudly.
     #[test]
-    fn a_structured_rate_limit_event_is_captured_not_unknown() {
+    fn an_unseen_line_type_reaches_the_canary_rather_than_a_guessed_arm() {
         let l = r#"{"type":"rate_limit_event","window":"5h","utilization":0.97}"#;
-        let p = parsed(l);
-        assert!(p.limit_hit);
-        match &p.events[0] {
-            EventKind::Notice { message, .. } => {
-                assert!(message.contains("utilization"), "raw shape lost: {message}")
-            }
-            other => panic!("expected a notice carrying the raw shape, got {other:?}"),
+        assert!(
+            !HANDLED.contains(&"rate_limit_event"),
+            "a type nobody has observed must not be pre-handled"
+        );
+        match parse_line(l) {
+            LineOutcome::Unknown { event_type } => assert_eq!(event_type, "rate_limit_event"),
+            other => panic!("expected the canary to fire, got {other:?}"),
         }
     }
 

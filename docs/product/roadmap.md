@@ -241,7 +241,7 @@ message, which is what shipped keys on ([A20](assumptions.md), filed
 
 | # | Item | Effort | |
 |---|---|---|---|
-| R-G1 | **Five-hour window status** — where you are in the window, since with overage disabled exhausting it hard-fails sessions. Written assuming a `rate_limit_event` from the CLI; no such event exists on disk, so what shipped keys on the synthetic assistant message limits really arrive as ([A20](assumptions.md)) | S | ✅ |
+| R-G1 | **Five-hour window status** — where you are in the window, since with overage disabled exhausting it hard-fails sessions. Built on the synthetic limit message, not the structured event this row first assumed ([A20](assumptions.md)) | S | ✅ |
 | R-G2 | **Warn before exhaustion** | S | ✅ |
 | R-G3 | **Token burn** per session/day/repo | S | ✅ |
 

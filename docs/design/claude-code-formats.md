@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-07-29
+updated: 2026-07-30
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
