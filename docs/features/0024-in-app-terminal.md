@@ -1,6 +1,6 @@
 ---
 title: In-app terminal
-status: built
+status: shipped
 updated: 2026-07-30
 roadmap: [R-B31, R-B32, R-B33, R-B34]
 depends_on: []

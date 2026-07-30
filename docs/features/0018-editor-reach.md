@@ -1,7 +1,7 @@
 ---
 title: Editor reach — git ergonomics, navigation, comforts
-status: in-progress
-updated: 2026-07-29
+status: shipped
+updated: 2026-07-30
 roadmap: [R-B27, R-B28, R-B29]
 depends_on: [A13, A15, A16]
 ---

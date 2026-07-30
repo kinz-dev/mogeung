@@ -72,7 +72,7 @@ alert of its own that was confidently wrong.
 | R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
 | R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
-## B. Sharpen the queue — **shipped and verified through R-B26 and R-B30; R-B27–29 and R-B31 built 2026-07-29 and R-B32–34 on 2026-07-30, all awaiting the dogfooding verdict**
+## B. Sharpen the queue — **shipped and verified end to end; the last verdicts (R-B27–29, R-B31–34) landed 2026-07-30**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 
@@ -81,8 +81,10 @@ The terminal is the moving part here. `R-B31` shipped it as a pane on
 selection and could not exist before a session did — so `R-B32`–`R-B34` are one
 run: a panel with a tab per shell, a font you choose, and a name per tab. See
 [feature 0024](../features/0024-in-app-terminal.md) and
-[ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md). All four rows stay
-⏳ together; the verdict on the panel is a verdict on the tabs and the names.
+[ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md). The four were
+judged together, as they were built, and passed on 2026-07-30 — which is also
+the pane's obituary: one day between shipping a shape and being told it was the
+wrong one is [item 0](#0-the-non-feature) doing exactly what it is for.
 
 | # | Item | Effort | |
 |---|---|---|---|
@@ -112,14 +114,14 @@ run: a panel with a tab per shell, a font you choose, and a name per tab. See
 | R-B24 | **File explorer pane** — the session's worktree as a tree, with a read-only syntax-highlighted viewer. Deliberately not an editor — see [pillar K](#k-explicitly-not) and [feature 0007](../features/0007-file-explorer.md) | M | ✅ |
 | R-B25 | **Explorer workbench** — remember and reveal, multi-file tabs, go-to-file, content search, in one pass ([A16](assumptions.md)). Still a viewer, never an editor. See [feature 0008](../features/0008-explorer-workbench.md) | L | ✅ |
 | R-B26 | **Session labels** — name a session yourself; colour badge on the card, `label:` in the filter. Client view-state like pins ([A17](assumptions.md)). See [feature 0009](../features/0009-session-labels.md) | S | ✅ |
-| R-B27 | **Editor git ergonomics** — a diff gutter vs HEAD with next/prev-change keys, inline blame on the current line, compare-with-revision side by side, and a gutter mark on lines *this session* changed (the mogeung-only one). Still a viewer, never an editor | L | ⏳ |
-| R-B28 | **Editor navigation** — symbol outline and go-to-symbol (tree-sitter is already in the tree), go-to-line, sticky scroll, folding, highlight-other-occurrences | L | ⏳ |
-| R-B29 | **Editor content comforts** — markdown preview, image preview, per-tab word wrap, copy path / `path:line`, file facts in the header, bookmarks with a jump list | M | ⏳ |
+| R-B27 | **Editor git ergonomics** — a diff gutter vs HEAD with next/prev-change keys, inline blame on the current line, compare-with-revision side by side, and a gutter mark on lines *this session* changed (the mogeung-only one). Still a viewer, never an editor | L | ✅ |
+| R-B28 | **Editor navigation** — symbol outline and go-to-symbol (tree-sitter is already in the tree), go-to-line, sticky scroll, folding, highlight-other-occurrences | L | ✅ |
+| R-B29 | **Editor content comforts** — markdown preview, image preview, per-tab word wrap, copy path / `path:line`, file facts in the header, bookmarks with a jump list | M | ✅ |
 | R-B30 | **Per-pane zoom** — Ctrl+wheel over a pane scales that pane alone (Editor, Changes, Git, Transcript, Agent, Terminal), remembered per pane; the global Ctrl+=/− stays whole-window. Asked for directly, built 2026-07-28 | S | ✅ |
-| R-B31 | **In-app terminal** — a shell of your own, `Alt+F12` or ``Ctrl+` ``. Under tmux, so a build or a `claude` started in it outlives the window and stays reachable from a real terminal; a bare pty when tmux is absent, labelled as such. The pane the Agent tab was renamed to make room for — and no longer a pane at all: `R-B33` moved it. See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md) and [feature 0024](../features/0024-in-app-terminal.md) | M | ⏳ |
-| R-B32 | **Configurable terminal font** — pick the family the terminal panes draw in, from the monospaced fonts installed on this machine. The bundled Hack carries no Powerline or Nerd Font glyphs, so an oh-my-zsh prompt is a row of boxes until you can say otherwise. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ⏳ |
-| R-B33 | **Terminal as a workspace panel** — the shell leaves the pane tree for a panel across the bottom, on demand, with a tab per shell and no tie to any session: a terminal is where you *start* an agent, so it must outlast the selection and exist before there is one. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | M | ⏳ |
-| R-B34 | **Name a terminal tab** — double-click a tab, or right-click it, to call it what it is doing; blank puts the folder name back. The label only: the tmux session stays keyed by worktree and ordinal, so a rename cannot strand a shell. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ⏳ |
+| R-B31 | **In-app terminal** — a shell of your own, `Alt+F12` or ``Ctrl+` ``. Under tmux, so a build or a `claude` started in it outlives the window and stays reachable from a real terminal; a bare pty when tmux is absent, labelled as such. The pane the Agent tab was renamed to make room for — and no longer a pane at all: `R-B33` moved it. See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md) and [feature 0024](../features/0024-in-app-terminal.md) | M | ✅ |
+| R-B32 | **Configurable terminal font** — pick the family the terminal panes draw in, from the monospaced fonts installed on this machine. The bundled Hack carries no Powerline or Nerd Font glyphs, so an oh-my-zsh prompt is a row of boxes until you can say otherwise. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ✅ |
+| R-B33 | **Terminal as a workspace panel** — the shell leaves the pane tree for a panel across the bottom, on demand, with a tab per shell and no tie to any session: a terminal is where you *start* an agent, so it must outlast the selection and exist before there is one. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | M | ✅ |
+| R-B34 | **Name a terminal tab** — double-click a tab, or right-click it, to call it what it is doing; blank puts the folder name back. The label only: the tmux session stays keyed by worktree and ordinal, so a rename cannot strand a shell. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ✅ |
 
 ## C. Notifications and reach — **shipped; `R-C2` built 2026-07-29, awaiting the verdict**
 
