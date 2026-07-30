@@ -1,6 +1,9 @@
-//! The embedded terminal pane: a real pty, running `tmux attach`.
+//! The embedded terminal panes: a real pty, running tmux.
 //!
-//! # Why this attaches rather than spawns
+//! Two panes are built out of this one widget, and the difference between them
+//! is the whole point of the module.
+//!
+//! # Agent — attached, never spawned
 //!
 //! A pty has exactly one master, held by whichever terminal created it. A
 //! `claude` started in iTerm2 is owned by iTerm2 and **cannot** be attached to
@@ -16,6 +19,17 @@
 //! session is untouched and still reachable from any terminal. That is what
 //! makes hosting a session additive rather than a repeat of the v0.1 failure
 //! ([ADR-0003]), and it is why the widget being immature is survivable.
+//!
+//! # Terminal — spawned, and still not trapped
+//!
+//! The shell pane does own its process. It runs under tmux anyway, and not for
+//! the code reuse: people type `claude` into a shell that sits next to a diff,
+//! and a directly-owned pty would kill that session when the window closes —
+//! the property above, defeated through the back door. `new-session -A` keeps
+//! it, transitively, for anything started inside.
+//!
+//! Where tmux is missing the pane falls back to a bare pty and says so. See
+//! [ADR-0011](../../../docs/decisions/0011-own-a-shell-never-an-agent.md).
 
 use egui_term::{
     Binding, BindingAction, BackendSettings, InputKind, PtyEvent, TerminalBackend, TerminalMode,
@@ -71,15 +85,102 @@ fn shift_enter_newline() -> Vec<(Binding<InputKind>, BindingAction)> {
     )]
 }
 
-/// One attached view of a tmux session.
+/// What the pty on the other end of this widget actually is.
+///
+/// Not cosmetic. It decides whether the wheel may drive tmux copy-mode, and
+/// whether the "nothing here is trapped" promise the Agent pane makes still
+/// holds — [`Kind::Bare`] is the one case where it does not.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// A tmux client attached to a session someone else started. Mogeung is a
+    /// second viewer and owns nothing.
+    Attached,
+    /// A shell mogeung started, inside tmux. Owned, but reachable from any
+    /// terminal and outliving this window — see [ADR-0011].
+    Shell,
+    /// A shell mogeung started on a pty of its own, because tmux is not
+    /// installed. Anything running here dies with the window, which is why the
+    /// pane says so out loud instead of degrading quietly.
+    Bare,
+}
+
+/// One view of a pty: an attached tmux session, or a shell we started.
 pub struct Term {
     target: String,
+    kind: Kind,
     backend: TerminalBackend,
     events: Receiver<(u64, PtyEvent)>,
-    /// Set once tmux exits — detached, or the session ended.
+    /// Set once the child exits — detached, the session ended, or `exit`.
     exited: bool,
     /// Sub-line wheel remainder for the scrollback interception below.
     scroll_pixels: f32,
+}
+
+/// The shell to spawn when there is no tmux to spawn it inside.
+///
+/// `-l` because the window may have been started from a launcher, a `.app` or
+/// the tray, none of which have read a login profile — so without it `cargo`
+/// and friends are missing from `PATH` for reasons that look nothing like the
+/// cause. tmux runs a login shell by default, so the fallback matching it
+/// keeps the two modes behaving the same.
+fn user_shell() -> (String, Vec<String>) {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "/bin/sh".to_string());
+    (shell, vec!["-l".to_string()])
+}
+
+/// The tmux session name for a worktree's shell.
+///
+/// Keyed by path: a single global shell would be in the wrong directory every
+/// time the selection moved, and keying by session id would strand a shell
+/// every time a session ended.
+///
+/// Readable half plus a hash, because both matter. tmux forbids `.` and `:` in
+/// a name and a bare hash would leave `tmux ls` full of things nobody can
+/// identify — while two worktrees called `mogeung` in different checkouts must
+/// not collide onto one shell.
+///
+/// `ordinal` distinguishes several shells in one worktree, and **0 produces the
+/// name this function returned when there could only be one**. That is not
+/// tidiness: the shells people already have open are named that way, and a
+/// suffix on the first one would silently strand every one of them.
+pub fn shell_session_name(root: &str, ordinal: u32) -> String {
+    let base: String = std::path::Path::new(root)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '-' })
+        .take(24)
+        .collect();
+    let hash = id_for(root) as u32;
+    let base = base.trim_matches('-');
+    let suffix = if ordinal == 0 {
+        String::new()
+    } else {
+        format!("-{ordinal}")
+    };
+    if base.is_empty() {
+        format!("mogeung-shell-{hash:08x}{suffix}")
+    } else {
+        format!("mogeung-shell-{base}-{hash:08x}{suffix}")
+    }
+}
+
+/// Whether tmux is on `PATH` at all.
+///
+/// Asked once per pane open, never per frame: it forks a process, and the
+/// answer cannot change between two frames in any way worth catching.
+pub fn tmux_available() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// A stable widget id per target, so switching between two sessions does not
@@ -91,30 +192,100 @@ fn id_for(target: &str) -> u64 {
     h.finish()
 }
 
+/// The tmux argv that attaches to an existing session.
+///
+/// `=` is tmux's exact-match prefix. Without it, attaching to `mogeung-api`
+/// would also match `mogeung-api-v2` and put you in front of the wrong agent —
+/// which, in a tool whose whole job is telling sessions apart, is the worst
+/// possible failure.
+fn attach_args(target: &str) -> Vec<String> {
+    vec![
+        "attach-session".to_string(),
+        "-t".to_string(),
+        format!("={target}"),
+    ]
+}
+
+/// The tmux argv that opens the worktree's shell, creating it if this is the
+/// first time.
+///
+/// `-A` is the whole feature: attach when the session exists, create when it
+/// does not. It is what makes the pane the *same* shell across restarts rather
+/// than a fresh one each launch, so a build still running from an hour ago is
+/// still there — and it means closing the window detaches instead of killing.
+///
+/// `-s` takes the name literally, so no `=` prefix here; and `-c` roots the
+/// new session in the worktree, which is only read on creation. A shell that
+/// already exists keeps whatever directory you left it in, which is the
+/// behaviour every terminal has.
+fn shell_args(name: &str, cwd: &str) -> Vec<String> {
+    vec![
+        "new-session".to_string(),
+        "-A".to_string(),
+        "-s".to_string(),
+        name.to_string(),
+        "-c".to_string(),
+        cwd.to_string(),
+    ]
+}
+
 impl Term {
     pub fn attach(ctx: &egui::Context, target: &str) -> anyhow::Result<Self> {
+        Self::spawn(
+            ctx,
+            target,
+            Kind::Attached,
+            "tmux".to_string(),
+            attach_args(target),
+            None,
+        )
+    }
+
+    /// A shell rooted in `root`. `R-B31`, one per tab in the panel (`R-B33`).
+    ///
+    /// Under tmux when there is a tmux, on a bare pty when there is not — the
+    /// difference is [`Kind`], and the pane reports it, because only one of
+    /// the two survives this window closing ([ADR-0011]).
+    pub fn shell(ctx: &egui::Context, root: &str, ordinal: u32) -> anyhow::Result<Self> {
+        let name = shell_session_name(root, ordinal);
+        if tmux_available() {
+            Self::spawn(
+                ctx,
+                &name,
+                Kind::Shell,
+                "tmux".to_string(),
+                shell_args(&name, root),
+                Some(root.into()),
+            )
+        } else {
+            let (shell, args) = user_shell();
+            Self::spawn(ctx, &name, Kind::Bare, shell, args, Some(root.into()))
+        }
+    }
+
+    fn spawn(
+        ctx: &egui::Context,
+        target: &str,
+        kind: Kind,
+        shell: String,
+        args: Vec<String>,
+        working_directory: Option<std::path::PathBuf>,
+    ) -> anyhow::Result<Self> {
         let (tx, events) = channel();
         let backend = TerminalBackend::new(
             id_for(target),
             ctx.clone(),
             tx,
             BackendSettings {
-                shell: "tmux".to_string(),
-                // `=` is tmux's exact-match prefix. Without it, attaching to
-                // `mogeung-api` would also match `mogeung-api-v2` and put you in
-                // front of the wrong agent — which, in a tool whose whole job is
-                // telling sessions apart, is the worst possible failure.
-                args: vec![
-                    "attach-session".to_string(),
-                    "-t".to_string(),
-                    format!("={target}"),
-                ],
-                working_directory: None,
+                shell,
+                args,
+                working_directory,
                 env: child_env(),
             },
         )?;
         Ok(Self {
             target: target.to_string(),
+            kind,
             backend,
             events,
             exited: false,
@@ -124,6 +295,10 @@ impl Term {
 
     pub fn target(&self) -> &str {
         &self.target
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
     }
 
     pub fn exited(&self) -> bool {
@@ -147,13 +322,17 @@ impl Term {
     /// detect the click that takes focus: the response of an enclosing
     /// `allocate_ui` senses hover only, so testing `clicked()` on it silently
     /// never fires and the pane can never be typed into.
-    pub fn ui(&mut self, ui: &mut egui::Ui, focused: bool, font_px: f32) -> egui::Response {
+    /// `font` is the chosen terminal family at the pane's zoom — see
+    /// [`crate::font`]. Passed in rather than built here because the family is
+    /// a preference and the size is the pane's, and neither is this widget's
+    /// business.
+    pub fn ui(&mut self, ui: &mut egui::Ui, focused: bool, font: egui::FontId) -> egui::Response {
         self.wheel_scrolls_tmux_history(ui);
         let view = TerminalView::new(ui, &mut self.backend)
             .set_focus(focused)
             .set_size(ui.available_size())
             .set_font(egui_term::TerminalFont::new(egui_term::FontSettings {
-                font_type: egui::FontId::monospace(font_px),
+                font_type: font,
             }))
             .add_bindings(shift_enter_newline());
         let response = ui.add(view);
@@ -198,7 +377,10 @@ impl Term {
     /// *view* of the pane and writes nothing to the process inside — the agent
     /// sees no input at all, which is the entire point.
     fn wheel_scrolls_tmux_history(&mut self, ui: &egui::Ui) {
-        if self.exited {
+        // A bare pty has no tmux to drive, and its scrollback belongs to the
+        // emulator, which handles the wheel itself. Sending `send-keys -X`
+        // here would target a session that does not exist.
+        if self.exited || self.kind == Kind::Bare {
             return;
         }
         let mode = self.backend.last_content().terminal_mode;
@@ -334,6 +516,99 @@ mod tests {
             caps.contains("clear="),
             "{TERM} has no clear capability — tmux will refuse it"
         );
+    }
+
+    /// `-A` is the persistence, and losing it would look like the pane simply
+    /// working: you would get a shell, in the right directory, every time —
+    /// just never the *same* shell, so the build you left running would be
+    /// gone and nothing would say why.
+    #[test]
+    fn the_shell_attaches_to_its_session_rather_than_replacing_it() {
+        let args = shell_args("mogeung-shell-repo-0badcafe", "/home/k/repo");
+        assert_eq!(args[0], "new-session");
+        assert!(args.contains(&"-A".to_string()), "{args:?}");
+        assert!(args.contains(&"mogeung-shell-repo-0badcafe".to_string()));
+        // `-c` roots a *new* session; an existing one keeps its own cwd.
+        let c = args.iter().position(|a| a == "-c").expect("rooted");
+        assert_eq!(args[c + 1], "/home/k/repo");
+    }
+
+    /// `-s` names a session literally, so the exact-match `=` that attach
+    /// needs must **not** appear here — tmux would create a session actually
+    /// called `=mogeung-shell-…` and the next launch would make another.
+    #[test]
+    fn the_shell_name_is_not_written_as_a_match_pattern() {
+        let args = shell_args("mogeung-shell-x-1", "/tmp");
+        assert!(
+            !args.iter().any(|a| a.starts_with('=')),
+            "= belongs to attach-session, not new-session: {args:?}"
+        );
+        assert!(attach_args("mog:0.0").contains(&"=mog:0.0".to_string()));
+    }
+
+    /// Two checkouts of the same repo are the case this has to get right —
+    /// same basename, different worktree, and sharing one shell between them
+    /// would put your commands in the wrong tree.
+    #[test]
+    fn each_worktree_gets_its_own_shell_even_with_the_same_name() {
+        let a = shell_session_name("/home/k/work/mogeung", 0);
+        let b = shell_session_name("/home/k/review/mogeung", 0);
+        assert_ne!(a, b);
+        assert!(a.contains("mogeung") && b.contains("mogeung"), "still readable in `tmux ls`");
+        assert_eq!(a, shell_session_name("/home/k/work/mogeung", 0), "stable across launches");
+    }
+
+    /// The first shell in a worktree must keep the name it had when a worktree
+    /// could only have one. Suffixing it would leave every shell anyone
+    /// currently has open — and whatever is running in them — under a name
+    /// this build never asks tmux for again.
+    #[test]
+    fn the_first_shell_in_a_worktree_is_named_as_it_always_was() {
+        let name = shell_session_name("/home/k/repo", 0);
+        let hash = name.strip_prefix("mogeung-shell-repo-").expect("{name}");
+        assert_eq!(hash.len(), 8, "the name grew a part it did not have: {name}");
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "{name}");
+        assert_ne!(shell_session_name("/home/k/repo", 1), name);
+    }
+
+    /// Extra shells in one worktree address different tmux sessions, and the
+    /// names stay legal — an ordinal is no use if tmux reads it as a window.
+    #[test]
+    fn extra_shells_in_one_worktree_are_distinct_and_legal() {
+        let names: Vec<String> = (0..4).map(|n| shell_session_name("/home/k/repo", n)).collect();
+        let mut uniq = names.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), names.len(), "two shells share a session: {names:?}");
+        for n in &names {
+            assert!(!n.contains('.') && !n.contains(':'), "{n}");
+            assert!(n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'), "{n}");
+        }
+    }
+
+    /// tmux gives `.` and `:` meaning inside a target, so a name carrying
+    /// either addresses a window or a pane instead of the session.
+    #[test]
+    fn a_shell_name_is_legal_as_a_tmux_session_name() {
+        for root in ["/home/k/my.repo", "/home/k/a:b", "/home/k/-weird-", "/", ""] {
+            let name = shell_session_name(root, 0);
+            assert!(name.starts_with("mogeung-shell-"), "{name}");
+            assert!(!name.contains('.') && !name.contains(':'), "{name}");
+            assert!(
+                name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                "{name}"
+            );
+        }
+    }
+
+    /// The fallback runs a *login* shell for the same reason `TERM` is set
+    /// explicitly above: a window started from a launcher has read no profile,
+    /// so without it `PATH` is missing everything the user installed.
+    #[test]
+    fn the_fallback_shell_is_a_login_shell() {
+        let (shell, args) = user_shell();
+        assert!(!shell.is_empty());
+        assert_eq!(args, vec!["-l".to_string()]);
     }
 
     #[test]

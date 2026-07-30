@@ -102,7 +102,7 @@ pub struct Prefs {
     pub show_thinking: bool,
 
     /// Per-pane content zoom, keyed by pane ("editor", "diff", "git",
-    /// "transcript", "terminal") — Ctrl+wheel over a pane, not the global
+    /// "transcript", "agent", "terminal") — Ctrl+wheel over a pane, not the global
     /// Ctrl+=/Ctrl+- which scales the whole window. Only non-default
     /// levels are stored, so the file stays quiet until you zoom.
     #[serde(default)]
@@ -120,6 +120,33 @@ pub struct Prefs {
     /// Dark, light, or whatever the desktop says. `R-J6`.
     #[serde(default)]
     pub theme: crate::theme::Mode,
+
+    /// The font family the terminal panes draw in. `R-B32`.
+    ///
+    /// A family name as the system knows it — "MesloLGS NF", "JetBrains Mono" —
+    /// resolved against the installed fonts by [`crate::font`].
+    ///
+    /// `None` is *automatic*, not "bundled": it resolves through
+    /// [`crate::font::PREFERRED`], which prefers MesloLGS NF where it is
+    /// installed and falls back to the bundled monospace where it is not. The
+    /// bundled font carries no Powerline or Nerd Font glyphs, so a prompt built
+    /// out of them is a row of boxes — and the whole point of a default is that
+    /// the common case does not have to find this setting first.
+    ///
+    /// Terminal-only, deliberately. The diff, the transcript and the Editor are
+    /// monospace too and want the font that is known to carry mogeung's icons.
+    #[serde(default)]
+    pub terminal_font: Option<String>,
+    /// The terminal's base size in points, before the pane's own zoom.
+    #[serde(default = "default_terminal_px")]
+    pub terminal_font_px: f32,
+
+    /// The terminal panel: up or not, how tall, and which shells are in it.
+    /// `R-B33`. Persisted because each tab re-attaches to a tmux session that
+    /// outlived the window — a panel that forgot its tabs would leave them
+    /// running and unreachable from here.
+    #[serde(default)]
+    pub terminal_panel: TerminalPanel,
 
     /// Where the window was, last time it closed. `R-J1`.
     ///
@@ -195,6 +222,61 @@ impl Window {
     }
 }
 
+/// The terminal panel's stored shape. `R-B33`.
+///
+/// A shell is `(worktree, ordinal)` and nothing more: the pty is spawned fresh
+/// on restore, and re-attaches to the tmux session those two name. Storing
+/// anything about the *running* shell here would be storing a fact that tmux
+/// already owns and that this file cannot keep true.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerminalPanel {
+    /// On demand: closed on a fresh install, and whatever you left it at after.
+    #[serde(default)]
+    pub open: bool,
+    #[serde(default = "default_panel_height")]
+    pub height: f32,
+    #[serde(default)]
+    pub shells: Vec<ShellRef>,
+    #[serde(default)]
+    pub active: usize,
+}
+
+impl Default for TerminalPanel {
+    fn default() -> Self {
+        TerminalPanel {
+            open: false,
+            height: default_panel_height(),
+            shells: Vec::new(),
+            active: 0,
+        }
+    }
+}
+
+/// One shell in the panel: where it is rooted, and which one it is there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellRef {
+    pub root: String,
+    /// 0 is the first shell in that worktree, and names the tmux session the
+    /// single-shell build used — see `term::shell_session_name`.
+    #[serde(default)]
+    pub ordinal: u32,
+    /// What you called this tab, if you called it anything. `R-B34`.
+    ///
+    /// A label and nothing else — the tmux session is still named by `root`
+    /// and `ordinal`, so a file written by a build that had never heard of
+    /// names still restores the same shells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+fn default_panel_height() -> f32 {
+    crate::shells::DEFAULT_HEIGHT
+}
+
+fn default_terminal_px() -> f32 {
+    14.0
+}
+
 fn yes() -> bool {
     true
 }
@@ -222,6 +304,9 @@ impl Default for Prefs {
             editor_wrap: BTreeSet::new(),
             bookmarks: Vec::new(),
             theme: crate::theme::Mode::default(),
+            terminal_font: None,
+            terminal_font_px: default_terminal_px(),
+            terminal_panel: TerminalPanel::default(),
             window: None,
         }
     }
@@ -678,6 +763,50 @@ mod tests {
         p.set_label("a", "   ");
         assert_eq!(p.label("a"), None, "an empty label is a removal");
         assert!(p.labels.is_empty(), "removal must not leave an empty entry behind");
+    }
+
+    /// `R-B32`/`R-B33`. Both settings have to survive a restart, and a file
+    /// written before either existed must still load — the terminal's font is
+    /// not a thing anyone wants to choose twice a day, and a panel that forgot
+    /// its tabs would leave their tmux sessions running with nothing pointing
+    /// at them.
+    #[test]
+    fn the_terminal_font_and_panel_round_trip_and_older_files_still_load() {
+        let mut p = Prefs::default();
+        assert_eq!(p.terminal_font, None, "the bundled monospace until asked");
+        assert!(!p.terminal_panel.open, "on demand, so closed on a fresh install");
+
+        p.terminal_font = Some("MesloLGS NF".into());
+        p.terminal_font_px = 15.0;
+        p.terminal_panel = TerminalPanel {
+            open: true,
+            height: 300.0,
+            shells: vec![
+                ShellRef { root: "/home/k/repo".into(), ordinal: 0, name: None },
+                ShellRef {
+                    root: "/home/k/repo".into(),
+                    ordinal: 1,
+                    name: Some("tests".into()),
+                },
+            ],
+            active: 1,
+        };
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.terminal_font.as_deref(), Some("MesloLGS NF"));
+        assert_eq!(back.terminal_font_px, 15.0);
+        assert_eq!(back.terminal_panel, p.terminal_panel);
+
+        let older: Prefs = serde_json::from_str(r#"{"hidden":[],"scope":"live"}"#).unwrap();
+        assert_eq!(older.terminal_font, None);
+        assert_eq!(older.terminal_font_px, 14.0, "not zero — an unreadable terminal");
+        assert_eq!(older.terminal_panel, TerminalPanel::default());
+
+        // A shell written before ordinals or names existed is the first one,
+        // unnamed — not a parse error that would take the whole file down.
+        let one: TerminalPanel =
+            serde_json::from_str(r#"{"open":true,"shells":[{"root":"/a"}]}"#).unwrap();
+        assert_eq!(one.shells[0].ordinal, 0);
+        assert_eq!(one.shells[0].name, None);
     }
 
     #[test]

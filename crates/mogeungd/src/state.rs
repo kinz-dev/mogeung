@@ -1968,7 +1968,7 @@ fn linux_focus_pid(pid: u32) -> Result<u32> {
     tmux_client_pids(&session).into_iter().next().ok_or_else(|| {
         anyhow!(
             "this session runs under tmux ({target}) with no terminal attached — \
-             attach one with `tmux attach -t '{session}'`, or use mogeung's Terminal tab"
+             attach one with `tmux attach -t '{session}'`, or use mogeung's Agent tab"
         )
     })
 }

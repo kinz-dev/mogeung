@@ -36,7 +36,7 @@ last on rather than in front of the agent.
 
 - [x] Clicking anywhere in a card selects it, and the card shows it is a target
       before you click
-- [x] Clicking a session under tmux lands on the Terminal tab
+- [x] Clicking a session under tmux lands on the Agent tab
 - [x] A finished session can be dismissed by a corner `✕` or by right-click
 - [x] A **live** session offers neither, and `h` refuses it with a reason
 - [x] Selecting a session with a long transcript does not stutter
@@ -65,13 +65,13 @@ immutable once received; a clone is a refcount bump.
 the Notes. Hovering also draws an outline and changes the cursor now, so a card
 looks like the target it is.
 
-**What the click means.** Selecting a session and then hunting for the Terminal
+**What the click means.** Selecting a session and then hunting for the Agent
 tab is two gestures for one intention.
 
 ### Files touched
 
 - `crates/mogeung-ui/src/app.rs` — `Rc` for sessions, changes and events;
-  card interaction; `may_toggle_hidden`; open Terminal on click
+  card interaction; `may_toggle_hidden`; open the Agent tab on click
 - `crates/mogeung-ui/src/ui.rs` — `icon::HIDE`
 - `crates/mogeung-ui/src/term.rs` — Shift+Enter (see
   [0003](0003-attached-terminal.md))

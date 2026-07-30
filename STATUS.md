@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 433 passing |
-| Rust | 40543 lines |
-| Docs | 56 files, 10 ADRs |
+| Tests | 478 passing |
+| Rust | 43269 lines |
+| Docs | 58 files, 11 ADRs |
 
 ## Assumptions
 
@@ -44,4 +44,5 @@ Untested: **10** · At risk: **3** · Supported: 11 · Refuted: 1
 | [Linux reach and remote daemon](docs/features/0021-linux-and-remote.md) | `in-progress` | [A13, A24] |
 | [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `in-progress` | [A10] |
 | [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `in-progress` | [A19] |
+| [In-app terminal](docs/features/0024-in-app-terminal.md) | `built` | [] |
 

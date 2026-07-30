@@ -282,7 +282,10 @@ two search surfaces with two casing rules would be a bug report.
 **The pane now displays as "Editor"** — asked for by name, 2026-07-27. The
 rename is skin-deep on purpose: `Tab::Explorer` and the action variants are
 serialized into every saved `layout.json` and `keymap.json`, so the
-identifiers stay and only the labels moved (the `LeaveTerminal` precedent).
+identifiers stay and only the labels moved. (The Terminal tab later took the
+other route when it became "Agent" — identifiers renamed, on-disk names pinned
+with `#[serde(rename)]`; see [0003](0003-attached-terminal.md). Worth it there
+because another pane wanted the vacated word, which is not true here.)
 What did *not* move is the boundary: the pane has no write path, and pillar
 K still says permanently. The name is what the user calls the pane; the
 protocol is what it can do.

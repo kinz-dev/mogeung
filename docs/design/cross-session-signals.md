@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-07-29
+updated: 2026-07-30
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -224,6 +224,16 @@ The trade that made v0.1 bad is avoided for a specific, checkable reason: an
 attached session is **never trapped in mogeung**. See
 [ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md), and
 `crates/mogeung-ui/src/term.rs`.
+
+And then a second correction, 2026-07-29: `R-B31` ships a terminal mogeung
+*does* own the pty of — a plain shell, in a worktree, moved out of the pane
+tree and into a panel of its own a day later by `R-B33`. The surviving argument
+is the one that had to be answered, not dodged: a shell is where someone types
+`claude`, and a pty we owned outright would trap that session exactly as
+predicted. It runs under tmux for that reason, which keeps the never-trapped
+property for anything started inside it. So the paragraph above stands as
+written; what it rules out is owning the *agent's* loop, not owning a process.
+See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md).
 
 ### What still cannot work
 

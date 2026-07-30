@@ -16,7 +16,7 @@ them can be on screen at once.
 ### Problem
 
 The detail pane shows exactly one of Changes, Transcript, Info, Debt and
-Terminal. Reading a diff while watching the transcript that produced it means
+Agent. Reading a diff while watching the transcript that produced it means
 alternating between two tabs and holding one of them in your head — which is
 precisely the work a second pane would do for you.
 

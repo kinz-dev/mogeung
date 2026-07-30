@@ -47,6 +47,27 @@ pub enum Action {
     TabTranscript,
     TabInfo,
     TabDebt,
+    /// The session's own terminal, attached through tmux. `R-B18`.
+    ///
+    /// Called `Agent` rather than `Terminal` because a second pty pane is
+    /// coming, and "Terminal" has to mean there what it means in every editor:
+    /// a shell you own. The serde name stays `tab_terminal` so a keymap saved
+    /// before the rename keeps its binding.
+    #[serde(rename = "tab_terminal")]
+    TabAgent,
+    /// Show or hide the terminal panel — shells of your own. `R-B31`, `R-B33`.
+    ///
+    /// The one action in this group that is not a tab and not one-way. The
+    /// terminal is a panel across the bottom rather than a pane in the tree
+    /// (`R-B33`), and a key that gives a third of the window to a shell has to
+    /// be the key that takes it back — which is what Alt+F12 and ``Ctrl+` ``
+    /// do in the editors people arrive here from.
+    ///
+    /// The serde name is `tab_shell`, not `tab_terminal` — that one belongs to
+    /// the Agent pane, which held the word first and cannot give up its stored
+    /// name without dropping everyone's binding. The two are unrelated things
+    /// that happen to have swapped labels once.
+    #[serde(rename = "tab_shell")]
     TabTerminal,
     /// The session's worktree, read-only. `R-B24`.
     TabExplorer,
@@ -57,16 +78,20 @@ pub enum Action {
     PrevTab,
     /// Cycle dark → light → system → dark. `R-J6`.
     CycleTheme,
-    /// Toggle whether the keyboard belongs to the embedded terminal.
+    /// Toggle whether the keyboard belongs to the focused pty pane.
     ///
-    /// One chord both ways — into the agent and back out — because reaching
-    /// the terminal should not need a mouse when leaving it does not. Needs
-    /// its own action because the obvious key cannot be used: Escape belongs
-    /// to Claude Code, where it interrupts a turn. A binding that stole it
-    /// would make the agent uninterruptible from the pane that exists to
-    /// interrupt it. (The name says "leave" because renaming the variant
-    /// would break every saved keymap that mentions `leave_terminal`.)
-    LeaveTerminal,
+    /// One chord both ways — in and back out — because reaching the terminal
+    /// should not need a mouse when leaving it does not. Needs its own action
+    /// because the obvious key cannot be used: Escape belongs to Claude Code,
+    /// where it interrupts a turn. A binding that stole it would make the
+    /// agent uninterruptible from the pane that exists to interrupt it.
+    ///
+    /// Deliberately *not* per-pane: it means whichever terminal is in front of
+    /// you — the shell in the panel if it is up, else the Agent pane. One chord
+    /// for "give the terminal my keystrokes" is a thing you learn once — two
+    /// would be two, and you would press the wrong one.
+    #[serde(rename = "leave_terminal")]
+    ToggleTerminalFocus,
     // -- scrolling the content pane
     PageDown,
     PageUp,
@@ -78,7 +103,13 @@ pub enum Action {
     First,
     Activate,
     // -- queue
-    JumpToTerminal,
+    /// Raise the terminal *application* the session runs in — iTerm2, or
+    /// Terminal.app, or the tmux client — not a pane inside mogeung.
+    ///
+    /// The distinction was invisible while mogeung had one thing called a
+    /// terminal. With two it is the difference between staying and leaving.
+    #[serde(rename = "jump_to_terminal")]
+    FocusTerminalApp,
     MarkAllRead,
     Snooze,
     FilterFocus,
@@ -138,13 +169,14 @@ impl Action {
         Action::TabTranscript,
         Action::TabInfo,
         Action::TabDebt,
+        Action::TabAgent,
         Action::TabTerminal,
         Action::TabExplorer,
         Action::TabGit,
         Action::TabInsight,
         Action::NextTab,
         Action::PrevTab,
-        Action::LeaveTerminal,
+        Action::ToggleTerminalFocus,
         Action::PageDown,
         Action::PageUp,
         Action::ScrollTop,
@@ -153,7 +185,7 @@ impl Action {
         Action::Prev,
         Action::First,
         Action::Activate,
-        Action::JumpToTerminal,
+        Action::FocusTerminalApp,
         Action::MarkAllRead,
         Action::Snooze,
         Action::FilterFocus,
@@ -194,19 +226,20 @@ impl Action {
             | Action::TabTranscript
             | Action::TabInfo
             | Action::TabDebt
+            | Action::TabAgent
             | Action::TabTerminal
             | Action::TabExplorer
             | Action::TabGit
             | Action::TabInsight
             | Action::NextTab
             | Action::PrevTab
-            | Action::LeaveTerminal => "Tabs",
+            | Action::ToggleTerminalFocus => "Tabs",
             Action::PageDown
             | Action::PageUp
             | Action::ScrollTop
             | Action::ScrollBottom => "Scrolling",
             Action::Next | Action::Prev | Action::First | Action::Activate => "Navigation",
-            Action::JumpToTerminal
+            Action::FocusTerminalApp
             | Action::MarkAllRead
             | Action::Snooze
             | Action::FilterFocus
@@ -246,13 +279,14 @@ impl Action {
             Action::TabTranscript => "Show the Transcript tab",
             Action::TabInfo => "Show the Info tab",
             Action::TabDebt => "Show the Debt tab",
-            Action::TabTerminal => "Show the Terminal tab",
+            Action::TabAgent => "Show the Agent tab — the session's own terminal, attached",
+            Action::TabTerminal => "Show or hide the terminal — your own shells, at the bottom",
             Action::TabExplorer => "Show the Editor tab — browse and read the session's files",
             Action::TabGit => "Show the Git tab — commits, changes and diffs",
             Action::TabInsight => "Show the Insight tab — cross-session search, digest, analytics, docs",
             Action::NextTab => "Next tab",
             Action::PrevTab => "Previous tab",
-            Action::LeaveTerminal => "Focus the terminal, or give the keyboard back",
+            Action::ToggleTerminalFocus => "Type into the terminal, or give the keyboard back",
             Action::PageDown => "Scroll the transcript or diff down a page",
             Action::PageUp => "Scroll the transcript or diff up a page",
             Action::ScrollTop => "Jump to the top",
@@ -260,8 +294,8 @@ impl Action {
             Action::Next => "Next item in the focused pane",
             Action::Prev => "Previous item in the focused pane",
             Action::First => "First item in the focused pane",
-            Action::Activate => "Open — terminal for a session, file for a row",
-            Action::JumpToTerminal => "Jump to the session's terminal",
+            Action::Activate => "Open — the terminal app for a session, the file for a row",
+            Action::FocusTerminalApp => "Switch to the terminal app the session runs in",
             Action::MarkAllRead => "Mark the whole diff read",
             Action::Snooze => "Snooze or wake the session",
             Action::FilterFocus => "Focus the queue filter",
@@ -428,10 +462,20 @@ impl Default for Keymap {
         set(Action::TabTranscript, &["T"]);
         set(Action::TabInfo, &["I"]);
         set(Action::TabDebt, &["D"]);
-        set(Action::TabTerminal, &["E"]);
-        // X as in eXplorer, kept although the pane now displays as "Editor":
-        // `E` belongs to the Terminal tab, and a binding that moves under
-        // trained hands costs more than a mnemonic that lags a rename.
+        // E as in tErminal, kept although the pane now displays as "Agent",
+        // for the same reason X below stayed with the Editor: a binding that
+        // moves under trained hands costs more than a mnemonic that lags a
+        // rename. `A` is therefore still free.
+        set(Action::TabAgent, &["E"]);
+        // Not a letter, unlike every tab above it, and deliberately so. Both
+        // of these are what the editors people already have bound it to —
+        // Alt+F12 is IntelliJ's, Ctrl+` is VS Code's — and a shell is the one
+        // pane here that arrives with an existing reflex attached. The bare
+        // letters stay with the panes that are mogeung's own idea.
+        //
+        // Two defaults rather than one because the reflex splits cleanly by
+        // editor and neither camp should have to look this up.
+        set(Action::TabTerminal, &["Alt+F12", "Ctrl+Backquote"]);
         set(Action::TabExplorer, &["X"]);
         // V as in VCS — g means "first" and G is taken with it.
         set(Action::TabGit, &["V"]);
@@ -441,8 +485,9 @@ impl Default for Keymap {
 
         // Read while the terminal holds the keyboard, so it must be a chord
         // Claude Code will never want. Escape, Ctrl+C and Ctrl+D all belong to
-        // the agent; Alt+Cmd+M does not belong to anyone.
-        set(Action::LeaveTerminal, &["Alt+Cmd+M"]);
+        // the agent; Alt+Cmd+M does not belong to anyone. The same is true of
+        // a shell, so this one chord covers both pty panes.
+        set(Action::ToggleTerminalFocus, &["Alt+Cmd+M"]);
 
         set(Action::PageDown, &["PageDown"]);
         set(Action::PageUp, &["PageUp"]);
@@ -454,7 +499,8 @@ impl Default for Keymap {
         set(Action::First, &["G"]);
         set(Action::Activate, &["Enter"]);
 
-        set(Action::JumpToTerminal, &["O"]);
+        // O as in "over there" — this one leaves mogeung for the terminal app.
+        set(Action::FocusTerminalApp, &["O"]);
         set(Action::MarkAllRead, &["R"]);
         set(Action::Snooze, &["S"]);
         set(Action::FilterFocus, &["Slash"]);
@@ -810,6 +856,59 @@ mod tests {
         assert_eq!(km.conflict(&j, Action::Snooze), Some(Action::Next));
         // Rebinding an action to a key it already owns is not a conflict.
         assert_eq!(km.conflict(&j, Action::Next), None);
+    }
+
+    /// The three terminal actions were renamed when the Terminal tab became
+    /// the Agent tab; their names *on disk* were not. Dropping the
+    /// `#[serde(rename)]` that holds that line would hand every existing user
+    /// the default binding back and their own rebinding would vanish — the
+    /// exact failure this module keeps insisting is the worst kind, because a
+    /// shortcut that quietly reverted looks identical to one that broke.
+    #[test]
+    fn a_keymap_saved_before_the_agent_rename_keeps_its_bindings() {
+        let km = Keymap::from_json(
+            r#"{ "bindings": {
+                "tab_terminal": ["Alt+9"],
+                "leave_terminal": ["Alt+8"],
+                "jump_to_terminal": ["Alt+7"]
+            } }"#,
+        )
+        .unwrap();
+        assert_eq!(km.bindings_for(Action::TabAgent)[0].0, "Alt+9");
+        assert_eq!(km.bindings_for(Action::ToggleTerminalFocus)[0].0, "Alt+8");
+        assert_eq!(km.bindings_for(Action::FocusTerminalApp)[0].0, "Alt+7");
+        // And what we write back is still readable by a build from before the
+        // rename, so exporting a map does not strand the person you sent it to.
+        let json = km.to_json().unwrap();
+        for name in ["tab_terminal", "leave_terminal", "jump_to_terminal"] {
+            assert!(json.contains(name), "{name} is missing from the export");
+        }
+    }
+
+    /// The terminal panel's two chords are the ones the user's editor already
+    /// taught them, and both have to survive: dropping either sends half the
+    /// people who reach for a terminal to a key that does nothing, and they
+    /// will conclude it does not exist rather than that it moved.
+    ///
+    /// Also the thing they must never become: a chord that reaches the panel
+    /// while a pty pane holds the keyboard would be swallowed, so neither may
+    /// collide with `ToggleTerminalFocus`.
+    #[test]
+    fn the_terminal_answers_to_both_editors_reflexes() {
+        let km = Keymap::default();
+        for chord in ["Alt+F12", "Ctrl+Backquote"] {
+            let (mods, key) = Binding(chord.into()).parse().expect("{chord} must parse");
+            assert_eq!(
+                km.action_for(mods, key),
+                Some(Action::TabTerminal),
+                "{chord} no longer shows the terminal"
+            );
+        }
+        assert_ne!(
+            km.bindings_for(Action::ToggleTerminalFocus),
+            km.bindings_for(Action::TabTerminal),
+            "the chord that shows the terminal must not be the one that leaves it"
+        );
     }
 
     #[test]

@@ -32,7 +32,7 @@ already done what you asked.
 | Key | Does |
 |---|---|
 | `j` / `k` | move down / up the queue |
-| `enter` or `o` | focus that session's terminal tab |
+| `enter` or `o` | switch to the terminal app that session runs in |
 | `r` | mark everything in its diff read |
 | `s` | snooze 30 minutes, or wake it |
 | `g` | jump to the top of the queue |

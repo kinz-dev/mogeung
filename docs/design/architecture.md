@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-29
+updated: 2026-07-30
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -52,6 +52,15 @@ client is told *which* pane by the daemon and decides nothing itself, and
 because what it holds is a view rather than the session: the pty belongs to
 tmux, and closing the window leaves the session untouched. See
 [ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md).
+
+The terminal panel (`R-B31`, `R-B33`) is the second, and the only place a
+client holds a resource the daemon knows nothing about at all: a shell it
+started itself, in a directory it chose, with no session id anywhere in the
+state. It stays inside the rule for the reason [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md)
+gives — the shell runs under tmux, so what it holds is again a *view*, and a
+`claude` started in it is a session mogeung observes like any other rather than
+one it owns. Closing the window detaches. The daemon is not told, because there
+is nothing it could correctly do with the information.
 
 The file explorer (`R-B24`) gives the daemon a second read surface: on request
 it lists and reads files under a session's *own* root — repo when known, cwd

@@ -15,7 +15,7 @@ the dogfooding verdict ([A19](assumptions.md)) · blank = not started.
 The distinction exists because a blank box on built work read as "not
 done" and got R-D10 asked for twice.
 
-Pillars `A`–`D` are shipped. `E`–`I` (bar the two descopes in `I`) were
+Pillars `A`–`D` and `J` are shipped. `E`–`I` (bar the two descopes in `I`) were
 **built 2026-07-29 in one pass** at an explicit *"finish the R-\* items in
 one-go"* ask — a deliberate override of the item-0 gate, recorded per spec
 (features 0015–0022) and in the ledger (A20–A25). Every row from that pass
@@ -72,14 +72,14 @@ alert of its own that was confidently wrong.
 | R-A4 | **Health panel** — sessions found, lines parsed/skipped, last scan, and what mogeung *cannot* see | S | ✅ |
 | R-A5 | **Huge-transcript handling** — cap and tail rather than reading whole files | S | ✅ |
 
-## B. Sharpen the queue — **shipped and verified through R-B26 and R-B30; R-B27–29 built 2026-07-29, awaiting the dogfooding verdict**
+## B. Sharpen the queue — **shipped and verified through R-B26 and R-B30; R-B27–29 and R-B31 built 2026-07-29 and R-B32–33 on 2026-07-30, all awaiting the dogfooding verdict**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 
 | # | Item | Effort | |
 |---|---|---|---|
 | R-B1 | **Keyboard triage** — `j/k` move, `enter` open, `r` mark read, `o` open terminal | S | ✅ |
-| R-B2 | **Jump to terminal** — focus the actual Terminal tab for a session via pid/tty. Closes `WAITING` → acting | M | ✅ |
+| R-B2 | **Jump to terminal** — focus the terminal *app's* window or tab for a session via pid/tty. Closes `WAITING` → acting | M | ✅ |
 | R-B3 | **Collision warning** — two *live* sessions editing the same file right now | M | ✅ |
 | R-B4 | **Permission vs. instruction** — distinguish "waiting for approval" from "waiting for next task", via a pending `tool_use` with no result | M | ✅ |
 | R-B5 | **Snooze** a session for N minutes | S | ✅ |
@@ -107,7 +107,11 @@ Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
 | R-B27 | **Editor git ergonomics** — a diff gutter vs HEAD with next/prev-change keys, inline blame on the current line, compare-with-revision side by side, and a gutter mark on lines *this session* changed (the mogeung-only one). Still a viewer, never an editor | L | ⏳ |
 | R-B28 | **Editor navigation** — symbol outline and go-to-symbol (tree-sitter is already in the tree), go-to-line, sticky scroll, folding, highlight-other-occurrences | L | ⏳ |
 | R-B29 | **Editor content comforts** — markdown preview, image preview, per-tab word wrap, copy path / `path:line`, file facts in the header, bookmarks with a jump list | M | ⏳ |
-| R-B30 | **Per-pane zoom** — Ctrl+wheel over a pane scales that pane alone (Editor, Changes, Git, Transcript, Terminal), remembered per pane; the global Ctrl+=/− stays whole-window. Asked for directly, built 2026-07-28 | S | ✅ |
+| R-B30 | **Per-pane zoom** — Ctrl+wheel over a pane scales that pane alone (Editor, Changes, Git, Transcript, Agent, Terminal), remembered per pane; the global Ctrl+=/− stays whole-window. Asked for directly, built 2026-07-28 | S | ✅ |
+| R-B31 | **In-app terminal** — a shell of your own, `Alt+F12` or ``Ctrl+` ``. Under tmux, so a build or a `claude` started in it outlives the window and stays reachable from a real terminal; a bare pty when tmux is absent, labelled as such. The pane the Agent tab was renamed to make room for — and no longer a pane at all: `R-B33` moved it. See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md) and [feature 0024](../features/0024-in-app-terminal.md) | M | ⏳ |
+| R-B32 | **Configurable terminal font** — pick the family the terminal panes draw in, from the monospaced fonts installed on this machine. The bundled Hack carries no Powerline or Nerd Font glyphs, so an oh-my-zsh prompt is a row of boxes until you can say otherwise. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ⏳ |
+| R-B33 | **Terminal as a workspace panel** — the shell leaves the pane tree for a panel across the bottom, on demand, with a tab per shell and no tie to any session: a terminal is where you *start* an agent, so it must outlast the selection and exist before there is one. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | M | ⏳ |
+| R-B34 | **Name a terminal tab** — double-click a tab, or right-click it, to call it what it is doing; blank puts the folder name back. The label only: the tmux session stays keyed by worktree and ordinal, so a rename cannot strand a shell. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ⏳ |
 
 ## C. Notifications and reach — **shipped; `R-C2` built 2026-07-29, awaiting the verdict**
 
@@ -266,35 +270,35 @@ machine to verify on); the row covers Linux.
 
 ## J. Polish
 
-The only pillar with unbuilt work, and the only one that was never numbered —
-which is why "what is left?" could not be answered from this file. Numbered
+The last pillar to be numbered, and for a while the only one with unbuilt work
+— which is why "what is left?" could not be answered from this file. Numbered
 2026-07-29 at a *"move quick on J"* ask, after checking each line of the old
 prose against the code rather than against its own claim: UI state turned out
 half-built (`prefs.rs` persists nineteen fields; window geometry is not one),
 and the rest not started.
 
-Nothing here waits on a `⏳` verdict — J is the one pillar that can proceed
-during the dogfooding week rather than after it. Two couplings exist and
-neither is a dependency: `R-J5` and `R-J6` scale with the number of panes, and
+J never waited on a `⏳` verdict — it is the one pillar that could proceed
+during the dogfooding week rather than after it. Two couplings existed and
+neither was a dependency: `R-J5` and `R-J6` scale with the number of panes, and
 several panes are removal candidates if the week rules against them, so both
-are sequenced last. See [feature 0023](../features/0023-polish.md).
+were sequenced last. See [feature 0023](../features/0023-polish.md).
 
 `R-J1`–`R-J5` were built the same day they were numbered. `R-J2` was gated on
 a measurement and the measurement said build it: 30ms per frame on the largest
 commit in this repo, 0.28ms after, and flat in diff size rather than linear.
 `R-J6` followed, and found a defect in the palette it was extending: white
 lettering on an amber badge is 2.36:1, which had shipped, on the two badges
-most often on screen. The pillar is now built end to end and awaits the same
-verdict as everything else.
+most often on screen. All six were exercised and signed off 2026-07-29; the
+pillar is shipped end to end.
 
 | # | Item | Effort | |
 |---|---|---|---|
-| R-J1 | **Window geometry** — remember size and position across launches, the one piece of UI state `prefs.rs` does not already hold. In our own store, not eframe's, so app state has one home | S | ⏳ |
-| R-J2 | **Virtualised diff rendering** — draw the visible lines, not every line of every hunk. Gated on a measurement first: if a real diff is already fast enough, this row closes unbuilt | M | ⏳ |
-| R-J3 | **Config file** — `~/.mogeung/config.toml` for both binaries, flags still winning. A malformed file degrades to defaults rather than refusing to start | S | ⏳ |
-| R-J4 | **`mogeung` CLI subcommands** — `queue`, `sessions`, `health`, `rescan`, `diff`, `search`, each with `--json`. Six of the forty endpoints, chosen; wrapping all of them would be a worse tool, not a more complete one | M | ⏳ |
-| R-J5 | **Empty states** — seventeen sites where "nothing here" cannot be told apart from a failed fetch | S | ⏳ |
-| R-J6 | **Light theme** — two hand-written palettes behind one lookup, a `dark`/`light`/`system` preference, and contrast tests over every pair that has to hold. Built last, deliberately: the only row that touches every pane | L | ⏳ |
+| R-J1 | **Window geometry** — remember size and position across launches, the one piece of UI state `prefs.rs` does not already hold. In our own store, not eframe's, so app state has one home | S | ✅ |
+| R-J2 | **Virtualised diff rendering** — draw the visible lines, not every line of every hunk. Gated on a measurement first: if a real diff is already fast enough, this row closes unbuilt | M | ✅ |
+| R-J3 | **Config file** — `~/.mogeung/config.toml` for both binaries, flags still winning. A malformed file degrades to defaults rather than refusing to start | S | ✅ |
+| R-J4 | **`mogeung` CLI subcommands** — `queue`, `sessions`, `health`, `rescan`, `diff`, `search`, each with `--json`. Six of the forty endpoints, chosen; wrapping all of them would be a worse tool, not a more complete one | M | ✅ |
+| R-J5 | **Empty states** — seventeen sites where "nothing here" cannot be told apart from a failed fetch | S | ✅ |
+| R-J6 | **Light theme** — two hand-written palettes behind one lookup, a `dark`/`light`/`system` preference, and contrast tests over every pair that has to hold. Built last, deliberately: the only row that touches every pane | L | ✅ |
 
 ## K. Explicitly not
 

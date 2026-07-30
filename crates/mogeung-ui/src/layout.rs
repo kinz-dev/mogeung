@@ -34,16 +34,24 @@ pub type Tree = egui_tiles::Tree<Tab>;
 /// Also the order focus cycling walks, so `next` means the same thing however
 /// the panes have been dragged around. Cycling in *layout* order would change
 /// meaning every time you moved something.
+/// [`Tab::Terminal`] is deliberately absent: the shell moved out of the tree
+/// and into the bottom panel on 2026-07-30 (`R-B33`), and is reached by
+/// ``Ctrl+` `` rather than by being a pane. The variant survives only so that a
+/// layout saved before then still parses — see [`strip_retired`].
 pub const ALL_PANES: [Tab; 8] = [
     Tab::Changes,
     Tab::Transcript,
     Tab::Info,
     Tab::Debt,
-    Tab::Terminal,
+    Tab::Agent,
     Tab::Explorer,
     Tab::Git,
     Tab::Insight,
 ];
+
+/// Panes that no longer belong in the tree, and are dropped from a layout that
+/// still holds them.
+const RETIRED: [Tab; 1] = [Tab::Terminal];
 
 /// The id is fixed rather than generated: `egui_tiles` keys its per-tile
 /// interaction state off it, so a changing id would silently reset drag and
@@ -74,7 +82,13 @@ pub fn load() -> (Tree, Option<String>) {
     match serde_json::from_str::<Tree>(&text) {
         // An empty tree is loadable and useless — it would present a blank
         // pane with no way back short of deleting the file by hand.
-        Ok(tree) if !tree.is_empty() => (tree, None),
+        Ok(mut tree) if !tree.is_empty() => {
+            strip_retired(&mut tree);
+            if tree.is_empty() {
+                return (default_tree(), None);
+            }
+            (tree, None)
+        }
         Ok(_) => (
             default_tree(),
             Some(format!("{} held an empty layout — using the default", path.display())),
@@ -86,6 +100,30 @@ pub fn load() -> (Tree, Option<String>) {
                 path.display()
             )),
         ),
+    }
+}
+
+/// Drop panes that have left the tree, and tidy up what that leaves behind.
+///
+/// The shell used to be the ninth pane. Deleting the variant outright would
+/// have been cleaner and was not an option: `"Shell"` is written into every
+/// saved `layout.json`, serde would refuse the file, and [`load`] degrades an
+/// unparseable layout to the default — so the reward for upgrading would have
+/// been losing an arrangement you had built by hand.
+///
+/// Removing a tile can leave a container holding one child or none, which
+/// renders as a tab bar with a single tab or an empty split; `simplify` is what
+/// makes the pane's departure invisible rather than a scar in the layout.
+fn strip_retired(tree: &mut Tree) {
+    let mut removed = false;
+    for tab in RETIRED {
+        while let Some(id) = tree.tiles.find_pane(&tab) {
+            tree.tiles.remove(id);
+            removed = true;
+        }
+    }
+    if removed {
+        tree.simplify(&egui_tiles::SimplificationOptions::default());
     }
 }
 
@@ -195,6 +233,68 @@ mod tests {
         let json = serde_json::to_string(&tree).expect("serialises");
         let back: Tree = serde_json::from_str(&json).expect("deserialises");
         assert_eq!(panes_in(&back), ALL_PANES.to_vec());
+    }
+
+    /// `Tab::Agent` was `Tab::Terminal` until 2026-07-29, and every saved
+    /// `layout.json` still spells it the old way. `load` degrades a file it
+    /// cannot parse to the default arrangement — correct for corruption, and
+    /// exactly wrong here, because losing your panes to a rename would look
+    /// like the docking system forgetting things at random.
+    #[test]
+    fn the_agent_pane_still_reads_and_writes_its_old_name() {
+        assert_eq!(
+            serde_json::to_string(&Tab::Agent).unwrap(),
+            "\"Terminal\"",
+            "a layout written now must stay readable by a build from before the rename"
+        );
+        assert_eq!(
+            serde_json::from_str::<Tab>("\"Terminal\"").unwrap(),
+            Tab::Agent,
+            "a layout saved before the rename must still restore"
+        );
+    }
+
+    /// And the shell pane must not be tempted to take the stored name it now
+    /// displays. Two panes writing `"Terminal"` is a layout file that loads
+    /// one of them twice and the other never — silently, because the shape
+    /// stays valid.
+    #[test]
+    fn the_two_terminal_panes_do_not_share_a_stored_name() {
+        let agent = serde_json::to_string(&Tab::Agent).unwrap();
+        let shell = serde_json::to_string(&Tab::Terminal).unwrap();
+        assert_ne!(agent, shell, "both panes claimed the same name on disk");
+        assert_eq!(shell, "\"Shell\"");
+        assert_eq!(serde_json::from_str::<Tab>("\"Shell\"").unwrap(), Tab::Terminal);
+    }
+
+    /// A layout saved while the shell was a pane must still *parse* — the
+    /// whole reason the variant outlived the pane. What it must not do is
+    /// restore the pane: it now lives in the bottom panel, and a ghost tab
+    /// labelled Terminal beside it is the confusion the Agent rename just
+    /// finished clearing up.
+    #[test]
+    fn a_layout_holding_the_retired_shell_pane_loads_without_it() {
+        let mut tree = Tree::new_tabs(TREE_ID, {
+            let mut v = ALL_PANES.to_vec();
+            v.insert(5, Tab::Terminal);
+            v
+        });
+        assert!(tree.tiles.find_pane(&Tab::Terminal).is_some(), "present to begin with");
+
+        strip_retired(&mut tree);
+        assert!(tree.tiles.find_pane(&Tab::Terminal).is_none(), "the pane is gone");
+        assert_eq!(panes_in(&tree), ALL_PANES.to_vec(), "and took nothing with it");
+    }
+
+    /// The pathological version: a layout whose *only* pane was the shell. It
+    /// strips to nothing, and an empty tree is a blank window with no way back
+    /// short of deleting the file by hand.
+    #[test]
+    fn a_layout_that_was_only_the_shell_falls_back_to_the_default() {
+        let mut tree = Tree::new_tabs(TREE_ID, vec![Tab::Terminal]);
+        strip_retired(&mut tree);
+        let tree = if tree.is_empty() { default_tree() } else { tree };
+        assert_eq!(panes_in(&tree), ALL_PANES.to_vec());
     }
 
     #[test]

@@ -28,7 +28,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `Snooze` | Silence a session for N minutes; 0 clears it |
 | `FetchReviewDebt` | How much of a repo's agent output nobody has read |
 | `FetchBlastRadius` | What else references the symbols a file's diff changed |
-| `FocusTerminal` | Bring a live session's Terminal tab to the front |
+| `FocusTerminal` | Bring the terminal *app* a live session runs in to the front — iTerm2, Terminal.app, the tmux client; not a mogeung pane |
 | `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`) |
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |

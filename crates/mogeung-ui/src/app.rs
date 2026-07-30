@@ -25,6 +25,31 @@ pub enum Tab {
     /// Review debt for the selected session's repo. `R-D8`.
     Debt,
     /// The session's own terminal, attached through tmux. `R-B18`.
+    ///
+    /// Displays as "Agent", and the variant follows the display name here
+    /// rather than lagging it as `Explorer` does — because the word this pane
+    /// gives up is one another pane is going to want. A variant still called
+    /// `Terminal`, meaning "the agent's tmux client", sitting next to a tab
+    /// labelled Terminal meaning "your shell", is a trap laid for whoever
+    /// edits this next.
+    ///
+    /// The *serialised* name stays `"Terminal"`: it is in every saved
+    /// `layout.json`, and a rename would quietly reset the arrangement.
+    #[serde(rename = "Terminal")]
+    Agent,
+    /// **Retired.** The shell was a pane for one day.
+    ///
+    /// It moved to the bottom panel on 2026-07-30 (`R-B33`), because a shell is
+    /// not a view of a session: as a pane it followed the selection, vanished
+    /// when the selection moved, and could not exist at all before a session
+    /// did — which is exactly when you want a shell to start one.
+    ///
+    /// The variant stays because `"Shell"` is written into saved layouts and
+    /// serde would refuse a file that still holds it — and [`crate::layout`]
+    /// degrades an unparseable layout to the default, so removing this would
+    /// have cost people the arrangement they built. It is stripped on load and
+    /// unreachable thereafter; the arm in `pane_ui` is the belt to that braces.
+    #[serde(rename = "Shell")]
     Terminal,
     /// The session's worktree: tree on the left, read-only viewer on the
     /// right. `R-B24`. A viewer and never an editor — the roadmap's
@@ -45,6 +70,7 @@ impl Tab {
             Tab::Transcript => "Transcript",
             Tab::Info => "Info",
             Tab::Debt => "Debt",
+            Tab::Agent => "Agent",
             Tab::Terminal => "Terminal",
             // Display name only. The variant stays `Explorer` because it is
             // serialized into saved layouts; and the pane stays read-only —
@@ -64,11 +90,118 @@ impl Tab {
             Tab::Transcript => Action::TabTranscript,
             Tab::Info => Action::TabInfo,
             Tab::Debt => Action::TabDebt,
+            Tab::Agent => Action::TabAgent,
             Tab::Terminal => Action::TabTerminal,
             Tab::Explorer => Action::TabExplorer,
             Tab::Git => Action::TabGit,
             Tab::Insight => Action::TabInsight,
         }
+    }
+}
+
+/// Which of the two terminal panes is being typed into.
+///
+/// They are the same widget over different ptys, and everything about handing
+/// the keyboard over is identical — which is why `ToggleTerminalFocus` is one
+/// chord for both rather than one each. This is the "which", and it exists
+/// only because there are now two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PtyPane {
+    /// The agent's session, attached through tmux.
+    Agent,
+    /// The worktree's shell.
+    Shell,
+}
+
+/// What a chord means while a terminal holds the keyboard.
+///
+/// Exactly two things reach mogeung in that state. Everything else — including
+/// every other shortcut this app has — is typing, and must arrive at the pty
+/// untouched: `Alt+1` is a tab shortcut out here and something the program
+/// inside may want in there, and mogeung is not the one to decide otherwise.
+///
+/// Pure, so the rule is testable. The live path needs an egui context and a
+/// running shell, and this is the part that is easy to get wrong.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PtyChord {
+    /// Give the keyboard back.
+    Leave,
+    /// Show or hide the terminal panel — the toggle half of `TabTerminal`,
+    /// which is useless if the only way to reach it is to leave the shell
+    /// first.
+    ToggleTerminal,
+    /// Not ours. Hands off.
+    Pass,
+}
+
+fn pty_chord(action: Option<crate::keymap::Action>) -> PtyChord {
+    match action {
+        Some(crate::keymap::Action::ToggleTerminalFocus) => PtyChord::Leave,
+        Some(crate::keymap::Action::TabTerminal) => PtyChord::ToggleTerminal,
+        _ => PtyChord::Pass,
+    }
+}
+
+/// What a click in the terminal panel's header asked for.
+///
+/// Collected and applied after the header is drawn, because every one of these
+/// mutates the list the header is iterating — closing a tab from inside the
+/// loop over the tabs is the classic version of that bug.
+enum PanelAction {
+    None,
+    Select(usize),
+    OpenIn(String),
+    Close(usize),
+    Restart(usize),
+    Hide,
+    /// Start renaming a tab. `R-B34`.
+    Rename(usize),
+    /// Finish the rename in progress, or abandon it.
+    CommitRename,
+    CancelRename,
+    /// Put the derived name back.
+    ClearName(usize),
+}
+
+/// Draw a terminal pane's body, and own the whole of "who has the keyboard".
+///
+/// A free function over the two fields it touches, not a method: the caller is
+/// already holding a `&mut` to its own `Term`. Shared because both panes must
+/// answer the mouse identically, and because every line here was a bug once —
+/// the click that could never be detected, and the pane you could only leave
+/// by remembering a chord.
+fn pty_body(
+    ui: &mut egui::Ui,
+    term: &mut crate::term::Term,
+    which: PtyPane,
+    focus: &mut Option<PtyPane>,
+    font: egui::FontId,
+) {
+    let focused = *focus == Some(which);
+    let before = ui.available_size();
+    // `.inner`, not `.response`: `allocate_ui`'s own response senses hover
+    // only, so `clicked()` on it is always false. The first version tested
+    // that one, and the pane could never be typed into.
+    let area = ui
+        .allocate_ui(before, |ui| term.ui(ui, focused, font))
+        .inner;
+
+    // Clicking in takes the keyboard; the chord in the hint gives it back, and
+    // so does clicking anything else — a pane you can only escape by
+    // remembering a chord is a trap.
+    if area.clicked() {
+        *focus = Some(which);
+    } else if focused && ui.input(|i| i.pointer.any_pressed()) && !area.contains_pointer() {
+        *focus = None;
+    }
+
+    if focused {
+        ui.painter().rect_stroke(
+            area.rect,
+            2.0,
+            egui::Stroke::new(1.0, ui.visuals().selection.bg_fill),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
@@ -308,17 +441,45 @@ pub struct App {
     /// log filter" flag, the git twin of `explorer_find_focus`.
     git_filter_focus: bool,
 
-    /// The attached terminal, when the Terminal tab has been opened for a
+    /// The attached terminal, when the Agent tab has been opened for a
     /// session that runs under tmux. One at a time: a second attach costs a
     /// pty and a tmux client for a pane nobody is looking at.
-    term: Option<crate::term::Term>,
-    /// Whether keystrokes belong to the agent or to mogeung. See `handle_keys`.
-    term_focused: bool,
+    ///
+    /// `agent_`, not `term_`, because this is the pty mogeung *borrows*. A pty
+    /// mogeung owns would be a different field, under a different rule
+    /// ([ADR-0010](../../../docs/decisions/0010-attach-a-terminal-never-own-one.md)).
+    agent_term: Option<crate::term::Term>,
     /// A refused attach, remembered against its target so the pane stops
     /// trying. Without it a failure that recurs — the wrong `TERM`, a session
     /// that has ended — is retried every frame, spawning a tmux per frame and
     /// flashing its own error at the refresh rate.
-    term_failed: Option<(String, String)>,
+    agent_failed: Option<(String, String)>,
+
+    /// Your own shells, in the bottom panel. `R-B31`, `R-B33`.
+    ///
+    /// Owned rather than borrowed — the distinction `agent_term`'s note draws
+    /// — and allowed to be, because they run under tmux and so are no more
+    /// trapped here than the agent is
+    /// ([ADR-0011](../../../docs/decisions/0011-own-a-shell-never-an-agent.md)).
+    ///
+    /// Not keyed to the selected session, and this is the field that says so:
+    /// nothing here is indexed by `SessionId`, so there is no path by which
+    /// moving the selection could disturb a shell.
+    shells: crate::shells::Shells,
+
+    /// The terminal font family currently registered with egui, and whether
+    /// one has ever been. `None` forces the first install, which is what
+    /// registers the family name the panes ask for at all — see
+    /// [`crate::font::definitions`].
+    font_installed: Option<Option<String>>,
+
+    /// Which pty pane, if either, is being typed into. See `handle_keys`.
+    ///
+    /// One field rather than a `bool` per pane, because "both have the
+    /// keyboard" is not a state that means anything — with two panes on screen
+    /// in a split it would deliver every keystroke twice — and one field makes
+    /// it unrepresentable instead of merely unlikely.
+    pty_focus: Option<PtyPane>,
 
     /// Whether the restored window position has been checked against the
     /// monitors that actually exist. One-shot, on the first frame. `R-J1`.
@@ -447,6 +608,16 @@ impl App {
         let config_warning = mogeung_core::config::Config::load().1;
         let (tree, layout_warning) = crate::layout::load();
         let (explorer, explorer_warning) = crate::explorer::Explorer::load();
+        // Before `prefs` is moved into the struct. The shells are restored
+        // here but not spawned — a tab from the last run costs a tmux client
+        // only once the panel is actually opened.
+        let shells = crate::shells::Shells::from_prefs(&prefs.terminal_panel);
+        // And before the first frame, which is the point: `set_fonts` takes
+        // effect at the *next* frame boundary, and a `FontFamily::Name` egui
+        // has not been told about is a panic in the paint loop rather than a
+        // fallback. Registering here means frame one already knows the name.
+        let font_warning = crate::font::install(&cc.egui_ctx, prefs.terminal_font.as_deref());
+        let font_installed = Some(prefs.terminal_font.clone());
         App {
             net,
             hotkey,
@@ -510,9 +681,11 @@ impl App {
             explorer_find_cursor: 0,
             explorer_find_focus: false,
             git_filter_focus: false,
-            term: None,
-            term_focused: false,
-            term_failed: None,
+            agent_term: None,
+            agent_failed: None,
+            shells,
+            font_installed,
+            pty_focus: None,
             geometry_checked: false,
             explorer,
             gitview: Default::default(),
@@ -527,6 +700,7 @@ impl App {
                 .chain(config_warning)
                 .chain(layout_warning)
                 .chain(explorer_warning)
+                .chain(font_warning)
                 .collect(),
         }
     }
@@ -1047,12 +1221,18 @@ impl eframe::App for App {
             crate::hotkey::raise(ui.ctx());
         }
 
+        // Before anything measures text in the terminal family.
+        self.sync_terminal_font(ui.ctx());
+
         self.handle_keys(ui);
         self.top_bar(ui);
         self.queue_panel(ui);
         // Before the detail pane: a `CentralPanel` claims whatever is left, so
-        // every other panel has to be declared first.
+        // every other panel has to be declared first. The status bar is
+        // declared before the terminal, which is what puts it *below* it —
+        // panels claim edges in the order they are shown.
         self.status_bar(ui);
+        self.terminal_panel(ui);
         self.detail_panel(ui);
         self.launch_window(ui);
         self.health_window(ui);
@@ -1073,6 +1253,15 @@ impl eframe::App for App {
         // Before the write below, so a move lands in the same save.
         self.track_geometry(ui);
         self.follow_theme(ui);
+
+        // The panel's shape rides along in the preferences. Held back while
+        // the pointer is down so dragging its top edge does not write the file
+        // on every frame of the drag — the rule the layout already follows.
+        if self.shells.dirty && !ui.input(|i| i.pointer.any_down()) {
+            self.shells.dirty = false;
+            self.prefs.terminal_panel = self.shells.to_prefs();
+            self.prefs_dirty = true;
+        }
 
         if self.prefs_dirty {
             self.prefs_dirty = false;
@@ -1121,15 +1310,17 @@ impl App {
             )
             .show(root, |ui| {
             ui.horizontal(|ui| {
-                let title = ui.label(RichText::new("mogeung").strong().size(15.0).color(pal().text_strong));
-                match &self.hotkey {
-                    Some(h) => {
-                        title.on_hover_text(format!("{} brings this window forward", h.accel));
-                    }
-                    None => {
-                        title.on_hover_text("no global shortcut — see --hotkey");
-                    }
-                }
+                // No wordmark. The window title says what this is, and a bar
+                // this dense should spend its width on the queue rather than
+                // on the app's own name (asked for directly, 2026-07-30).
+                //
+                // What the wordmark carried is the global shortcut, which is
+                // worth keeping and belongs on the connection dot beside it —
+                // both answer "how do I get to this window".
+                let hotkey_tip = match &self.hotkey {
+                    Some(h) => format!("{} brings this window forward", h.accel),
+                    None => "no global shortcut — see --hotkey".to_string(),
+                };
 
                 let (dot, tip) = if self.net.connected {
                     (RichText::new(icon::DOT).color(pal().green), "connected".to_string())
@@ -1143,7 +1334,7 @@ impl App {
                     )
                 };
                 ui.label(dot).on_hover_text(format!(
-                    "{} — {}\n\n{}",
+                    "{} — {}\n\n{}\n\n{hotkey_tip}",
                     self.net.url,
                     tip,
                     self.daemon_mode.detail(&self.daemon_addr)
@@ -1244,6 +1435,23 @@ impl App {
                     {
                         self.net.send(ClientMsg::Rescan);
                     }
+                    // The terminal left the tab bar for the bottom panel
+                    // (`R-B33`), and a panel with no chrome anywhere is a
+                    // feature only the people who read the changelog have.
+                    if icon_button(
+                        ui,
+                        icon::TERMINAL,
+                        &format!(
+                            "Terminal — your own shells  ({})",
+                            self.keymap.describe(crate::keymap::Action::TabTerminal)
+                        ),
+                        self.shells.open,
+                        None,
+                    )
+                    .clicked()
+                    {
+                        self.toggle_terminal_panel();
+                    }
                     if icon_button(
                         ui,
                         icon::KEYBOARD,
@@ -1259,9 +1467,9 @@ impl App {
                         self.show_keymap = !self.show_keymap;
                         self.keymap_scroll = self.show_keymap;
                         if self.show_keymap {
-                            // Editing bindings and typing into the agent are
+                            // Editing bindings and typing into a terminal are
                             // mutually exclusive intents.
-                            self.term_focused = false;
+                            self.pty_focus = None;
                         }
                     }
                     if icon_button(
@@ -1579,7 +1787,7 @@ impl App {
         // (reported twice, on Ubuntu). It now yields only to real text boxes —
         // and its own search box keeps the list drivable, the same contract as
         // the queue filter below.
-        if self.show_keymap && !self.term_focused {
+        if self.show_keymap && self.pty_focus.is_none() {
             if ui.memory(|m| m.has_focus(keymap_filter_id())) {
                 let (enter, down, up) = ui.input(|i| {
                     (
@@ -1609,23 +1817,48 @@ impl App {
         // The terminal takes egui focus while it has the keyboard, so the guard
         // below would swallow every chord — including the one that gives the
         // keyboard back. Read that one first, or the pane is a roach motel.
-        if self.term_focused {
-            let leave = ui.input(|i| {
-                i.events.iter().any(|e| match e {
-                    egui::Event::Key {
+        if self.pty_focus.is_some() {
+            // Two chords, not one. `TabTerminal` is a *toggle*, and a toggle
+            // that only works in one direction is not one: you press it, the
+            // keyboard goes to the shell — which is the point of the shortcut
+            // — and pressing it again to put the panel away would otherwise
+            // type `\x1b[24;3~` into your prompt.
+            //
+            // Both are *consumed* rather than merely observed. This runs
+            // before the pane draws, so an event left in the queue is one the
+            // pty also receives — and `Alt+F12` reaching a shell is a stray
+            // `\x1b[24;3~` in whatever you were halfway through typing.
+            let mut leave = false;
+            let mut toggle = false;
+            ui.input_mut(|i| {
+                i.events.retain(|e| {
+                    let egui::Event::Key {
                         key,
                         pressed: true,
                         modifiers,
                         ..
-                    } => {
-                        self.keymap.action_for(*modifiers, *key)
-                            == Some(crate::keymap::Action::LeaveTerminal)
+                    } = e
+                    else {
+                        return true;
+                    };
+                    match pty_chord(self.keymap.action_for(*modifiers, *key)) {
+                        PtyChord::Leave => {
+                            leave = true;
+                            false
+                        }
+                        PtyChord::ToggleTerminal => {
+                            toggle = true;
+                            false
+                        }
+                        PtyChord::Pass => true,
                     }
-                    _ => false,
-                })
+                });
             });
             if leave {
-                self.term_focused = false;
+                self.pty_focus = None;
+            }
+            if toggle {
+                self.toggle_terminal_panel();
             }
             return;
         }
@@ -1694,7 +1927,16 @@ impl App {
             A::TabTranscript => self.set_tab(Tab::Transcript),
             A::TabInfo => self.set_tab(Tab::Info),
             A::TabDebt => self.set_tab(Tab::Debt),
-            A::TabTerminal => self.set_tab(Tab::Terminal),
+            A::TabAgent => self.set_tab(Tab::Agent),
+            // Not a tab any more, and the only one of these that toggles: the
+            // terminal is a panel taking a third of the window, so the key
+            // that shows it has to be the key that puts it away. Alt+F12 in
+            // IntelliJ and Ctrl+` in VS Code both behave exactly this way, and
+            // both also put the cursor in the shell — a shell you must click
+            // before typing has wasted the shortcut. The keyboard is handed
+            // over a frame later, once the pty exists; see
+            // `Shells::focus_wanted`.
+            A::TabTerminal => self.toggle_terminal_panel(),
             A::TabExplorer => self.set_tab(Tab::Explorer),
             A::TabGit => self.set_tab(Tab::Git),
             A::TabInsight => self.set_tab(Tab::Insight),
@@ -1708,17 +1950,28 @@ impl App {
             // where it is a no-op. The live path is in `handle_keys`.
             // A toggle, not just an exit: reaching the terminal should not
             // need a mouse when leaving it does not (asked for directly).
-            A::LeaveTerminal => {
-                if self.term_focused {
-                    self.term_focused = false;
+            // There are two ptys now, so this arm has to pick one. The rule is
+            // "the one you are looking at, else the agent": the shell when the
+            // panel is up, because that is what is in front of you, and the
+            // agent otherwise — which is the behaviour this had when the agent
+            // was the only pty.
+            //
+            // A *closed* panel is deliberately not opened here. Doing so would
+            // mean this chord silently spawned a shell nobody asked for; that
+            // is what `TabTerminal` is for.
+            A::ToggleTerminalFocus => {
+                if self.pty_focus.is_some() {
+                    self.pty_focus = None;
+                } else if self.shells.open {
+                    self.shells.focus_wanted = true;
                 } else {
                     let attachable = self
                         .selected_session()
                         .map(|s| s.tmux_target.is_some())
                         .unwrap_or(false);
                     if attachable {
-                        self.set_tab(Tab::Terminal);
-                        self.term_focused = true;
+                        self.set_tab(Tab::Agent);
+                        self.pty_focus = Some(PtyPane::Agent);
                     }
                     // No session, or not under tmux: nothing to focus, and
                     // setting the flag anyway would swallow every key.
@@ -1757,7 +2010,7 @@ impl App {
                 Pane::Queue => self.focus_selected_terminal(),
                 _ => self.open_cursor_file(),
             },
-            A::JumpToTerminal => self.focus_selected_terminal(),
+            A::FocusTerminalApp => self.focus_selected_terminal(),
             A::MarkAllRead => {
                 if let Some(id) = self.selected.clone() {
                     self.net.send(ClientMsg::ReviewAll { session_id: id });
@@ -1849,7 +2102,7 @@ impl App {
                 self.show_keymap = !self.show_keymap;
                 self.keymap_scroll = self.show_keymap;
                 if self.show_keymap {
-                    self.term_focused = false;
+                    self.pty_focus = None;
                 }
             }
             A::Rescan => self.net.send(ClientMsg::Rescan),
@@ -2661,7 +2914,7 @@ impl App {
                                                         && ui
                                                             .small_button(format!("{} terminal", icon::TERMINAL))
                                                             .on_hover_text(
-                                                                "focus the Terminal tab this session runs in",
+                                                                "switch to the terminal app this session runs in",
                                                             )
                                                             .clicked()
                                                     {
@@ -2722,7 +2975,7 @@ impl App {
                                     // Clicking a session means "take me to it",
                                     // and where it is is the terminal. Only when
                                     // there is one to show: for a session not
-                                    // under tmux the Terminal tab is an
+                                    // under tmux the Agent tab is an
                                     // explanation, and landing on an
                                     // explanation every time you click is worse
                                     // than staying where you were.
@@ -2812,7 +3065,7 @@ impl App {
                     }
                     self.select(id);
                     if open_terminal {
-                        self.set_tab(Tab::Terminal);
+                        self.set_tab(Tab::Agent);
                     }
                 }
                 if let Some((session_id, minutes)) = to_snooze {
@@ -3867,7 +4120,26 @@ impl App {
             Tab::Transcript => self.transcript_tab(ui, s),
             Tab::Info => self.info_tab(ui, s),
             Tab::Debt => self.debt_tab(ui, s),
-            Tab::Terminal => self.terminal_tab(ui, s),
+            Tab::Agent => self.agent_tab(ui, s),
+            // Stripped from every layout on load, so this is unreachable in
+            // practice. It says where the shell went rather than drawing an
+            // empty pane, because "unreachable in practice" is a claim about
+            // code someone will edit later.
+            Tab::Terminal => {
+                ui.add_space(8.0);
+                ui.label("The terminal is a panel now, not a pane.");
+                ui.add_space(4.0);
+                if ui
+                    .button(format!(
+                        "{} Open it  ({})",
+                        icon::TERMINAL,
+                        self.keymap.describe(crate::keymap::Action::TabTerminal)
+                    ))
+                    .clicked()
+                {
+                    self.open_terminal_panel();
+                }
+            }
             Tab::Explorer => self.explorer_tab(ui, s),
             Tab::Git => self.git_tab(ui, s),
             Tab::Insight => self.insight_tab(ui),
@@ -6377,9 +6649,9 @@ impl App {
     /// A session started with a bare `claude` is owned by the terminal that
     /// spawned it and can never be attached to, so this says so plainly and
     /// points at the fix rather than showing a broken pane.
-    fn terminal_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
-        // Before the terminal is borrowed: zoom is App state.
-        let term_font_px = 14.0 * self.pane_zoom(ui, "terminal");
+    fn agent_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
+        // Before the terminal is borrowed: zoom and the font are App state.
+        let term_font = self.terminal_font(ui, "agent");
         let Some(target) = s.tmux_target.clone() else {
             ui.add_space(8.0);
             ui.label(
@@ -6394,7 +6666,7 @@ impl App {
             ui.label("Start sessions with `yolomo` instead of `yolo` and this tab becomes live.");
             ui.add_space(8.0);
             if ui
-                .button(format!("{} Jump to its terminal instead", icon::TERMINAL))
+                .button(format!("{} Switch to its terminal app instead", icon::TERMINAL))
                 .clicked()
             {
                 self.send_focus(s.id.clone());
@@ -6405,11 +6677,11 @@ impl App {
         // Re-attach when the selection moves to a different session. Comparing
         // targets rather than session ids is deliberate: a session that is
         // restarted keeps its id but gets a new pane.
-        if self.term.as_ref().is_some_and(|t| t.target() != target) {
-            self.term = None;
+        if self.agent_term.as_ref().is_some_and(|t| t.target() != target) {
+            self.agent_term = None;
         }
-        if self.term_failed.as_ref().is_some_and(|(t, _)| *t != target) {
-            self.term_failed = None;
+        if self.agent_failed.as_ref().is_some_and(|(t, _)| *t != target) {
+            self.agent_failed = None;
         }
 
         // A refusal is remembered and *not* retried. It used to be retried on
@@ -6418,29 +6690,30 @@ impl App {
         // session that has ended — because each frame spawned another tmux and
         // redrew the same error. What looked like a flickering message was the
         // pane failing sixty times a second.
-        if let Some((_, err)) = self.term_failed.clone() {
+        if let Some((_, err)) = self.agent_failed.clone() {
             ui.add_space(8.0);
             ui.colored_label(pal().red, format!("could not attach to {target}: {err}"));
             ui.add_space(8.0);
             if ui.button("Try again").clicked() {
-                self.term_failed = None;
+                self.agent_failed = None;
             }
             return;
         }
 
-        if self.term.is_none() {
-            self.term_focused = false;
+        if self.agent_term.is_none() {
+            self.release_pty(PtyPane::Agent);
             match crate::term::Term::attach(ui.ctx(), &target) {
-                Ok(t) => self.term = Some(t),
+                Ok(t) => self.agent_term = Some(t),
                 Err(e) => {
-                    self.term = None;
-                    self.term_failed = Some((target.clone(), e.to_string()));
+                    self.agent_term = None;
+                    self.agent_failed = Some((target.clone(), e.to_string()));
                     return;
                 }
             }
         }
 
-        let Some(term) = self.term.as_mut() else {
+        let focused = self.pty_focus == Some(PtyPane::Agent);
+        let Some(term) = self.agent_term.as_mut() else {
             return;
         };
         term.poll();
@@ -6461,15 +6734,15 @@ impl App {
                     );
                     return;
                 }
-                let hint = if self.term_focused {
+                let hint = if focused {
                     format!(
                         "keyboard goes to the agent — {} returns it",
-                        self.keymap.describe(crate::keymap::Action::LeaveTerminal)
+                        self.keymap.describe(crate::keymap::Action::ToggleTerminalFocus)
                     )
                 } else {
                     format!(
                         "click the terminal — or press {} — to type into this session",
-                        self.keymap.describe(crate::keymap::Action::LeaveTerminal)
+                        self.keymap.describe(crate::keymap::Action::ToggleTerminalFocus)
                     )
                 };
                 ui.label(RichText::new(hint).weak());
@@ -6477,39 +6750,476 @@ impl App {
         });
         ui.separator();
 
-        let before = ui.available_size();
-        // `.inner`, not `.response`: `allocate_ui`'s own response senses hover
-        // only, so `clicked()` on it is always false. The first version tested
-        // that one, and the pane could never be typed into.
-        let area = ui
-            .allocate_ui(before, |ui| term.ui(ui, self.term_focused, term_font_px))
-            .inner;
-
-        // Clicking in takes the keyboard; the chord in the hint gives it back,
-        // and so does clicking anything else — a pane you can only escape by
-        // remembering a chord is a trap.
-        if area.clicked() {
-            self.term_focused = true;
-        } else if self.term_focused
-            && ui.input(|i| i.pointer.any_pressed())
-            && !area.contains_pointer()
-        {
-            self.term_focused = false;
-        }
-
-        if self.term_focused {
-            ui.painter().rect_stroke(
-                area.rect,
-                2.0,
-                egui::Stroke::new(1.0, ui.visuals().selection.bg_fill),
-                egui::StrokeKind::Inside,
-            );
-        }
+        pty_body(ui, term, PtyPane::Agent, &mut self.pty_focus, term_font);
 
         // After the last use of `term`, which borrows the field this drops.
         if reattach {
-            self.term = None;
-            self.term_focused = false;
+            self.agent_term = None;
+            self.release_pty(PtyPane::Agent);
+        }
+    }
+
+    /// Your own shells, in a panel across the bottom. `R-B31`, `R-B33`.
+    ///
+    /// Under tmux, so what you start here — a build, a test run, a `claude` —
+    /// outlives this window and stays reachable from a real terminal
+    /// ([ADR-0011](../../../docs/decisions/0011-own-a-shell-never-an-agent.md)).
+    ///
+    /// A panel and not a pane, which is the whole of `R-B33`. As a pane it was
+    /// *about* the selected session, like every other pane: it followed the
+    /// selection, so a shell in one worktree vanished when you looked at
+    /// another, and it could not exist at all until a session did — which is
+    /// exactly the moment you want a shell, because starting one is what you
+    /// are about to do. Nothing here is keyed by session id, and that is the
+    /// point rather than an implementation detail.
+    fn terminal_panel(&mut self, root: &mut egui::Ui) {
+        if !self.shells.open {
+            return;
+        }
+        let resp = egui::Panel::bottom("terminal")
+            .resizable(true)
+            .default_size(self.shells.height)
+            .min_size(crate::shells::MIN_HEIGHT)
+            .frame(
+                egui::Frame::NONE
+                    .fill(pal().bg)
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
+            )
+            .show(root, |ui| self.terminal_body(ui));
+
+        // The panel owns its height while you drag it; this copies the result
+        // back. Written to disk only once the pointer is up — the same rule
+        // the layout follows, and for the same reason: a drag would otherwise
+        // write the file sixty times a second.
+        let now = resp.response.rect.height();
+        if (now - self.shells.height).abs() > 0.5 {
+            self.shells.height = now;
+            self.shells.dirty = true;
+        }
+    }
+
+    fn terminal_body(&mut self, ui: &mut egui::Ui) {
+        let font = self.terminal_font(ui, "terminal");
+        self.shells.tick(ui.ctx());
+
+        // Read before the shell is borrowed below.
+        let leave = self.keymap.describe(crate::keymap::Action::ToggleTerminalFocus);
+        let default_root = self.default_shell_root();
+        let roots = self.known_roots();
+
+        let mut act = PanelAction::None;
+        // Taken for the frame. The text being typed is state on `self.shells`,
+        // and the loop below holds the tab list borrowed to draw it.
+        let mut editing = self.shells.rename.take();
+        ui.horizontal(|ui| {
+            for (i, s) in self.shells.tabs.iter().enumerate() {
+                let name = s.session_name();
+                let tip = match s.kind() {
+                    Some(crate::term::Kind::Bare) => format!(
+                        "{}\n\nNo tmux — this shell dies with the window.\n\
+                         Double-click the tab to rename it.",
+                        s.root
+                    ),
+                    _ => format!(
+                        "{}\n\nA tmux session. It survives mogeung closing, and \
+                         `tmux attach -t {name}` reaches it from any terminal.\n\
+                         Double-click the tab to rename it — the label only, \
+                         never the session.",
+                        s.root
+                    ),
+                };
+                let active = i == self.shells.active;
+
+                // Renamed in place rather than in a window: the tab is small,
+                // the thing being named is right there, and every terminal
+                // and browser made this gesture mean this for twenty years.
+                if let Some(r) = editing.as_mut().filter(|r| r.at == i) {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut r.text)
+                            .id(egui::Id::new("shell-rename"))
+                            .char_limit(crate::shells::NAME_LIMIT)
+                            .hint_text(s.default_title())
+                            .desired_width(120.0),
+                    );
+                    // Once, on the frame the edit opened. Asking every frame
+                    // would make the field impossible to click away from.
+                    if std::mem::take(&mut r.opened) {
+                        field.request_focus();
+                    }
+                    let (enter, escape) = ui.input(|inp| {
+                        (
+                            inp.key_pressed(egui::Key::Enter),
+                            inp.key_pressed(egui::Key::Escape),
+                        )
+                    });
+                    // Escape before the lost-focus commit, and not merged with
+                    // it: egui surrenders focus on Escape, so the two arrive on
+                    // the same frame and testing focus first would save the
+                    // edit you just abandoned.
+                    if escape {
+                        act = PanelAction::CancelRename;
+                    } else if enter || field.lost_focus() {
+                        act = PanelAction::CommitRename;
+                    }
+                    continue;
+                }
+
+                let tab = ui.selectable_label(active, s.title()).on_hover_text(tip);
+                if tab.clicked() {
+                    act = PanelAction::Select(i);
+                }
+                if tab.double_clicked() {
+                    act = PanelAction::Rename(i);
+                }
+                tab.context_menu(|ui| {
+                    if ui.button("Rename…").clicked() {
+                        act = PanelAction::Rename(i);
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(s.name.is_some(), egui::Button::new("Use the folder name"))
+                        .on_hover_text(s.default_title())
+                        .clicked()
+                    {
+                        act = PanelAction::ClearName(i);
+                        ui.close();
+                    }
+                    if ui.button("Close").clicked() {
+                        act = PanelAction::Close(i);
+                        ui.close();
+                    }
+                });
+                // On the active tab only, and beside the thing it closes —
+                // there is a second × at the far right that hides the whole
+                // panel, and two identical glyphs meaning different things
+                // are only told apart by where they sit.
+                if active
+                    && ui
+                        .add(
+                            egui::Button::new(RichText::new(icon::HIDE).color(pal().dim))
+                                .frame(false),
+                        )
+                        .on_hover_text("Close this shell — detaches from tmux, never kills it")
+                        .clicked()
+                {
+                    act = PanelAction::Close(i);
+                }
+            }
+            if ui
+                .button("+")
+                .on_hover_text(format!("A shell in {default_root}"))
+                .clicked()
+            {
+                act = PanelAction::OpenIn(default_root.clone());
+            }
+            ui.menu_button(icon::EXPANDED, |ui| {
+                ui.label(dim("open a shell in"));
+                for r in &roots {
+                    if ui.button(r.as_str()).clicked() {
+                        act = PanelAction::OpenIn(r.clone());
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("A shell somewhere else — any worktree mogeung knows, or home");
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icon_button(
+                    ui,
+                    icon::HIDE,
+                    "Hide the terminal — the shells keep running",
+                    false,
+                    None,
+                )
+                .clicked()
+                {
+                    act = PanelAction::Hide;
+                }
+                self.terminal_font_menu(ui);
+                if let Some(i) = (!self.shells.tabs.is_empty()).then_some(self.shells.active) {
+                    ui.separator();
+                    let s = &self.shells.tabs[i];
+                    if s.kind() == Some(crate::term::Kind::Bare) {
+                        ui.label(
+                            RichText::new("no tmux — this shell dies with the window")
+                                .color(pal().amber),
+                        )
+                        .on_hover_text(
+                            "Install tmux and the shells here persist across restarts, and \
+                             stay reachable from a real terminal.",
+                        );
+                    }
+                    if s.exited() {
+                        if ui.button("New shell").clicked() {
+                            act = PanelAction::Restart(i);
+                        }
+                        ui.label(RichText::new("the shell exited").color(pal().red));
+                    } else if s.failed.is_some() {
+                        if ui.button("Try again").clicked() {
+                            act = PanelAction::Restart(i);
+                        }
+                        // The reason itself is in the body, once. Repeating it
+                        // here would cost the header its whole width to say
+                        // what is already on screen.
+                        ui.label(RichText::new("could not start a shell").color(pal().red));
+                    } else {
+                        let hint = if self.pty_focus == Some(PtyPane::Shell) {
+                            format!("keyboard goes to the shell — {leave} returns it")
+                        } else {
+                            format!("click the terminal — or press {leave} — to type")
+                        };
+                        ui.label(RichText::new(hint).weak());
+                    }
+                }
+            });
+        });
+        // Back where it lives, before the actions below act on it. An index
+        // past the end cannot happen — everything that moves the tabs ends the
+        // edit — and if it ever did, the field would stop drawing and there
+        // would be no way left to dismiss it.
+        self.shells.rename = editing.filter(|r| r.at < self.shells.tabs.len());
+        ui.separator();
+
+        // The shortcut that opened the panel asked for the keyboard too, and
+        // this is the first point at which there is something to give it to.
+        let ready = self.shells.current().is_some_and(|s| s.term.is_some());
+        if ready && std::mem::take(&mut self.shells.focus_wanted) {
+            self.pty_focus = Some(PtyPane::Shell);
+        }
+
+        match self.shells.tabs.get_mut(self.shells.active) {
+            Some(s) => match s.term.as_mut() {
+                // Kept on screen after it exits rather than replaced: whatever
+                // the shell printed on its way out is still in the grid, and
+                // that text is the only explanation anyone gets.
+                Some(term) => pty_body(ui, term, PtyPane::Shell, &mut self.pty_focus, font),
+                None => {
+                    ui.add_space(8.0);
+                    ui.colored_label(
+                        pal().red,
+                        s.failed
+                            .clone()
+                            .unwrap_or_else(|| "the shell is not running".into()),
+                    );
+                }
+            },
+            None => {
+                ui.add_space(8.0);
+                ui.label(dim("no shell open — the + button starts one"));
+            }
+        }
+
+        match act {
+            PanelAction::None => {}
+            PanelAction::Select(i) => {
+                self.shells.select(i);
+                // The keyboard follows the tab you clicked, not the shell you
+                // were typing into a moment ago.
+                self.release_pty(PtyPane::Shell);
+            }
+            PanelAction::OpenIn(root) => {
+                self.shells.open_in(&root);
+                self.shells.focus_wanted = true;
+            }
+            PanelAction::Close(i) => {
+                self.shells.close(i);
+                self.release_pty(PtyPane::Shell);
+            }
+            PanelAction::Restart(i) => self.shells.restart(i),
+            PanelAction::Rename(i) => {
+                // The field and the pty cannot both have the keyboard, and the
+                // pty is holding it: without this you would type the new name
+                // into the shell instead.
+                self.release_pty(PtyPane::Shell);
+                self.shells.begin_rename(i);
+            }
+            PanelAction::CommitRename => self.shells.commit_rename(),
+            PanelAction::CancelRename => self.shells.cancel_rename(),
+            PanelAction::ClearName(i) => self.shells.clear_name(i),
+            PanelAction::Hide => {
+                self.shells.open = false;
+                self.shells.dirty = true;
+                self.shells.cancel_rename();
+                self.release_pty(PtyPane::Shell);
+            }
+        }
+    }
+
+    /// The font picker. `R-B32`.
+    ///
+    /// Here rather than in a settings window because this is the only place the
+    /// setting means anything, and because the thing you want to do after
+    /// choosing a font is look at a terminal drawn in it.
+    fn terminal_font_menu(&mut self, ui: &mut egui::Ui) {
+        // What is on screen, which is not the same question as what was
+        // chosen: with nothing chosen the answer is whatever `PREFERRED`
+        // found, and a menu that showed "default" there would be hiding the
+        // only interesting part.
+        let auto = crate::font::default_family().map(|f| f.family.clone());
+        let auto_label = match &auto {
+            Some(f) => format!("automatic — {f}"),
+            None => "automatic — bundled monospace".to_string(),
+        };
+        let current = self
+            .prefs
+            .terminal_font
+            .clone()
+            .or(auto)
+            .unwrap_or_else(|| "bundled monospace".into());
+        ui.menu_button("Aa", |ui| {
+            ui.set_min_width(240.0);
+            ui.label(dim("terminal font"));
+            ui.horizontal(|ui| {
+                ui.label("size");
+                let mut px = self.prefs.terminal_font_px;
+                if ui
+                    .add(egui::DragValue::new(&mut px).range(8.0..=32.0).speed(0.25))
+                    .changed()
+                {
+                    self.prefs.terminal_font_px = px;
+                    self.prefs_dirty = true;
+                }
+                ui.label(dim("pt · Ctrl+wheel zooms this pane alone"));
+            });
+            ui.separator();
+            if ui
+                .selectable_label(self.prefs.terminal_font.is_none(), auto_label)
+                .on_hover_text(
+                    "MesloLGS NF when it is installed — the font Powerlevel10k's own \
+                     wizard sets up — and the bundled monospace otherwise, which carries \
+                     no Powerline or Nerd Font glyphs.",
+                )
+                .clicked()
+            {
+                self.prefs.terminal_font = None;
+                self.prefs_dirty = true;
+                ui.close();
+            }
+            // Scanned once per process, so a font installed while mogeung is
+            // running needs a restart to appear — the same deal every terminal
+            // emulator offers, and the alternative is a directory walk per
+            // frame.
+            let families = crate::font::monospace_families();
+            if families.is_empty() {
+                ui.label(dim("no monospaced fonts found on this machine"));
+            }
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for f in families {
+                        let chosen = self.prefs.terminal_font.as_deref() == Some(f.as_str());
+                        if ui.selectable_label(chosen, &f).clicked() {
+                            self.prefs.terminal_font = Some(f);
+                            self.prefs_dirty = true;
+                            ui.close();
+                        }
+                    }
+                });
+        })
+        .response
+        .on_hover_text(format!(
+            "Terminal font — {current}\n\nMonospaced families only: a terminal grid is laid \
+             out from the width of one glyph, so a proportional font does not draw badly, it \
+             draws wrongly."
+        ));
+    }
+
+    /// The terminal family at this pane's zoom.
+    ///
+    /// `FontFamily::Name`, always — [`crate::font::definitions`] registers the
+    /// name whether or not a font was chosen, precisely so this cannot ask for
+    /// a family egui does not know. That is a panic inside the paint loop, not
+    /// a fallback.
+    fn terminal_font(&mut self, ui: &egui::Ui, pane: &str) -> egui::FontId {
+        let z = self.pane_zoom(ui, pane);
+        let px = (self.prefs.terminal_font_px * z).clamp(6.0, 48.0);
+        egui::FontId::new(px, egui::FontFamily::Name(crate::font::FAMILY.into()))
+    }
+
+    /// Register the chosen font with egui, when and only when it changed.
+    ///
+    /// `set_fonts` rebuilds the glyph atlas, so this must not run per frame —
+    /// and it takes effect on the *next* frame, which is why the first install
+    /// happens in `App::new` rather than here. A family that does not exist yet
+    /// is not a missing glyph, it is a panic.
+    fn sync_terminal_font(&mut self, ctx: &egui::Context) {
+        if self.font_installed.as_ref() == Some(&self.prefs.terminal_font) {
+            return;
+        }
+        self.font_installed = Some(self.prefs.terminal_font.clone());
+        if let Some(w) = crate::font::install(ctx, self.prefs.terminal_font.as_deref()) {
+            self.errors.push(w);
+        }
+    }
+
+    /// Show the terminal, and put the keyboard in it.
+    ///
+    /// Opening with no shells starts one: a panel that appears empty and asks
+    /// you to press `+` has spent your keystroke on nothing.
+    fn open_terminal_panel(&mut self) {
+        self.shells.open = true;
+        if self.shells.tabs.is_empty() {
+            let root = self.default_shell_root();
+            self.shells.open_in(&root);
+        }
+        self.shells.focus_wanted = true;
+        self.shells.dirty = true;
+    }
+
+    fn toggle_terminal_panel(&mut self) {
+        if self.shells.open {
+            self.shells.open = false;
+            self.shells.dirty = true;
+            // A half-typed name in a panel you just put away is not a name,
+            // and leaving it in flight means the field comes back holding the
+            // keyboard's attention without having asked for it.
+            self.shells.cancel_rename();
+            self.release_pty(PtyPane::Shell);
+        } else {
+            self.open_terminal_panel();
+        }
+    }
+
+    /// Where a new shell starts when you have not said.
+    ///
+    /// The selected session's worktree, because that is what you are looking
+    /// at — and `$HOME` when there is no selection, which is the case the pane
+    /// version could not express at all.
+    fn default_shell_root(&self) -> String {
+        self.selected_session()
+            .map(|s| s.repo_root.clone().unwrap_or_else(|| s.cwd.clone()))
+            .or_else(|| std::env::var("HOME").ok())
+            .unwrap_or_else(|| ".".to_string())
+    }
+
+    /// The directories the `+` menu offers: every worktree mogeung knows, plus
+    /// home. Sorted and deduplicated, with the selection first — it is the one
+    /// you are most likely to want and should not be hunted for.
+    fn known_roots(&self) -> Vec<String> {
+        let first = self.default_shell_root();
+        let mut out = vec![first.clone()];
+        let mut rest: Vec<String> = self
+            .sessions
+            .values()
+            .map(|s| s.repo_root.clone().unwrap_or_else(|| s.cwd.clone()))
+            .chain(std::env::var("HOME").ok())
+            .filter(|r| *r != first)
+            .collect();
+        rest.sort();
+        rest.dedup();
+        out.extend(rest);
+        out
+    }
+
+    /// Take the keyboard back from one pty pane, and only that one.
+    ///
+    /// The `if` is the point. Both panes draw every frame when they are side
+    /// by side in a split, so an unconditional clear here would let the Agent
+    /// pane re-attaching yank focus out of a shell mid-command.
+    fn release_pty(&mut self, which: PtyPane) {
+        if self.pty_focus == Some(which) {
+            self.pty_focus = None;
         }
     }
 
@@ -8468,7 +9178,7 @@ impl App {
             .collapsible(false)
             .show(&ctx, |ui| {
                 ui.label(
-                    RichText::new("Opens a real interactive claude in Terminal.")
+                    RichText::new("Opens a real interactive claude in your terminal app.")
                         .size(12.5),
                 );
                 ui.label(dim(
@@ -9425,7 +10135,36 @@ impl App {
 mod tests {
     use super::{keymap_row, may_toggle_hidden, short_path};
 
-    use super::{find_target, FindTarget, ScrollRequest, Tab};
+    use super::{find_target, pty_chord, FindTarget, PtyChord, ScrollRequest, Tab};
+
+    /// `Alt+F12` is a *toggle*, and a toggle you can only press once is not
+    /// one: the same key that opens the terminal hands it the keyboard, so
+    /// unless it is honoured from inside the shell, putting the panel away
+    /// means reaching for the mouse — and the keystroke lands in your prompt
+    /// as an escape sequence on the way past.
+    ///
+    /// The other half matters just as much: everything *else* must reach the
+    /// pty. `Alt+1` switches tabs out here and may mean something to the
+    /// program in there, and a terminal that swallows shortcuts is a terminal
+    /// you cannot run a terminal program in.
+    #[test]
+    fn only_two_chords_are_taken_from_a_focused_terminal() {
+        use crate::keymap::Action as A;
+        assert_eq!(pty_chord(Some(A::ToggleTerminalFocus)), PtyChord::Leave);
+        assert_eq!(pty_chord(Some(A::TabTerminal)), PtyChord::ToggleTerminal);
+        assert_eq!(pty_chord(None), PtyChord::Pass, "an unbound key is typing");
+
+        for a in A::ALL {
+            if matches!(a, A::ToggleTerminalFocus | A::TabTerminal) {
+                continue;
+            }
+            assert_eq!(
+                pty_chord(Some(*a)),
+                PtyChord::Pass,
+                "{a:?} would be stolen from the shell"
+            );
+        }
+    }
 
     /// The point of the rule: you cannot dismiss an agent that is still
     /// running. Everything else about hiding is a preference; this one is a
@@ -9454,7 +10193,7 @@ mod tests {
     fn find_goes_where_the_keyboard_is_aimed() {
         assert_eq!(find_target(Tab::Git), FindTarget::GitFilter);
         assert_eq!(find_target(Tab::Explorer), FindTarget::EditorFind);
-        for other in [Tab::Changes, Tab::Transcript, Tab::Info, Tab::Debt, Tab::Terminal] {
+        for other in [Tab::Changes, Tab::Transcript, Tab::Info, Tab::Debt, Tab::Agent] {
             assert_eq!(find_target(other), FindTarget::EditorFind);
         }
     }

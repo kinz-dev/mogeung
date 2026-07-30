@@ -42,7 +42,7 @@ with, and you leave for the terminal anyway.
 
 ### Acceptance
 
-- [x] A session started with `yolomo` shows a live Terminal tab
+- [x] A session started with `yolomo` shows a live Agent tab
 - [x] A session started with bare `claude` says why it cannot be hosted, and
       offers `R-B2` instead
 - [x] Detaching leaves the session running and reachable from any terminal
@@ -90,8 +90,8 @@ ancestry walk runs against an in-memory pid table.
 - `crates/mogeung-core/src/session.rs` — `tmux_target`
 - `crates/mogeungd/src/state.rs` — pane resolution, wired into the scan
 - `crates/mogeung-ui/src/term.rs` — the pane
-- `crates/mogeung-ui/src/app.rs` — Terminal tab, focus model
-- `crates/mogeung-ui/src/keymap.rs` — `TabTerminal`, `LeaveTerminal`
+- `crates/mogeung-ui/src/app.rs` — Agent tab, focus model
+- `crates/mogeung-ui/src/keymap.rs` — `TabAgent`, `ToggleTerminalFocus`
 - `scripts/yolomo`
 
 ### Risks and unknowns
@@ -214,3 +214,33 @@ whose terminfo entry exists and carries `clear`.
 **Two existing tab-cycling tests broke** on the fifth tab because they hardcoded
 `Debt` as last. Rewritten against the ends of `TAB_ORDER`, so the next tab does
 not produce failures in tests that are not about it.
+
+**The tab is called "Agent" as of 2026-07-29**, asked for by name ahead of an
+in-app shell pane that will want the word "Terminal" to mean what it means in
+VS Code and IntelliJ: a shell you own. Two panes both called some kind of
+terminal, disagreeing about who owns Escape, is a trap — this one yields the
+whole keymap to Claude Code and a shell pane would not.
+
+Unlike the `Explorer`→"Editor" rename ([0008](0008-explorer-workbench.md)),
+the *identifiers* moved too: `Tab::Agent`, `Action::TabAgent`,
+`Action::ToggleTerminalFocus`, `Action::FocusTerminalApp`. Leaving them behind
+would hand the next reader a `Tab::Terminal` meaning "the agent's tmux client"
+sitting next to a tab labelled Terminal meaning "your shell". What did *not*
+move is either on-disk name: `#[serde(rename)]` pins `"Terminal"` in
+`layout.json` and `tab_terminal`/`leave_terminal`/`jump_to_terminal` in
+`keymap.json`, so a saved layout still restores and a rebound key still fires.
+A test holds that line in both directions, because a shortcut that quietly
+reverted to its default is indistinguishable from one that broke.
+
+`E` stayed on the tab through the rename, on the same reasoning that kept `X`
+on the Editor: a binding that moves under trained hands costs more than a
+mnemonic that lags a name. `Backquote` was reserved for the shell pane — the
+chord every editor teaches — and a test failed if anything else claimed it.
+
+**The shell pane arrived the same day** ([0024](0024-in-app-terminal.md),
+`R-B31`), and the reservation held: it answers to ``Ctrl+` `` and `Alt+F12`.
+The vocabulary this rename bought is now load-bearing rather than
+anticipatory — Agent is the session's terminal, Terminal is yours — and the
+one-chord rule for `ToggleTerminalFocus` became real: it now aims at whichever
+of the two panes has the keyboard, which is what the note on that action
+promised while there was still only one.
