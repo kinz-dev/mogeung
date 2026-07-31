@@ -43,6 +43,13 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 The flags below are how you reach a daemon the first time. After that, use the
 window: click the connection dot in the top bar, or press `Alt+D`.
 
+The top of that window is where you are, not where you could go: the daemon
+you are connected to, whether the socket is up, and — from the identity it
+publishes (`R-I5`) — which `~/.claude` it is watching, on which host, at which
+version. Read that line before trusting anything below it. The URL there has
+any token blanked, because this window is the one people share when asking for
+help.
+
 **`LOCAL` is always the first row, and always where a launch starts.** It names
 the daemon on this machine on the default port, it is never saved to the file,
 and it has no Edit or Forget: the destination you need when a remote is
@@ -77,9 +84,10 @@ default: the broadcast tells everything on the segment that this machine is
 watching Claude Code sessions and where to reach it, and that is not a thing to
 do to someone on guest wifi without being asked.
 
-Finding a daemon connects to nothing. It fills in the form, you supply the
-token, you press Connect. A daemon can only advertise from a non-loopback bind,
-which already requires a token — so anything you find here will want one.
+Finding a daemon connects to nothing. **Add** fills in the new-daemon form under
+**Saved**, you supply the token, you press Save — and then Connect on the row it
+made. A daemon can only advertise from a non-loopback bind, which already
+requires a token, so anything you find here will want one.
 
 **Switching keeps the window and drops the daemon.** Your layout, keymap and
 prefs describe *this window* and survive. Everything the old daemon said —

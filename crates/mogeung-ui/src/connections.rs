@@ -118,6 +118,32 @@ impl Connection {
     }
 }
 
+/// A URL with any token blanked, for anything that reaches a screen.
+///
+/// [`Connection::dial_url`] puts the token in the query string, and the URL the
+/// window is actually connected to is that one — so every place that renders
+/// "which daemon am I on" was rendering the secret with it. Two of them had
+/// shipped: the connection dot's tooltip, and the footer of the Daemons window.
+/// Both are on screen while somebody is asking for help, which is exactly when
+/// a window gets shared.
+///
+/// The parameter is kept rather than dropped. A URL that silently loses its
+/// query would read as the URL you typed, and "this daemon wants a token" is
+/// worth seeing; the value is not.
+pub fn redacted(url: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    let kept: Vec<String> = query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((k, _)) if k.eq_ignore_ascii_case("token") => format!("{k}=…"),
+            _ => pair.to_string(),
+        })
+        .collect();
+    format!("{base}?{}", kept.join("&"))
+}
+
 /// Every remembered daemon, and which one was last chosen.
 ///
 /// `list` holds the *saved* daemons only. [`Connection::local`] is not in it
@@ -412,6 +438,34 @@ mod tests {
             fixed.active, None,
             "the pointer indexed the row that went; it must not slide onto its neighbour"
         );
+    }
+
+    /// The dialled URL is what the window shows when it says which daemon it
+    /// is on, and it is the one string in the client that carries the secret.
+    #[test]
+    fn a_token_never_survives_into_something_shown() {
+        let dialled = Connection {
+            name: "devbox".into(),
+            url: "wss://dev.example.com/ws".into(),
+            token: Some("s3cret".into()),
+        }
+        .dial_url();
+        let shown = redacted(&dialled);
+        assert!(!shown.contains("s3cret"), "{shown}");
+        assert_eq!(shown, "wss://dev.example.com/ws?token=…");
+    }
+
+    #[test]
+    fn redacting_leaves_everything_that_is_not_the_token() {
+        assert_eq!(redacted("ws://box/ws"), "ws://box/ws");
+        assert_eq!(redacted("ws://box/ws?debug=1"), "ws://box/ws?debug=1");
+        // Order is whatever the URL had; only the one value goes.
+        assert_eq!(
+            redacted("ws://box/ws?debug=1&token=abc&trace=2"),
+            "ws://box/ws?debug=1&token=…&trace=2"
+        );
+        // A hand-written URL need not use the casing dial_url does.
+        assert_eq!(redacted("ws://box/ws?Token=abc"), "ws://box/ws?Token=…");
     }
 
     #[test]

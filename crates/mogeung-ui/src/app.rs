@@ -1395,7 +1395,7 @@ impl App {
                     .add(egui::Label::new(dot).sense(egui::Sense::click()))
                     .on_hover_text(format!(
                         "{} — {}\n\n{}{}\n\nClick to choose a daemon.\n\n{hotkey_tip}",
-                        self.net.url,
+                        crate::connections::redacted(&self.net.url),
                         tip,
                         self.daemon_mode.detail(&self.daemon_addr),
                         self.daemon_provenance()
@@ -10793,189 +10793,242 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
 
+        // Small shapes shared by the three lists below. Nested rather than
+        // free functions: nothing else in the window draws a list like this,
+        // and whoever changes a card should find it beside the rows.
+        fn section(ui: &mut egui::Ui, title: &str, note: &str) {
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(title).strong().size(11.0).color(pal().text_strong));
+                if !note.is_empty() {
+                    ui.label(dim(note));
+                }
+            });
+            ui.add_space(3.0);
+        }
+
+        /// One daemon, as a card: name and buttons on top, address beneath.
+        ///
+        /// The old list was a run of `ui.horizontal`s, which gave a name, a
+        /// URL, three suffixes and three buttons the same weight on one line —
+        /// so the thing you pick by (the name) and the thing you are picking
+        /// between (which machine) had to be read out of the middle of a
+        /// sentence. The fill and the stroke say which one you are on without
+        /// reading anything at all.
+        fn card<R>(ui: &mut egui::Ui, live: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+            let out = egui::Frame::NONE
+                .fill(if live { pal().bg_raised } else { Color32::TRANSPARENT })
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if live { pal().green } else { pal().border },
+                ))
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::symmetric(10, 7))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    body(ui)
+                });
+            ui.add_space(4.0);
+            out.inner
+        }
+
+        let current = self.net.url.clone();
+        let local = crate::connections::Connection::local();
+        let local_live = current.starts_with(&local.url);
+
+        // What to call the daemon we are on, for the header. Its saved name if
+        // it has one — the URL is the fallback, not the answer, because the
+        // whole reason rows carry names is that a URL is a poor thing to
+        // recognise a machine by under time pressure.
+        let current_name = if local_live {
+            local.label().to_string()
+        } else {
+            self.connections
+                .list
+                .iter()
+                .find(|c| current.starts_with(&c.url))
+                .map(|c| c.label().to_string())
+                .unwrap_or_else(|| current.clone())
+        };
+        let current_detail = match &self.daemon_identity {
+            Some(id) => format!(
+                "{} on {} · mogeungd {} · pid {}",
+                id.claude_home,
+                id.label(),
+                id.version,
+                id.pid
+            ),
+            // Either the first snapshot has not landed or the daemon predates
+            // R-I5. Say which is possible rather than leaving a blank line
+            // where every other daemon shows its provenance.
+            None => "identity not published — the first snapshot may still be in flight".into(),
+        };
+
+        // Our own daemon, seen from outside, is dropped before the count as
+        // well as before the rows: offering it back would invite a second
+        // connection to the machine we are already on, and reporting "1 found"
+        // above an empty list is worse than either.
+        let found: Vec<(&mogeungd::discovery::Found, String)> = self
+            .scanned
+            .iter()
+            .filter(|f| !(f.machine_id.is_some() && f.machine_id == self.this_machine))
+            .filter_map(|f| f.url().map(|u| (f, u)))
+            .collect();
+        let scan_note = if self.scan.is_none() {
+            "not listening".to_string()
+        } else if !found.is_empty() {
+            format!("listening · {} found", found.len())
+        } else if self.scan_says_waiting() {
+            "listening…".to_string()
+        } else {
+            "listening · nothing yet".to_string()
+        };
+
         egui::Window::new("Daemons")
             .open(&mut open)
-            .default_width(520.0)
+            .default_width(560.0)
             .collapsible(false)
             .show(&ctx, |ui| {
-                ui.label(dim(
-                    "Which daemon this window watches. Switching keeps your layout \
-                     and keymap; everything the old daemon said is dropped.",
-                ));
-                ui.add_space(6.0);
-
-                let current = self.net.url.clone();
-
-                // LOCAL, always, above everything and outside the saved list.
-                // It carries no Edit or Forget: the point of it is that the
-                // machine you are sitting in front of cannot be lost, and a
-                // row you can delete is a row somebody deletes.
-                let local = crate::connections::Connection::local();
-                let local_live = current.starts_with(&local.url);
-                ui.horizontal(|ui| {
-                    ui.label(if local_live { icon::DOT } else { " " });
-                    ui.label(RichText::new(local.label()).strong());
-                    ui.label(dim(&local.url));
-                    ui.label(dim(match self.daemon_mode {
-                        crate::daemon::Mode::Hosting if local_live => "· hosted by this window",
-                        crate::daemon::Mode::Attached { .. } if local_live => "· already running",
-                        _ => "· this machine",
-                    }));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !local_live && ui.button("Connect").clicked() {
-                            switch = Some(local.clone());
-                        }
-                    });
-                });
-
-                if self.connections.list.is_empty() {
-                    ui.label(dim("No other daemons saved yet."));
-                }
-
-                for (i, c) in self.connections.list.iter().enumerate() {
-                    let live = current.starts_with(&c.url);
-                    ui.horizontal(|ui| {
-                        ui.label(if live { icon::DOT } else { " " });
-                        ui.label(RichText::new(c.label()).strong());
-                        ui.label(dim(&c.url));
-                        // Which one you reached for last time. It is a hint and
-                        // nothing more — no launch dials it, which is the whole
-                        // change here.
-                        if !live && self.connections.active == Some(i) {
-                            ui.label(dim("· last used"));
-                        }
-                        // Never the token itself, here or anywhere: this window
-                        // is the thing people screen-share.
-                        if c.token.is_some() {
-                            ui.label(dim("· token"));
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Forget").clicked() {
-                                remove = Some(i);
-                            }
-                            if ui.button("Edit").clicked() {
-                                reopen = Some((Some(i), c.clone()));
-                            }
-                            if !live && ui.button("Connect").clicked() {
-                                switch = Some(c.clone());
-                            }
-                        });
-                    });
-                }
-
-                ui.add_space(8.0);
-                ui.separator();
-
-                // --- Discovery (R-I8) -----------------------------------
-                // A wifi picker, not a search: the subscription runs while this
-                // window is open and rows accumulate.
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("On this network").strong());
-                    let waiting = self
-                        .scan_since
-                        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4));
-                    if self.scan.is_none() {
-                        ui.label(dim("· not listening"));
-                    } else if self.scanned.is_empty() && waiting {
-                        ui.label(dim("· listening…"));
-                    } else if self.scanned.is_empty() {
-                        ui.label(dim("· nothing advertising"));
-                    } else {
-                        ui.label(dim(format!("· listening · {} found", self.scanned.len())));
-                    }
-                });
-
-                if self.scanned.is_empty() && !self.scan_says_waiting() {
-                    ui.label(dim(
-                        "A daemon appears only with --advertise, and only from a \
-                         non-loopback --listen. Many networks drop multicast between hosts.",
-                    ));
-                }
-
-                for f in &self.scanned {
-                    // Our own daemon, seen from outside. Offering it back would
-                    // invite a second connection to the machine we are on.
-                    if f.machine_id.is_some() && f.machine_id == self.this_machine {
-                        continue;
-                    }
-                    let Some(url) = f.url() else { continue };
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&f.name).strong());
-                        ui.label(dim(
-                            f.addr().map(|a| a.to_string()).unwrap_or_default(),
-                        ));
-                        if f.addrs.len() > 1 {
-                            ui.label(dim(format!("+{}", f.addrs.len() - 1)))
-                                .on_hover_text(
-                                    f.addrs
-                                        .iter()
-                                        .map(|a| a.to_string())
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
+                // --- Where you are ------------------------------------------
+                // At the top, not the footnote it used to be at the bottom:
+                // every row below asks where to go next, and none of them can
+                // be answered without knowing where you already are.
+                egui::Frame::NONE
+                    .fill(pal().bg_raised)
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon::DOT).color(if self.net.connected {
+                                pal().green
+                            } else {
+                                pal().red
+                            }));
+                            ui.label(dim("watching"));
+                            ui.label(RichText::new(&current_name).strong().size(15.0));
+                            if !self.net.connected {
+                                ui.label(
+                                    RichText::new(
+                                        self.net.last_error.as_deref().unwrap_or("disconnected"),
+                                    )
+                                    .color(pal().red)
+                                    .size(12.0),
                                 );
-                        }
-                        if f.needs_token {
-                            ui.label(dim("· needs a token"));
-                        }
-                        if let Some(home) = &f.claude_home {
-                            ui.label(dim(format!("· {home}")));
-                        }
+                            }
+                        });
+                        ui.label(dim(&current_detail));
+                        ui.label(mono(crate::connections::redacted(&current)).color(pal().dim));
+                    });
+
+                ui.add_space(8.0);
+                ui.label(dim(
+                    "Switching keeps your layout and keymap; everything the old daemon \
+                     said is dropped.",
+                ));
+
+                // --- This machine -------------------------------------------
+                // Above everything and outside the saved list, carrying no
+                // Edit or Forget: the point of it is that the machine you are
+                // sitting in front of cannot be lost, and a row you can delete
+                // is a row somebody deletes.
+                section(ui, "THIS MACHINE", "");
+                card(ui, local_live, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(icon::DOT).color(if local_live {
+                            pal().green
+                        } else {
+                            pal().dim
+                        }));
+                        ui.label(RichText::new(local.label()).strong());
+                        ui.label(dim(match self.daemon_mode {
+                            crate::daemon::Mode::Hosting if local_live => "hosted by this window",
+                            crate::daemon::Mode::Attached { .. } if local_live => "already running",
+                            _ => "where this window is running",
+                        }));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let known = self.connections.list.iter().any(|c| c.url == url);
-                            if known {
-                                ui.label(dim("saved"));
-                            } else if ui.button("Add").clicked() {
-                                // Add, never connect: this fills the form and
-                                // waits for a hand.
-                                reopen = Some((
-                                    None,
-                                    crate::connections::Connection {
-                                        name: f.name.clone(),
-                                        url,
-                                        token: None,
-                                    },
-                                ));
+                            if !local_live && ui.button("Connect").clicked() {
+                                switch = Some(local.clone());
                             }
                         });
                     });
-                }
+                    ui.label(mono(&local.url).color(pal().dim));
+                });
 
-                ui.add_space(8.0);
-                ui.separator();
-
-                match draft_slot.as_mut() {
-                    None => {
-                        if ui.button("Add a daemon").clicked() {
+                // --- Saved --------------------------------------------------
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("SAVED").strong().size(11.0).color(pal().text_strong));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if draft_slot.is_none()
+                            && ui
+                                .button(format!("{} Add a daemon", icon::NEW_SESSION))
+                                .clicked()
+                        {
                             reopen = Some((None, Default::default()));
                         }
-                        ui.label(dim(format!(
-                            "Watching {current}\nSaved in {}",
-                            crate::connections::Connections::path().display()
-                        )));
-                    }
-                    Some((at, draft)) => {
-                        egui::Grid::new("conn-draft").num_columns(2).show(ui, |ui| {
-                            ui.label("Name");
-                            ui.text_edit_singleline(&mut draft.name);
-                            ui.end_row();
-                            ui.label("URL");
-                            ui.text_edit_singleline(&mut draft.url);
-                            ui.end_row();
-                            ui.label("Token");
-                            let mut token = draft.token.clone().unwrap_or_default();
-                            // Masked because a token on screen is a token in
-                            // whatever recording or screenshot is running.
-                            if ui
-                                .add(egui::TextEdit::singleline(&mut token).password(true))
-                                .changed()
-                            {
-                                draft.token = (!token.is_empty()).then_some(token);
-                            }
-                            ui.end_row();
-                        });
+                    });
+                });
+                ui.add_space(3.0);
+
+                // The form sits where the row it makes will land, rather than
+                // at the far bottom of the window where the Add button that
+                // opened it cannot see the result.
+                if let Some((at, draft)) = draft_slot.as_mut() {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(match at {
+                                Some(_) => "Edit daemon",
+                                None => "New daemon",
+                            })
+                            .strong(),
+                        );
+                        ui.add_space(4.0);
+                        egui::Grid::new("conn-draft")
+                            .num_columns(2)
+                            .spacing([10.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label(dim("Name"));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.name)
+                                        .hint_text("devbox")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.end_row();
+                                ui.label(dim("URL"));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.url)
+                                        .hint_text("ws://10.0.0.27:7717/ws")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.end_row();
+                                ui.label(dim("Token"));
+                                let mut token = draft.token.clone().unwrap_or_default();
+                                // Masked because a token on screen is a token
+                                // in whatever recording or screenshot is
+                                // running.
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut token)
+                                            .password(true)
+                                            .hint_text("only if the daemon requires one")
+                                            .desired_width(f32::INFINITY),
+                                    )
+                                    .changed()
+                                {
+                                    draft.token = (!token.is_empty()).then_some(token);
+                                }
+                                ui.end_row();
+                            });
                         if let Some(problem) = draft.problem() {
-                            ui.label(RichText::new(problem).color(pal().amber));
+                            ui.label(
+                                RichText::new(format!("{} {problem}", icon::WARN))
+                                    .color(pal().amber)
+                                    .size(12.0),
+                            );
                         }
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             let ok = draft.problem().is_none();
                             if ui.add_enabled(ok, egui::Button::new("Save")).clicked() {
@@ -10989,12 +11042,129 @@ impl App {
                             }
                         });
                         ui.label(dim(
-                            "The token is stored in ~/.mogeung/connections.json, \
-                             owner-readable only. It travels in clear text unless \
-                             the URL is wss://.",
+                            "The token is stored in ~/.mogeung/connections.json, owner-readable \
+                             only. It travels in clear text unless the URL is wss://.",
                         ));
-                    }
+                    });
+                    ui.add_space(6.0);
                 }
+
+                if self.connections.list.is_empty() && draft_slot.is_none() {
+                    ui.label(dim(
+                        "Nothing saved yet — add one above, or take one off the network below.",
+                    ));
+                }
+
+                for (i, c) in self.connections.list.iter().enumerate() {
+                    let live = current.starts_with(&c.url);
+                    card(ui, live, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon::DOT).color(if live {
+                                pal().green
+                            } else {
+                                pal().dim
+                            }));
+                            ui.label(RichText::new(c.label()).strong());
+                            if live {
+                                ui.label(dim("connected"));
+                            } else if self.connections.active == Some(i) {
+                                // Which one you reached for last time. A hint
+                                // and nothing more — no launch dials it, which
+                                // is the whole change `R-I7` reverted to.
+                                ui.label(dim("last used"));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .button(icon::HIDE)
+                                    .on_hover_text("Forget this daemon")
+                                    .clicked()
+                                {
+                                    remove = Some(i);
+                                }
+                                if ui.button("Edit").clicked() {
+                                    reopen = Some((Some(i), c.clone()));
+                                }
+                                if !live && ui.button("Connect").clicked() {
+                                    switch = Some(c.clone());
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(mono(&c.url).color(pal().dim));
+                            // Never the token itself, here or anywhere: this
+                            // window is the thing people screen-share.
+                            if c.token.is_some() {
+                                ui.label(badge("token", pal().blue));
+                            }
+                        });
+                    });
+                }
+
+                // --- On this network (R-I8) ---------------------------------
+                // A wifi picker, not a search: the subscription runs while this
+                // window is open and rows accumulate.
+                section(ui, "ON THIS NETWORK", &scan_note);
+
+                if found.is_empty() && !self.scan_says_waiting() {
+                    ui.label(dim(
+                        "A daemon appears only with --advertise, and only from a \
+                         non-loopback --listen. Many networks drop multicast between hosts.",
+                    ));
+                }
+
+                for (f, url) in &found {
+                    card(ui, false, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon::DOT).color(pal().dim));
+                            ui.label(RichText::new(&f.name).strong());
+                            if f.needs_token {
+                                ui.label(badge("token", pal().amber));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if self.connections.list.iter().any(|c| c.url == *url) {
+                                    ui.label(dim("saved"));
+                                } else if ui.button("Add").clicked() {
+                                    // Add, never connect: this fills the form
+                                    // and waits for a hand.
+                                    reopen = Some((
+                                        None,
+                                        crate::connections::Connection {
+                                            name: f.name.clone(),
+                                            url: url.clone(),
+                                            token: None,
+                                        },
+                                    ));
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                mono(f.addr().map(|a| a.to_string()).unwrap_or_default())
+                                    .color(pal().dim),
+                            );
+                            if f.addrs.len() > 1 {
+                                ui.label(dim(format!("+{}", f.addrs.len() - 1)))
+                                    .on_hover_text(
+                                        f.addrs
+                                            .iter()
+                                            .map(|a| a.to_string())
+                                            .collect::<Vec<_>>()
+                                            .join("\n"),
+                                    );
+                            }
+                            if let Some(home) = &f.claude_home {
+                                ui.label(dim(format!("· {home}")));
+                            }
+                        });
+                    });
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(dim(format!(
+                    "Saved in {}",
+                    crate::connections::Connections::path().display()
+                )));
             });
 
         self.conn_draft = draft_slot;

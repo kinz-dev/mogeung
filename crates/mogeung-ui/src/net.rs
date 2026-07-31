@@ -155,7 +155,14 @@ async fn net_loop(
                 }
             }
             Err(e) => {
-                let msg = NetEvent::Disconnected(format!("cannot reach daemon: {e}"));
+                // Through `redacted` because this string is rendered, and a
+                // transport error is free to quote the URI it failed on — which
+                // is the dialled one, token and all. It is the identity
+                // function on anything without a `token=` parameter, so this
+                // costs nothing on the errors that do not.
+                let msg = NetEvent::Disconnected(crate::connections::redacted(&format!(
+                    "cannot reach daemon: {e}"
+                )));
                 if !post(&ev_tx, msg, &ctx) {
                     return;
                 }
