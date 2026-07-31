@@ -333,6 +333,25 @@ impl Shells {
         }
     }
 
+    /// Drop every live pty, keeping the tabs themselves.
+    ///
+    /// For switching daemons (`R-I7`): a running pane holds a shell on the
+    /// machine we are leaving, rooted at a path the next one need not have.
+    /// Dropping the view **detaches** rather than kills — tmux still owns the
+    /// session over there ([ADR-0011]), so a build left running keeps running
+    /// and switching back re-attaches to it.
+    ///
+    /// The tabs stay because they are this window's arrangement, not the
+    /// daemon's, and each re-spawns through the current reach when it is next
+    /// shown.
+    pub fn detach_all(&mut self) {
+        for s in &mut self.tabs {
+            s.term = None;
+            s.failed = None;
+        }
+        self.rename = None;
+    }
+
     /// Start the visible shell again after it exited, or after a failure.
     pub fn restart(&mut self, at: usize) {
         if let Some(s) = self.tabs.get_mut(at) {

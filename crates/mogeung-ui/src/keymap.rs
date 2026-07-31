@@ -155,6 +155,7 @@ pub enum Action {
     ResetLayout,
     ToggleAmbient,
     ToggleHealth,
+    ToggleConnections,
     OpenKeymap,
     Rescan,
 }
@@ -211,6 +212,7 @@ impl Action {
         Action::ResetLayout,
         Action::ToggleAmbient,
         Action::ToggleHealth,
+        Action::ToggleConnections,
         Action::OpenKeymap,
         Action::CycleTheme,
         Action::Rescan,
@@ -263,6 +265,7 @@ impl Action {
             | Action::ResetLayout
             | Action::ToggleAmbient
             | Action::ToggleHealth
+            | Action::ToggleConnections
             | Action::OpenKeymap
             | Action::CycleTheme
             | Action::Rescan => "Windows",
@@ -321,6 +324,7 @@ impl Action {
             Action::ResetLayout => "Reset the pane layout",
             Action::ToggleAmbient => "Show or hide the ambient board",
             Action::ToggleHealth => "Show or hide the health panel",
+            Action::ToggleConnections => "Choose which daemon this window watches",
             Action::OpenKeymap => "Open this keyboard settings window",
             Action::CycleTheme => "Theme — dark, light, or follow the desktop",
             Action::Rescan => "Rescan sessions now",
@@ -542,6 +546,7 @@ impl Default for Keymap {
 
         set(Action::ToggleAmbient, &["Alt+A"]);
         set(Action::ToggleHealth, &["Alt+H"]);
+        set(Action::ToggleConnections, &["Alt+D"]);
         set(Action::OpenKeymap, &["Alt+K"]);
         set(Action::Rescan, &["Alt+R"]);
         // Alt+T rather than a bare letter: switching theme mid-review is a

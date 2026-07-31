@@ -38,6 +38,22 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 > on a trusted network, TLS only once the bet fails. If your network is not one
 > you trust, use **Route A** below, which does not open a port at all.
 
+## Choosing a daemon from the window
+
+The flags below are how you reach a daemon the first time. After that, use the
+window: click the connection dot in the top bar, or press `Alt+D`.
+
+Saved daemons live in `~/.mogeung/connections.json` (written owner-only, since
+it holds tokens). Each has a name, a URL and an optional token, and the one you
+last connected to is reopened next launch — a flag on the command line still
+overrides it for that run.
+
+**Switching keeps the window and drops the daemon.** Your layout, keymap and
+prefs describe *this window* and survive. Everything the old daemon said —
+sessions, diffs, repos, open files — goes, because it describes a different
+machine. Terminal tabs detach rather than close: tmux keeps the shell running
+over there, and switching back re-attaches.
+
 ## Requirements
 
 `mogeungd` installed and Claude Code running on the remote box; `mogeung` on

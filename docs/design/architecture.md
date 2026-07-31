@@ -162,6 +162,16 @@ refusal printed from a background thread is a line the window opens over. The
 token the window would have presented to a daemon elsewhere is the token it
 requires when it is the daemon; that is why `--token` reaches `daemon::host`.
 
+**The daemon can be changed without restarting** (`R-I7`). The window keeps a
+list at `~/.mogeung/connections.json` — client state, like the keymap, and
+`0600` because it holds tokens. Switching replaces the `Net`, which is how the
+old network thread learns to stop: it returns once nobody is listening on its
+event channel, rather than reconnecting for ever behind a window that has moved
+on. Everything the previous daemon said is then dropped, because it describes a
+different machine; what the *user* chose — layout, keymap, prefs — survives.
+Terminal panes detach rather than close, so tmux keeps their shells alive on the
+machine being left.
+
 **The window also asks who it is talking to** (`R-I5`). The daemon publishes a
 `DaemonIdentity` — a stable `machine_id` from `~/.mogeung/machine-id`, plus
 hostname, watched `~/.claude`, pid and version — on every snapshot and on

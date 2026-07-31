@@ -10,6 +10,7 @@
 //! this process or another one.
 
 mod app;
+mod connections;
 mod cli;
 mod daemon;
 mod diff;
@@ -229,7 +230,7 @@ fn main() -> eframe::Result<()> {
         cli::Outcome::Run(cmd, opts) => std::process::exit(cli::run(cmd, opts)),
     }
 
-    let args = parse_args();
+    let mut args = parse_args();
 
     // Hand the window over to a detached copy of ourselves and give the
     // terminal back, unless asked to stay (--foreground) or we *are* that
@@ -255,6 +256,20 @@ fn main() -> eframe::Result<()> {
                 .unwrap_or_else(|_| "mogeungd=info".into()),
         )
         .try_init();
+
+    // The daemon chosen in the window last time, if any (`R-I7`). It carries
+    // the same weight as `--url`: it names a specific daemon, possibly on
+    // another machine, so we attach rather than hosting one here. A flag still
+    // beats it — the command line is how you override a remembered choice once,
+    // and an override you must edit a file to undo is not an override.
+    let remembered = crate::connections::Connections::load().0.active().cloned();
+    if args.url.is_none() {
+        if let Some(c) = &remembered {
+            args.url = Some(c.dial_url());
+            args.token = None; // already in the URL
+            eprintln!("watching the saved daemon \"{}\" ({})", c.label(), c.url);
+        }
+    }
 
     // An explicit --url means "talk to that", full stop: the user has pointed
     // us somewhere, possibly another machine, and starting a local daemon would

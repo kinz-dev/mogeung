@@ -417,6 +417,13 @@ pub struct App {
     /// Who the daemon says it is (`R-I5`). `None` until the first snapshot, or
     /// for good against a daemon too old to say.
     daemon_identity: Option<mogeung_core::wire::DaemonIdentity>,
+    /// Daemons this window can reach, and which is current. `R-I7`.
+    connections: crate::connections::Connections,
+    show_connections: bool,
+    /// The row being added or edited, and where it will land. `None` for a new
+    /// one — kept out of `connections` until saved so an abandoned edit leaves
+    /// nothing behind.
+    conn_draft: Option<(Option<usize>, crate::connections::Connection)>,
     /// This machine's id, resolved once — the other half of the comparison.
     this_machine: Option<String>,
 
@@ -613,6 +620,7 @@ impl App {
         let config_warning = mogeung_core::config::Config::load().1;
         let (tree, layout_warning) = crate::layout::load();
         let (explorer, explorer_warning) = crate::explorer::Explorer::load();
+        let (connections, connections_warning) = crate::connections::Connections::load();
         // Before `prefs` is moved into the struct. The shells are restored
         // here but not spawned — a tab from the last run costs a tmux client
         // only once the panel is actually opened.
@@ -675,6 +683,9 @@ impl App {
             daemon_mode,
             daemon_addr,
             daemon_identity: None,
+            connections,
+            show_connections: false,
+            conn_draft: None,
             this_machine: mogeungd::machine::machine_id(),
             pane: Pane::Queue,
             keymap,
@@ -707,6 +718,7 @@ impl App {
                 .chain(config_warning)
                 .chain(layout_warning)
                 .chain(explorer_warning)
+                .chain(connections_warning)
                 .chain(font_warning)
                 .collect(),
         }
@@ -1252,6 +1264,7 @@ impl eframe::App for App {
         self.detail_panel(ui);
         self.launch_window(ui);
         self.health_window(ui);
+        self.connections_window(ui);
         self.prompt_window(ui);
         self.ambient_window(ui);
         self.keymap_window(ui);
@@ -1349,13 +1362,20 @@ impl App {
                             .unwrap_or_else(|| "disconnected".into()),
                     )
                 };
-                ui.label(dot).on_hover_text(format!(
-                    "{} — {}\n\n{}{}\n\n{hotkey_tip}",
-                    self.net.url,
-                    tip,
-                    self.daemon_mode.detail(&self.daemon_addr),
-                    self.daemon_provenance()
-                ));
+                // Clickable: the dot already answers "which daemon, and is it
+                // up", so it is where a hand goes to change the answer. `R-I7`.
+                let dot_hit = ui
+                    .add(egui::Label::new(dot).sense(egui::Sense::click()))
+                    .on_hover_text(format!(
+                        "{} — {}\n\n{}{}\n\nClick to choose a daemon.\n\n{hotkey_tip}",
+                        self.net.url,
+                        tip,
+                        self.daemon_mode.detail(&self.daemon_addr),
+                        self.daemon_provenance()
+                    ));
+                if dot_hit.clicked() {
+                    self.show_connections = !self.show_connections;
+                }
 
                 // Worth a word on screen, not just a tooltip: with a hosted
                 // daemon, closing this window stops watching entirely — which
@@ -2093,6 +2113,12 @@ impl App {
                     self.net.send(ClientMsg::FetchHealth);
                 }
             }
+            A::ToggleConnections => {
+                self.show_connections = !self.show_connections;
+                if !self.show_connections {
+                    self.conn_draft = None;
+                }
+            }
             A::CommandPalette => {
                 if self.palette.open {
                     self.palette.close();
@@ -2479,6 +2505,58 @@ impl App {
     /// The pre-`R-I5` heuristic, kept only as the fallback above.
     fn addr_looks_remote(a: &str) -> bool {
         !(a.contains("127.0.0.1") || a.contains("localhost") || a.contains("[::1]"))
+    }
+
+    /// Point this window at a different daemon, without restarting it. `R-I7`.
+    ///
+    /// Two halves, and the second is the one that can go quietly wrong.
+    ///
+    /// Replacing `net` drops the old one, which is what stops its thread —
+    /// see `net::post`. Then **everything the previous daemon told us has to
+    /// go**, because it describes a different machine: its sessions, its
+    /// diffs, its repos, its files. A stale session left in the map would
+    /// render as a real row, and clicking it would ask the *new* daemon about
+    /// an id it has never heard of.
+    ///
+    /// The rule for anything added later: if it arrived over the wire, it is
+    /// cleared here. If the user chose it — the keymap, the layout, prefs — it
+    /// survives, because those describe the window rather than the daemon.
+    fn switch_to(&mut self, conn: &crate::connections::Connection, ctx: &egui::Context) {
+        self.net = Net::connect(conn.dial_url(), ctx.clone());
+        self.daemon_addr = conn.url.clone();
+        self.daemon_mode = crate::daemon::Mode::None;
+        self.daemon_identity = None;
+
+        // Daemon-derived, all of it.
+        self.sessions.clear();
+        self.queue.clear();
+        self.changes.clear();
+        self.events.clear();
+        self.hydrated.clear();
+        self.subagents.clear();
+        self.subagents_asked.clear();
+        self.selected = None;
+        self.selected_file = None;
+        self.debt = None;
+        self.blast = None;
+        self.blast_pending = false;
+        self.usage = None;
+        self.usage_asked = None;
+        self.health = Health::default();
+        self.insight = InsightState::default();
+        self.gitview = Default::default();
+        self.explorer.forget_all();
+
+        // Terminal panes hold a shell on the *old* machine, rooted at a path
+        // the new one need not have. Closing the view is safe and is the point
+        // of ADR-0011: tmux keeps the session, so this detaches rather than
+        // kills, and the tab comes back if you switch back.
+        self.shells.detach_all();
+        self.agent_term = None;
+        self.agent_failed = None;
+        self.pty_focus = None;
+
+        self.errors.clear();
     }
 
     /// Where a terminal pane should run its tmux. `R-I6`.
@@ -6916,7 +6994,7 @@ impl App {
         // before `R-I6`, in a directory that only exists on the other machine.
         let Some(reach) = self.terminal_reach() else {
             ui.add_space(8.0);
-            ui.label(dim(&self.no_reach_reason()));
+            ui.label(dim(self.no_reach_reason()));
             return;
         };
         self.shells.tick(ui.ctx(), &reach);
@@ -10619,3 +10697,165 @@ mod tests {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Connections — which daemon this window is watching. `R-I7`.
+// ---------------------------------------------------------------------------
+
+impl App {
+    /// Add, name, switch and forget daemons without a restart.
+    ///
+    /// The rule the layout follows: the list is written on change, not on
+    /// every frame. Unlike the layout there is no drag to debounce, so a save
+    /// per edit is exactly right.
+    fn connections_window(&mut self, root: &mut egui::Ui) {
+        if !self.show_connections {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let mut open = true;
+        let mut save = false;
+        let mut switch: Option<crate::connections::Connection> = None;
+        let mut remove: Option<usize> = None;
+        // Taken for the frame, like the tab rename: the draft is state on
+        // `self`, and the list below holds `self` borrowed to draw it.
+        let mut draft_slot = self.conn_draft.take();
+        let mut reopen: Option<(Option<usize>, crate::connections::Connection)> = None;
+        let mut commit: Option<(Option<usize>, crate::connections::Connection)> = None;
+        let mut cancel = false;
+
+        egui::Window::new("Daemons")
+            .open(&mut open)
+            .default_width(520.0)
+            .collapsible(false)
+            .show(&ctx, |ui| {
+                ui.label(dim(
+                    "Which daemon this window watches. Switching keeps your layout \
+                     and keymap; everything the old daemon said is dropped.",
+                ));
+                ui.add_space(6.0);
+
+                if self.connections.list.is_empty() {
+                    ui.label(dim("Nothing saved yet."));
+                }
+
+                let current = self.net.url.clone();
+                for (i, c) in self.connections.list.iter().enumerate() {
+                    let live = current.starts_with(&c.url);
+                    ui.horizontal(|ui| {
+                        ui.label(if live { icon::DOT } else { " " });
+                        ui.label(RichText::new(c.label()).strong());
+                        ui.label(dim(&c.url));
+                        // Never the token itself, here or anywhere: this window
+                        // is the thing people screen-share.
+                        if c.token.is_some() {
+                            ui.label(dim("· token"));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Forget").clicked() {
+                                remove = Some(i);
+                            }
+                            if ui.button("Edit").clicked() {
+                                reopen = Some((Some(i), c.clone()));
+                            }
+                            if !live && ui.button("Connect").clicked() {
+                                switch = Some(c.clone());
+                            }
+                        });
+                    });
+                }
+
+                ui.add_space(8.0);
+                ui.separator();
+
+                match draft_slot.as_mut() {
+                    None => {
+                        if ui.button("Add a daemon").clicked() {
+                            reopen = Some((None, Default::default()));
+                        }
+                        ui.label(dim(format!(
+                            "Watching {current}\nSaved in {}",
+                            crate::connections::Connections::path().display()
+                        )));
+                    }
+                    Some((at, draft)) => {
+                        egui::Grid::new("conn-draft").num_columns(2).show(ui, |ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut draft.name);
+                            ui.end_row();
+                            ui.label("URL");
+                            ui.text_edit_singleline(&mut draft.url);
+                            ui.end_row();
+                            ui.label("Token");
+                            let mut token = draft.token.clone().unwrap_or_default();
+                            // Masked because a token on screen is a token in
+                            // whatever recording or screenshot is running.
+                            if ui
+                                .add(egui::TextEdit::singleline(&mut token).password(true))
+                                .changed()
+                            {
+                                draft.token = (!token.is_empty()).then_some(token);
+                            }
+                            ui.end_row();
+                        });
+                        if let Some(problem) = draft.problem() {
+                            ui.label(RichText::new(problem).color(pal().amber));
+                        }
+                        ui.horizontal(|ui| {
+                            let ok = draft.problem().is_none();
+                            if ui.add_enabled(ok, egui::Button::new("Save")).clicked() {
+                                let mut conn = draft.clone();
+                                conn.url = conn.url.trim().to_string();
+                                conn.name = conn.name.trim().to_string();
+                                commit = Some((*at, conn));
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                        ui.label(dim(
+                            "The token is stored in ~/.mogeung/connections.json, \
+                             owner-readable only. It travels in clear text unless \
+                             the URL is wss://.",
+                        ));
+                    }
+                }
+            });
+
+        self.conn_draft = draft_slot;
+        if cancel {
+            self.conn_draft = None;
+        }
+        if let Some((at, conn)) = commit {
+            // Editing a row's URL into one that already exists collapses the
+            // two rather than leaving a duplicate behind.
+            if let Some(old) = at {
+                self.connections.remove(old);
+            }
+            self.connections.upsert(conn);
+            self.conn_draft = None;
+            save = true;
+        }
+        if let Some(next) = reopen {
+            self.conn_draft = Some(next);
+        }
+        if let Some(i) = remove {
+            self.connections.remove(i);
+            save = true;
+        }
+        if let Some(conn) = switch {
+            self.connections.active = self.connections.list.iter().position(|c| c.url == conn.url);
+            self.switch_to(&conn, &ctx);
+            save = true;
+        }
+        if save {
+            if let Err(e) = self.connections.save() {
+                self.errors.push(format!("could not save connections: {e}"));
+            }
+        }
+        if !open {
+            self.show_connections = false;
+            self.conn_draft = None;
+        }
+    }
+}

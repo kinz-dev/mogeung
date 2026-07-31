@@ -79,6 +79,22 @@ impl Net {
     }
 }
 
+/// Post an event, reporting whether anyone is still listening.
+///
+/// The `Net` that owns the receiving end is dropped when the window switches
+/// daemons (`R-I7`), and this is how the thread finds out. It matters more than
+/// it looks: without it a switch leaves the old thread reconnecting for ever —
+/// waking every two seconds, failing to send, and calling `request_repaint` on
+/// a context it has no business waking. Three switches in a session and there
+/// are three of them.
+fn post(ev_tx: &Sender<NetEvent>, ev: NetEvent, ctx: &egui::Context) -> bool {
+    if ev_tx.send(ev).is_err() {
+        return false;
+    }
+    ctx.request_repaint();
+    true
+}
+
 async fn net_loop(
     url: String,
     ev_tx: Sender<NetEvent>,
@@ -88,8 +104,9 @@ async fn net_loop(
     loop {
         match tokio_tungstenite::connect_async(&url).await {
             Ok((ws, _)) => {
-                let _ = ev_tx.send(NetEvent::Connected);
-                ctx.request_repaint();
+                if !post(&ev_tx, NetEvent::Connected, &ctx) {
+                    return;
+                }
                 let (mut sink, mut stream) = ws.split();
 
                 loop {
@@ -117,32 +134,81 @@ async fn net_loop(
                     match tokio::time::timeout(Duration::from_millis(50), stream.next()).await {
                         Ok(Some(Ok(Message::Text(t)))) => {
                             if let Ok(msg) = serde_json::from_str::<ServerMsg>(&t) {
-                                let _ = ev_tx.send(NetEvent::Msg(Box::new(msg)));
-                                ctx.request_repaint();
+                                if !post(&ev_tx, NetEvent::Msg(Box::new(msg)), &ctx) {
+                                    return;
+                                }
                             }
                         }
                         Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
                         Ok(Some(Err(e))) => {
-                            let _ = ev_tx.send(NetEvent::Disconnected(e.to_string()));
+                            if !post(&ev_tx, NetEvent::Disconnected(e.to_string()), &ctx) {
+                                return;
+                            }
                             break;
                         }
                         // Timeout or a frame type we do not care about.
                         _ => {}
                     }
                 }
-                let _ = ev_tx.send(NetEvent::Disconnected("connection closed".into()));
-                ctx.request_repaint();
+                if !post(&ev_tx, NetEvent::Disconnected("connection closed".into()), &ctx) {
+                    return;
+                }
             }
             Err(e) => {
-                let _ = ev_tx.send(NetEvent::Disconnected(format!(
-                    "cannot reach daemon: {e}"
-                )));
-                ctx.request_repaint();
+                let msg = NetEvent::Disconnected(format!("cannot reach daemon: {e}"));
+                if !post(&ev_tx, msg, &ctx) {
+                    return;
+                }
             }
         }
         // Reconnect forever: the daemon outliving or restarting under the UI is
         // normal, not an error state the user should have to act on.
         tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+
+    /// The network thread must die when its `Net` does.
+    ///
+    /// `R-I7` lets the window switch daemons at runtime, which means dropping a
+    /// `Net` and building another — and the old thread reconnects for ever
+    /// unless something tells it to stop. Nothing does, explicitly: the signal
+    /// is that both channels have lost their far end. This asserts the loop
+    /// actually returns on that, rather than spinning invisibly for the rest of
+    /// the session.
+    ///
+    /// The url points at a closed port on purpose. That is the hard case — a
+    /// thread that never connects sits in the retry path, which is exactly
+    /// where a missed check would leave it.
+    #[test]
+    fn the_network_thread_stops_when_its_owner_is_dropped() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let (ev_tx, ev_rx) = channel::<NetEvent>();
+            let (cmd_tx, cmd_rx) = channel::<ClientMsg>();
+            drop(ev_rx);
+            drop(cmd_tx);
+
+            let loop_done = net_loop(
+                "ws://127.0.0.1:1/ws".to_string(),
+                ev_tx,
+                cmd_rx,
+                egui::Context::default(),
+            );
+
+            // Generous: the loop sleeps two seconds between attempts, and the
+            // point is that it returns at all rather than how fast.
+            tokio::time::timeout(Duration::from_secs(10), loop_done)
+                .await
+                .expect("net_loop must return once nobody is listening");
+        });
     }
 }
 
