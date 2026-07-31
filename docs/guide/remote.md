@@ -274,8 +274,35 @@ reports need not resolve from here, and need not be the name ssh wants.
 
 **Authentication happens in the pane.** A key passphrase or a host-key prompt
 appears in the terminal itself and you answer it there — it is a real terminal,
-so nothing needs to be pre-arranged. Agent forwarding, `ControlMaster` and the
-rest are your ssh config's business; mogeung adds only `-t`, which tmux needs.
+so nothing needs to be pre-arranged.
+
+Two things worth setting up anyway, because each pane is its own ssh connection:
+
+```
+# ~/.ssh/config on the laptop
+Host devbox
+    User you
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+```
+
+`ControlMaster` reuses one connection for every pane, so you authenticate once
+instead of per tab. With `ssh-copy-id` as well, you authenticate not at all.
+
+**The remote command runs through a login shell** — `exec $SHELL -l -c 'tmux …'`
+rather than plain `tmux …`. That is not decoration. `ssh host cmd` gets a
+non-interactive, non-login shell, and zsh then sources only `.zshenv`, so macOS
+never runs `path_helper` and Homebrew's `/opt/homebrew/bin` is absent from
+`PATH`. tmux is installed and invisible:
+
+```
+zsh:1: command not found: tmux
+```
+
+A login shell sources the profile, which is where package managers put their
+`PATH`. The cost is that anything your profile prints runs once per pane; tmux
+clears the screen on attach, so you will rarely see it.
 
 Sessions still outlive the window — over there. `tmux attach -t <name>` on the
 dev box reaches the same shell, and the tab's tooltip names the host so you know
@@ -287,6 +314,13 @@ which machine to run that on.
 loopback needs `--token`. The message prints both ways out. Note that it also
 applies to the window — `mogeung --addr 0.0.0.0:7717` hosts a daemon, so it is
 refused on the same terms and exits rather than opening one quietly.
+
+**`command not found: tmux` in a terminal pane**, from a machine where tmux is
+definitely installed. Fixed on 2026-07-31 by running the remote command through
+a login shell — upgrade the **window**, which is the side that builds the
+command. If it persists, tmux really is missing there, or it is installed
+somewhere your login profile does not add to `PATH`; `ssh devbox 'echo $SHELL;
+$SHELL -lc "command -v tmux"'` answers both in one go.
 
 **"could not bind — is a daemon already running?"** on the dev box. One already
 is. That is the design: whoever wins the bind is the daemon. Attach to it.

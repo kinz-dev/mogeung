@@ -96,13 +96,34 @@ impl Reach {
         match self {
             Reach::Local => ("tmux".to_string(), tmux_args),
             Reach::Ssh(dest) => {
-                let mut args = vec!["-t".to_string(), dest.clone(), "tmux".to_string()];
-                // ssh joins what follows with spaces and hands it to the remote
-                // login shell, so every argument has to survive a second round
-                // of word splitting. A worktree path with a space in it is the
-                // ordinary case, not the exotic one.
-                args.extend(tmux_args.iter().map(|a| shell_quote(a)));
-                ("ssh".to_string(), args)
+                // Each tmux argument is quoted because the remote shell parses
+                // this line: a worktree path with a space in it is the ordinary
+                // case, not the exotic one.
+                let mut command = String::from("tmux");
+                for a in &tmux_args {
+                    command.push(' ');
+                    command.push_str(&shell_quote(a));
+                }
+                // …and then the whole thing is quoted again, because it is run
+                // through a **login** shell. `ssh host cmd` gets a
+                // non-interactive, non-login shell, which on zsh sources only
+                // `.zshenv` — so macOS never runs `path_helper` and Homebrew's
+                // `/opt/homebrew/bin` is missing from PATH. tmux is installed
+                // and the shell cannot see it:
+                //
+                //     zsh:1: command not found: tmux
+                //
+                // Reported from a real Apple-silicon box on 2026-07-31. `-l`
+                // sources the profile, which is where every package manager
+                // puts its PATH.
+                let login = format!(
+                    "exec ${{SHELL:-/bin/sh}} -l -c {}",
+                    shell_quote(&command)
+                );
+                (
+                    "ssh".to_string(),
+                    vec!["-t".to_string(), dest.clone(), login],
+                )
             }
         }
     }
@@ -755,14 +776,23 @@ mod reach_tests {
         assert_eq!(program, "ssh");
         assert_eq!(args[0], "-t", "tmux needs a pty on the far side");
         assert_eq!(args[1], "dev@box");
-        assert_eq!(args[2], "tmux");
+        assert_eq!(args.len(), 3, "one command word after the destination");
+        assert!(args[2].contains("new-session"), "the tmux verb must survive: {args:?}");
+        assert!(args[2].contains("/srv/w"), "the remote root must survive: {args:?}");
+    }
+
+    /// `ssh host cmd` runs a non-login shell, which on macOS+zsh means
+    /// `path_helper` never runs and Homebrew is absent from PATH — tmux is
+    /// installed and cannot be found. Reported from a real box:
+    /// `zsh:1: command not found: tmux`.
+    #[test]
+    fn the_remote_command_runs_through_a_login_shell() {
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(attach_args("mog:0.0"));
+        let cmd = &args[2];
+        assert!(cmd.contains(" -l -c "), "must be a login shell: {cmd}");
         assert!(
-            args.iter().any(|a| a.contains("new-session")),
-            "the tmux verb must survive: {args:?}"
-        );
-        assert!(
-            args.iter().any(|a| a.contains("/srv/w")),
-            "the remote root must survive: {args:?}"
+            cmd.starts_with("exec ${SHELL:-/bin/sh}"),
+            "must use the remote user's own shell, with a fallback: {cmd}"
         );
     }
 
@@ -775,8 +805,8 @@ mod reach_tests {
     fn a_path_with_a_space_survives_the_remote_shell() {
         let (_, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", "/My Code/repo"));
         assert!(
-            args.iter().any(|a| a == "'/My Code/repo'"),
-            "the path must arrive as one word: {args:?}"
+            args[2].contains("/My Code/repo"),
+            "the path must survive quoting: {args:?}"
         );
     }
 
@@ -786,13 +816,10 @@ mod reach_tests {
     fn a_single_quote_cannot_break_out_of_the_remote_command() {
         assert_eq!(shell_quote("it's"), r"'it'\''s'");
         let (_, args) = Reach::Ssh("box".into()).spawn_as(vec!["a'; rm -rf /; echo '".into()]);
-        let joined = args.join(" ");
         assert!(
-            !joined.contains("; rm -rf /; echo") || joined.contains(r"'\''"),
-            "an embedded quote must stay quoted: {joined}"
+            args[2].contains(r"'\''"),
+            "an embedded quote must be escaped, not left to close the string: {args:?}"
         );
-        // Every tmux argument arrives wrapped, so nothing in it starts a new word.
-        assert!(args[3].starts_with('\'') && args[3].ends_with('\''));
     }
 
     /// Attaching to a session by name has the same problem and the same fix:
@@ -801,7 +828,7 @@ mod reach_tests {
     fn an_attach_target_keeps_its_exact_match_prefix_over_ssh() {
         let (_, args) = Reach::Ssh("box".into()).spawn_as(attach_args("mog:0.0"));
         assert!(
-            args.iter().any(|a| a.contains("=mog:0.0")),
+            args[2].contains("=mog:0.0"),
             "the = prefix decides which session: {args:?}"
         );
     }
@@ -817,44 +844,53 @@ mod reach_tests {
 mod remote_shell_tests {
     use super::*;
 
-    /// Hand the composed command to an actual POSIX shell and count the words
+    /// Hand the composed command to actual POSIX shells and count the words
     /// that come out.
     ///
-    /// Every other quoting test here asserts what I believe `sh` does with the
-    /// string. This one asks it. The failure being guarded against is silent:
-    /// a mis-split path does not error, it roots the remote shell somewhere
-    /// else, and the tab looks like it worked.
+    /// Every other quoting test here asserts what I believe a shell does with
+    /// the string. This one asks. And it asks **twice**, because the command
+    /// is parsed twice on the far side: once by the shell `ssh` starts, and
+    /// again by the login shell that one execs. A quoting mistake at either
+    /// level is silent — a mis-split path does not error, it roots the remote
+    /// shell somewhere else and the tab looks like it worked.
     #[test]
-    fn the_remote_shell_splits_the_command_the_way_we_intended() {
+    fn the_remote_shells_split_the_command_the_way_we_intended() {
         let root = "/My Code/re'po";
         let (_, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", root));
 
-        // ssh hands everything after the destination to the remote login shell,
-        // joined by spaces. Reproduce exactly that.
-        let remote = args[2..].join(" ");
+        // Round one: the shell ssh starts parses the whole command line. Take
+        // its argv, standing in for `exec $SHELL -l -c …`.
+        let outer = words_of(&args[2]);
+        assert_eq!(outer.first().map(String::as_str), Some("exec"));
+        assert_eq!(outer.get(1).map(String::as_str), Some("/bin/sh"), "SHELL is unset here, so the fallback shows");
+        assert_eq!(outer.get(2).map(String::as_str), Some("-l"));
+        assert_eq!(outer.get(3).map(String::as_str), Some("-c"));
+        assert_eq!(outer.len(), 5, "the command must arrive as ONE word: {outer:?}");
+
+        // Round two: the login shell parses that single word.
+        let inner = words_of(&outer[4]);
+        assert_eq!(inner[0], "tmux");
+        assert_eq!(inner[1], "new-session");
+        assert_eq!(
+            inner.last().map(String::as_str),
+            Some(root),
+            "the root must survive both rounds, quote and space intact: {inner:?}"
+        );
+        assert_eq!(inner.len(), 7, "tmux + six tmux arguments: {inner:?}");
+    }
+
+    /// What a POSIX shell makes of a command line, as a word list.
+    fn words_of(command: &str) -> Vec<String> {
         let out = std::process::Command::new("sh")
             .arg("-c")
-            .arg(format!("printf '%s\\n' {remote}"))
+            .arg(format!("printf '%s\\n' {command}"))
+            .env_remove("SHELL")
             .output()
             .expect("sh must exist");
-        assert!(out.status.success(), "shell rejected: {remote}");
-
-        let words: Vec<&str> = std::str::from_utf8(&out.stdout)
-            .expect("utf8")
+        assert!(out.status.success(), "shell rejected: {command}");
+        String::from_utf8_lossy(&out.stdout)
             .lines()
-            .collect();
-
-        assert_eq!(words[0], "tmux");
-        assert_eq!(words[1], "new-session");
-        assert_eq!(
-            words.last().copied(),
-            Some(root),
-            "the root must arrive as one word, quote and space intact: {words:?}"
-        );
-        assert_eq!(
-            words.len(),
-            7,
-            "tmux + six tmux arguments, no more and no fewer: {words:?}"
-        );
+            .map(str::to_string)
+            .collect()
     }
 }
