@@ -310,6 +310,22 @@ which machine to run that on.
 
 ## Troubleshooting
 
+**Scan finds nothing.** In order of likelihood: the daemon was not started with
+`--advertise`; its `--listen` is loopback, which refuses to advertise because
+nobody could reach it; a firewall is blocking the port (macOS prompts on first
+bind — a dismissed prompt looks exactly like a network problem); the two
+machines are on different subnets or a guest VLAN; or the network drops
+multicast between hosts, which many do.
+
+To tell a silent daemon apart from a silent network, ask the protocol directly
+rather than through the UI:
+
+```sh
+cargo run -p mogeungd --example browse_probe
+```
+
+Same code the Scan button runs, with nothing else in the way.
+
 **"refusing to listen on … with no token."** Working as intended: a bind beyond
 loopback needs `--token`. The message prints both ways out. Note that it also
 applies to the window — `mogeung --addr 0.0.0.0:7717` hosts a daemon, so it is

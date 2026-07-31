@@ -93,19 +93,46 @@ pub fn advertise(addr: SocketAddr, identity: &DaemonIdentity, has_token: bool) -
         (KEY_HOME, identity.claude_home.clone()),
     ];
 
-    let info = ServiceInfo::new(
-        SERVICE,
-        &host,
-        &host_name,
-        addr.ip(),
-        addr.port(),
-        &properties[..],
-    )?;
+    let info = service_info(addr, &host, &host_name, &properties)?;
     let fullname = info.get_fullname().to_string();
 
     let daemon = ServiceDaemon::new()?;
     daemon.register(info)?;
     Ok(Advert { daemon, fullname })
+}
+
+/// Build the record, choosing the addresses to publish.
+///
+/// **`--listen 0.0.0.0` is the ordinary way to run a reachable daemon, and it
+/// is not an address anyone can connect to.** Publishing it verbatim produces a
+/// record whose only address is unspecified; a browser then has nothing usable
+/// to offer, and the daemon is simply invisible — which is exactly how this
+/// failed the first time it met a real network, on 2026-07-31.
+///
+/// So an unspecified bind hands the address list to mdns-sd's `addr_auto`,
+/// which fills it from the host's live interfaces and keeps it current as they
+/// change. A specific bind publishes exactly that address, because the operator
+/// chose it and picking a different one would be second-guessing them.
+fn service_info(
+    addr: SocketAddr,
+    host: &str,
+    host_name: &str,
+    properties: &[(&str, String)],
+) -> Result<ServiceInfo> {
+    if addr.ip().is_unspecified() {
+        return Ok(
+            ServiceInfo::new(SERVICE, host, host_name, (), addr.port(), properties)?
+                .enable_addr_auto(),
+        );
+    }
+    Ok(ServiceInfo::new(
+        SERVICE,
+        host,
+        host_name,
+        addr.ip(),
+        addr.port(),
+        properties,
+    )?)
 }
 
 /// A daemon someone else is advertising.
@@ -230,6 +257,44 @@ mod tests {
             panic!("loopback must not advertise");
         };
         assert!(err.to_string().contains("loopback"), "got: {err}");
+    }
+
+    /// The bug that made this row invisible on its first real network.
+    ///
+    /// `--listen 0.0.0.0` is how you run a daemon others can reach, and
+    /// `0.0.0.0` is not somewhere anyone can connect to. Published verbatim it
+    /// produced a record with one unspecified address, which the browse side
+    /// then dropped as unusable — so the daemon advertised perfectly and could
+    /// never be found.
+    #[test]
+    fn an_unspecified_bind_publishes_real_interfaces_not_the_wildcard() {
+        let props = [("k", "v".to_string())];
+        for wildcard in ["0.0.0.0:7717", "[::]:7717"] {
+            let info = service_info(wildcard.parse().unwrap(), "devbox", "devbox.local.", &props)
+                .expect("a wildcard bind must still advertise");
+            assert!(
+                info.is_addr_auto(),
+                "{wildcard} must publish live interface addresses"
+            );
+            assert!(
+                !info.get_addresses().iter().any(|a| a.is_unspecified()),
+                "{wildcard} must never publish an address nobody can dial"
+            );
+        }
+    }
+
+    /// A specific bind is a choice, and republishing something else would be
+    /// second-guessing it.
+    #[test]
+    fn a_specific_bind_advertises_exactly_that_address() {
+        let props = [("k", "v".to_string())];
+        let info = service_info("192.168.1.5:7717".parse().unwrap(), "d", "d.local.", &props)
+            .expect("info");
+        assert!(!info.is_addr_auto());
+        assert!(info
+            .get_addresses()
+            .iter()
+            .any(|a| a.to_string() == "192.168.1.5"));
     }
 
     #[test]
