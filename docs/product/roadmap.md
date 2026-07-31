@@ -27,10 +27,12 @@ items in one-go"* ask — a deliberate override of the item-0 gate, recorded per
 spec (features 0015–0022) and in the ledger (A20–A25). That gamble was settled
 on 2026-07-30: `E`–`H` were used and passed, so those rows are ✅.
 
-**`I` is the exception, and stays ⏳ on purpose.** Its rows reach machines and
-tools this desk does not have — Codex with no real sessions on disk, a remote
-daemon, a second OS — so nothing here has judged them and a ✅ would be a
-claim about a machine nobody ran.
+**`I` was the exception**, because its rows reach machines and tools this desk
+does not have — Codex with no real sessions on disk, a remote daemon, a second
+OS — so a ✅ would have been a claim about a machine nobody ran. That changed
+on 2026-07-31 for the remote half: a Mac watched from a Linux window settled
+`R-I4` and `R-I6`. `R-I1` (Codex) and the rest of the remote rows are still
+unjudged and stay ⏳.
 
 ## Identifiers
 
@@ -340,6 +342,22 @@ paces the others — its first two steps are overdue already, and how far up its
 ladder we climb depends on whether `R-I6` makes ssh the transport for
 everything.
 
+**Dogfooding began 2026-07-31**, and pillar `I` stopped being the pillar
+nothing had judged: a second machine appeared — an Apple-silicon Mac watched
+from a Linux window over `ssh -L`. `R-I4` and `R-I6` are ✅ on that evidence;
+`R-I5` is half — its comparison is proven by `R-I6` reaching the Mac through a
+loopback address, its refusals are not yet exercised. `R-I7`, `R-I8` and the
+direct-bind half of `R-I10` remain untried.
+
+**It found two bugs in the first hour, both invisible locally.** The remote
+tmux was launched through a non-login shell, so macOS never ran `path_helper`;
+fixing that with `-l` was not enough either, because a login shell run with
+`-c` is still non-interactive and Homebrew's `PATH` commonly lives in `.zshrc`.
+Both produced the same line — `zsh:1: command not found: tmux` — on a machine
+where tmux was installed. This is [item 0](#0-the-non-feature)'s argument
+applied to a pillar rather than a feature: no amount of local testing reaches
+a second machine's login shell.
+
 **Progress, 2026-07-31**, on the `remote-reach` branch: `R-I10`'s
 mandatory-token rung, then `R-I5`, then `R-I6`. That last one settled
 something. ssh is now a *hard requirement* for terminals against a remote
@@ -356,9 +374,9 @@ see `R-I10`.
 | R-I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises ([A23](assumptions.md)) | M | ⏳ |
 | R-I2 | **Gemini CLI adapter** — descoped, see above | M |  |
 | R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above | M | ⏳ |
-| R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). Shipped; guide at [guide/remote.md](../guide/remote.md) | M | ⏳ |
-| R-I5 | **Daemon identity** — **built 2026-07-31.** `DaemonIdentity` on the snapshot and on `/api/health`: a stable `machine_id` (`~/.mogeung/machine-id`), hostname, watched `~/.claude`, pid, version, optional ssh target. The window compares ids instead of guessing from the address string, so an `ssh -L` tunnel no longer reads as local. Repo roots were not included — nothing needed them, and the identity comparison did not | S | ⏳ |
-| R-I6 | **Remote terminal** — **built 2026-07-31.** Both terminal panes drive tmux over ssh when the daemon is elsewhere (`Reach::Ssh`), using the `ssh_target` from `R-I5`'s identity; without one they refuse rather than guess a hostname ssh may not want. As predicted, the cost was quoting and credentials rather than architecture — ADR-0010 and ADR-0011 hold unchanged, one layer further out. No bare-pty fallback remotely: it would trade the right machine for a shell on the wrong one | M | ⏳ |
+| R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). **Verified 2026-07-31** over the ssh-tunnel route: the queue, sessions and diffs of a Mac, in a window on another machine. The direct-bind and token paths are still unexercised, so [A24](assumptions.md) itself is untouched by this. Guide at [guide/remote.md](../guide/remote.md) | M | ✅ |
+| R-I5 | **Daemon identity** — **built 2026-07-31; half-verified the same day.** The comparison is demonstrably live: `R-I6`'s terminals reached the Mac *through a `127.0.0.1` tunnel*, which only happens when identity — not the address — decides. The refusal surface (open-in, jump-to-terminal) is still unexercised, which is why this stays ⏳. `DaemonIdentity` on the snapshot and on `/api/health`: a stable `machine_id` (`~/.mogeung/machine-id`), hostname, watched `~/.claude`, pid, version, optional ssh target. The window compares ids instead of guessing from the address string, so an `ssh -L` tunnel no longer reads as local. Repo roots were not included — nothing needed them, and the identity comparison did not | S | ⏳ |
+| R-I6 | **Remote terminal** — **verified in use 2026-07-31**, an egui window on Linux driving tmux on an Apple-silicon Mac over an ssh tunnel: both panes, a worktree path containing a space, two concurrent tabs, and detach-not-kill across a window restart. Both terminal panes drive tmux over ssh when the daemon is elsewhere (`Reach::Ssh`), using the `ssh_target` from `R-I5`'s identity; without one they refuse rather than guess a hostname ssh may not want. ADR-0010 and ADR-0011 hold unchanged, one layer further out. No bare-pty fallback remotely: it would trade the right machine for a shell on the wrong one | M | ✅ |
 | R-I7 | **Connections in the window** — **built 2026-07-31.** Add, name, switch and forget daemons from the connection dot or `Alt+D`; saved in `~/.mogeung/connections.json`, written `0600` because it holds tokens, and the active one is reopened next launch. Switching drops everything the old daemon said and keeps what the window owns; terminal tabs detach rather than die. The `Net` teardown it needed turned out to be a real leak — the reconnect loop ignored a dropped receiver and would have spun for ever per switch | M | ⏳ |
 | R-I8 | **LAN discovery** — **built 2026-07-31.** `--advertise` publishes `_mogeung._tcp` (off by default: the broadcast announces *"this machine is watching Claude Code sessions"* to the segment); the window's Scan button browses for 2s on a thread and lists what it finds. **Finding is never connecting** — a result fills the form and waits for a hand. A loopback bind refuses to advertise, which is also the interlock that makes everything discoverable token-gated by construction (`R-I10`) | M | ⏳ |
 | R-I9 | **Multi-daemon mix mode** — one window, several daemons, one merged queue. The only row here that changes the data model: `SessionId` is a bare `String` and the whole client keys on it, so every session, review mark, shell tab and layout entry must become origin-qualified. Also makes the window an aggregator, which is a new kind of authority — needs an ADR before code. The cheap alternative it must beat: one window per daemon, which works today and costs nothing | L | |
