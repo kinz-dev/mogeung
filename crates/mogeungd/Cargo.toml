@@ -24,6 +24,7 @@ ruzstd = "0.8"
 ignore = "0.4"
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
+mdns-sd = { version = "0.20.3", default-features = false, features = ["logging"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.30"

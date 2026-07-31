@@ -64,6 +64,15 @@ struct Args {
     /// watching from elsewhere knows where "here" is. The daemon never uses it.
     #[arg(long, value_name = "USER@HOST")]
     ssh_target: Option<String>,
+
+    /// Announce this daemon on the local network over mDNS (R-I8).
+    ///
+    /// Off unless asked for, and deliberately so: the broadcast tells every
+    /// machine on the segment that this one is watching Claude Code sessions
+    /// and where to reach it. Requires a non-loopback --listen, which in turn
+    /// requires --token.
+    #[arg(long)]
+    advertise: bool,
 }
 
 /// Command line over file over default, resolved in one place so the order can
@@ -86,6 +95,7 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             claude_home: None,
             token: args.token.or(cfg.token),
             ssh_target: args.ssh_target.or(cfg.ssh_target),
+            advertise: args.advertise || cfg.advertise.unwrap_or(false),
         },
     )
 }
@@ -137,6 +147,7 @@ mod tests {
             push_url: None,
             token: None,
             ssh_target: None,
+            advertise: false,
         }
     }
 

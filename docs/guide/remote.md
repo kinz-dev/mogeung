@@ -48,6 +48,16 @@ it holds tokens). Each has a name, a URL and an optional token, and the one you
 last connected to is reopened next launch — a flag on the command line still
 overrides it for that run.
 
+**Scan the network** asks over mDNS which daemons are advertising nearby. A
+daemon only appears if it was started with `--advertise`, which is off by
+default — the broadcast tells everything on the segment that this machine is
+watching Claude Code sessions and where to reach it, and that is not a thing to
+do to someone on guest wifi without being asked.
+
+Finding a daemon connects to nothing. It fills in the form, you supply the
+token, you press Connect. A daemon can only advertise from a non-loopback bind,
+which already requires a token — so anything you find here will want one.
+
 **Switching keeps the window and drops the daemon.** Your layout, keymap and
 prefs describe *this window* and survive. Everything the old daemon said —
 sessions, diffs, repos, open files — goes, because it describes a different
@@ -114,6 +124,9 @@ clear text, so this is for a network you already trust.
 mogeungd --listen 0.0.0.0:7717 --token "$(openssl rand -hex 24)"
 ```
 
+Add `--advertise` if you want the window's network scan to find it. Off by
+default, deliberately — see "Choosing a daemon from the window" above.
+
 Copy the token it printed. Leave `--token` off and the daemon will not start —
 it prints what to do instead and exits. Set it and the daemon still warns at
 startup that the token is travelling in clear text; that warning is not
@@ -144,6 +157,8 @@ listen = "0.0.0.0:7717"
 token  = "…"
 # how a client reaches this machine for terminal panes (R-I6)
 ssh_target = "dev@devbox"
+# announce on the local network so the window's scan finds it (R-I8)
+advertise = true
 
 # on your laptop
 url    = "ws://devbox:7717/ws"

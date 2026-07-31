@@ -162,6 +162,16 @@ refusal printed from a background thread is a line the window opens over. The
 token the window would have presented to a daemon elsewhere is the token it
 requires when it is the daemon; that is why `--token` reaches `daemon::host`.
 
+**Daemons can announce themselves** (`R-I8`), over mDNS as `_mogeung._tcp`,
+**only** when `--advertise` says so. The broadcast is a disclosure in its own
+right — it names the machine and says there is something here worth reaching —
+and no code can tell a home network from conference wifi, so the default is off
+and stays off. Browsing produces a list the window renders; nothing dials
+anything. A loopback bind refuses to advertise, since nobody could reach it, and
+that refusal is what makes every discoverable daemon token-gated by construction:
+the only binds that *can* advertise are the ones `admit` already requires a
+token for.
+
 **The daemon can be changed without restarting** (`R-I7`). The window keeps a
 list at `~/.mogeung/connections.json` — client state, like the keymap, and
 `0600` because it holds tokens. Switching replaces the `Net`, which is how the

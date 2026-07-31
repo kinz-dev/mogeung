@@ -424,6 +424,13 @@ pub struct App {
     /// one — kept out of `connections` until saved so an abandoned edit leaves
     /// nothing behind.
     conn_draft: Option<(Option<usize>, crate::connections::Connection)>,
+    /// A network scan in flight (`R-I8`). mDNS answers arrive when they arrive,
+    /// so the browse runs on a thread and posts its result here.
+    scan: Option<std::sync::mpsc::Receiver<Vec<mogeungd::discovery::Found>>>,
+    /// What the last scan found. **Offers, not connections** — nothing here is
+    /// dialled until a hand says so.
+    scanned: Vec<mogeungd::discovery::Found>,
+    scanned_once: bool,
     /// This machine's id, resolved once — the other half of the comparison.
     this_machine: Option<String>,
 
@@ -686,6 +693,9 @@ impl App {
             connections,
             show_connections: false,
             conn_draft: None,
+            scan: None,
+            scanned: Vec::new(),
+            scanned_once: false,
             this_machine: mogeungd::machine::machine_id(),
             pane: Pane::Queue,
             keymap,
@@ -10723,6 +10733,21 @@ impl App {
         let mut reopen: Option<(Option<usize>, crate::connections::Connection)> = None;
         let mut commit: Option<(Option<usize>, crate::connections::Connection)> = None;
         let mut cancel = false;
+        let mut start_scan = false;
+
+        // Collect a finished scan before drawing, so its results appear on the
+        // frame they arrive rather than the one after.
+        if let Some(rx) = &self.scan {
+            match rx.try_recv() {
+                Ok(found) => {
+                    self.scanned = found;
+                    self.scanned_once = true;
+                    self.scan = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.scan = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
 
         egui::Window::new("Daemons")
             .open(&mut open)
@@ -10760,6 +10785,61 @@ impl App {
                             }
                             if !live && ui.button("Connect").clicked() {
                                 switch = Some(c.clone());
+                            }
+                        });
+                    });
+                }
+
+                ui.add_space(8.0);
+                ui.separator();
+
+                // --- Discovery (R-I8) -----------------------------------
+                ui.horizontal(|ui| {
+                    let busy = self.scan.is_some();
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Scan the network"))
+                        .on_hover_text(
+                            "Ask over mDNS which daemons are advertising here.\n                             Finding one connects to nothing — you pick.",
+                        )
+                        .clicked()
+                    {
+                        start_scan = true;
+                    }
+                    if busy {
+                        ui.label(dim("listening…"));
+                    } else if self.scanned_once && self.scanned.is_empty() {
+                        ui.label(dim(
+                            "nothing advertising — a daemon only appears with --advertise",
+                        ));
+                    }
+                });
+
+                for f in &self.scanned {
+                    // Our own daemon, seen from outside. Offering it back would
+                    // invite a second connection to the machine we are on.
+                    if f.machine_id.is_some() && f.machine_id == self.this_machine {
+                        continue;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&f.name).strong());
+                        ui.label(dim(f.addr.to_string()));
+                        if f.needs_token {
+                            ui.label(dim("· needs a token"));
+                        }
+                        if let Some(home) = &f.claude_home {
+                            ui.label(dim(format!("· {home}")));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Add, never connect: this fills the form and waits.
+                            if ui.button("Add").clicked() {
+                                reopen = Some((
+                                    None,
+                                    crate::connections::Connection {
+                                        name: f.name.clone(),
+                                        url: f.url(),
+                                        token: None,
+                                    },
+                                ));
                             }
                         });
                     });
@@ -10821,6 +10901,20 @@ impl App {
                     }
                 }
             });
+
+        if start_scan {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx2 = ctx.clone();
+            // A thread rather than the frame loop: mDNS answers arrive over
+            // seconds, and a UI that waits for them is a UI that has stopped.
+            std::thread::spawn(move || {
+                let found = mogeungd::discovery::browse(std::time::Duration::from_secs(2))
+                    .unwrap_or_default();
+                let _ = tx.send(found);
+                ctx2.request_repaint();
+            });
+            self.scan = Some(rx);
+        }
 
         self.conn_draft = draft_slot;
         if cancel {

@@ -30,6 +30,8 @@ pub struct Options {
     /// How to reach this machine over ssh, published in the daemon's identity
     /// (`R-I5`). The daemon never uses it; a client does.
     pub ssh_target: Option<String>,
+    /// Announce this daemon over mDNS (`R-I8`). Off unless asked for.
+    pub advertise: bool,
 }
 
 impl Default for Options {
@@ -41,6 +43,7 @@ impl Default for Options {
             claude_home: None,
             token: None,
             ssh_target: None,
+            advertise: false,
         }
     }
 }
@@ -178,11 +181,35 @@ where
         );
     }
 
+    // Held for the life of the server: dropping it withdraws the record, so a
+    // clean shutdown stops advertising an address nothing answers on. `R-I8`.
+    let _advert = if opts.advertise {
+        match crate::discovery::advertise(addr, &state.daemon_identity(), posture == Posture::TokenGated)
+        {
+            Ok(a) => {
+                tracing::info!("advertising on the local network as {SERVICE_HINT}");
+                Some(a)
+            }
+            // Not fatal. Discovery is a convenience, and a daemon that refuses
+            // to watch anything because mDNS is unavailable — a container with
+            // no multicast, a locked-down network — has broken the thing you
+            // actually asked it to do over the thing you asked for as well.
+            Err(e) => {
+                tracing::warn!("not advertising: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     axum::serve(listener, api::router_with_token(state, opts.token.clone()))
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
 }
+
+const SERVICE_HINT: &str = crate::discovery::SERVICE;
 
 #[cfg(test)]
 mod tests {
