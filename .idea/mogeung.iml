@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/mogeung-core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/mogeung-tray/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/mogeung-ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/mogeungd/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/mogeungd/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/mogeungd/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
