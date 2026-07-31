@@ -110,6 +110,36 @@ pub enum ClientMsg {
     },
     /// The repo's uncommitted state — staged, unstaged and untracked.
     GitStatus { session_id: SessionId },
+
+    // -- The write family. `R-D19`.
+    //
+    // Everything above this line reads. These change the repository, and are
+    // the only messages in this protocol that do — see
+    // [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md),
+    // which permits the working tree and the local repository and refuses
+    // every remote verb. There is deliberately no `GitPush`, `GitPull` or
+    // `GitFetch`: that is `R-D24`, behind a second ADR that has not been
+    // written.
+    //
+    // They are grouped rather than filed beside their read siblings so that
+    // the guard which refuses them can name a contiguous list, and so that
+    // adding a fourth is visibly joining a family that has a rule.
+    /// Stage the given worktree paths.
+    GitStage {
+        session_id: SessionId,
+        paths: Vec<String>,
+    },
+    /// Unstage them, leaving the working tree untouched.
+    GitUnstage {
+        session_id: SessionId,
+        paths: Vec<String>,
+    },
+    /// Throw local changes away. **The one verb here with no undo** — for an
+    /// untracked path it means deletion, and git keeps no copy.
+    GitDiscard {
+        session_id: SessionId,
+        paths: Vec<String>,
+    },
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile {
         session_id: SessionId,

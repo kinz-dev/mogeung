@@ -52,6 +52,133 @@ fn run_git_diff(cwd: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
+/// Run a git command that **changes** the repository. `R-D19`.
+///
+/// A sibling to [`run_git`] rather than a flag on it, because the two want
+/// opposite postures and mixing them is how a write comes to fail quietly.
+/// Everything else in this file reads, and a read that fails degrades: an
+/// empty log, no blame, a diff we could not compute. That is right for reading
+/// — the pane stays usable and the health panel says what is missing.
+///
+/// It is wrong for writing. A stage that silently did nothing looks exactly
+/// like a stage that worked until you commit and find the file absent, so
+/// these fail loudly, and they fail in **git's own words**: the error is
+/// stderr verbatim, not a paraphrase wrapped around it. `git` already writes
+/// the best available sentence about why it refused, and every layer that
+/// rewrites one makes it worse — "cannot switch branch" against git's own
+/// "Your local changes to the following files would be overwritten by
+/// checkout:" plus the list.
+///
+/// See [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md)
+/// for what may be written at all: the working tree and the local repository,
+/// never a remote.
+pub fn run_git_write(cwd: &Path, args: &[&str]) -> Result<String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("failed to run git {args:?}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let said = stderr.trim();
+        // A non-zero exit with nothing on stderr is rare and would otherwise
+        // produce an empty error dialog, which reads as a bug in mogeung
+        // rather than a refusal by git.
+        if said.is_empty() {
+            bail!(
+                "git {:?} failed with no message (exit {})",
+                args,
+                out.status.code().unwrap_or(-1)
+            );
+        }
+        bail!("{said}");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Stage the given worktree paths. `R-D19`.
+pub fn stage(root: &Path, paths: &[String]) -> Result<()> {
+    // `add` rather than `add --all`: the pathspecs are the whole instruction,
+    // and a verb that could stage more than it was handed is one nobody can
+    // predict from the list they were looking at when they clicked.
+    run_git_write(root, &pathspec_args(&["add"], paths)).map(drop)
+}
+
+/// Unstage the given paths, leaving the working tree alone. `R-D19`.
+pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
+    // Before the first commit there is no HEAD to restore the index from, and
+    // `restore --staged` says so rather than doing the obvious thing. That is
+    // not an error worth showing: "unstage" in a fresh repository means "make
+    // it untracked again", which is what `rm --cached` does.
+    if head_sha(root).is_err() {
+        return run_git_write(root, &pathspec_args(&["rm", "--cached", "-r", "-q"], paths))
+            .map(drop);
+    }
+    run_git_write(root, &pathspec_args(&["restore", "--staged"], paths)).map(drop)
+}
+
+/// Throw away local changes to the given paths. `R-D19`.
+///
+/// **The only verb here with no undo.** Everything else this daemon can do to
+/// a repository is recoverable from git's own history; this destroys work git
+/// has never seen. The confirmation belongs in the UI, but the honesty belongs
+/// here too: nothing in this function is clever, and it does exactly what the
+/// two commands below do.
+///
+/// Tracked and untracked paths need different commands and are partitioned by
+/// asking git rather than by guessing from the filesystem — a path can exist
+/// and be untracked, or not exist and be tracked (that is a deletion, and
+/// discarding it means bringing the file back).
+///
+/// The question is put to `ls-files` rather than to `status`, which is the
+/// listing the pane is built from and therefore shaped for display: `status`
+/// **collapses an untracked directory to one row**, so a file inside a folder
+/// the agent just created never appears in it and would be classified as
+/// tracked. `ls-files` answers the question actually being asked — is git
+/// tracking this exact path — and answers it for the whole selection in one
+/// call.
+pub fn discard(root: &Path, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let listed = run_git(root, &pathspec_args(&["ls-files", "-z"], paths))?;
+    let tracked: HashSet<&str> = listed.split('\0').filter(|s| !s.is_empty()).collect();
+
+    let (kept, gone): (Vec<String>, Vec<String>) = paths.iter().cloned().partition(|p| {
+        // Exactly tracked, or a directory with something tracked beneath it —
+        // a selection can name a folder, and `ls-files` answers with the files
+        // inside rather than the folder itself.
+        let prefix = format!("{p}/");
+        tracked.contains(p.as_str()) || tracked.iter().any(|t| t.starts_with(&prefix))
+    });
+
+    // Tracked first. If `clean` were to run first and then `restore` refused,
+    // the untracked files would already be gone with nothing restored — the
+    // worst half of the operation completed alone.
+    if !kept.is_empty() {
+        run_git_write(root, &pathspec_args(&["restore", "--staged", "--worktree"], &kept))?;
+    }
+    if !gone.is_empty() {
+        // `-q` because the list of what was removed is on stdout and nobody
+        // reads it; `--` is in `pathspec_args`, and is what keeps a file named
+        // `-rf` from being read as flags.
+        run_git_write(root, &pathspec_args(&["clean", "-f", "-q"], &gone))?;
+    }
+    Ok(())
+}
+
+/// `git <verb> -- <paths>`, with the separator that makes a path a path.
+///
+/// Without `--`, a file called `-i` or `--hard` is an option. Agents produce
+/// stranger filenames than people do, and this is a write verb: the failure is
+/// not a confusing message but the wrong command running.
+fn pathspec_args<'a>(verb: &[&'a str], paths: &'a [String]) -> Vec<&'a str> {
+    let mut args: Vec<&str> = verb.to_vec();
+    args.push("--");
+    args.extend(paths.iter().map(String::as_str));
+    args
+}
+
 pub fn is_repo(path: &Path) -> bool {
     run_git(path, &["rev-parse", "--git-dir"]).is_ok()
 }
@@ -1260,36 +1387,56 @@ pub fn file_at_rev(cwd: &Path, rev: &str, rel: &str) -> Result<(String, bool)> {
 /// do not recognise still lists, it just wears its raw `XY`. `--ignored`
 /// adds `!!` rows (directories collapsed), which clients use to *dim*, not
 /// to list.
+/// `-z` rather than line-oriented, which is not a detail. `R-D19`.
+///
+/// Plain `--porcelain` C-quotes any path it considers unusual — a space is
+/// enough for surrounding quotes, and a non-ASCII byte becomes an octal escape,
+/// so `café.txt` arrives as `caf\303\251.txt`. Stripping the quotes got the
+/// first case right and left the second wrong, which was survivable while this
+/// was only ever *displayed*.
+///
+/// It stops being survivable now that the same strings are pathspecs handed
+/// back to git by [`discard`], which partitions on exact matches: a filename
+/// git spelled differently on the way out than the way in is a path the verb
+/// classifies wrongly. `-z` emits paths raw, NUL-separated, and quotes nothing.
 pub fn status(cwd: &Path) -> Result<Vec<StatusEntry>> {
-    let out = run_git(cwd, &["status", "--porcelain", "--ignored"])?;
+    let out = run_git(cwd, &["status", "--porcelain", "-z", "--ignored"])?;
     Ok(parse_status(&out))
 }
 
 fn parse_status(out: &str) -> Vec<StatusEntry> {
-    out.lines()
-        .filter_map(|line| {
-            if line.len() < 4 {
-                return None;
-            }
-            let (code, rest) = line.split_at(2);
-            let path = rest.trim_start();
-            // "old -> new" for renames; the new name is the one you can open.
-            let path = path.rsplit(" -> ").next().unwrap_or(path);
-            let x = code.chars().next().unwrap_or(' ');
-            let y = code.chars().nth(1).unwrap_or(' ');
-            // The porcelain's unmerged table: any U, or both sides added or
-            // both deleted.
-            let conflicted =
-                x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
-            Some(StatusEntry {
-                path: path.trim_matches('"').to_string(),
-                staged: x != ' ' && x != '?' && x != '!',
-                unstaged: y != ' ' && y != '!',
-                state: code.to_string(),
-                conflicted,
-            })
-        })
-        .collect()
+    let mut entries = Vec::new();
+    let mut records = out.split('\0');
+    while let Some(rec) = records.next() {
+        // The trailing NUL leaves one empty record; a short one is not a row.
+        if rec.len() < 4 {
+            continue;
+        }
+        let (code, rest) = rec.split_at(2);
+        // Exactly one space separates the code from the path — `trim_start`
+        // here would eat the first character of a file whose name begins with
+        // one, which `-z` is otherwise careful to preserve.
+        let path = rest.strip_prefix(' ').unwrap_or(rest);
+        let x = code.chars().next().unwrap_or(' ');
+        let y = code.chars().nth(1).unwrap_or(' ');
+        // A rename or copy spends a second record on the source path. Under
+        // `-z` there is no ` -> ` to split on, and the record must be consumed
+        // or the old name is read as a row of its own.
+        if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+            let _ = records.next();
+        }
+        // The porcelain's unmerged table: any U, or both sides added or
+        // both deleted.
+        let conflicted = x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
+        entries.push(StatusEntry {
+            path: path.to_string(),
+            staged: x != ' ' && x != '?' && x != '!',
+            unstaged: y != ' ' && y != '!',
+            state: code.to_string(),
+            conflicted,
+        });
+    }
+    entries
 }
 
 /// One uncommitted file against `HEAD` — or against nothing, when it is
@@ -1710,13 +1857,15 @@ index 333..444 100644
         assert!(parse_submodules("").is_empty());
     }
 
-    /// The porcelain codes that actually occur, including the rename arrow
-    /// and the quoted-path case.
+    /// The porcelain codes that actually occur. NUL-separated, because that is
+    /// what `-z` produces and what the parser is now written against — under
+    /// `-z` a rename spends a *second record* on its source path rather than
+    /// an ` -> ` arrow.
     #[test]
     fn status_parsing_reads_the_common_codes() {
-        let out = " M crates/a.rs\nM  crates/b.rs\nMM crates/c.rs\n?? new.txt\nR  old.rs -> new.rs\n";
+        let out = " M crates/a.rs\0M  crates/b.rs\0MM crates/c.rs\0?? new.txt\0R  new.rs\0old.rs\0";
         let entries = parse_status(out);
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 5, "the rename's source is not a row of its own");
         let by = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
         assert!(!by("crates/a.rs").staged);
         assert!(by("crates/a.rs").unstaged);
@@ -1726,6 +1875,7 @@ index 333..444 100644
         assert!(!by("new.txt").staged, "untracked is not staged");
         assert!(by("new.txt").unstaged);
         assert_eq!(by("new.rs").state, "R ", "a rename lists under its new name");
+        assert!(entries.iter().all(|e| e.path != "old.rs"), "the source is consumed");
         assert!(entries.iter().all(|e| !e.conflicted));
     }
 
@@ -1734,7 +1884,7 @@ index 333..444 100644
     /// change.
     #[test]
     fn status_parsing_marks_conflicts_and_ignored() {
-        let out = "UU src/merge.rs\nAA both.rs\nDD gone.rs\nAU theirs.rs\n!! target/\n M ok.rs\n";
+        let out = "UU src/merge.rs\0AA both.rs\0DD gone.rs\0AU theirs.rs\0!! target/\0 M ok.rs\0";
         let entries = parse_status(out);
         let by = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
         for p in ["src/merge.rs", "both.rs", "gone.rs", "theirs.rs"] {
@@ -1744,6 +1894,24 @@ index 333..444 100644
         let ignored = by("target/");
         assert_eq!(ignored.state, "!!");
         assert!(!ignored.staged && !ignored.unstaged, "ignored is not a change");
+    }
+
+    /// The names line-oriented porcelain spelled differently on the way out
+    /// than they exist on disk. Display could survive that; `R-D19`'s write
+    /// verbs cannot, because they hand these strings back to git as pathspecs
+    /// and `discard` partitions on an exact match.
+    #[test]
+    fn status_parsing_keeps_unusual_names_exactly_as_they_are() {
+        // Quoted by plain porcelain for the space, octal-escaped for the
+        // accent, and neither under `-z`.
+        let out = "?? with space.txt\0?? café.txt\0 M dir/a b/c.rs\0?? --hard\0";
+        let entries = parse_status(out);
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["with space.txt", "café.txt", "dir/a b/c.rs", "--hard"]);
+        assert!(
+            entries.iter().all(|e| !e.path.contains('"') && !e.path.contains('\\')),
+            "no quoting or escaping survives into a pathspec: {paths:?}"
+        );
     }
 
     /// Porcelain blame repeats a commit's details only once; every later

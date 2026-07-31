@@ -721,12 +721,57 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
     send_task.abort();
 }
 
+/// Whether a command changes the repository. `R-D19`.
+///
+/// Enumerated in one function rather than checked at each verb, so that adding
+/// a write verb without adding it here is a visible omission in a list of
+/// three rather than a missing line in a 45-arm match. The default arm is
+/// `false` on purpose: a *read* wrongly listed here is refused on an open
+/// bind, which is annoying; a write wrongly omitted is a repository an
+/// unauthenticated socket can change.
+///
+/// See [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md).
+fn is_write(cmd: &ClientMsg) -> bool {
+    matches!(
+        cmd,
+        ClientMsg::GitStage { .. } | ClientMsg::GitUnstage { .. } | ClientMsg::GitDiscard { .. }
+    )
+}
+
+/// Answer a write by re-reading the repository. `R-D19`.
+///
+/// Every write verb ends here, so "what happened" is always git's answer
+/// rather than the client's optimism.
+async fn rebroadcast_status(state: &Arc<AppState>, session_id: String) {
+    match state.git_status(&session_id).await {
+        Ok(entries) => state.broadcast(ServerMsg::GitLocalChanges {
+            session_id,
+            entries,
+        }),
+        Err(e) => state.broadcast(ServerMsg::Error {
+            message: e.to_string(),
+        }),
+    }
+}
+
 async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
     let err = |e: anyhow::Error| {
         state.broadcast(ServerMsg::Error {
             message: e.to_string(),
         })
     };
+
+    // One gate, before dispatch, for every verb that can change a repository.
+    // It is redundant with `server::admit`, which refuses to start a daemon
+    // that could reach it — and it is here anyway, because `admit` guards the
+    // *binary* while this guards the *router*, and the router is what a test,
+    // an embedding, or a future entry point actually constructs.
+    if is_write(&cmd) && !state.may_write() {
+        return err(anyhow::anyhow!(
+            "this daemon is not listening on loopback and no token was configured, \
+             so it will not write to a repository"
+        ));
+    }
 
     match cmd {
         ClientMsg::Subscribe => {
@@ -959,6 +1004,39 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }),
             Err(e) => err(e),
         },
+
+        // -- The write family. `R-D19`.
+        //
+        // Each answers by re-reading and re-broadcasting the status, rather
+        // than by reporting what it did. The client therefore never models
+        // repository state locally and the two cannot drift — the pane shows
+        // what git says, one round trip after the click, including when git
+        // did something other than what was asked.
+        ClientMsg::GitStage { session_id, paths } => {
+            match state.git_stage(&session_id, paths).await {
+                Ok(()) => rebroadcast_status(state, session_id).await,
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitUnstage { session_id, paths } => {
+            match state.git_unstage(&session_id, paths).await {
+                Ok(()) => rebroadcast_status(state, session_id).await,
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitDiscard { session_id, paths } => {
+            match state.git_discard(&session_id, paths).await {
+                Ok(()) => {
+                    // The diff the Changes tab is showing was computed from
+                    // files that may no longer exist. Recomputing is not
+                    // decoration: a stale hunk offers a "discard" of something
+                    // already gone.
+                    state.recompute_change(&session_id).await;
+                    rebroadcast_status(state, session_id).await
+                }
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitDiffFile {
             session_id,
             path,
@@ -1110,5 +1188,51 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }),
             Err(e) => err(e),
         },
+    }
+}
+
+#[cfg(test)]
+mod write_guard_tests {
+    use super::*;
+
+    /// The enumeration in `is_write` is the single point of failure this whole
+    /// guard has: one verb missing from it and an unauthenticated socket can
+    /// change a repository. So this asserts the list from both directions —
+    /// every write is in it, and the reads that sit closest to them are not.
+    #[test]
+    fn every_write_verb_is_named_and_no_read_is() {
+        let id = || "s".to_string();
+        let paths = || vec!["a.rs".to_string()];
+
+        for cmd in [
+            ClientMsg::GitStage { session_id: id(), paths: paths() },
+            ClientMsg::GitUnstage { session_id: id(), paths: paths() },
+            ClientMsg::GitDiscard { session_id: id(), paths: paths() },
+        ] {
+            assert!(is_write(&cmd), "{cmd:?} changes the repository");
+        }
+
+        // The neighbours. `GitStatus` especially: it is the answer every write
+        // verb broadcasts, so gating it would make a successful write look
+        // like a failed one.
+        for cmd in [
+            ClientMsg::GitStatus { session_id: id() },
+            ClientMsg::RefreshChange { session_id: id() },
+            ClientMsg::ReviewAll { session_id: id() },
+            ClientMsg::Subscribe,
+        ] {
+            assert!(!is_write(&cmd), "{cmd:?} only reads");
+        }
+    }
+
+    /// `ForgetSession` is destructive and deliberately *not* a repository
+    /// write: it drops mogeung's own records and touches no file git owns.
+    /// Worth pinning, because "destructive" and "writes the repo" are the two
+    /// things most likely to be conflated by whoever extends this next.
+    #[test]
+    fn forgetting_a_session_is_not_a_repository_write() {
+        assert!(!is_write(&ClientMsg::ForgetSession {
+            session_id: "s".into()
+        }));
     }
 }
