@@ -24,6 +24,17 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Where a daemon on this machine listens unless told otherwise.
+pub const DEFAULT_ADDR: &str = "127.0.0.1:7717";
+
+/// What the always-present local row is called.
+pub const LOCAL_NAME: &str = "LOCAL";
+
+/// The websocket URL of the daemon on this machine.
+pub fn local_url() -> String {
+    format!("ws://{DEFAULT_ADDR}/ws")
+}
+
 /// One daemon, as this window remembers it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Connection {
@@ -38,6 +49,25 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// The daemon on this machine — the row that is always in the list.
+    ///
+    /// Synthetic on purpose: it is never written to `connections.json`, never
+    /// edited and never forgotten. The whole reason it exists is to be the one
+    /// destination that cannot be lost, so a window pointed at an unreachable
+    /// dev box is always one click from the machine it is running on.
+    pub fn local() -> Self {
+        Connection {
+            name: LOCAL_NAME.into(),
+            url: local_url(),
+            token: None,
+        }
+    }
+
+    /// Whether this names the local daemon, and so must not be stored.
+    pub fn is_local(&self) -> bool {
+        self.url.trim() == local_url()
+    }
+
     /// The label a row wears: the name, or the URL when it has no name.
     pub fn label(&self) -> &str {
         if self.name.trim().is_empty() {
@@ -77,17 +107,33 @@ impl Connection {
         if url.len() <= "wss://".len() {
             return Some("needs a host after the scheme");
         }
+        // Saving this would produce a second, *editable and forgettable* row
+        // for the daemon that must always be reachable — and the first row it
+        // duplicates would still be there, so the list would show one machine
+        // twice with different affordances.
+        if self.is_local() {
+            return Some("LOCAL is always in the list");
+        }
         None
     }
 }
 
-/// Every remembered daemon, and which one is current.
+/// Every remembered daemon, and which one was last chosen.
+///
+/// `list` holds the *saved* daemons only. [`Connection::local`] is not in it
+/// and never will be — the window draws it above these, always.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Connections {
     #[serde(default)]
     pub list: Vec<Connection>,
-    /// Index into `list`. Out of range means "none of them" — which happens
-    /// when the window was started with `--url`, and after a removal.
+    /// Index into `list`, recording the last daemon switched to in the window.
+    /// `None` means LOCAL, which is also where every launch starts.
+    ///
+    /// **This no longer decides what the window connects to at start-up.** It
+    /// used to, and the result was a window that silently kept dialling a dev
+    /// box you were no longer at — with the machine you were actually sitting
+    /// in front of nowhere in the list. Start-up is always LOCAL now; this is
+    /// kept for the window to show what you last picked.
     #[serde(default)]
     pub active: Option<usize>,
 }
@@ -118,7 +164,19 @@ impl Connections {
     /// An `active` that points nowhere is a file someone hand-edited, or one
     /// written by a build that indexed differently. Drop the pointer rather
     /// than panicking on it later.
+    ///
+    /// A stored row naming the local daemon is dropped too. Files written
+    /// before LOCAL existed can hold one — it was the obvious thing to add by
+    /// hand when the list started empty — and leaving it would show this
+    /// machine twice, once forgettable and once not.
     fn repaired(mut self) -> Self {
+        let before = self.list.len();
+        self.list.retain(|c| !c.is_local());
+        // Indices moved under the pointer. It only records the last choice, so
+        // dropping it costs a highlight rather than a connection.
+        if self.list.len() != before {
+            self.active = None;
+        }
         if self.active.is_some_and(|i| i >= self.list.len()) {
             self.active = None;
         }
@@ -134,10 +192,6 @@ impl Connections {
         std::fs::write(&path, json).map_err(|e| e.to_string())?;
         restrict(&path);
         Ok(())
-    }
-
-    pub fn active(&self) -> Option<&Connection> {
-        self.list.get(self.active?)
     }
 
     /// Remember a connection, keeping the list a set by URL.
@@ -291,7 +345,6 @@ mod tests {
         c.active = Some(1);
         c.remove(1);
         assert_eq!(c.active, None);
-        assert!(c.active().is_none());
     }
 
     #[test]
@@ -313,6 +366,52 @@ mod tests {
             active: Some(7),
         };
         assert_eq!(broken.repaired().active, None);
+    }
+
+    /// The row that must always exist, and must always mean this machine.
+    #[test]
+    fn local_names_the_default_port_on_this_machine() {
+        let local = Connection::local();
+        assert_eq!(local.url, "ws://127.0.0.1:7717/ws");
+        assert_eq!(local.label(), "LOCAL");
+        assert!(local.token.is_none(), "the local daemon needs no token");
+        assert!(local.is_local());
+        assert!(!conn("devbox", "ws://10.0.0.27:7717/ws").is_local());
+    }
+
+    /// Typing the local URL into the add form would produce a second row for
+    /// the machine already at the top of the list — and unlike that one, this
+    /// one would carry Edit and Forget. Refuse it where every other bad URL is
+    /// refused, so the message lands next to the field.
+    #[test]
+    fn the_local_url_cannot_be_saved_as_a_row() {
+        let mut typed = conn("my laptop", &local_url());
+        assert_eq!(typed.problem(), Some("LOCAL is always in the list"));
+        // Whitespace is what a paste leaves behind, and must not slip past.
+        typed.url = format!("  {}  ", local_url());
+        assert_eq!(typed.problem(), Some("LOCAL is always in the list"));
+        // A different port on this machine is somebody's real second daemon.
+        assert!(conn("other", "ws://127.0.0.1:9999/ws").problem().is_none());
+    }
+
+    /// Files written before LOCAL existed can hold a hand-added localhost row.
+    /// Loading one must not show this machine twice.
+    #[test]
+    fn a_stored_local_row_is_dropped_on_load() {
+        let stored = Connections {
+            list: vec![
+                conn("localhost", &local_url()),
+                conn("devbox", "ws://10.0.0.27:7717/ws"),
+            ],
+            active: Some(0),
+        };
+        let fixed = stored.repaired();
+        assert_eq!(fixed.list.len(), 1);
+        assert_eq!(fixed.list[0].name, "devbox");
+        assert_eq!(
+            fixed.active, None,
+            "the pointer indexed the row that went; it must not slide onto its neighbour"
+        );
     }
 
     #[test]

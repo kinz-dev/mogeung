@@ -54,7 +54,7 @@ struct Args {
 impl Default for Args {
     fn default() -> Self {
         Args {
-            addr: "127.0.0.1:7717".into(),
+            addr: connections::DEFAULT_ADDR.into(),
             url: None,
             token: None,
             hotkey: Some(hotkey::DEFAULT.to_string()),
@@ -127,6 +127,9 @@ fn parse_args() -> Args {
 Starts a daemon if none is already watching, and attaches to one if there is.
 A daemon this window started stops when the window closes; one that was already
 running is left alone.
+
+Always starts on the local daemon. Daemons on other machines are saved in the
+window and chosen there (Alt+D) — a remote is never dialled automatically.
 
 Detaches from the terminal by default, like nohup: the prompt comes back at
 once and closing the terminal does not close the window. Console output is
@@ -230,7 +233,7 @@ fn main() -> eframe::Result<()> {
         cli::Outcome::Run(cmd, opts) => std::process::exit(cli::run(cmd, opts)),
     }
 
-    let mut args = parse_args();
+    let args = parse_args();
 
     // Hand the window over to a detached copy of ourselves and give the
     // terminal back, unless asked to stay (--foreground) or we *are* that
@@ -257,20 +260,21 @@ fn main() -> eframe::Result<()> {
         )
         .try_init();
 
-    // The daemon chosen in the window last time, if any (`R-I7`). It carries
-    // the same weight as `--url`: it names a specific daemon, possibly on
-    // another machine, so we attach rather than hosting one here. A flag still
-    // beats it — the command line is how you override a remembered choice once,
-    // and an override you must edit a file to undo is not an override.
-    let remembered = crate::connections::Connections::load().0.active().cloned();
-    if args.url.is_none() {
-        if let Some(c) = &remembered {
-            args.url = Some(c.dial_url());
-            args.token = None; // already in the URL
-            eprintln!("watching the saved daemon \"{}\" ({})", c.label(), c.url);
-        }
-    }
-
+    // Every launch starts on the local daemon.
+    //
+    // `R-I7` used to reopen the connection last chosen in the window, and that
+    // was wrong in the one way a default must never be wrong: it was sticky and
+    // invisible. Connect to a dev box once and every later launch dialled it —
+    // including from a train, and including after that box was turned off — and
+    // because the remembered URL was applied *here*, before `daemon::acquire`,
+    // the window also stopped honouring ADR-0009. It never checked the local
+    // port and never hosted a daemon, so the machine you were sitting in front
+    // of was not being watched at all, and nothing said so.
+    //
+    // So the remembered choice no longer reaches this far. LOCAL is always the
+    // start, always in the list, and another daemon is one keypress away in the
+    // window (Alt+D) — a choice you make when you mean it, per session.
+    //
     // An explicit --url means "talk to that", full stop: the user has pointed
     // us somewhere, possibly another machine, and starting a local daemon would
     // be answering a question nobody asked.

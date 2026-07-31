@@ -414,6 +414,13 @@ pub struct App {
     /// Where the daemon came from, and how to describe it.
     daemon_mode: crate::daemon::Mode,
     daemon_addr: String,
+    /// What `daemon::acquire` decided at launch, kept for the whole run.
+    ///
+    /// Switching away from LOCAL and back must not turn "this window is hosting
+    /// the daemon" into "nothing is serving it" — the thread is still there and
+    /// still serving, so saying otherwise would be a lie the status bar tells
+    /// about its own process.
+    launch_mode: crate::daemon::Mode,
     /// Who the daemon says it is (`R-I5`). `None` until the first snapshot, or
     /// for good against a daemon too old to say.
     daemon_identity: Option<mogeung_core::wire::DaemonIdentity>,
@@ -696,6 +703,7 @@ impl App {
             md_cache: egui_commonmark::CommonMarkCache::default(),
             transcript_limit: TRANSCRIPT_PAGE,
             scroll: None,
+            launch_mode: daemon_mode.clone(),
             daemon_mode,
             daemon_addr,
             daemon_identity: None,
@@ -2543,7 +2551,13 @@ impl App {
     fn switch_to(&mut self, conn: &crate::connections::Connection, ctx: &egui::Context) {
         self.net = Net::connect(conn.dial_url(), ctx.clone());
         self.daemon_addr = conn.url.clone();
-        self.daemon_mode = crate::daemon::Mode::None;
+        // Going back to LOCAL returns to the daemon this process started or
+        // found at launch, which is still exactly where it was.
+        self.daemon_mode = if conn.is_local() {
+            self.launch_mode.clone()
+        } else {
+            crate::daemon::Mode::None
+        };
         self.daemon_identity = None;
 
         // Daemon-derived, all of it.
@@ -10790,17 +10804,46 @@ impl App {
                 ));
                 ui.add_space(6.0);
 
+                let current = self.net.url.clone();
+
+                // LOCAL, always, above everything and outside the saved list.
+                // It carries no Edit or Forget: the point of it is that the
+                // machine you are sitting in front of cannot be lost, and a
+                // row you can delete is a row somebody deletes.
+                let local = crate::connections::Connection::local();
+                let local_live = current.starts_with(&local.url);
+                ui.horizontal(|ui| {
+                    ui.label(if local_live { icon::DOT } else { " " });
+                    ui.label(RichText::new(local.label()).strong());
+                    ui.label(dim(&local.url));
+                    ui.label(dim(match self.daemon_mode {
+                        crate::daemon::Mode::Hosting if local_live => "· hosted by this window",
+                        crate::daemon::Mode::Attached { .. } if local_live => "· already running",
+                        _ => "· this machine",
+                    }));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !local_live && ui.button("Connect").clicked() {
+                            switch = Some(local.clone());
+                        }
+                    });
+                });
+
                 if self.connections.list.is_empty() {
-                    ui.label(dim("Nothing saved yet."));
+                    ui.label(dim("No other daemons saved yet."));
                 }
 
-                let current = self.net.url.clone();
                 for (i, c) in self.connections.list.iter().enumerate() {
                     let live = current.starts_with(&c.url);
                     ui.horizontal(|ui| {
                         ui.label(if live { icon::DOT } else { " " });
                         ui.label(RichText::new(c.label()).strong());
                         ui.label(dim(&c.url));
+                        // Which one you reached for last time. It is a hint and
+                        // nothing more — no launch dials it, which is the whole
+                        // change here.
+                        if !live && self.connections.active == Some(i) {
+                            ui.label(dim("· last used"));
+                        }
                         // Never the token itself, here or anywhere: this window
                         // is the thing people screen-share.
                         if c.token.is_some() {

@@ -43,10 +43,24 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 The flags below are how you reach a daemon the first time. After that, use the
 window: click the connection dot in the top bar, or press `Alt+D`.
 
+**`LOCAL` is always the first row, and always where a launch starts.** It names
+the daemon on this machine on the default port, it is never saved to the file,
+and it has no Edit or Forget: the destination you need when a remote is
+unreachable is the one that must not be losable. Starting mogeung binds that
+port and hosts a daemon if nothing is there, exactly as it does with no
+connections saved at all.
+
 Saved daemons live in `~/.mogeung/connections.json` (written owner-only, since
-it holds tokens). Each has a name, a URL and an optional token, and the one you
-last connected to is reopened next launch — a flag on the command line still
-overrides it for that run.
+it holds tokens). Each has a name, a URL and an optional token. The row you last
+connected to is marked *last used*, but **no launch dials a remote for you** —
+you pick it, per session. `--url` on the command line still points that run
+wherever you say.
+
+> This changed on 2026-07-31. Until then the last-used connection was reopened
+> automatically, which was sticky in both directions: a window started at home
+> kept dialling a dev box that was off, and — because the remembered URL was
+> applied before the local-port check — it also stopped hosting a local daemon,
+> so the machine in front of you was not being watched and nothing said so.
 
 **On this network** lists daemons advertising nearby, and keeps listening for
 as long as the window is open — like a wifi picker rather than a search box.
