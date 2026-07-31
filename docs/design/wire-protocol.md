@@ -86,12 +86,18 @@ family — stage, unstage, discard, commit, branch, stash, resolve — and holds
 the line at the **network**, so `fetch`, `pull` and `push` remain absent by
 protocol.
 
-**The first three landed 2026-07-31** (`R-D19`): `GitStage`, `GitUnstage` and
-`GitDiscard`, each carrying a `session_id` and a list of worktree paths. They
-are grouped in the enum rather than filed beside their read siblings, so the
-guard that refuses them can name a contiguous list and a fourth is visibly
-joining a family with a rule. Commit, branch, stash and resolve
-(`R-D20`–`R-D22`) are still unbuilt.
+**Four landed 2026-07-31.** `GitStage`, `GitUnstage` and `GitDiscard` (`R-D19`)
+carry a `session_id` and a list of worktree paths; `GitCommit` (`R-D20`) carries
+a message, an `amend` flag and a `session_trailer` flag. They are grouped in the
+enum rather than filed beside their read siblings, so the guard that refuses
+them can name a contiguous list and a fifth is visibly joining a family with a
+rule. Branch, stash and resolve (`R-D21`, `R-D22`) are still unbuilt.
+
+`GitCommit` commits **only what is staged** — never `-a`. The staging list is
+the instruction, and a commit verb that could sweep in a file deliberately left
+unstaged would make the checkboxes a suggestion. The trailer is composed by the
+daemon, not the client: the id recorded has to be the one the daemon knows the
+session by, or `R-F2` could never look anything up with it.
 
 Two properties hold for every one of them:
 
@@ -108,7 +114,10 @@ Two properties hold for every one of them:
   round trip after the click — including when git did something other than
   what was asked.
 
-Write failures carry **git's stderr verbatim**. A paraphrase would throw away
+Write failures carry **git's own words verbatim** — stderr when there is any,
+stdout otherwise, because git splits refusals across both streams and the
+commonest of all, `commit`'s "nothing to commit, working tree clean", arrives
+on stdout with a non-zero exit. A paraphrase would throw away
 the list of files and the hint that make git's own refusals actionable. See
 [feature 0025](../features/0025-git-write-local.md).
 

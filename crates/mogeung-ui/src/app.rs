@@ -5038,8 +5038,10 @@ impl App {
         // Conflicts first: the one uncommitted state that is never routine.
         entries.sort_by_key(|e| !e.conflicted);
 
-        // The write bar. `R-D19` — the first thing in this pane that changes
-        // the repository rather than describing it.
+        // The commit box, then the write bar. `R-D19`/`R-D20` — the first
+        // things in this pane that change the repository rather than
+        // describing it.
+        self.git_commit_box(ui, s);
         self.git_write_bar(ui, s, &entries);
 
         for e in entries {
@@ -5109,6 +5111,105 @@ impl App {
                 });
             }
         }
+    }
+
+    /// Write and make a commit. `R-D20`.
+    ///
+    /// Above the file list, IntelliJ's layout, which is already this pane's
+    /// reference from `R-D18`. Below it would put the message further from the
+    /// staged files it describes the more of them there are.
+    fn git_commit_box(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let staged = self
+            .gitview
+            .status
+            .iter()
+            .filter(|e| e.staged && e.state != "!!")
+            .count();
+        let conflicts = self.gitview.status.iter().filter(|e| e.conflicted).count();
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+
+            ui.add(
+                egui::TextEdit::multiline(&mut self.gitview.commit_msg)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Commit message"),
+            );
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.gitview.commit_amend, "Amend")
+                    .on_hover_text(
+                        "Replace the last commit instead of adding one. \
+                         Rewrites history — safe until it has been pushed.",
+                    );
+                ui.checkbox(&mut self.gitview.commit_trailer, "Record session")
+                    .on_hover_text(
+                        "Add a Mogeung-Session trailer naming the session this work \
+                         came from, so a line can later be traced back to the prompt \
+                         that produced it.\n\nIt becomes part of the commit message: \
+                         permanent, and visible to anyone who reads the commit. It is \
+                         an id and carries no prompt text.",
+                    );
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Amend needs no staged files — its whole use is fixing a
+                    // message — so the two conditions differ.
+                    let has_message = !self.gitview.commit_msg.trim().is_empty();
+                    let ready = has_message && (staged > 0 || self.gitview.commit_amend);
+                    if ui
+                        .add_enabled(ready, egui::Button::new("Commit"))
+                        .on_disabled_hover_text(if !has_message {
+                            "a commit needs a message"
+                        } else {
+                            "nothing is staged — tick the files to include"
+                        })
+                        .clicked()
+                    {
+                        self.net.send(ClientMsg::GitCommit {
+                            session_id: s.id.clone(),
+                            message: self.gitview.commit_msg.clone(),
+                            amend: self.gitview.commit_amend,
+                            session_trailer: self.gitview.commit_trailer,
+                        });
+                        // Cleared optimistically, and that is a deliberate
+                        // trade: a refused commit costs a retyped message,
+                        // while a message left in the box after a successful
+                        // one gets committed twice by the next click. The
+                        // daemon's refusal arrives in the error bar with git's
+                        // own words, so the failure is never silent.
+                        self.gitview.commit_msg.clear();
+                        self.gitview.commit_amend = false;
+                        // The log on screen no longer has the tip it was drawn
+                        // from. Asking again is cheaper than a protocol message
+                        // that would exist for this one caller.
+                        self.gitview.commits.clear();
+                        self.gitview.log_pending = false;
+                    }
+                    ui.label(dim(match staged {
+                        0 => "nothing staged".to_string(),
+                        1 => "1 file staged".to_string(),
+                        n => format!("{n} files staged"),
+                    }));
+                });
+            });
+
+            // Committing over an unresolved conflict is legal git and almost
+            // never intended: it records the markers as content.
+            if conflicts > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "{} unresolved conflict{} — committing now records the \
+                         markers as code",
+                        conflicts,
+                        if conflicts == 1 { "" } else { "s" }
+                    ))
+                    .color(pal().amber)
+                    .size(12.0),
+                );
+            }
+        });
+        ui.add_space(4.0);
     }
 
     /// Stage, unstage and discard the ticked files. `R-D19`.

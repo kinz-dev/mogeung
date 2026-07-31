@@ -17,7 +17,7 @@ to support the GIT workflow"* — and scoped, from four offered tiers, to
 **local writes only**. `push` was in the question and is deliberately not in
 this feature; see [Explicitly out of scope](#explicitly-out-of-scope).
 
-**`R-D19` shipped 2026-07-31**; `R-D20`–`R-D23` are still a plan. See
+**`R-D19` and `R-D20` shipped 2026-07-31**; `R-D21`–`R-D23` are still a plan. See
 [Notes](#notes) for what building the first stage changed about the rest.
 
 ## Spec
@@ -74,10 +74,10 @@ decoration, it is liability.
       state without a manual refresh
 - [x] Discarding asks first, names every file it will destroy, and says plainly
       that git cannot bring them back
-- [ ] A commit can be written and made from the pane — message body, amend of
+- [x] A commit can be written and made from the pane — message body, amend of
       the tip commit, and an optional trailer naming the session whose diff it
       came from
-- [ ] A commit made from the pane appears in the log below it, and its diff
+- [x] A commit made from the pane appears in the log below it, and its diff
       arrives already marked read where the hunks were read before committing
 - [ ] Branches can be created and switched from the refs list; a switch that
       git refuses reports git's own words, and the pane's state does not move
@@ -240,6 +240,26 @@ part of this stage's cost rather than a later tidy-up.
   token. It was still built, for a reason worth writing down: `admit` guards
   the binary and this guards the router, and the router is what a test, an
   embedding, or a future entry point constructs.
+
+### `R-D20`, same day (2026-07-31)
+
+Cheap, as predicted — `R-D19` had already paid for `run_git_write`, the guard,
+containment and the fixtures. Three things it added that the plan did not have:
+
+- **Hooks run, and `stdin` is `/dev/null`.** Skipping hooks with `--no-verify`
+  would mean a repository that rejects bad commits everywhere except from this
+  window, so they run. But a `pre-commit` hook is free to prompt, and a daemon
+  has no terminal to prompt on — an inherited stdin would block a thread for
+  ever on a question nobody can see. With `/dev/null` the prompt gets EOF and
+  git fails loudly. Both cases are pinned by tests, including one whose only
+  real assertion is that it returns at all.
+- **stdout is a fallback for stderr.** `git commit` with nothing staged exits 1
+  and writes its refusal to *stdout*. Reading only stderr — which is what
+  "surfaces git's stderr verbatim" in the acceptance list above literally says
+  — rendered the commonest failure of all as "failed with no message".
+- **A whitespace-only message is refused before git sees it**, the one place
+  worth pre-empting git rather than deferring to it: `git commit -m "   "`
+  succeeds and produces a commit with a blank subject.
 
 ### Still open, and now more concrete
 

@@ -62,8 +62,10 @@ fn run_git_diff(cwd: &Path, args: &[&str]) -> Result<String> {
 ///
 /// It is wrong for writing. A stage that silently did nothing looks exactly
 /// like a stage that worked until you commit and find the file absent, so
-/// these fail loudly, and they fail in **git's own words**: the error is
-/// stderr verbatim, not a paraphrase wrapped around it. `git` already writes
+/// these fail loudly, and they fail in **git's own words**: the error is what
+/// git wrote, verbatim, not a paraphrase wrapped around it. stderr when there
+/// is any, and stdout otherwise — git splits refusals across both streams, and
+/// the commonest one of all ("nothing to commit") arrives on stdout. `git` already writes
 /// the best available sentence about why it refused, and every layer that
 /// rewrites one makes it worse — "cannot switch branch" against git's own
 /// "Your local changes to the following files would be overwritten by
@@ -75,15 +77,31 @@ fn run_git_diff(cwd: &Path, args: &[&str]) -> Result<String> {
 pub fn run_git_write(cwd: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .args(args)
+        // No stdin, deliberately. `commit` runs the repository's hooks and may
+        // reach for a GPG passphrase, and either can decide to prompt. A
+        // daemon has no terminal to prompt on, so an inherited stdin means a
+        // thread blocked for ever on a question nobody will ever see. With
+        // `/dev/null` the prompt gets EOF, git fails, and its complaint
+        // reaches the window — slow and wrong beats silent and stuck.
+        .stdin(std::process::Stdio::null())
         .current_dir(cwd)
         .output()
         .with_context(|| format!("failed to run git {args:?}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let said = stderr.trim();
-        // A non-zero exit with nothing on stderr is rare and would otherwise
-        // produce an empty error dialog, which reads as a bug in mogeung
-        // rather than a refusal by git.
+        // stdout as the fallback, because git does not keep refusals on one
+        // stream. `commit` with nothing staged exits 1 and writes "nothing to
+        // commit, working tree clean" to *stdout* — which is the refusal a
+        // user hits most often, and reading only stderr rendered it as the
+        // empty message below.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let said = match stderr.trim() {
+            "" => stdout.trim(),
+            s => s,
+        };
+        // Neither stream said anything. Rare, and it would otherwise produce
+        // an empty error dialog, which reads as a bug in mogeung rather than
+        // as a refusal by git.
         if said.is_empty() {
             bail!(
                 "git {:?} failed with no message (exit {})",
@@ -166,6 +184,62 @@ pub fn discard(root: &Path, paths: &[String]) -> Result<()> {
     }
     Ok(())
 }
+
+/// Commit what is staged. `R-D20`.
+///
+/// Returns the new commit's sha, so the pane can select what it just made
+/// rather than hunting for it in a log it has to re-fetch first.
+///
+/// **Only what is staged**, never `-a`. The staging list is the instruction,
+/// and a commit verb that could include a file the user had deliberately left
+/// unstaged would make the checkboxes above it a suggestion.
+///
+/// Hooks run. Skipping them with `--no-verify` would be a silent change of
+/// meaning — a repository that refuses bad commits would start accepting them
+/// from this window and only this window — so the honest failure is git's own,
+/// which `run_git_write` returns verbatim.
+pub fn commit(
+    root: &Path,
+    message: &str,
+    amend: bool,
+    trailers: &[(String, String)],
+) -> Result<String> {
+    // git refuses an empty message itself, and its refusal is the better
+    // sentence. This one exists because a message of only whitespace passes
+    // git's check and produces a commit with a blank subject line.
+    if message.trim().is_empty() {
+        bail!("a commit needs a message");
+    }
+
+    let mut args: Vec<String> = vec!["commit".into(), "-m".into(), message.into()];
+    if amend {
+        args.push("--amend".into());
+    }
+    // `--trailer` rather than appending to the message ourselves: git knows
+    // where a trailer block goes when the message already has one, how to
+    // separate it from the body, and what to do about `Signed-off-by`.
+    // Requires git 2.32 (2021).
+    for (k, v) in trailers {
+        args.push("--trailer".into());
+        args.push(format!("{k}={v}"));
+    }
+
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_git_write(root, &borrowed)?;
+    head_sha(root)
+}
+
+/// The trailer naming the session a commit's work came from. `R-D20`.
+///
+/// This is the reason committing from the pane is worth building rather than
+/// shelling out to a terminal: mogeung knows which session produced which
+/// hunks, and a terminal never can. `R-F2` prompt-blame reads it back — from a
+/// line, to the commit, to the session, to the prompt that caused it.
+///
+/// A `Key: value` trailer rather than anything cleverer because it survives:
+/// `git log`, `git show`, GitHub, `git interpret-trailers --parse`, and every
+/// tool that has never heard of mogeung all keep it intact and ignore it.
+pub const SESSION_TRAILER: &str = "Mogeung-Session";
 
 /// `git <verb> -- <paths>`, with the separator that makes a path a path.
 ///

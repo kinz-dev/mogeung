@@ -227,3 +227,192 @@ fn an_empty_selection_changes_nothing() {
     assert!(dir.join("new.txt").exists(), "discard of nothing destroys nothing");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// -- Commit. `R-D20`. ---------------------------------------------------------
+
+fn log_subjects(dir: &Path) -> Vec<String> {
+    git_in(dir, &["log", "--format=%s"])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn committing_records_only_what_was_staged() {
+    let dir = repo("commit", false);
+    std::fs::write(dir.join("staged.txt"), "in\n").unwrap();
+    std::fs::write(dir.join("loose.txt"), "out\n").unwrap();
+    git::stage(&dir, &p("staged.txt")).unwrap();
+
+    let sha = git::commit(&dir, "add the staged one", false, &[]).unwrap();
+
+    assert_eq!(log_subjects(&dir), ["add the staged one", "first"]);
+    assert_eq!(sha.len(), 40, "the new sha comes back: {sha}");
+    // The unstaged file is untouched and still uncommitted — the checkboxes
+    // are the instruction, not a suggestion.
+    assert_eq!(status(&dir), "?? loose.txt\n");
+    let named = git_in(&dir, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(named.trim(), "staged.txt");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The distinctive part, and the reason this is worth building rather than
+/// shelling out: a terminal cannot know which session produced the work.
+/// `R-F2` prompt-blame reads this back.
+#[test]
+fn the_session_trailer_lands_where_git_puts_trailers() {
+    let dir = repo("trailer", false);
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+    git::commit(
+        &dir,
+        "subject line\n\nA body paragraph.",
+        false,
+        &[(git::SESSION_TRAILER.into(), "sess-abc-123".into())],
+    )
+    .unwrap();
+
+    let body = git_in(&dir, &["log", "-1", "--format=%B"]);
+    assert!(body.contains("subject line"), "{body}");
+    assert!(body.contains("A body paragraph."), "the body survives: {body}");
+    assert!(
+        body.contains("Mogeung-Session: sess-abc-123"),
+        "trailer formatted by git, not spliced by us: {body}"
+    );
+    // Parseable as a trailer by anything that speaks the convention, which is
+    // what makes it useful to a tool that has never heard of mogeung.
+    let parsed = git_in(&dir, &["log", "-1", "--format=%(trailers:key=Mogeung-Session,valueonly)"]);
+    assert_eq!(parsed.trim(), "sess-abc-123");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn amending_replaces_the_tip_rather_than_adding_to_it() {
+    let dir = repo("amend", false);
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+    git::commit(&dir, "first try", false, &[]).unwrap();
+    assert_eq!(log_subjects(&dir), ["first try", "first"]);
+
+    std::fs::write(dir.join("b.txt"), "y\n").unwrap();
+    git::stage(&dir, &p("b.txt")).unwrap();
+    git::commit(&dir, "second thoughts", true, &[]).unwrap();
+
+    assert_eq!(log_subjects(&dir), ["second thoughts", "first"], "no new commit");
+    let named = git_in(&dir, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(named.contains("a.txt") && named.contains("b.txt"), "{named}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Amending in a repository with no commits: git refuses, and its refusal is
+/// the sentence worth showing.
+#[test]
+fn amending_with_nothing_to_amend_is_gits_refusal() {
+    let dir = repo("amend-empty", true);
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+    let e = git::commit(&dir, "nope", true, &[]).unwrap_err().to_string();
+    assert!(e.to_lowercase().contains("amend"), "git's words: {e}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A message of only whitespace passes git's own empty check and produces a
+/// commit with a blank subject — one of the few places worth refusing ahead
+/// of git rather than after it.
+#[test]
+fn a_blank_message_is_refused_before_git_sees_it() {
+    let dir = repo("blank-msg", false);
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+
+    for blank in ["", "   ", "\n\n", " \t\n "] {
+        let e = git::commit(&dir, blank, false, &[]).unwrap_err().to_string();
+        assert!(e.contains("needs a message"), "{blank:?} → {e}");
+    }
+    assert_eq!(log_subjects(&dir), ["first"], "nothing was committed");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Nothing staged is git's call, not ours — "no changes added to commit" is
+/// more useful than anything we would write, and the pane shows it verbatim.
+#[test]
+fn committing_nothing_is_gits_refusal() {
+    let dir = repo("nothing-staged", false);
+    let e = git::commit(&dir, "empty", false, &[]).unwrap_err().to_string();
+    assert!(
+        e.contains("nothing to commit") || e.contains("no changes added"),
+        "git's words: {e}"
+    );
+    assert_eq!(log_subjects(&dir), ["first"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A message starting with a dash must not be read as an option. `-m` takes
+/// the next argument whatever it looks like, and this pins that it stays so.
+#[test]
+fn a_message_that_looks_like_a_flag_is_still_a_message() {
+    let dir = repo("dashy-msg", false);
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+    git::commit(&dir, "--amend all the things", false, &[]).unwrap();
+    assert_eq!(log_subjects(&dir), ["--amend all the things", "first"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A pre-commit hook that refuses must stop the commit, and say why. Skipping
+/// hooks would mean a repository that rejects bad commits everywhere except
+/// from this window.
+#[test]
+fn a_hook_that_refuses_stops_the_commit() {
+    let dir = repo("hook", false);
+    let hooks = dir.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho 'the hook says no' >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+    let e = git::commit(&dir, "should not land", false, &[]).unwrap_err().to_string();
+    assert!(e.contains("the hook says no"), "the hook's own words: {e}");
+    assert_eq!(log_subjects(&dir), ["first"], "nothing was committed");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A hook that reads stdin would block a daemon thread for ever on a question
+/// nobody can see, because a daemon has no terminal. `run_git_write` gives it
+/// `/dev/null`, so it gets EOF and the commit fails loudly instead of hanging.
+#[test]
+fn a_hook_that_prompts_fails_instead_of_hanging() {
+    let dir = repo("hook-prompt", false);
+    let hooks = dir.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nread answer || exit 1\n[ \"$answer\" = y ] || exit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    std::fs::write(dir.join("a.txt"), "x\n").unwrap();
+    git::stage(&dir, &p("a.txt")).unwrap();
+    // The assertion that matters is that this returns at all.
+    assert!(git::commit(&dir, "should not hang", false, &[]).is_err());
+    assert_eq!(log_subjects(&dir), ["first"]);
+
+    std::fs::remove_dir_all(&dir).ok();
+}

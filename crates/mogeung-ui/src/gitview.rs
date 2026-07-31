@@ -70,6 +70,24 @@ pub struct GitView {
     /// Files a confirmed Discard would destroy, while the confirmation is up.
     /// `None` when nothing is being asked. `R-D19`.
     pub confirm_discard: Option<Vec<String>>,
+    /// The commit message being written. `R-D20`.
+    ///
+    /// Kept here rather than in `prefs`: a half-typed message is not a
+    /// setting, and one restored on a later launch would be a sentence about
+    /// work that has since been committed by other means.
+    pub commit_msg: String,
+    /// Replace the tip commit rather than adding one.
+    pub commit_amend: bool,
+    /// Record which session the work came from, for `R-F2`.
+    ///
+    /// On by default, and a visible checkbox rather than a setting, because it
+    /// is the reason committing from here beats committing from a terminal —
+    /// off by default it would be a feature nobody finds. Visible because the
+    /// trailer becomes part of the commit message: it is a UUID and carries no
+    /// prompt text, but it is permanent, and anyone who reads the commit sees
+    /// it. That is a choice to put in front of a hand, not in a preferences
+    /// dialog.
+    pub commit_trailer: bool,
     pub status_pending: bool,
     /// Set once the first status answer lands, so an empty repo reads as
     /// "clean" instead of "loading" forever.
@@ -147,6 +165,12 @@ impl GitView {
         }
         *self = GitView {
             session: Some(id.clone()),
+            // On for each new session rather than derived, and set here
+            // because this is the one path that builds a live `GitView` — see
+            // the field for why it defaults on. Unticking it is a decision
+            // about *this* commit, so it does not follow you to the next
+            // session.
+            commit_trailer: true,
             ..Default::default()
         };
     }

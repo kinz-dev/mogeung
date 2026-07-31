@@ -140,6 +140,22 @@ pub enum ClientMsg {
         session_id: SessionId,
         paths: Vec<String>,
     },
+    /// Commit what is staged. `R-D20`.
+    ///
+    /// Only what is staged: the checkboxes above are the instruction, and a
+    /// commit that swept in unstaged files would make them a suggestion.
+    GitCommit {
+        session_id: SessionId,
+        message: String,
+        /// Replace the tip commit instead of adding one.
+        #[serde(default)]
+        amend: bool,
+        /// Record which session's work this was, for `R-F2` prompt-blame.
+        /// Optional because a commit made by hand in the pane need not have
+        /// come from an agent at all.
+        #[serde(default)]
+        session_trailer: bool,
+    },
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile {
         session_id: SessionId,

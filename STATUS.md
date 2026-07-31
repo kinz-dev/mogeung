@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `git-write-local` |
-| Tests | 552 passing |
-| Rust | 47288 lines |
+| Tests | 561 passing |
+| Rust | 47742 lines |
 | Docs | 62 files, 13 ADRs |
 
 ## Assumptions

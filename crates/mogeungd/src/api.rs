@@ -734,7 +734,10 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
 fn is_write(cmd: &ClientMsg) -> bool {
     matches!(
         cmd,
-        ClientMsg::GitStage { .. } | ClientMsg::GitUnstage { .. } | ClientMsg::GitDiscard { .. }
+        ClientMsg::GitStage { .. }
+            | ClientMsg::GitUnstage { .. }
+            | ClientMsg::GitDiscard { .. }
+            | ClientMsg::GitCommit { .. }
     )
 }
 
@@ -1021,6 +1024,30 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
         ClientMsg::GitUnstage { session_id, paths } => {
             match state.git_unstage(&session_id, paths).await {
                 Ok(()) => rebroadcast_status(state, session_id).await,
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitCommit {
+            session_id,
+            message,
+            amend,
+            session_trailer,
+        } => {
+            match state
+                .git_commit(&session_id, message, amend, session_trailer)
+                .await
+            {
+                Ok(_sha) => {
+                    // The staged files are gone from the working tree's point
+                    // of view, and the session's diff was computed against a
+                    // base that has just moved. The log is the client's own
+                    // problem: it knows it asked for a commit, so it re-asks
+                    // rather than being told — which keeps a `GitLogStale`
+                    // message that would exist for exactly one caller out of
+                    // the protocol.
+                    state.recompute_change(&session_id).await;
+                    rebroadcast_status(state, session_id).await
+                }
                 Err(e) => err(e),
             }
         }

@@ -1618,6 +1618,29 @@ impl AppState {
         *self.writes_allowed.get().unwrap_or(&true)
     }
 
+    /// Commit what is staged in the session's repository. `R-D20`.
+    ///
+    /// The trailer is built here rather than by the client, so the id recorded
+    /// is the one the daemon knows the session by — a client that guessed it
+    /// would write a value `R-F2` could never look anything up with.
+    pub async fn git_commit(
+        &self,
+        id: &str,
+        message: String,
+        amend: bool,
+        session_trailer: bool,
+    ) -> Result<String> {
+        let root = self.git_root(id).await?;
+        let trailers = match session_trailer {
+            true => vec![(crate::git::SESSION_TRAILER.to_string(), id.to_string())],
+            false => Vec::new(),
+        };
+        tokio::task::spawn_blocking(move || {
+            crate::git::commit(&root, &message, amend, &trailers)
+        })
+        .await?
+    }
+
     /// The repository a write verb may touch, once every path in it has been
     /// checked. `R-D19`.
     ///
