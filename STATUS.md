@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `remote-reach` |
-| Tests | 523 passing |
-| Rust | 45239 lines |
+| Tests | 525 passing |
+| Rust | 45477 lines |
 | Docs | 61 files, 12 ADRs |
 
 ## Assumptions

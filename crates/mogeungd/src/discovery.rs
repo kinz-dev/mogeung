@@ -140,8 +140,15 @@ fn service_info(
 pub struct Found {
     /// The instance name — its hostname, as advertised.
     pub name: String,
-    /// Where to reach it.
-    pub addr: SocketAddr,
+    /// Every address it can be reached on, **in a stable order**: IPv4 before
+    /// IPv6, then numerically.
+    ///
+    /// The order is part of the contract. This was a `HashSet` read with
+    /// `.find()`, so a host answering on both families produced a different
+    /// address each time the list was drawn — one daemon appearing to move
+    /// between scans, which reads as an unreliable network rather than an
+    /// unordered container.
+    pub addrs: Vec<SocketAddr>,
     /// Its `machine_id`, when it published one. Lets a client recognise its
     /// own daemon in the list instead of offering it back.
     pub machine_id: Option<String>,
@@ -153,52 +160,134 @@ pub struct Found {
 }
 
 impl Found {
+    /// The address to dial: the lowest IPv4 when there is one. IPv4 first
+    /// because a URL carrying a v6 literal needs brackets, and a link-local one
+    /// needs a scope that will not survive the trip.
+    pub fn addr(&self) -> Option<SocketAddr> {
+        self.addrs.first().copied()
+    }
+
     /// The websocket URL for this daemon.
-    pub fn url(&self) -> String {
-        format!("ws://{}/ws", self.addr)
+    pub fn url(&self) -> Option<String> {
+        Some(format!("ws://{}/ws", self.addr()?))
+    }
+
+    /// Merge a later sighting into an earlier one, keeping every address seen.
+    ///
+    /// A host announces per interface and per family, so sightings arrive
+    /// piecemeal. Replacing rather than merging is half of why a row flickered.
+    pub fn absorb(&mut self, other: Found) {
+        for a in other.addrs {
+            if !self.addrs.contains(&a) {
+                self.addrs.push(a);
+            }
+        }
+        sort_addrs(&mut self.addrs);
+        self.machine_id = other.machine_id.or_else(|| self.machine_id.take());
+        self.version = other.version.or_else(|| self.version.take());
+        self.claude_home = other.claude_home.or_else(|| self.claude_home.take());
+        self.needs_token = other.needs_token;
     }
 }
 
-/// Listen for advertisements for `window`, then stop.
-///
-/// Blocking, and meant for a thread of its own: mDNS answers arrive whenever
-/// they arrive, and a UI cannot wait on that. A fixed window rather than
-/// "until we have some" because *nothing found* is a real answer, and the one
-/// worth reporting quickly.
-pub fn browse(window: Duration) -> Result<Vec<Found>> {
-    let daemon = ServiceDaemon::new()?;
-    let rx = daemon.browse(SERVICE)?;
-    let deadline = std::time::Instant::now() + window;
-    let mut found: Vec<Found> = Vec::new();
+/// IPv4 before IPv6, then numerically. Deterministic is the whole point.
+fn sort_addrs(addrs: &mut [SocketAddr]) {
+    addrs.sort_by_key(|a| match a.ip() {
+        IpAddr::V4(v4) => (0u8, u128::from(u32::from(v4)), a.port()),
+        IpAddr::V6(v6) => (1u8, u128::from(v6), a.port()),
+    });
+}
 
-    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
-        match rx.recv_timeout(remaining) {
-            Ok(ServiceEvent::ServiceResolved(info)) => {
-                let Some(ip) = info.addresses.iter().map(|a| a.to_ip_addr()).find(usable) else {
-                    continue;
-                };
-                let addr = SocketAddr::new(ip, info.get_port());
-                let entry = Found {
-                    name: instance_name(info.get_fullname()),
-                    addr,
-                    machine_id: prop(&info, KEY_MACHINE),
-                    version: prop(&info, KEY_VERSION),
-                    needs_token: prop(&info, KEY_TOKEN).as_deref() == Some("1"),
-                    claude_home: prop(&info, KEY_HOME),
-                };
-                // A host with several interfaces answers several times.
-                if !found.iter().any(|f| f.addr == entry.addr) {
-                    found.push(entry);
+/// A live subscription to what is advertising on this network.
+///
+/// mdns-sd's `browse` is **continuous**: it keeps querying and reports records
+/// as they resolve. The first version of this ran one for two seconds and then
+/// shut it down, which fought the model in both directions — a record that had
+/// not arrived yet counted as absent, and every click started from cold. A host
+/// is therefore *expected* to take several seconds and several announcements to
+/// appear fully, which is exactly what a fixed window cannot express.
+///
+/// Holding the subscription open while the list is on screen is both cheaper
+/// and more accurate. Dropping it stops the queries.
+pub struct Watcher {
+    daemon: ServiceDaemon,
+    rx: mdns_sd::Receiver<ServiceEvent>,
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        let _ = self.daemon.shutdown();
+    }
+}
+
+impl Watcher {
+    /// Begin listening. Cheap — the querying happens on mdns-sd's own thread.
+    pub fn start() -> Result<Self> {
+        let daemon = ServiceDaemon::new()?;
+        let rx = daemon.browse(SERVICE)?;
+        Ok(Watcher { daemon, rx })
+    }
+
+    /// Everything resolved since the last call. Never blocks, so this is safe
+    /// to call from a frame loop.
+    pub fn poll(&self) -> Vec<Found> {
+        let mut out = Vec::new();
+        while let Ok(event) = self.rx.try_recv() {
+            if let ServiceEvent::ServiceResolved(info) = event {
+                if let Some(f) = resolve(&info) {
+                    out.push(f);
                 }
             }
-            Ok(_) => {}
-            Err(_) => break,
         }
+        out
     }
-    let _ = daemon.shutdown();
-    found.sort_by(|a, b| a.name.cmp(&b.name).then(a.addr.cmp(&b.addr)));
+}
+
+/// Turn a resolved record into something offerable, or nothing.
+fn resolve(info: &ResolvedService) -> Option<Found> {
+    let mut addrs: Vec<SocketAddr> = info
+        .addresses
+        .iter()
+        .map(|a| a.to_ip_addr())
+        .filter(usable)
+        .map(|ip| SocketAddr::new(ip, info.get_port()))
+        .collect();
+    if addrs.is_empty() {
+        return None;
+    }
+    sort_addrs(&mut addrs);
+    Some(Found {
+        name: instance_name(info.get_fullname()),
+        addrs,
+        machine_id: prop(info, KEY_MACHINE),
+        version: prop(info, KEY_VERSION),
+        needs_token: prop(info, KEY_TOKEN).as_deref() == Some("1"),
+        claude_home: prop(info, KEY_HOME),
+    })
+}
+
+/// One-shot browse for `window`, for scripts and the probe example.
+///
+/// The window uses [`Watcher`] instead: a deadline cannot tell "nothing is
+/// there" from "nothing has answered yet", and in a UI that difference is the
+/// whole experience.
+pub fn browse(window: Duration) -> Result<Vec<Found>> {
+    let watcher = Watcher::start()?;
+    let deadline = std::time::Instant::now() + window;
+    let mut found: Vec<Found> = Vec::new();
+    while std::time::Instant::now() < deadline {
+        for f in watcher.poll() {
+            match found.iter_mut().find(|e| e.name == f.name) {
+                Some(existing) => existing.absorb(f),
+                None => found.push(f),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    found.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(found)
 }
+
 
 /// Addresses worth offering. Loopback is dropped because a record reaching us
 /// over the network claiming `127.0.0.1` describes *our* loopback, not theirs,
@@ -321,17 +410,52 @@ mod tests {
         assert!(usable(&IpAddr::V6(global)));
     }
 
-    #[test]
-    fn a_found_daemon_becomes_a_websocket_url() {
-        let f = Found {
-            name: "devbox".into(),
-            addr: "192.168.1.5:7717".parse().unwrap(),
+    fn found(name: &str, addrs: &[&str]) -> Found {
+        Found {
+            name: name.into(),
+            addrs: addrs.iter().map(|a| a.parse().unwrap()).collect(),
             machine_id: None,
             version: None,
             needs_token: true,
             claude_home: None,
-        };
-        assert_eq!(f.url(), "ws://192.168.1.5:7717/ws");
+        }
+    }
+
+    #[test]
+    fn a_found_daemon_becomes_a_websocket_url() {
+        let f = found("devbox", &["192.168.1.5:7717"]);
+        assert_eq!(f.url().as_deref(), Some("ws://192.168.1.5:7717/ws"));
+    }
+
+    /// The flapping this replaced: a host answering on both families used to
+    /// yield whichever address a `HashSet` happened to hand over first, so the
+    /// same daemon appeared to move between scans. IPv4 wins because a v6
+    /// literal in a URL needs brackets, and a link-local one needs a scope that
+    /// will not survive being written down.
+    #[test]
+    fn a_dual_stack_daemon_always_offers_the_same_address() {
+        let mut f = found("devbox", &["[2001:db8::5]:7717", "192.168.1.5:7717"]);
+        sort_addrs(&mut f.addrs);
+        assert_eq!(f.url().as_deref(), Some("ws://192.168.1.5:7717/ws"));
+
+        // …and the reverse arrival order must give the same answer.
+        let mut g = found("devbox", &["192.168.1.5:7717", "[2001:db8::5]:7717"]);
+        sort_addrs(&mut g.addrs);
+        assert_eq!(f.addrs, g.addrs);
+    }
+
+    /// Sightings arrive per interface and per family. Merging keeps them all;
+    /// replacing was the other half of the flicker.
+    #[test]
+    fn a_second_sighting_adds_addresses_rather_than_replacing_them() {
+        let mut f = found("devbox", &["192.168.1.5:7717"]);
+        f.absorb(found("devbox", &["[2001:db8::5]:7717"]));
+        assert_eq!(f.addrs.len(), 2);
+        assert_eq!(f.url().as_deref(), Some("ws://192.168.1.5:7717/ws"), "v4 still first");
+
+        // The same sighting twice must not grow the list.
+        f.absorb(found("devbox", &["192.168.1.5:7717"]));
+        assert_eq!(f.addrs.len(), 2, "addresses are a set, not a log");
     }
 
     /// Nothing on the network is an answer, not a hang. Browsing must return
@@ -348,7 +472,7 @@ mod tests {
         // Anything found here is a real daemon on this network, which is fine;
         // the assertion is about returning, not about the contents.
         for f in &found {
-            assert!(!f.addr.ip().is_loopback());
+            assert!(f.addrs.iter().all(|a| !a.ip().is_loopback()));
         }
     }
 }

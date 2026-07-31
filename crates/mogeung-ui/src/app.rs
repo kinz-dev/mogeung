@@ -424,13 +424,22 @@ pub struct App {
     /// one — kept out of `connections` until saved so an abandoned edit leaves
     /// nothing behind.
     conn_draft: Option<(Option<usize>, crate::connections::Connection)>,
-    /// A network scan in flight (`R-I8`). mDNS answers arrive when they arrive,
-    /// so the browse runs on a thread and posts its result here.
-    scan: Option<std::sync::mpsc::Receiver<Vec<mogeungd::discovery::Found>>>,
-    /// What the last scan found. **Offers, not connections** — nothing here is
-    /// dialled until a hand says so.
+    /// A live mDNS subscription, held while the Daemons window is open
+    /// (`R-I8`). Dropping it stops the queries.
+    scan: Option<mogeungd::discovery::Watcher>,
+    /// Everything seen since the window was opened, newest sighting merged in.
+    ///
+    /// **Accumulates and never clears.** A host answers piecemeal — per
+    /// interface, per address family, over several seconds — so a list rebuilt
+    /// from each round of answers flickers, drops rows, and looks like an
+    /// unreliable network. This is a wifi picker, not a search result.
+    ///
+    /// Still offers, not connections: nothing here is dialled until a hand
+    /// says so.
     scanned: Vec<mogeungd::discovery::Found>,
-    scanned_once: bool,
+    /// When the subscription started, so the panel can say "still looking"
+    /// rather than "nothing there" during the seconds before the first answer.
+    scan_since: Option<std::time::Instant>,
     /// This machine's id, resolved once — the other half of the comparison.
     this_machine: Option<String>,
 
@@ -695,7 +704,7 @@ impl App {
             conn_draft: None,
             scan: None,
             scanned: Vec::new(),
-            scanned_once: false,
+            scan_since: None,
             this_machine: mogeungd::machine::machine_id(),
             pane: Pane::Queue,
             keymap,
@@ -2567,6 +2576,17 @@ impl App {
         self.pty_focus = None;
 
         self.errors.clear();
+    }
+
+    /// Whether a scan is young enough that an empty list means "not yet"
+    /// rather than "nothing there". mDNS answers take seconds, and telling
+    /// someone nothing is out there before anyone could have replied is the
+    /// difference between a tool that looks broken and one that looks patient.
+    fn scan_says_waiting(&self) -> bool {
+        self.scan.is_some()
+            && self
+                .scan_since
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4))
     }
 
     /// Where a terminal pane should run its tmux. `R-I6`.
@@ -10733,20 +10753,30 @@ impl App {
         let mut reopen: Option<(Option<usize>, crate::connections::Connection)> = None;
         let mut commit: Option<(Option<usize>, crate::connections::Connection)> = None;
         let mut cancel = false;
-        let mut start_scan = false;
-
-        // Collect a finished scan before drawing, so its results appear on the
-        // frame they arrive rather than the one after.
-        if let Some(rx) = &self.scan {
-            match rx.try_recv() {
-                Ok(found) => {
-                    self.scanned = found;
-                    self.scanned_once = true;
-                    self.scan = None;
+        // Subscribe for as long as the window is open, and merge whatever has
+        // arrived before drawing, so a sighting shows on the frame it lands.
+        if self.scan.is_none() {
+            match mogeungd::discovery::Watcher::start() {
+                Ok(w) => {
+                    self.scan = Some(w);
+                    self.scan_since = Some(std::time::Instant::now());
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.scan = None,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                // No multicast here — a container, a locked-down interface.
+                // Say so once rather than showing an empty list for ever.
+                Err(e) => self.errors.push(format!("cannot browse the network: {e}")),
             }
+        }
+        if let Some(w) = &self.scan {
+            for f in w.poll() {
+                match self.scanned.iter_mut().find(|e| e.name == f.name) {
+                    Some(existing) => existing.absorb(f),
+                    None => self.scanned.push(f),
+                }
+            }
+            self.scanned.sort_by(|a, b| a.name.cmp(&b.name));
+            // Answers arrive between frames, and an idle window repaints about
+            // once a second — too slow to feel like it is listening.
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
 
         egui::Window::new("Daemons")
@@ -10794,25 +10824,30 @@ impl App {
                 ui.separator();
 
                 // --- Discovery (R-I8) -----------------------------------
+                // A wifi picker, not a search: the subscription runs while this
+                // window is open and rows accumulate.
                 ui.horizontal(|ui| {
-                    let busy = self.scan.is_some();
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Scan the network"))
-                        .on_hover_text(
-                            "Ask over mDNS which daemons are advertising here.\n                             Finding one connects to nothing — you pick.",
-                        )
-                        .clicked()
-                    {
-                        start_scan = true;
-                    }
-                    if busy {
-                        ui.label(dim("listening…"));
-                    } else if self.scanned_once && self.scanned.is_empty() {
-                        ui.label(dim(
-                            "nothing advertising — a daemon only appears with --advertise",
-                        ));
+                    ui.label(RichText::new("On this network").strong());
+                    let waiting = self
+                        .scan_since
+                        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4));
+                    if self.scan.is_none() {
+                        ui.label(dim("· not listening"));
+                    } else if self.scanned.is_empty() && waiting {
+                        ui.label(dim("· listening…"));
+                    } else if self.scanned.is_empty() {
+                        ui.label(dim("· nothing advertising"));
+                    } else {
+                        ui.label(dim(format!("· listening · {} found", self.scanned.len())));
                     }
                 });
+
+                if self.scanned.is_empty() && !self.scan_says_waiting() {
+                    ui.label(dim(
+                        "A daemon appears only with --advertise, and only from a \
+                         non-loopback --listen. Many networks drop multicast between hosts.",
+                    ));
+                }
 
                 for f in &self.scanned {
                     // Our own daemon, seen from outside. Offering it back would
@@ -10820,9 +10855,22 @@ impl App {
                     if f.machine_id.is_some() && f.machine_id == self.this_machine {
                         continue;
                     }
+                    let Some(url) = f.url() else { continue };
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&f.name).strong());
-                        ui.label(dim(f.addr.to_string()));
+                        ui.label(dim(
+                            f.addr().map(|a| a.to_string()).unwrap_or_default(),
+                        ));
+                        if f.addrs.len() > 1 {
+                            ui.label(dim(format!("+{}", f.addrs.len() - 1)))
+                                .on_hover_text(
+                                    f.addrs
+                                        .iter()
+                                        .map(|a| a.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
+                                );
+                        }
                         if f.needs_token {
                             ui.label(dim("· needs a token"));
                         }
@@ -10830,13 +10878,17 @@ impl App {
                             ui.label(dim(format!("· {home}")));
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Add, never connect: this fills the form and waits.
-                            if ui.button("Add").clicked() {
+                            let known = self.connections.list.iter().any(|c| c.url == url);
+                            if known {
+                                ui.label(dim("saved"));
+                            } else if ui.button("Add").clicked() {
+                                // Add, never connect: this fills the form and
+                                // waits for a hand.
                                 reopen = Some((
                                     None,
                                     crate::connections::Connection {
                                         name: f.name.clone(),
-                                        url: f.url(),
+                                        url,
                                         token: None,
                                     },
                                 ));
@@ -10902,20 +10954,6 @@ impl App {
                 }
             });
 
-        if start_scan {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let ctx2 = ctx.clone();
-            // A thread rather than the frame loop: mDNS answers arrive over
-            // seconds, and a UI that waits for them is a UI that has stopped.
-            std::thread::spawn(move || {
-                let found = mogeungd::discovery::browse(std::time::Duration::from_secs(2))
-                    .unwrap_or_default();
-                let _ = tx.send(found);
-                ctx2.request_repaint();
-            });
-            self.scan = Some(rx);
-        }
-
         self.conn_draft = draft_slot;
         if cancel {
             self.conn_draft = None;
@@ -10950,6 +10988,11 @@ impl App {
         if !open {
             self.show_connections = false;
             self.conn_draft = None;
+            // Stop querying the network the moment nobody is looking at the
+            // answers. The rows are kept: reopening shows what was found, and
+            // the subscription refreshes it.
+            self.scan = None;
+            self.scan_since = None;
         }
     }
 }

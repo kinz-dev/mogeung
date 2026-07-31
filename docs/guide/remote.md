@@ -48,9 +48,18 @@ it holds tokens). Each has a name, a URL and an optional token, and the one you
 last connected to is reopened next launch — a flag on the command line still
 overrides it for that run.
 
-**Scan the network** asks over mDNS which daemons are advertising nearby. A
-daemon only appears if it was started with `--advertise`, which is off by
-default — the broadcast tells everything on the segment that this machine is
+**On this network** lists daemons advertising nearby, and keeps listening for
+as long as the window is open — like a wifi picker rather than a search box.
+Rows accumulate; they are not cleared between rounds.
+
+That matters because of how mDNS actually behaves: a host answers piecemeal,
+per interface and per address family, over several seconds. Expect a machine to
+appear with one address and gain others a moment later. Give it a few seconds
+before concluding nothing is there — the panel says *listening…* while it is
+still too early to tell.
+
+A daemon only appears if it was started with `--advertise`, which is off by
+default: the broadcast tells everything on the segment that this machine is
 watching Claude Code sessions and where to reach it, and that is not a thing to
 do to someone on guest wifi without being asked.
 
