@@ -10796,12 +10796,48 @@ impl App {
         // Small shapes shared by the three lists below. Nested rather than
         // free functions: nothing else in the window draws a list like this,
         // and whoever changes a card should find it beside the rows.
+
+        /// The Body size *in this scope*, after the `scale_text` below.
+        ///
+        /// The window's own sizes derive from it rather than being written
+        /// down, for the reason `diff_size` does the same: `dim` and `mono`
+        /// bake 12.0 into themselves, so a label built from them cannot be
+        /// scaled by anything outside them — and a dialog that scales half its
+        /// text looks worse than one that scales none of it.
+        fn body_size(ui: &egui::Ui) -> f32 {
+            ui.style()
+                .text_styles
+                .get(&egui::TextStyle::Body)
+                .map(|f| f.size)
+                .unwrap_or(13.0)
+        }
+
+        /// Secondary text — the `dim` of this window, but scalable.
+        fn soft(ui: &egui::Ui, text: impl Into<String>) -> RichText {
+            RichText::new(text.into())
+                .color(pal().dim)
+                .size(body_size(ui) - 1.0)
+        }
+
+        /// An address. Monospace so a host and port can be compared by eye.
+        fn addr(ui: &egui::Ui, text: impl Into<String>) -> RichText {
+            RichText::new(text.into())
+                .monospace()
+                .color(pal().dim)
+                .size(body_size(ui) - 1.0)
+        }
+
         fn section(ui: &mut egui::Ui, title: &str, note: &str) {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(title).strong().size(11.0).color(pal().text_strong));
+                ui.label(
+                    RichText::new(title)
+                        .strong()
+                        .size(body_size(ui) - 1.0)
+                        .color(pal().text_strong),
+                );
                 if !note.is_empty() {
-                    ui.label(dim(note));
+                    ui.label(soft(ui, note));
                 }
             });
             ui.add_space(3.0);
@@ -10889,6 +10925,12 @@ impl App {
             .default_width(560.0)
             .collapsible(false)
             .show(&ctx, |ui| {
+                // A dialog you read across a desk and act on once, not body
+                // text you sit in — and it was inheriting the panes' sizes,
+                // which are tuned for density in a window full of diffs.
+                // Scoped to this `Ui`, so nothing behind the dialog moves.
+                scale_text(ui, 1.15);
+
                 // --- Where you are ------------------------------------------
                 // At the top, not the footnote it used to be at the bottom:
                 // every row below asks where to go next, and none of them can
@@ -10905,24 +10947,24 @@ impl App {
                             } else {
                                 pal().red
                             }));
-                            ui.label(dim("watching"));
-                            ui.label(RichText::new(&current_name).strong().size(15.0));
+                            ui.label(soft(ui, "watching"));
+                            ui.label(RichText::new(&current_name).strong().size(body_size(ui) + 3.0));
                             if !self.net.connected {
                                 ui.label(
                                     RichText::new(
                                         self.net.last_error.as_deref().unwrap_or("disconnected"),
                                     )
                                     .color(pal().red)
-                                    .size(12.0),
+                                    .size(body_size(ui) - 1.0),
                                 );
                             }
                         });
-                        ui.label(dim(&current_detail));
-                        ui.label(mono(crate::connections::redacted(&current)).color(pal().dim));
+                        ui.label(soft(ui, &current_detail));
+                        ui.label(addr(ui, crate::connections::redacted(&current)));
                     });
 
                 ui.add_space(8.0);
-                ui.label(dim(
+                ui.label(soft(ui, 
                     "Switching keeps your layout and keymap; everything the old daemon \
                      said is dropped.",
                 ));
@@ -10941,7 +10983,7 @@ impl App {
                             pal().dim
                         }));
                         ui.label(RichText::new(local.label()).strong());
-                        ui.label(dim(match self.daemon_mode {
+                        ui.label(soft(ui, match self.daemon_mode {
                             crate::daemon::Mode::Hosting if local_live => "hosted by this window",
                             crate::daemon::Mode::Attached { .. } if local_live => "already running",
                             _ => "where this window is running",
@@ -10952,13 +10994,18 @@ impl App {
                             }
                         });
                     });
-                    ui.label(mono(&local.url).color(pal().dim));
+                    ui.label(addr(ui, &local.url));
                 });
 
                 // --- Saved --------------------------------------------------
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("SAVED").strong().size(11.0).color(pal().text_strong));
+                    ui.label(
+                        RichText::new("SAVED")
+                            .strong()
+                            .size(body_size(ui) - 1.0)
+                            .color(pal().text_strong),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if draft_slot.is_none()
                             && ui
@@ -10989,21 +11036,21 @@ impl App {
                             .num_columns(2)
                             .spacing([10.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label(dim("Name"));
+                                ui.label(soft(ui, "Name"));
                                 ui.add(
                                     egui::TextEdit::singleline(&mut draft.name)
                                         .hint_text("devbox")
                                         .desired_width(f32::INFINITY),
                                 );
                                 ui.end_row();
-                                ui.label(dim("URL"));
+                                ui.label(soft(ui, "URL"));
                                 ui.add(
                                     egui::TextEdit::singleline(&mut draft.url)
                                         .hint_text("ws://10.0.0.27:7717/ws")
                                         .desired_width(f32::INFINITY),
                                 );
                                 ui.end_row();
-                                ui.label(dim("Token"));
+                                ui.label(soft(ui, "Token"));
                                 let mut token = draft.token.clone().unwrap_or_default();
                                 // Masked because a token on screen is a token
                                 // in whatever recording or screenshot is
@@ -11025,7 +11072,7 @@ impl App {
                             ui.label(
                                 RichText::new(format!("{} {problem}", icon::WARN))
                                     .color(pal().amber)
-                                    .size(12.0),
+                                    .size(body_size(ui) - 1.0),
                             );
                         }
                         ui.add_space(4.0);
@@ -11041,7 +11088,7 @@ impl App {
                                 cancel = true;
                             }
                         });
-                        ui.label(dim(
+                        ui.label(soft(ui, 
                             "The token is stored in ~/.mogeung/connections.json, owner-readable \
                              only. It travels in clear text unless the URL is wss://.",
                         ));
@@ -11050,7 +11097,7 @@ impl App {
                 }
 
                 if self.connections.list.is_empty() && draft_slot.is_none() {
-                    ui.label(dim(
+                    ui.label(soft(ui, 
                         "Nothing saved yet — add one above, or take one off the network below.",
                     ));
                 }
@@ -11066,12 +11113,12 @@ impl App {
                             }));
                             ui.label(RichText::new(c.label()).strong());
                             if live {
-                                ui.label(dim("connected"));
+                                ui.label(soft(ui, "connected"));
                             } else if self.connections.active == Some(i) {
                                 // Which one you reached for last time. A hint
                                 // and nothing more — no launch dials it, which
                                 // is the whole change `R-I7` reverted to.
-                                ui.label(dim("last used"));
+                                ui.label(soft(ui, "last used"));
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui
@@ -11090,7 +11137,7 @@ impl App {
                             });
                         });
                         ui.horizontal(|ui| {
-                            ui.label(mono(&c.url).color(pal().dim));
+                            ui.label(addr(ui, &c.url));
                             // Never the token itself, here or anywhere: this
                             // window is the thing people screen-share.
                             if c.token.is_some() {
@@ -11106,7 +11153,7 @@ impl App {
                 section(ui, "ON THIS NETWORK", &scan_note);
 
                 if found.is_empty() && !self.scan_says_waiting() {
-                    ui.label(dim(
+                    ui.label(soft(ui, 
                         "A daemon appears only with --advertise, and only from a \
                          non-loopback --listen. Many networks drop multicast between hosts.",
                     ));
@@ -11122,7 +11169,7 @@ impl App {
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if self.connections.list.iter().any(|c| c.url == *url) {
-                                    ui.label(dim("saved"));
+                                    ui.label(soft(ui, "saved"));
                                 } else if ui.button("Add").clicked() {
                                     // Add, never connect: this fills the form
                                     // and waits for a hand.
@@ -11138,12 +11185,12 @@ impl App {
                             });
                         });
                         ui.horizontal(|ui| {
-                            ui.label(
-                                mono(f.addr().map(|a| a.to_string()).unwrap_or_default())
-                                    .color(pal().dim),
-                            );
+                            ui.label(addr(
+                                ui,
+                                f.addr().map(|a| a.to_string()).unwrap_or_default(),
+                            ));
                             if f.addrs.len() > 1 {
-                                ui.label(dim(format!("+{}", f.addrs.len() - 1)))
+                                ui.label(soft(ui, format!("+{}", f.addrs.len() - 1)))
                                     .on_hover_text(
                                         f.addrs
                                             .iter()
@@ -11153,7 +11200,7 @@ impl App {
                                     );
                             }
                             if let Some(home) = &f.claude_home {
-                                ui.label(dim(format!("· {home}")));
+                                ui.label(soft(ui, format!("· {home}")));
                             }
                         });
                     });
@@ -11161,7 +11208,7 @@ impl App {
 
                 ui.add_space(10.0);
                 ui.separator();
-                ui.label(dim(format!(
+                ui.label(soft(ui, format!(
                     "Saved in {}",
                     crate::connections::Connections::path().display()
                 )));
