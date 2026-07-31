@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Watching a remote machine
@@ -28,14 +28,81 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 
 > **Read this before you expose a port.**
 >
-> The daemon has **no TLS**. Its `--token` is a shared secret in clear text, and
-> it is **optional** — a daemon started without one accepts anyone who can
-> reach the port. Anyone who can is able to read every transcript on that
-> machine and open terminals on it.
+> A daemon binding beyond loopback **must** have a `--token`; without one it
+> refuses to start rather than serving openly. That is the floor, not safety:
+> the daemon still has **no TLS**, so the token and everything after it travel
+> in clear text, and anyone holding it can read every transcript on that machine
+> and open terminals on it.
 >
 > This is a deliberate, recorded bet ([A24](../product/assumptions.md)): a token
 > on a trusted network, TLS only once the bet fails. If your network is not one
 > you trust, use **Route A** below, which does not open a port at all.
+
+## Choosing a daemon from the window
+
+The flags below are how you reach a daemon the first time. After that, use the
+window: click the connection dot in the top bar, or press `Alt+D`.
+
+The top of that window is where you are, not where you could go: the daemon
+you are connected to, whether the socket is up, and — from the identity it
+publishes (`R-I5`) — which `~/.claude` it is watching, on which host, at which
+version. Read that line before trusting anything below it. The URL there has
+any token blanked, because this window is the one people share when asking for
+help.
+
+**`LOCAL` is always the first row, and always where a launch starts.** It names
+the daemon on this machine on the default port, it is never saved to the file,
+and it has no Edit or Forget: the destination you need when a remote is
+unreachable is the one that must not be losable. Starting mogeung binds that
+port and hosts a daemon if nothing is there, exactly as it does with no
+connections saved at all.
+
+Saved daemons live in `~/.mogeung/connections.json` (written owner-only, since
+it holds tokens). Each has a name, a URL and an optional token. The row you last
+connected to is marked *last used*, but **no launch dials a remote for you** —
+you pick it, per session. `--url` on the command line still points that run
+wherever you say.
+
+> This changed on 2026-07-31. Until then the last-used connection was reopened
+> automatically, which was sticky in both directions: a window started at home
+> kept dialling a dev box that was off, and — because the remembered URL was
+> applied before the local-port check — it also stopped hosting a local daemon,
+> so the machine in front of you was not being watched and nothing said so.
+
+**On this network** lists daemons advertising nearby, and keeps listening for
+as long as the window is open — like a wifi picker rather than a search box.
+Rows accumulate; they are not cleared between rounds.
+
+That matters because of how mDNS actually behaves: a host answers piecemeal,
+per interface and per address family, over several seconds. Expect a machine to
+appear with one address and gain others a moment later. Give it a few seconds
+before concluding nothing is there — the panel says *listening…* while it is
+still too early to tell.
+
+A daemon only appears if it was started with `--advertise`, which is off by
+default: the broadcast tells everything on the segment that this machine is
+watching Claude Code sessions and where to reach it, and that is not a thing to
+do to someone on guest wifi without being asked.
+
+Finding a daemon connects to nothing. **Add** fills in the new-daemon form under
+**Saved**, you supply the token, you press Save — and then Connect on the row it
+made. A daemon can only advertise from a non-loopback bind, which already
+requires a token, so anything you find here will want one.
+
+**What you hid, pinned, labelled or bookmarked belongs to the machine**, not to
+the window, and lives in `~/.mogeung/state/<machine>.json` — so two windows
+watching two daemons no longer overwrite each other's, which they did until
+2026-07-31. Your terminal tabs are in there too, and swap with the daemon: a
+tab rooted in a worktree on the dev box does not follow you to the laptop that
+happens to have the same path. The shells it leaves behind are detached, not
+killed, and come back with their tabs when you switch back. Upgrading migrates
+everything you already had into this machine's file.
+
+**Switching keeps the window and drops the daemon.** Your layout, keymap and
+prefs describe *this window* and survive. Everything the old daemon said —
+sessions, diffs, repos, open files — goes, because it describes a different
+machine. Terminal tabs detach rather than close: tmux keeps the shell running
+over there, and switching back re-attaches.
 
 ## Requirements
 
@@ -68,30 +135,21 @@ That is the whole setup. The window attaches instead of starting its own daemon
 — that is what `--url` means, and it is the reason to prefer `--url` over
 `--addr` here.
 
-> **One rough edge you must know about on this route.** The window decides
-> whether a daemon is remote by looking at the address it dialled, and through a
-> tunnel that address is `127.0.0.1`. So the window concludes it is local and
-> **re-enables the five actions that should refuse** — "Open in IntelliJ" will
-> open your laptop's IntelliJ at a path that only exists on the dev box, and
-> "Launch terminal" will start a terminal on your laptop.
->
-> Nothing is damaged; the actions simply misfire. Avoid them on this route, or
-> use the workaround below.
+The tunnel does not confuse the window about whose machine it is looking at.
+The daemon says which machine it is on and the window compares (`R-I5`), so the
+local-only actions below refuse correctly even though the address you dialled
+is `127.0.0.1`. Hover the connection dot to see who is answering:
 
-**Workaround — a tunnel that still looks remote.** Forward to a different
-loopback address, which the window does not recognise as local, so the refusals
-work correctly:
-
-```sh
-ssh -N -L 127.0.0.2:7717:localhost:7717 devbox &
-mogeung --url ws://127.0.0.2:7717/ws
+```
+watching /home/dev/.claude on devbox
+mogeungd 0.1.0 · pid 4242
 ```
 
-Linux binds all of `127.0.0.0/8` already. On macOS, add the alias first:
-`sudo ifconfig lo0 alias 127.0.0.2`.
-
-This exploits how the check is written rather than fixing it, so treat it as a
-stopgap.
+> Until 2026-07-31 this was not true — the window guessed from the address
+> string, and a tunnel read as local, silently re-enabling actions that then
+> opened editors and terminals on the wrong machine. If your window predates
+> that, upgrade it; the daemon alone is not enough, since it is the window that
+> does the comparing.
 
 ---
 
@@ -106,9 +164,16 @@ clear text, so this is for a network you already trust.
 mogeungd --listen 0.0.0.0:7717 --token "$(openssl rand -hex 24)"
 ```
 
-Copy the token it printed. The daemon will warn loudly at startup that it is
-listening beyond localhost — that warning is not boilerplate, and it says
-something different depending on whether you set a token. Read it once.
+Add `--advertise` if you want the window's network scan to find it. Off by
+default, deliberately — see "Choosing a daemon from the window" above.
+
+Copy the token it printed. Leave `--token` off and the daemon will not start —
+it prints what to do instead and exits. Set it and the daemon still warns at
+startup that the token is travelling in clear text; that warning is not
+boilerplate.
+
+There is no `--insecure`. If you want a listening daemon with no token, the
+answer is Route A: bind loopback and let ssh carry it.
 
 **On your laptop:**
 
@@ -130,6 +195,10 @@ Retyping a token is how tokens end up in shell history. Both binaries read
 # on the dev box
 listen = "0.0.0.0:7717"
 token  = "…"
+# how a client reaches this machine for terminal panes (R-I6)
+ssh_target = "dev@devbox"
+# announce on the local network so the window's scan finds it (R-I8)
+advertise = true
 
 # on your laptop
 url    = "ws://devbox:7717/ws"
@@ -138,6 +207,46 @@ token  = "…"
 
 Then both sides are just `mogeungd` and `mogeung`. Set the file's permissions
 to `600` — it now holds a credential.
+
+---
+
+## Route C — behind a TLS reverse proxy
+
+Route B's token travels in clear text. If that is not good enough and you would
+rather not tunnel, put a TLS terminator in front of the daemon: the clients can
+dial `wss://` as of 2026-07-31.
+
+Keep the daemon on loopback and let the proxy be the only thing listening:
+
+```sh
+mogeungd --token "$(openssl rand -hex 24)"     # 127.0.0.1:7717, as by default
+```
+
+Caddy needs two lines and gets a certificate by itself:
+
+```
+mogeung.example.com {
+    reverse_proxy 127.0.0.1:7717
+}
+```
+
+Then point the window at the proxy:
+
+```sh
+mogeung --url wss://mogeung.example.com/ws --token <the-token>
+```
+
+Keep the token. The proxy encrypts the path; it does not decide who may use it,
+and the daemon behind it will still hand every transcript to whoever asks.
+
+The proxy must forward WebSocket upgrades — Caddy and recent nginx do this
+without being asked; older nginx configs need `Upgrade`/`Connection` headers set
+explicitly.
+
+**Certificates come from the operating system's trust store**, so a private CA
+works if the machine running the window already trusts it. A self-signed
+certificate that nothing trusts will be refused, and there is no flag to skip
+the check.
 
 ---
 
@@ -164,33 +273,110 @@ If `curl` returns nothing at all, no daemon answered. If it returns
 **Works unchanged** — the queue, session detail, transcripts, diffs and review
 marks, the whole Git pane, the file explorer and go-to-file, content search,
 insight, health, notifications (they fire on the *daemon's* machine, and
-`--push-url` forwards them anywhere).
+`--push-url` forwards them anywhere). The terminal panes work too, over ssh —
+see below.
 
 **Refuses, on purpose** — these act on a machine, and the machine is not yours:
 
 | Action | What it says |
 |---|---|
-| Jump to terminal | its terminals are on the other machine |
-| Open in IntelliJ / VS Code / Finder | that path lives on the other machine |
-| Launch terminal | would open a terminal on the other machine |
+| Jump to terminal | its terminals are on `devbox` |
+| Open in IntelliJ / VS Code / Finder | that path lives on `devbox` |
+| Launch terminal | would open a terminal on `devbox` |
 | Screenshot / image preview | the image lives on the other machine |
 
-A refusal is a message in the error strip, not a silent no-op.
+A refusal is a message in the error strip, not a silent no-op, and it names the
+machine — a refusal you cannot act on reads as a bug.
 
-## Known rough edges
+## Terminals, when the daemon is elsewhere
 
-Remote support is built but has not been through a dogfooding week (`R-I4`),
-and these are the things that would find you first.
+The terminal panel and the agent pane both drive tmux. Against a remote daemon
+they drive it **over ssh**, on the machine that has the files (`R-I6`), so a
+shell tab opens where the work is rather than on your laptop.
 
-**The in-app terminal panel is not remote-aware.** Unlike the four actions
-above, the terminal tabs at the bottom of the window are not guarded. They start
-a shell on **your** machine, rooted at a path that exists on the **dev box** —
-so you get a local shell in a directory that is not there. Use ssh in a real
-terminal for now.
+For that, the daemon has to say how it is reached:
 
-**Tunnel-vs-refusal**, as described in Route A.
+```sh
+mogeungd --ssh-target dev@devbox        # or ssh_target in its config.toml
+```
+
+Any destination ssh understands — `user@host`, or a `Host` alias from your
+`~/.ssh/config`, which is the tidier option since the alias can carry the port,
+the identity file and a `ProxyJump`.
+
+Without it the panel says so and opens nothing:
+
+> terminals run on devbox, and it has not published an ssh target — start its
+> daemon with `--ssh-target user@host`
+
+That refusal is deliberate. There is no guess available: the hostname a daemon
+reports need not resolve from here, and need not be the name ssh wants.
+
+**Authentication happens in the pane.** A key passphrase or a host-key prompt
+appears in the terminal itself and you answer it there — it is a real terminal,
+so nothing needs to be pre-arranged.
+
+Two things worth setting up anyway, because each pane is its own ssh connection:
+
+```
+# ~/.ssh/config on the laptop
+Host devbox
+    User you
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+```
+
+`ControlMaster` reuses one connection for every pane, so you authenticate once
+instead of per tab. With `ssh-copy-id` as well, you authenticate not at all.
+
+**The remote command runs through a login shell** — `exec $SHELL -l -c 'tmux …'`
+rather than plain `tmux …`. That is not decoration. `ssh host cmd` gets a
+non-interactive, non-login shell, and zsh then sources only `.zshenv`, so macOS
+never runs `path_helper` and Homebrew's `/opt/homebrew/bin` is absent from
+`PATH`. tmux is installed and invisible:
+
+```
+zsh:1: command not found: tmux
+```
+
+A login shell sources the profile, which is where package managers put their
+`PATH`. The cost is that anything your profile prints runs once per pane; tmux
+clears the screen on attach, so you will rarely see it.
+
+Sessions still outlive the window — over there. `tmux attach -t <name>` on the
+dev box reaches the same shell, and the tab's tooltip names the host so you know
+which machine to run that on.
 
 ## Troubleshooting
+
+**Scan finds nothing.** In order of likelihood: the daemon was not started with
+`--advertise`; its `--listen` is loopback, which refuses to advertise because
+nobody could reach it; a firewall is blocking the port (macOS prompts on first
+bind — a dismissed prompt looks exactly like a network problem); the two
+machines are on different subnets or a guest VLAN; or the network drops
+multicast between hosts, which many do.
+
+To tell a silent daemon apart from a silent network, ask the protocol directly
+rather than through the UI:
+
+```sh
+cargo run -p mogeungd --example browse_probe
+```
+
+Same code the Scan button runs, with nothing else in the way.
+
+**"refusing to listen on … with no token."** Working as intended: a bind beyond
+loopback needs `--token`. The message prints both ways out. Note that it also
+applies to the window — `mogeung --addr 0.0.0.0:7717` hosts a daemon, so it is
+refused on the same terms and exits rather than opening one quietly.
+
+**`command not found: tmux` in a terminal pane**, from a machine where tmux is
+definitely installed. Fixed on 2026-07-31 by running the remote command through
+a login shell — upgrade the **window**, which is the side that builds the
+command. If it persists, tmux really is missing there, or it is installed
+somewhere your login profile does not add to `PATH`; `ssh devbox 'echo $SHELL;
+$SHELL -lc "command -v tmux"'` answers both in one go.
 
 **"could not bind — is a daemon already running?"** on the dev box. One already
 is. That is the design: whoever wins the bind is the daemon. Attach to it.

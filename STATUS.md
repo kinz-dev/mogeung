@@ -4,10 +4,10 @@
 
 | | |
 |---|---|
-| Branch | `main` |
-| Tests | 478 passing |
-| Rust | 42999 lines |
-| Docs | 61 files, 12 ADRs |
+| Branch | `remote-reach` |
+| Tests | 535 passing |
+| Rust | 46369 lines |
+| Docs | 62 files, 13 ADRs |
 
 ## Assumptions
 

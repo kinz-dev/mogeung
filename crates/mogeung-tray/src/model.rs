@@ -35,7 +35,7 @@ impl Model {
     pub fn apply(&mut self, msg: &ServerMsg) -> bool {
         let before = self.waiting();
         match msg {
-            ServerMsg::Snapshot { sessions, queue } => {
+            ServerMsg::Snapshot { sessions, queue, .. } => {
                 self.sessions = sessions
                     .iter()
                     .map(|s| (s.id.clone(), s.clone()))
@@ -172,6 +172,7 @@ mod tests {
                 item("bbbb2222", AttentionReason::AwaitingPermission),
                 item("aaaa1111", AttentionReason::AwaitingInput),
             ],
+            daemon: None,
         });
         assert!(changed);
 
@@ -190,6 +191,7 @@ mod tests {
         m.apply(&ServerMsg::Snapshot {
             sessions: vec![sess("aaaa1111")],
             queue: vec![item("aaaa1111", AttentionReason::Running)],
+            daemon: None,
         });
         assert!(m.waiting().is_empty());
 
@@ -232,6 +234,7 @@ mod tests {
         m.apply(&ServerMsg::Snapshot {
             sessions: vec![sess("aaaa1111")],
             queue: vec![item("aaaa1111", AttentionReason::AwaitingInput)],
+            daemon: None,
         });
         assert_eq!(m.waiting().len(), 1);
         assert!(m.apply(&ServerMsg::SessionRemoved {
@@ -248,6 +251,7 @@ mod tests {
         m.apply(&ServerMsg::Snapshot {
             sessions: vec![s],
             queue: vec![item("aaaa1111", AttentionReason::AwaitingInput)],
+            daemon: None,
         });
         let label = &m.waiting()[0].label;
         assert!(label.ends_with('…'));

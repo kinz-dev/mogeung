@@ -77,7 +77,7 @@ async fn snapshot_arrives_unsolicited_on_connect() {
     let (mut ws, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
 
     let got = wait_for(&mut ws, 5, |m| match m {
-        ServerMsg::Snapshot { sessions, queue } => Some((sessions.len(), queue.len())),
+        ServerMsg::Snapshot { sessions, queue, .. } => Some((sessions.len(), queue.len())),
         _ => None,
     })
     .await;

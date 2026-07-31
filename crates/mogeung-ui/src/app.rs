@@ -414,6 +414,41 @@ pub struct App {
     /// Where the daemon came from, and how to describe it.
     daemon_mode: crate::daemon::Mode,
     daemon_addr: String,
+    /// What `daemon::acquire` decided at launch, kept for the whole run.
+    ///
+    /// Switching away from LOCAL and back must not turn "this window is hosting
+    /// the daemon" into "nothing is serving it" — the thread is still there and
+    /// still serving, so saying otherwise would be a lie the status bar tells
+    /// about its own process.
+    launch_mode: crate::daemon::Mode,
+    /// Who the daemon says it is (`R-I5`). `None` until the first snapshot, or
+    /// for good against a daemon too old to say.
+    daemon_identity: Option<mogeung_core::wire::DaemonIdentity>,
+    /// Daemons this window can reach, and which is current. `R-I7`.
+    connections: crate::connections::Connections,
+    show_connections: bool,
+    /// The row being added or edited, and where it will land. `None` for a new
+    /// one — kept out of `connections` until saved so an abandoned edit leaves
+    /// nothing behind.
+    conn_draft: Option<(Option<usize>, crate::connections::Connection)>,
+    /// A live mDNS subscription, held while the Daemons window is open
+    /// (`R-I8`). Dropping it stops the queries.
+    scan: Option<mogeungd::discovery::Watcher>,
+    /// Everything seen since the window was opened, newest sighting merged in.
+    ///
+    /// **Accumulates and never clears.** A host answers piecemeal — per
+    /// interface, per address family, over several seconds — so a list rebuilt
+    /// from each round of answers flickers, drops rows, and looks like an
+    /// unreliable network. This is a wifi picker, not a search result.
+    ///
+    /// Still offers, not connections: nothing here is dialled until a hand
+    /// says so.
+    scanned: Vec<mogeungd::discovery::Found>,
+    /// When the subscription started, so the panel can say "still looking"
+    /// rather than "nothing there" during the seconds before the first answer.
+    scan_since: Option<std::time::Instant>,
+    /// This machine's id, resolved once — the other half of the comparison.
+    this_machine: Option<String>,
 
     /// Which pane the keyboard drives, and the editable bindings.
     pane: Pane,
@@ -608,10 +643,11 @@ impl App {
         let config_warning = mogeung_core::config::Config::load().1;
         let (tree, layout_warning) = crate::layout::load();
         let (explorer, explorer_warning) = crate::explorer::Explorer::load();
+        let (connections, connections_warning) = crate::connections::Connections::load();
         // Before `prefs` is moved into the struct. The shells are restored
         // here but not spawned — a tab from the last run costs a tmux client
         // only once the panel is actually opened.
-        let shells = crate::shells::Shells::from_prefs(&prefs.terminal_panel);
+        let shells = crate::shells::Shells::from_prefs(&prefs.terminal_panel, &prefs.scoped.shells);
         // And before the first frame, which is the point: `set_fonts` takes
         // effect at the *next* frame boundary, and a `FontFamily::Name` egui
         // has not been told about is a panic in the paint loop rather than a
@@ -667,8 +703,17 @@ impl App {
             md_cache: egui_commonmark::CommonMarkCache::default(),
             transcript_limit: TRANSCRIPT_PAGE,
             scroll: None,
+            launch_mode: daemon_mode.clone(),
             daemon_mode,
             daemon_addr,
+            daemon_identity: None,
+            connections,
+            show_connections: false,
+            conn_draft: None,
+            scan: None,
+            scanned: Vec::new(),
+            scan_since: None,
+            this_machine: mogeungd::machine::machine_id(),
             pane: Pane::Queue,
             keymap,
             show_keymap: false,
@@ -700,6 +745,7 @@ impl App {
                 .chain(config_warning)
                 .chain(layout_warning)
                 .chain(explorer_warning)
+                .chain(connections_warning)
                 .chain(font_warning)
                 .collect(),
         }
@@ -709,12 +755,25 @@ impl App {
         let mut sessions_changed = false;
         for msg in self.net.drain() {
             match msg {
-                ServerMsg::Snapshot { sessions, queue } => {
+                ServerMsg::Snapshot {
+                    sessions,
+                    queue,
+                    daemon,
+                } => {
                     self.sessions = sessions
                         .into_iter()
                         .map(|s| (s.id.clone(), Rc::new(s)))
                         .collect();
                     self.queue = queue;
+                    // `None` from a daemon older than R-I5; keep whatever we
+                    // were told rather than forgetting who we are talking to.
+                    if daemon.is_some() {
+                        self.daemon_identity = daemon;
+                    }
+                    // First moment we know whose machine this is, which is
+                    // when the view state that belongs to it can be loaded.
+                    // `R-I11`.
+                    self.adopt_scope();
                     // A reconnect invalidates our transcript cache.
                     self.hydrated.clear();
                     sessions_changed = true;
@@ -1236,6 +1295,7 @@ impl eframe::App for App {
         self.detail_panel(ui);
         self.launch_window(ui);
         self.health_window(ui);
+        self.connections_window(ui);
         self.prompt_window(ui);
         self.ambient_window(ui);
         self.keymap_window(ui);
@@ -1259,7 +1319,9 @@ impl eframe::App for App {
         // on every frame of the drag — the rule the layout already follows.
         if self.shells.dirty && !ui.input(|i| i.pointer.any_down()) {
             self.shells.dirty = false;
-            self.prefs.terminal_panel = self.shells.to_prefs();
+            let (panel, tabs) = self.shells.to_prefs();
+            self.prefs.terminal_panel = panel;
+            self.prefs.scoped.shells = tabs;
             self.prefs_dirty = true;
         }
 
@@ -1333,12 +1395,20 @@ impl App {
                             .unwrap_or_else(|| "disconnected".into()),
                     )
                 };
-                ui.label(dot).on_hover_text(format!(
-                    "{} — {}\n\n{}\n\n{hotkey_tip}",
-                    self.net.url,
-                    tip,
-                    self.daemon_mode.detail(&self.daemon_addr)
-                ));
+                // Clickable: the dot already answers "which daemon, and is it
+                // up", so it is where a hand goes to change the answer. `R-I7`.
+                let dot_hit = ui
+                    .add(egui::Label::new(dot).sense(egui::Sense::click()))
+                    .on_hover_text(format!(
+                        "{} — {}\n\n{}{}\n\nClick to choose a daemon.\n\n{hotkey_tip}",
+                        crate::connections::redacted(&self.net.url),
+                        tip,
+                        self.daemon_mode.detail(&self.daemon_addr),
+                        self.daemon_provenance()
+                    ));
+                if dot_hit.clicked() {
+                    self.show_connections = !self.show_connections;
+                }
 
                 // Worth a word on screen, not just a tooltip: with a hosted
                 // daemon, closing this window stops watching entirely — which
@@ -2076,6 +2146,12 @@ impl App {
                     self.net.send(ClientMsg::FetchHealth);
                 }
             }
+            A::ToggleConnections => {
+                self.show_connections = !self.show_connections;
+                if !self.show_connections {
+                    self.conn_draft = None;
+                }
+            }
             A::CommandPalette => {
                 if self.palette.open {
                     self.palette.close();
@@ -2437,10 +2513,202 @@ impl App {
     }
 
     /// A daemon on another machine: local-only actions must refuse rather
-    /// than act on the wrong box. `R-I4`.
+    /// than act on the wrong box. `R-I4`, corrected by `R-I5`.
+    ///
+    /// The daemon now says which machine it is on and we compare ids. What this
+    /// replaces was a substring test on the address we dialled — which answers
+    /// *where did I route this*, not *whose filesystem is on the other end*.
+    /// `ssh -N -L 7717:localhost:7717 devbox` makes a daemon a thousand miles
+    /// away answer on `127.0.0.1`, and the old test read that as local: "Open
+    /// in IntelliJ" would open a path that does not exist here, and "Launch
+    /// terminal" would start a shell on the wrong machine. That tunnel is the
+    /// *recommended* way to reach a remote daemon, so the guess was wrong
+    /// exactly where it mattered most.
     fn remote_daemon(&self) -> bool {
-        let a = &self.daemon_addr;
+        match &self.daemon_identity {
+            Some(id) => !id.is_same_machine_as(self.this_machine.as_deref()),
+            // Nothing has told us yet — either the first snapshot has not
+            // landed or the daemon predates R-I5. Fall back to the old guess:
+            // wrong for tunnels, but no worse than the behaviour it replaces,
+            // and refusing everything against an older daemon would be.
+            None => Self::addr_looks_remote(&self.daemon_addr),
+        }
+    }
+
+    /// Point the per-machine view state at whichever daemon is now answering,
+    /// and swap the terminal tabs with it. `R-I11`.
+    ///
+    /// Idempotent: called on every snapshot, and does nothing unless the
+    /// machine actually changed. Reconnects to the same daemon therefore cost
+    /// nothing, which matters because a flapping link produces a snapshot each
+    /// time it comes back.
+    fn adopt_scope(&mut self) {
+        // A daemon older than `R-I5` publishes no identity, and one that could
+        // not write `~/.mogeung/machine-id` publishes an identity without an
+        // id in it. The address is a poor substitute — a tunnel makes two
+        // machines look like one — but it is stable for as long as that daemon
+        // is the one being dialled, which is this scope's whole lifetime.
+        let origin = self
+            .daemon_identity
+            .as_ref()
+            .and_then(|id| id.machine_id.clone())
+            .unwrap_or_else(|| self.daemon_addr.clone());
+        if self.prefs.origin() == Some(origin.as_str()) {
+            return;
+        }
+        // The outgoing machine's tabs, saved before its state is swapped out.
+        let (panel, tabs) = self.shells.to_prefs();
+        self.prefs.terminal_panel = panel;
+        if self.prefs.origin().is_some() {
+            self.prefs.scoped.shells = tabs;
+        }
+        if let Some(note) = self.prefs.adopt_origin(&origin) {
+            self.errors.push(note);
+        }
+        // Dropping a tmux-backed `Term` detaches rather than kills, so the
+        // shells on the machine we just left keep running and come back with
+        // their tabs when it does.
+        self.shells = crate::shells::Shells::from_prefs(
+            &self.prefs.terminal_panel,
+            &self.prefs.scoped.shells,
+        );
+    }
+
+    /// The pre-`R-I5` heuristic, kept only as the fallback above.
+    fn addr_looks_remote(a: &str) -> bool {
         !(a.contains("127.0.0.1") || a.contains("localhost") || a.contains("[::1]"))
+    }
+
+    /// Point this window at a different daemon, without restarting it. `R-I7`.
+    ///
+    /// Two halves, and the second is the one that can go quietly wrong.
+    ///
+    /// Replacing `net` drops the old one, which is what stops its thread —
+    /// see `net::post`. Then **everything the previous daemon told us has to
+    /// go**, because it describes a different machine: its sessions, its
+    /// diffs, its repos, its files. A stale session left in the map would
+    /// render as a real row, and clicking it would ask the *new* daemon about
+    /// an id it has never heard of.
+    ///
+    /// The rule for anything added later: if it arrived over the wire, it is
+    /// cleared here. If the user chose it — the keymap, the layout, prefs — it
+    /// survives, because those describe the window rather than the daemon.
+    fn switch_to(&mut self, conn: &crate::connections::Connection, ctx: &egui::Context) {
+        self.net = Net::connect(conn.dial_url(), ctx.clone());
+        self.daemon_addr = conn.url.clone();
+        // Going back to LOCAL returns to the daemon this process started or
+        // found at launch, which is still exactly where it was.
+        self.daemon_mode = if conn.is_local() {
+            self.launch_mode.clone()
+        } else {
+            crate::daemon::Mode::None
+        };
+        self.daemon_identity = None;
+
+        // Daemon-derived, all of it.
+        self.sessions.clear();
+        self.queue.clear();
+        self.changes.clear();
+        self.events.clear();
+        self.hydrated.clear();
+        self.subagents.clear();
+        self.subagents_asked.clear();
+        self.selected = None;
+        self.selected_file = None;
+        self.debt = None;
+        self.blast = None;
+        self.blast_pending = false;
+        self.usage = None;
+        self.usage_asked = None;
+        self.health = Health::default();
+        self.insight = InsightState::default();
+        self.gitview = Default::default();
+        self.explorer.forget_all();
+
+        // Terminal panes hold a shell on the *old* machine, rooted at a path
+        // the new one need not have. Closing the view is safe and is the point
+        // of ADR-0011: tmux keeps the session, so this detaches rather than
+        // kills, and the tab comes back if you switch back.
+        self.shells.detach_all();
+        self.agent_term = None;
+        self.agent_failed = None;
+        self.pty_focus = None;
+
+        self.errors.clear();
+    }
+
+    /// Whether a scan is young enough that an empty list means "not yet"
+    /// rather than "nothing there". mDNS answers take seconds, and telling
+    /// someone nothing is out there before anyone could have replied is the
+    /// difference between a tool that looks broken and one that looks patient.
+    fn scan_says_waiting(&self) -> bool {
+        self.scan.is_some()
+            && self
+                .scan_since
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(4))
+    }
+
+    /// Where a terminal pane should run its tmux. `R-I6`.
+    ///
+    /// Local while the daemon is on this machine. Otherwise the daemon's
+    /// `ssh_target`, so the pane drives tmux where the files and the sessions
+    /// actually are, rather than starting a local shell in a directory that
+    /// exists somewhere else.
+    ///
+    /// `None` is the case worth naming: a remote daemon that has not been told
+    /// how to be reached. There is no honest guess available — the hostname it
+    /// reports need not resolve from here, and need not be the name ssh wants —
+    /// so callers refuse and say what to configure.
+    fn terminal_reach(&self) -> Option<crate::term::Reach> {
+        if !self.remote_daemon() {
+            return Some(crate::term::Reach::Local);
+        }
+        self.daemon_identity
+            .as_ref()?
+            .ssh_target
+            .as_ref()
+            .map(|t| crate::term::Reach::Ssh(t.clone()))
+    }
+
+    /// Why a terminal cannot be opened against this daemon, in a sentence the
+    /// user can act on.
+    fn no_reach_reason(&self) -> String {
+        format!(
+            "terminals run on {}, and it has not published an ssh target — \
+             start its daemon with --ssh-target user@host (or set ssh_target \
+             in its ~/.mogeung/config.toml)",
+            self.other_machine()
+        )
+    }
+
+    /// What to call the machine on the other end, in a sentence.
+    ///
+    /// Naming it is the point: "its terminals are on the other machine" leaves
+    /// you wondering which, and a refusal you cannot act on reads as a bug.
+    fn other_machine(&self) -> String {
+        match &self.daemon_identity {
+            Some(id) => id.label(),
+            None => "the other machine".into(),
+        }
+    }
+
+    /// The identity block appended to the connection tooltip.
+    fn daemon_provenance(&self) -> String {
+        let Some(id) = &self.daemon_identity else {
+            return String::new();
+        };
+        let here = if self.remote_daemon() { "" } else { " (this machine)" };
+        let ssh = match &id.ssh_target {
+            Some(t) => format!("\nssh: {t}"),
+            None => String::new(),
+        };
+        format!(
+            "\n\nwatching {} on {}{here}\nmogeungd {} · pid {}{ssh}",
+            id.claude_home,
+            id.label(),
+            id.version,
+            id.pid,
+        )
     }
 
     /// Jump-to-terminal, refused against a remote daemon — the terminal it
@@ -2448,9 +2716,11 @@ impl App {
     fn send_focus(&mut self, session_id: SessionId) {
         if self.remote_daemon() {
             self.errors.push(
-                "remote daemon — its terminals are on the other machine; \
-                 jump-to-terminal is not available"
-                    .into(),
+                format!(
+                    "remote daemon — its terminals are on {}; \
+                     jump-to-terminal is not available",
+                    self.other_machine()
+                ),
             );
             return;
         }
@@ -2461,7 +2731,8 @@ impl App {
     fn open_in_local(&mut self, target: ui::OpenTarget, dir: &str) {
         if self.remote_daemon() {
             self.errors.push(format!(
-                "remote daemon — {dir} lives on the other machine; open-in is not available"
+                "remote daemon — {dir} lives on {}; open-in is not available",
+                self.other_machine()
             ));
             return;
         }
@@ -2686,7 +2957,7 @@ impl App {
                             self.prefs.reveal_hidden = !self.prefs.reveal_hidden;
                         }
                         if self.prefs.reveal_hidden && ui.small_button("unhide all").clicked() {
-                            self.prefs.hidden.clear();
+                            self.prefs.scoped.hidden.clear();
                             self.prefs_dirty = true;
                         }
                     });
@@ -5858,16 +6129,16 @@ impl App {
                     self.outline_open = !self.outline_open;
                 }
                 // R-B29: wrap is a property of the file, so it persists per path.
-                let wrapped = self.prefs.editor_wrap.contains(&path);
+                let wrapped = self.prefs.scoped.editor_wrap.contains(&path);
                 if ui
                     .selectable_label(wrapped, "wrap")
                     .on_hover_text("wrap long lines — remembered for this file")
                     .clicked()
                 {
                     if wrapped {
-                        self.prefs.editor_wrap.remove(&path);
+                        self.prefs.scoped.editor_wrap.remove(&path);
                     } else {
-                        self.prefs.editor_wrap.insert(path.clone());
+                        self.prefs.scoped.editor_wrap.insert(path.clone());
                     }
                     self.prefs_dirty = true;
                 }
@@ -5913,6 +6184,7 @@ impl App {
                 // R-B29: the jump list.
                 let marks: Vec<(String, String, u64)> = self
                     .prefs
+                    .scoped
                     .bookmarks
                     .iter()
                     .filter(|(sid, _, _)| Some(sid) == self.explorer.session.as_ref())
@@ -6120,7 +6392,7 @@ impl App {
         );
         // R-B29: per-file wrap. The width estimate leaves room for the
         // gutters; exactness does not matter, only that lines stop escaping.
-        if self.prefs.editor_wrap.contains(&path) {
+        if self.prefs.scoped.editor_wrap.contains(&path) {
             let reserved = 80.0 + if self.annotate { 240.0 } else { 0.0 };
             job.wrap.max_width = (ui.available_width() - reserved).max(200.0);
         }
@@ -6467,7 +6739,7 @@ impl App {
                     // R-B29: bookmarks, toggled where the pointer is.
                     if let Some(sid) = self.explorer.session.clone() {
                         let mark = (sid, path.clone(), line);
-                        let existing = self.prefs.bookmarks.iter().position(|b| *b == mark);
+                        let existing = self.prefs.scoped.bookmarks.iter().position(|b| *b == mark);
                         let label = if existing.is_some() {
                             format!("Remove bookmark at line {line}")
                         } else {
@@ -6476,12 +6748,12 @@ impl App {
                         if ui.button(label).clicked() {
                             match existing {
                                 Some(i) => {
-                                    self.prefs.bookmarks.remove(i);
+                                    self.prefs.scoped.bookmarks.remove(i);
                                 }
                                 None => {
-                                    self.prefs.bookmarks.push(mark);
-                                    if self.prefs.bookmarks.len() > 100 {
-                                        self.prefs.bookmarks.remove(0);
+                                    self.prefs.scoped.bookmarks.push(mark);
+                                    if self.prefs.scoped.bookmarks.len() > 100 {
+                                        self.prefs.scoped.bookmarks.remove(0);
                                     }
                                 }
                             }
@@ -6702,7 +6974,14 @@ impl App {
 
         if self.agent_term.is_none() {
             self.release_pty(PtyPane::Agent);
-            match crate::term::Term::attach(ui.ctx(), &target) {
+            // The session's tmux lives wherever the daemon does. Attaching to
+            // that name locally would either miss or — worse — match an
+            // unrelated session of the same name on this machine.
+            let Some(reach) = self.terminal_reach() else {
+                self.agent_failed = Some((target.clone(), self.no_reach_reason()));
+                return;
+            };
+            match crate::term::Term::attach(ui.ctx(), &target, &reach) {
                 Ok(t) => self.agent_term = Some(t),
                 Err(e) => {
                     self.agent_term = None;
@@ -6800,7 +7079,15 @@ impl App {
 
     fn terminal_body(&mut self, ui: &mut egui::Ui) {
         let font = self.terminal_font(ui, "terminal");
-        self.shells.tick(ui.ctx());
+        // A remote daemon with no ssh target has nowhere to run a shell. Say
+        // so and stop, rather than starting one here — which is what this did
+        // before `R-I6`, in a directory that only exists on the other machine.
+        let Some(reach) = self.terminal_reach() else {
+            ui.add_space(8.0);
+            ui.label(dim(self.no_reach_reason()));
+            return;
+        };
+        self.shells.tick(ui.ctx(), &reach);
 
         // Read before the shell is borrowed below.
         let leave = self.keymap.describe(crate::keymap::Action::ToggleTerminalFocus);
@@ -6820,13 +7107,26 @@ impl App {
                          Double-click the tab to rename it.",
                         s.root
                     ),
-                    _ => format!(
-                        "{}\n\nA tmux session. It survives mogeung closing, and \
-                         `tmux attach -t {name}` reaches it from any terminal.\n\
-                         Double-click the tab to rename it — the label only, \
-                         never the session.",
-                        s.root
-                    ),
+                    // Naming the host matters here: `tmux attach -t …` is
+                    // advice you act on, and run on the wrong machine it finds
+                    // nothing — or something else entirely.
+                    _ => match reach.host_label() {
+                        Some(host) => format!(
+                            "{}\n\nA tmux session on {host}. It survives mogeung \
+                             closing, and `tmux attach -t {name}` reaches it from \
+                             any terminal *there*.\n\
+                             Double-click the tab to rename it — the label only, \
+                             never the session.",
+                            s.root
+                        ),
+                        None => format!(
+                            "{}\n\nA tmux session. It survives mogeung closing, and \
+                             `tmux attach -t {name}` reaches it from any terminal.\n\
+                             Double-click the tab to rename it — the label only, \
+                             never the session.",
+                            s.root
+                        ),
+                    },
                 };
                 let active = i == self.shells.active;
 
@@ -9245,10 +9545,10 @@ impl App {
             // R-I4: against a remote daemon this would open a terminal on
             // the other machine — refuse rather than surprise.
             if self.remote_daemon() {
-                self.errors.push(
-                    "remote daemon — launching a terminal would open it on the other machine"
-                        .into(),
-                );
+                self.errors.push(format!(
+                    "remote daemon — launching a terminal would open it on {}",
+                    self.other_machine()
+                ));
             } else {
                 self.net.send(ClientMsg::LaunchTerminal {
                     dir: self.launch_dir.trim().to_string(),
@@ -10487,3 +10787,518 @@ mod tests {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Connections — which daemon this window is watching. `R-I7`.
+// ---------------------------------------------------------------------------
+
+impl App {
+    /// Add, name, switch and forget daemons without a restart.
+    ///
+    /// The rule the layout follows: the list is written on change, not on
+    /// every frame. Unlike the layout there is no drag to debounce, so a save
+    /// per edit is exactly right.
+    fn connections_window(&mut self, root: &mut egui::Ui) {
+        if !self.show_connections {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let mut open = true;
+        let mut save = false;
+        let mut switch: Option<crate::connections::Connection> = None;
+        let mut remove: Option<usize> = None;
+        // Taken for the frame, like the tab rename: the draft is state on
+        // `self`, and the list below holds `self` borrowed to draw it.
+        let mut draft_slot = self.conn_draft.take();
+        let mut reopen: Option<(Option<usize>, crate::connections::Connection)> = None;
+        let mut commit: Option<(Option<usize>, crate::connections::Connection)> = None;
+        let mut cancel = false;
+        // Subscribe for as long as the window is open, and merge whatever has
+        // arrived before drawing, so a sighting shows on the frame it lands.
+        if self.scan.is_none() {
+            match mogeungd::discovery::Watcher::start() {
+                Ok(w) => {
+                    self.scan = Some(w);
+                    self.scan_since = Some(std::time::Instant::now());
+                }
+                // No multicast here — a container, a locked-down interface.
+                // Say so once rather than showing an empty list for ever.
+                Err(e) => self.errors.push(format!("cannot browse the network: {e}")),
+            }
+        }
+        if let Some(w) = &self.scan {
+            for f in w.poll() {
+                match self.scanned.iter_mut().find(|e| e.name == f.name) {
+                    Some(existing) => existing.absorb(f),
+                    None => self.scanned.push(f),
+                }
+            }
+            self.scanned.sort_by(|a, b| a.name.cmp(&b.name));
+            // Answers arrive between frames, and an idle window repaints about
+            // once a second — too slow to feel like it is listening.
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+
+        // Small shapes shared by the three lists below. Nested rather than
+        // free functions: nothing else in the window draws a list like this,
+        // and whoever changes a card should find it beside the rows.
+
+        /// The Body size *in this scope*, after the `scale_text` below.
+        ///
+        /// The window's own sizes derive from it rather than being written
+        /// down, for the reason `diff_size` does the same: `dim` and `mono`
+        /// bake 12.0 into themselves, so a label built from them cannot be
+        /// scaled by anything outside them — and a dialog that scales half its
+        /// text looks worse than one that scales none of it.
+        fn body_size(ui: &egui::Ui) -> f32 {
+            ui.style()
+                .text_styles
+                .get(&egui::TextStyle::Body)
+                .map(|f| f.size)
+                .unwrap_or(13.0)
+        }
+
+        /// Secondary text — the `dim` of this window, but scalable.
+        fn soft(ui: &egui::Ui, text: impl Into<String>) -> RichText {
+            RichText::new(text.into())
+                .color(pal().dim)
+                .size(body_size(ui) - 1.0)
+        }
+
+        /// An address. Monospace so a host and port can be compared by eye.
+        fn addr(ui: &egui::Ui, text: impl Into<String>) -> RichText {
+            RichText::new(text.into())
+                .monospace()
+                .color(pal().dim)
+                .size(body_size(ui) - 1.0)
+        }
+
+        fn section(ui: &mut egui::Ui, title: &str, note: &str) {
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(title)
+                        .strong()
+                        .size(body_size(ui) - 1.0)
+                        .color(pal().text_strong),
+                );
+                if !note.is_empty() {
+                    ui.label(soft(ui, note));
+                }
+            });
+            ui.add_space(3.0);
+        }
+
+        /// One daemon, as a card: name and buttons on top, address beneath.
+        ///
+        /// The old list was a run of `ui.horizontal`s, which gave a name, a
+        /// URL, three suffixes and three buttons the same weight on one line —
+        /// so the thing you pick by (the name) and the thing you are picking
+        /// between (which machine) had to be read out of the middle of a
+        /// sentence. The fill and the stroke say which one you are on without
+        /// reading anything at all.
+        fn card<R>(ui: &mut egui::Ui, live: bool, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+            let out = egui::Frame::NONE
+                .fill(if live { pal().bg_raised } else { Color32::TRANSPARENT })
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if live { pal().green } else { pal().border },
+                ))
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::symmetric(10, 7))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    body(ui)
+                });
+            ui.add_space(4.0);
+            out.inner
+        }
+
+        let current = self.net.url.clone();
+        let local = crate::connections::Connection::local();
+        let local_live = current.starts_with(&local.url);
+
+        // What to call the daemon we are on, for the header. Its saved name if
+        // it has one — the URL is the fallback, not the answer, because the
+        // whole reason rows carry names is that a URL is a poor thing to
+        // recognise a machine by under time pressure.
+        let current_name = if local_live {
+            local.label().to_string()
+        } else {
+            self.connections
+                .list
+                .iter()
+                .find(|c| current.starts_with(&c.url))
+                .map(|c| c.label().to_string())
+                .unwrap_or_else(|| current.clone())
+        };
+        let current_detail = match &self.daemon_identity {
+            Some(id) => format!(
+                "{} on {} · mogeungd {} · pid {}",
+                id.claude_home,
+                id.label(),
+                id.version,
+                id.pid
+            ),
+            // Either the first snapshot has not landed or the daemon predates
+            // R-I5. Say which is possible rather than leaving a blank line
+            // where every other daemon shows its provenance.
+            None => "identity not published — the first snapshot may still be in flight".into(),
+        };
+
+        // Our own daemon, seen from outside, is dropped before the count as
+        // well as before the rows: offering it back would invite a second
+        // connection to the machine we are already on, and reporting "1 found"
+        // above an empty list is worse than either.
+        let found: Vec<(&mogeungd::discovery::Found, String)> = self
+            .scanned
+            .iter()
+            .filter(|f| !(f.machine_id.is_some() && f.machine_id == self.this_machine))
+            .filter_map(|f| f.url().map(|u| (f, u)))
+            .collect();
+        let scan_note = if self.scan.is_none() {
+            "not listening".to_string()
+        } else if !found.is_empty() {
+            format!("listening · {} found", found.len())
+        } else if self.scan_says_waiting() {
+            "listening…".to_string()
+        } else {
+            "listening · nothing yet".to_string()
+        };
+
+        egui::Window::new("Daemons")
+            .open(&mut open)
+            .default_width(560.0)
+            .collapsible(false)
+            .show(&ctx, |ui| {
+                // A dialog you read across a desk and act on once, not body
+                // text you sit in — and it was inheriting the panes' sizes,
+                // which are tuned for density in a window full of diffs.
+                // Scoped to this `Ui`, so nothing behind the dialog moves.
+                scale_text(ui, 1.15);
+
+                // --- Where you are ------------------------------------------
+                // At the top, not the footnote it used to be at the bottom:
+                // every row below asks where to go next, and none of them can
+                // be answered without knowing where you already are.
+                egui::Frame::NONE
+                    .fill(pal().bg_raised)
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon::DOT).color(if self.net.connected {
+                                pal().green
+                            } else {
+                                pal().red
+                            }));
+                            ui.label(soft(ui, "watching"));
+                            ui.label(RichText::new(&current_name).strong().size(body_size(ui) + 3.0));
+                            if !self.net.connected {
+                                ui.label(
+                                    RichText::new(
+                                        self.net.last_error.as_deref().unwrap_or("disconnected"),
+                                    )
+                                    .color(pal().red)
+                                    .size(body_size(ui) - 1.0),
+                                );
+                            }
+                        });
+                        ui.label(soft(ui, &current_detail));
+                        ui.label(addr(ui, crate::connections::redacted(&current)));
+                    });
+
+                ui.add_space(8.0);
+                ui.label(soft(ui, 
+                    "Switching keeps your layout and keymap; everything the old daemon \
+                     said is dropped.",
+                ));
+
+                // --- This machine -------------------------------------------
+                // Above everything and outside the saved list, carrying no
+                // Edit or Forget: the point of it is that the machine you are
+                // sitting in front of cannot be lost, and a row you can delete
+                // is a row somebody deletes.
+                section(ui, "THIS MACHINE", "");
+                card(ui, local_live, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(icon::DOT).color(if local_live {
+                            pal().green
+                        } else {
+                            pal().dim
+                        }));
+                        ui.label(RichText::new(local.label()).strong());
+                        ui.label(soft(ui, match self.daemon_mode {
+                            crate::daemon::Mode::Hosting if local_live => "hosted by this window",
+                            crate::daemon::Mode::Attached { .. } if local_live => "already running",
+                            _ => "where this window is running",
+                        }));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if !local_live && ui.button("Connect").clicked() {
+                                switch = Some(local.clone());
+                            }
+                        });
+                    });
+                    ui.label(addr(ui, &local.url));
+                });
+
+                // --- Saved --------------------------------------------------
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("SAVED")
+                            .strong()
+                            .size(body_size(ui) - 1.0)
+                            .color(pal().text_strong),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if draft_slot.is_none()
+                            && ui
+                                .button(format!("{} Add a daemon", icon::NEW_SESSION))
+                                .clicked()
+                        {
+                            reopen = Some((None, Default::default()));
+                        }
+                    });
+                });
+                ui.add_space(3.0);
+
+                // The form sits where the row it makes will land, rather than
+                // at the far bottom of the window where the Add button that
+                // opened it cannot see the result.
+                if let Some((at, draft)) = draft_slot.as_mut() {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(match at {
+                                Some(_) => "Edit daemon",
+                                None => "New daemon",
+                            })
+                            .strong(),
+                        );
+                        ui.add_space(4.0);
+                        egui::Grid::new("conn-draft")
+                            .num_columns(2)
+                            .spacing([10.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label(soft(ui, "Name"));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.name)
+                                        .hint_text("devbox")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.end_row();
+                                ui.label(soft(ui, "URL"));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.url)
+                                        .hint_text("ws://10.0.0.27:7717/ws")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.end_row();
+                                ui.label(soft(ui, "Token"));
+                                let mut token = draft.token.clone().unwrap_or_default();
+                                // Masked because a token on screen is a token
+                                // in whatever recording or screenshot is
+                                // running.
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut token)
+                                            .password(true)
+                                            .hint_text("only if the daemon requires one")
+                                            .desired_width(f32::INFINITY),
+                                    )
+                                    .changed()
+                                {
+                                    draft.token = (!token.is_empty()).then_some(token);
+                                }
+                                ui.end_row();
+                            });
+                        if let Some(problem) = draft.problem() {
+                            ui.label(
+                                RichText::new(format!("{} {problem}", icon::WARN))
+                                    .color(pal().amber)
+                                    .size(body_size(ui) - 1.0),
+                            );
+                        }
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let ok = draft.problem().is_none();
+                            if ui.add_enabled(ok, egui::Button::new("Save")).clicked() {
+                                let mut conn = draft.clone();
+                                conn.url = conn.url.trim().to_string();
+                                conn.name = conn.name.trim().to_string();
+                                commit = Some((*at, conn));
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                        ui.label(soft(ui, 
+                            "The token is stored in ~/.mogeung/connections.json, owner-readable \
+                             only. It travels in clear text unless the URL is wss://.",
+                        ));
+                    });
+                    ui.add_space(6.0);
+                }
+
+                if self.connections.list.is_empty() && draft_slot.is_none() {
+                    ui.label(soft(ui, 
+                        "Nothing saved yet — add one above, or take one off the network below.",
+                    ));
+                }
+
+                for (i, c) in self.connections.list.iter().enumerate() {
+                    let live = current.starts_with(&c.url);
+                    card(ui, live, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon::DOT).color(if live {
+                                pal().green
+                            } else {
+                                pal().dim
+                            }));
+                            ui.label(RichText::new(c.label()).strong());
+                            if live {
+                                ui.label(soft(ui, "connected"));
+                            } else if self.connections.active == Some(i) {
+                                // Which one you reached for last time. A hint
+                                // and nothing more — no launch dials it, which
+                                // is the whole change `R-I7` reverted to.
+                                ui.label(soft(ui, "last used"));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .button(icon::HIDE)
+                                    .on_hover_text("Forget this daemon")
+                                    .clicked()
+                                {
+                                    remove = Some(i);
+                                }
+                                if ui.button("Edit").clicked() {
+                                    reopen = Some((Some(i), c.clone()));
+                                }
+                                if !live && ui.button("Connect").clicked() {
+                                    switch = Some(c.clone());
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(addr(ui, &c.url));
+                            // Never the token itself, here or anywhere: this
+                            // window is the thing people screen-share.
+                            if c.token.is_some() {
+                                ui.label(badge("token", pal().blue));
+                            }
+                        });
+                    });
+                }
+
+                // --- On this network (R-I8) ---------------------------------
+                // A wifi picker, not a search: the subscription runs while this
+                // window is open and rows accumulate.
+                section(ui, "ON THIS NETWORK", &scan_note);
+
+                if found.is_empty() && !self.scan_says_waiting() {
+                    ui.label(soft(ui, 
+                        "A daemon appears only with --advertise, and only from a \
+                         non-loopback --listen. Many networks drop multicast between hosts.",
+                    ));
+                }
+
+                for (f, url) in &found {
+                    card(ui, false, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icon::DOT).color(pal().dim));
+                            ui.label(RichText::new(&f.name).strong());
+                            if f.needs_token {
+                                ui.label(badge("token", pal().amber));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if self.connections.list.iter().any(|c| c.url == *url) {
+                                    ui.label(soft(ui, "saved"));
+                                } else if ui.button("Add").clicked() {
+                                    // Add, never connect: this fills the form
+                                    // and waits for a hand.
+                                    reopen = Some((
+                                        None,
+                                        crate::connections::Connection {
+                                            name: f.name.clone(),
+                                            url: url.clone(),
+                                            token: None,
+                                        },
+                                    ));
+                                }
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(addr(
+                                ui,
+                                f.addr().map(|a| a.to_string()).unwrap_or_default(),
+                            ));
+                            if f.addrs.len() > 1 {
+                                ui.label(soft(ui, format!("+{}", f.addrs.len() - 1)))
+                                    .on_hover_text(
+                                        f.addrs
+                                            .iter()
+                                            .map(|a| a.to_string())
+                                            .collect::<Vec<_>>()
+                                            .join("\n"),
+                                    );
+                            }
+                            if let Some(home) = &f.claude_home {
+                                ui.label(soft(ui, format!("· {home}")));
+                            }
+                        });
+                    });
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(soft(ui, format!(
+                    "Saved in {}",
+                    crate::connections::Connections::path().display()
+                )));
+            });
+
+        self.conn_draft = draft_slot;
+        if cancel {
+            self.conn_draft = None;
+        }
+        if let Some((at, conn)) = commit {
+            // Editing a row's URL into one that already exists collapses the
+            // two rather than leaving a duplicate behind.
+            if let Some(old) = at {
+                self.connections.remove(old);
+            }
+            self.connections.upsert(conn);
+            self.conn_draft = None;
+            save = true;
+        }
+        if let Some(next) = reopen {
+            self.conn_draft = Some(next);
+        }
+        if let Some(i) = remove {
+            self.connections.remove(i);
+            save = true;
+        }
+        if let Some(conn) = switch {
+            self.connections.active = self.connections.list.iter().position(|c| c.url == conn.url);
+            self.switch_to(&conn, &ctx);
+            save = true;
+        }
+        if save {
+            if let Err(e) = self.connections.save() {
+                self.errors.push(format!("could not save connections: {e}"));
+            }
+        }
+        if !open {
+            self.show_connections = false;
+            self.conn_draft = None;
+            // Stop querying the network the moment nobody is looking at the
+            // answers. The rows are kept: reopening shows what was found, and
+            // the subscription refreshes it.
+            self.scan = None;
+            self.scan_since = None;
+        }
+    }
+}

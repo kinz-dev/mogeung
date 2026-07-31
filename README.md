@@ -34,8 +34,8 @@ cargo build --release
 One executable. It starts a daemon if none is watching, attaches to one if there
 is, and a daemon it started stops when you close the window.
 
-For a daemon that outlives every window — so notifications and the phone client
-keep working while nothing is on screen — run it separately:
+For a daemon that outlives every window — so notifications keep firing while
+nothing is on screen — run it separately:
 
 ```sh
 ./target/release/mogeungd --notify   # keeps watching with no window open
@@ -101,12 +101,21 @@ that is merely continuing.
 
 ## Requirements
 
-Rust 1.85+, `git`, Claude Code 2.1.x on `PATH`, macOS.
+Rust 1.85+, `git`, Claude Code 2.1.x on `PATH`. macOS and Linux; Windows is not
+supported and is not planned.
 
-Two caveats worth knowing up front: everything rests on **undocumented** Claude
-Code file formats that an update can change, and the daemon has **no
-authentication** — it binds localhost, and anyone who can reach the port can
-read your transcripts. Do not expose it.
+The caveat worth knowing up front: everything rests on **undocumented** Claude
+Code file formats that an update can change, and going quietly blind is the
+failure mode the health panel exists to make loud.
+
+On exposure — the daemon binds loopback and needs no token there, because
+anyone who can reach `127.0.0.1` can already read `~/.claude` directly. Beyond
+loopback it **refuses to start without a shared secret**, and there is no
+`--insecure` to talk it out of that: the port serves every transcript on the
+machine and can open terminals on it. The safest route stays an ssh tunnel, which
+needs no token at all.
+
+→ [Watching a remote machine](docs/guide/remote.md)
 
 ## Develop
 
@@ -114,7 +123,7 @@ read your transcripts. Do not expose it.
 ./scripts/start.sh          # build + run both; --fresh for a throwaway db
 mprocs                      # both side by side, plus test/docs on a keypress
 
-cargo test --workspace      # 147 tests, all free — nothing spawns an agent
+cargo test --workspace      # 528 tests, all free — nothing spawns an agent
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```

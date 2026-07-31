@@ -10,6 +10,7 @@
 //! this process or another one.
 
 mod app;
+mod connections;
 mod cli;
 mod daemon;
 mod diff;
@@ -53,7 +54,7 @@ struct Args {
 impl Default for Args {
     fn default() -> Self {
         Args {
-            addr: "127.0.0.1:7717".into(),
+            addr: connections::DEFAULT_ADDR.into(),
             url: None,
             token: None,
             hotkey: Some(hotkey::DEFAULT.to_string()),
@@ -127,6 +128,9 @@ Starts a daemon if none is already watching, and attaches to one if there is.
 A daemon this window started stops when the window closes; one that was already
 running is left alone.
 
+Always starts on the local daemon. Daemons on other machines are saved in the
+window and chosen there (Alt+D) — a remote is never dialled automatically.
+
 Detaches from the terminal by default, like nohup: the prompt comes back at
 once and closing the terminal does not close the window. Console output is
 discarded unless --log names a file.
@@ -151,8 +155,8 @@ A shortcut macOS reserves for itself (Cmd+Space, Cmd+Tab) will appear to
 register and then never fire — the system consumes it first. If nothing
 happens, try another combination rather than assuming it is broken.
 
-For a daemon that outlives every window — so notifications and the phone client
-keep working — run `mogeungd` separately instead.",
+For a daemon that outlives every window — so notifications keep firing and a
+window elsewhere can attach — run `mogeungd` separately instead.",
                     default = hotkey::DEFAULT
                 );
                 std::process::exit(0);
@@ -197,7 +201,23 @@ fn detach(_log: Option<&std::path::Path>) -> std::io::Result<u32> {
     Err(std::io::Error::other("detaching is only supported on unix"))
 }
 
+/// Name the TLS backend rather than letting rustls infer one.
+///
+/// rustls 0.23 resolves its crypto provider from cargo features, and when the
+/// answer is not exactly one it does **not** fail to build — it panics on the
+/// first TLS connection, deep inside the network thread. So a future dependency
+/// that happens to pull in a second provider would turn every `wss://` URL into
+/// a crash, with nothing at build time to warn anyone.
+///
+/// Installing it explicitly makes that impossible: this wins regardless of what
+/// else appears in the tree. The `Err` means it is already installed, which is
+/// not a problem worth reporting. `R-I10`.
+fn pin_tls_backend() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 fn main() -> eframe::Result<()> {
+    pin_tls_backend();
     // Before anything else, including detaching: a subcommand is an answer on
     // stdout, and detaching would take the terminal away from it. `R-J4`.
     match cli::parse(std::env::args().skip(1)) {
@@ -240,6 +260,21 @@ fn main() -> eframe::Result<()> {
         )
         .try_init();
 
+    // Every launch starts on the local daemon.
+    //
+    // `R-I7` used to reopen the connection last chosen in the window, and that
+    // was wrong in the one way a default must never be wrong: it was sticky and
+    // invisible. Connect to a dev box once and every later launch dialled it —
+    // including from a train, and including after that box was turned off — and
+    // because the remembered URL was applied *here*, before `daemon::acquire`,
+    // the window also stopped honouring ADR-0009. It never checked the local
+    // port and never hosted a daemon, so the machine you were sitting in front
+    // of was not being watched at all, and nothing said so.
+    //
+    // So the remembered choice no longer reaches this far. LOCAL is always the
+    // start, always in the list, and another daemon is one keypress away in the
+    // window (Alt+D) — a choice you make when you mean it, per session.
+    //
     // An explicit --url means "talk to that", full stop: the user has pointed
     // us somewhere, possibly another machine, and starting a local daemon would
     // be answering a question nobody asked.
@@ -248,6 +283,17 @@ fn main() -> eframe::Result<()> {
         None => {
             let (mode, listener) = daemon::acquire(&args.addr, args.start_daemon);
             if let Some(listener) = listener {
+                // The hosted daemon refuses the same binds `mogeungd` refuses
+                // (R-I10), but it refuses them on a background thread, where a
+                // message is a line nobody reads before the window opens over
+                // it. Ask the same question here, while stderr is still the
+                // thing the user is looking at.
+                if let Ok(bound) = listener.local_addr() {
+                    if let Err(e) = mogeungd::server::admit(&bound, args.token.as_deref()) {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
                 daemon::host(
                     listener,
                     args.db.clone(),
@@ -255,6 +301,7 @@ fn main() -> eframe::Result<()> {
                         desktop: args.notify,
                         push_url: args.push_url.clone(),
                     },
+                    args.token.clone(),
                 );
             }
             (mode, format!("ws://{}/ws", args.addr))

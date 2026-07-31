@@ -4,10 +4,12 @@
 pub mod adapter;
 pub mod api;
 pub mod codex;
+pub mod discovery;
 pub mod docscan;
 pub mod git;
 pub mod insight;
 pub mod health;
+pub mod machine;
 pub mod notify;
 pub mod runner;
 pub mod server;

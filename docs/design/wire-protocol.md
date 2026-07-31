@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -174,6 +174,39 @@ the full `detail` object. It is deliberately curl-able: "is the board empty
 because nothing is happening, or because mogeung went blind?" should not require
 a window.
 
+## Who is answering (`R-I5`)
+
+`Snapshot` carries an optional `DaemonIdentity`, and `/api/health` returns the
+same object under `daemon`:
+
+| Field | For |
+|---|---|
+| `machine_id` | **the comparison.** `~/.mogeung/machine-id`, 16 random bytes written once |
+| `host` | display only — "watching devbox" beats "watching 10.0.0.4:7717" |
+| `claude_home` | which world this daemon watches; two homes on one box are two worlds |
+| `pid`, `version` | so a client can name what to blame |
+| `ssh_target` | how to reach this machine, when configured. Declared for `R-I6` |
+
+This exists because the client used to answer *"am I looking at another
+machine?"* with a substring test on the address it had dialled — a question
+about routing standing in for a question about whose filesystem this is. An
+`ssh -L 7717:localhost:7717` tunnel makes a remote daemon answer on
+`127.0.0.1`, so the guess flipped to "local" and re-enabled every action that
+opens an editor or a terminal. That tunnel is the *recommended* way to reach a
+remote daemon, so the guess was wrong exactly where it mattered most.
+
+**Hostnames are not the comparison, and deliberately so** — two VMs off one
+image share a name, and a collision would silently re-enable the actions this
+gates. **Unknown on either side means "not this machine"**: refusing prints a
+sentence, acting on the wrong filesystem opens an editor on a path that is not
+there.
+
+A client older than this field ignores it; a client newer than a daemon that
+does not send it falls back to the address guess rather than refusing
+everything, because daemon and window sit on different machines and upgrade at
+different times. Both directions are pinned by
+`a_snapshot_survives_a_version_gap_in_both_directions`.
+
 ## There is no bundled second client (`R-C3`, removed)
 
 `GET /` used to serve one self-contained HTML file speaking this same protocol —
@@ -190,22 +223,42 @@ the daemon logs a warning at startup when the bind is not a loopback address —
 anyone who can reach a non-loopback port can read every transcript on the
 machine and open terminals on it.
 
-**A shared token, when you set one** (`R-I4`). `--token` gates every HTTP and WS
-request; clients send `Authorization: Bearer …` or `?token=…`, the query form
-existing because a browser socket cannot set headers. Comparison is constant
-time, leaking length only. A wrong token is a clean 401.
+**A shared token, mandatory beyond loopback** (`R-I4`, tightened by `R-I10`).
+`--token` gates every HTTP and WS request; clients send
+`Authorization: Bearer …` or `?token=…`, the query form existing because a
+browser socket cannot set headers. Comparison is constant time, leaking length
+only. A wrong token is a clean 401.
 
-Three things this does *not* yet do, all tracked under `R-I10`:
+`server::admit` decides this **before the daemon serves anything** — before the
+database is opened, before the first scan — and a non-loopback bind with no
+token is an error that stops start-up rather than a warning that scrolls past.
+There is no `--insecure`: an override becomes the documented workaround, and
+binding loopback behind an ssh tunnel is both available and strictly better
+than a token in clear text. The window applies the same rule to the daemon it
+hosts, checked on the main thread so the refusal is visible rather than dying
+in a background one.
 
-- **The token is optional, not mandatory, for a non-loopback bind.** Today that
-  case only warns. It should refuse — more so once
-  [ADR-0012](../decisions/0012-write-locally-never-publish.md)'s write verbs
-  share this socket.
-- **No TLS.** The token and everything after it travel in clear text
+Two things this still does *not* do, tracked under `R-I10`:
+
+- **The daemon serves no TLS of its own.** It speaks plain HTTP and `ws://`, so
+  a token sent straight to it travels in clear text
   ([A24](../product/assumptions.md) is the bet: trusted network, no TLS until
-  the bet fails). A reverse proxy is the obvious answer and does not work yet —
-  the window is built with no TLS feature in `tokio-tungstenite`, so it cannot
-  dial `wss://` at all.
+  the bet fails).
+
+  What changed on 2026-07-31 is the *client* half: both clients are now built
+  with `rustls` and can dial `wss://`, so putting a TLS-terminating reverse
+  proxy in front of the daemon works. That is the recommended way to get
+  encryption without the daemon growing certificate handling, key rotation and
+  a renewal story it has no business owning.
+
+  **The trap this walked into is worth remembering.** Enabling the
+  `tokio-tungstenite` TLS feature alone left rustls with no crypto provider
+  selected — which does not fail the build. It panics on the first TLS
+  connection, inside the network thread. So both binaries name the provider
+  explicitly (`ring`) at start-up, and
+  `the_window_speaks_wss_not_just_ws` asserts a real TLS ClientHello reaches the
+  wire, because the alternative failure is a panic nobody sees until they try
+  the thing this was added for.
 - **Argument hygiene is not authentication.** The shape-checks above stop a
   client spelling a flag; they say nothing about *which* client.
 

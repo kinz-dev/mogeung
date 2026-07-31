@@ -148,6 +148,19 @@ pub struct Explorer {
 }
 
 impl Explorer {
+    /// Drop every session's live state, keeping what was loaded from disk.
+    ///
+    /// For switching daemons (`R-I7`): open tabs and file bodies belong to the
+    /// machine that served them, and a file left on screen after a switch is a
+    /// file the new daemon may not have. `saved` stays — it is keyed by session
+    /// id and is this window's memory of *shape*, re-applied only when a
+    /// session of that id is seen again, so keeping it costs nothing and
+    /// switching back to a daemon restores the arrangement.
+    pub fn forget_all(&mut self) {
+        self.session = None;
+        self.states.clear();
+    }
+
     /// Load the remembered shape. Any failure yields an empty explorer and a
     /// warning, never a blocked launch — the layout's rule, applied here.
     pub fn load() -> (Self, Option<String>) {

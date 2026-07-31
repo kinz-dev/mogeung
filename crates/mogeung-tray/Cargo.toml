@@ -15,7 +15,8 @@ serde_json.workspace = true
 # The same client stack the window uses (net.rs), minus egui: a small
 # current-thread runtime holding one websocket.
 tokio = { version = "1", features = ["rt", "time", "net"] }
-tokio-tungstenite = "0.30"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 futures-util = "0.3"
 
 # Pure-Rust StatusNotifierItem. Linux-only by nature; the macOS menu-bar

@@ -69,3 +69,62 @@ async fn no_token_configured_stays_open() {
         .unwrap();
     assert!(line.contains("200"), "got: {line}");
 }
+
+/// R-I10: a bind beyond loopback with no token does not serve at all.
+///
+/// It used to log a warning and carry on, which meant an open daemon looked
+/// exactly like a working one. Asserted through `server::run` rather than
+/// `admit` directly, because the guarantee is about the daemon refusing to
+/// start — a unit test of the predicate would still pass if nobody called it.
+#[tokio::test]
+async fn a_public_bind_with_no_token_refuses_to_serve() {
+    let home = temp_home("refuse");
+    let db = home.join("never-created.db");
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+
+    let opts = mogeungd::server::Options {
+        db: db.clone(),
+        claude_home: Some(home),
+        token: None,
+        ..Default::default()
+    };
+    let err = mogeungd::server::run(listener, opts, std::future::pending::<()>())
+        .await
+        .expect_err("a public bind with no token must not serve");
+
+    let msg = err.to_string();
+    assert!(msg.contains("refusing to listen"), "got: {msg}");
+    assert!(msg.contains("--token"), "must say how to fix it: {msg}");
+
+    // The refusal comes before any work: no database, no scan, nothing to
+    // clean up after a start that should never have begun.
+    assert!(
+        !db.exists(),
+        "refused before serving, so the database must not have been created"
+    );
+}
+
+/// The same bind, with a token, gets past admission and serves.
+#[tokio::test]
+async fn a_public_bind_with_a_token_is_allowed() {
+    let home = temp_home("allowed");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let store = Store::open(&home.join("mogeung.db")).unwrap();
+    let state = AppState::with_home(store, home).unwrap();
+    let router = api::router_with_token(state as Arc<AppState>, Some("s3cret".into()));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let reachable = tokio::task::spawn_blocking(move || {
+        get(
+            std::net::SocketAddr::from(([127, 0, 0, 1], addr.port())),
+            "/api/health?token=s3cret",
+            None,
+        )
+    })
+    .await
+    .unwrap();
+    assert!(reachable.contains("200"), "got: {reachable}");
+}

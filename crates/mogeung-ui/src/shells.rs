@@ -142,12 +142,14 @@ pub const DEFAULT_HEIGHT: f32 = 260.0;
 pub const MIN_HEIGHT: f32 = 120.0;
 
 impl Shells {
-    pub fn from_prefs(p: &TerminalPanel) -> Self {
+    /// The panel's geometry and the watched machine's tab list, which live in
+    /// two files since `R-I11` — the height is about this window, the tabs are
+    /// about worktrees on the machine the daemon is watching.
+    pub fn from_prefs(p: &TerminalPanel, tabs: &[ShellRef]) -> Self {
         Shells {
             open: p.open,
             height: sane_height(p.height),
-            tabs: p
-                .shells
+            tabs: tabs
                 .iter()
                 .map(|s| Shell {
                     root: s.root.clone(),
@@ -165,21 +167,23 @@ impl Shells {
         .repaired()
     }
 
-    pub fn to_prefs(&self) -> TerminalPanel {
-        TerminalPanel {
+    pub fn to_prefs(&self) -> (TerminalPanel, Vec<ShellRef>) {
+        let panel = TerminalPanel {
             open: self.open,
             height: sane_height(self.height),
-            shells: self
-                .tabs
-                .iter()
-                .map(|s| ShellRef {
-                    root: s.root.clone(),
-                    ordinal: s.ordinal,
-                    name: s.name.clone(),
-                })
-                .collect(),
             active: self.active,
-        }
+            ..Default::default()
+        };
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|s| ShellRef {
+                root: s.root.clone(),
+                ordinal: s.ordinal,
+                name: s.name.clone(),
+            })
+            .collect();
+        (panel, tabs)
     }
 
     /// Clamp `active` into the tabs that exist. A hand-edited or half-written
@@ -315,7 +319,7 @@ impl Shells {
     /// Polling all of them, not just the visible one: a shell whose process
     /// exited while you were looking at another tab must say so when you come
     /// back, and an undrained channel is how that gets missed.
-    pub fn tick(&mut self, ctx: &egui::Context) {
+    pub fn tick(&mut self, ctx: &egui::Context, reach: &crate::term::Reach) {
         for s in &mut self.tabs {
             if let Some(t) = s.term.as_mut() {
                 t.poll();
@@ -327,10 +331,29 @@ impl Shells {
         if s.term.is_some() || s.failed.is_some() {
             return;
         }
-        match Term::shell(ctx, &s.root, s.ordinal) {
+        match Term::shell(ctx, &s.root, s.ordinal, reach) {
             Ok(t) => s.term = Some(t),
             Err(e) => s.failed = Some(e.to_string()),
         }
+    }
+
+    /// Drop every live pty, keeping the tabs themselves.
+    ///
+    /// For switching daemons (`R-I7`): a running pane holds a shell on the
+    /// machine we are leaving, rooted at a path the next one need not have.
+    /// Dropping the view **detaches** rather than kills — tmux still owns the
+    /// session over there ([ADR-0011]), so a build left running keeps running
+    /// and switching back re-attaches to it.
+    ///
+    /// The tabs stay because they are this window's arrangement, not the
+    /// daemon's, and each re-spawns through the current reach when it is next
+    /// shown.
+    pub fn detach_all(&mut self) {
+        for s in &mut self.tabs {
+            s.term = None;
+            s.failed = None;
+        }
+        self.rename = None;
     }
 
     /// Start the visible shell again after it exited, or after a failure.
@@ -480,7 +503,8 @@ mod tests {
         s.height = 320.0;
         s.select(1);
 
-        let back = Shells::from_prefs(&s.to_prefs());
+        let (panel, tabs) = s.to_prefs();
+        let back = Shells::from_prefs(&panel, &tabs);
         assert!(back.open);
         assert_eq!(back.height, 320.0);
         assert_eq!(back.active, 1);
@@ -497,14 +521,15 @@ mod tests {
         let p = TerminalPanel {
             open: true,
             height: f32::NAN,
-            shells: vec![ShellRef { root: "/a".into(), ordinal: 0, name: None }],
             active: 7,
+            ..Default::default()
         };
-        let s = Shells::from_prefs(&p);
+        let tabs = vec![ShellRef { root: "/a".into(), ordinal: 0, name: None }];
+        let s = Shells::from_prefs(&p, &tabs);
         assert_eq!(s.active, 0);
         assert_eq!(s.height, DEFAULT_HEIGHT, "a nonsense height is refused");
 
-        let empty = Shells::from_prefs(&TerminalPanel { shells: vec![], active: 3, ..p });
+        let empty = Shells::from_prefs(&TerminalPanel { active: 3, ..p }, &[]);
         assert_eq!(empty.active, 0);
         assert!(empty.current().is_none());
     }
@@ -643,7 +668,8 @@ mod tests {
     fn names_round_trip_through_the_stored_form() {
         let mut s = shells(&[("/home/k/repo", 0), ("/home/k/repo", 1)]);
         rename(&mut s, 1, "tests");
-        let back = Shells::from_prefs(&s.to_prefs());
+        let (panel, tabs) = s.to_prefs();
+        let back = Shells::from_prefs(&panel, &tabs);
         assert_eq!(back.tabs[1].title(), "tests");
         assert_eq!(back.tabs[0].title(), "repo");
         assert!(back.rename.is_none(), "a half-typed name is not a name");
@@ -656,17 +682,18 @@ mod tests {
         let p = TerminalPanel {
             open: true,
             height: DEFAULT_HEIGHT,
-            shells: vec![
-                ShellRef { root: "/a".into(), ordinal: 0, name: Some("  ".into()) },
-                ShellRef {
-                    root: "/b".into(),
-                    ordinal: 0,
-                    name: Some("a\nname".into()),
-                },
-            ],
             active: 0,
+            ..Default::default()
         };
-        let s = Shells::from_prefs(&p);
+        let tabs = vec![
+            ShellRef { root: "/a".into(), ordinal: 0, name: Some("  ".into()) },
+            ShellRef {
+                root: "/b".into(),
+                ordinal: 0,
+                name: Some("a\nname".into()),
+            },
+        ];
+        let s = Shells::from_prefs(&p, &tabs);
         assert_eq!(s.tabs[0].name, None, "whitespace is not a name");
         assert_eq!(s.tabs[1].name.as_deref(), Some("aname"));
     }

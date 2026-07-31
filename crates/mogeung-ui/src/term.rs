@@ -59,6 +59,107 @@ fn child_env() -> HashMap<String, String> {
     HashMap::from([("TERM".to_string(), TERM.to_string())])
 }
 
+/// Which machine the tmux we drive is running on. `R-I6`.
+///
+/// The pane always holds a local pty — that is what a pty is. What changes is
+/// what runs in it: `tmux …` here, or `ssh -t host tmux …` when the daemon
+/// being watched is somewhere else. Before this existed the panel ran tmux
+/// locally regardless, rooted at a path that only existed on the *other*
+/// machine, so a remote session's shell tab opened a local shell in a directory
+/// that was not there.
+///
+/// Nothing about [ADR-0011] changes: it is still tmux that owns the session,
+/// still reachable from any terminal on that host, and still outliving this
+/// window. It simply outlives it over there.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Reach {
+    /// tmux runs on this machine.
+    #[default]
+    Local,
+    /// tmux runs on another machine, reached as this ssh destination —
+    /// `user@host`, or a name from `~/.ssh/config`.
+    Ssh(String),
+}
+
+impl Reach {
+    /// Turn a tmux argv into the program and argv actually spawned.
+    ///
+    /// `-t` forces a pty on the remote side: without it ssh runs the command
+    /// without a terminal and tmux refuses to start, reporting that it is not
+    /// a terminal — which reads like a tmux fault rather than a missing flag.
+    ///
+    /// No `BatchMode`, deliberately. A key passphrase or a host-key prompt
+    /// appears *in the pane* and can be answered there, because the pane is a
+    /// real terminal. Failing fast instead would turn every first connection
+    /// into an error with no way to act on it.
+    fn spawn_as(&self, tmux_args: Vec<String>) -> (String, Vec<String>) {
+        match self {
+            Reach::Local => ("tmux".to_string(), tmux_args),
+            Reach::Ssh(dest) => {
+                // Each tmux argument is quoted because the remote shell parses
+                // this line: a worktree path with a space in it is the ordinary
+                // case, not the exotic one.
+                let mut command = String::from("tmux");
+                for a in &tmux_args {
+                    command.push(' ');
+                    command.push_str(&shell_quote(a));
+                }
+                // …and then the whole thing is wrapped, because finding `tmux`
+                // over ssh is harder than it looks.
+                //
+                //     zsh:1: command not found: tmux
+                //
+                // — from an Apple-silicon Mac with tmux installed, twice, on
+                // 2026-07-31. Two separate gaps produce that same line:
+                //
+                // 1. `ssh host cmd` runs a **non-login** shell, so zsh sources
+                //    only `.zshenv`; macOS never runs `path_helper`. `-l` fixes
+                //    that by sourcing the profile.
+                // 2. A login shell run with `-c` is still **non-interactive**,
+                //    so `.zshrc` is not sourced either — and Homebrew's own
+                //    installer instructions put `brew shellenv` in `.zshrc` at
+                //    least as often as in `.zprofile`.
+                //
+                // Chasing (2) with `-i` as well invites job-control noise and
+                // prompt side effects into a pane that has to stay clean. So
+                // the fallback is explicit instead: **append** the usual
+                // package-manager directories, leaving anything the profile
+                // already set to win. Appending, not prepending — if the user
+                // has a chosen tmux earlier in PATH, it stays chosen.
+                let inner = format!(
+                    "PATH=\"$PATH:{FALLBACK_PATH}\"; exec {command}"
+                );
+                let login = format!("exec ${{SHELL:-/bin/sh}} -l -c {}", shell_quote(&inner));
+                (
+                    "ssh".to_string(),
+                    vec!["-t".to_string(), dest.clone(), login],
+                )
+            }
+        }
+    }
+
+    /// Where a shell started through this reach can be found afterwards.
+    pub fn host_label(&self) -> Option<&str> {
+        match self {
+            Reach::Local => None,
+            Reach::Ssh(dest) => Some(dest),
+        }
+    }
+}
+
+/// Where package managers put binaries, for when a login profile did not say.
+///
+/// Homebrew on Apple silicon, Homebrew on Intel, MacPorts, and the two Nix
+/// shapes. Appended to `PATH`, never prepended: this is a fallback for "the
+/// profile did not mention it", not an opinion about which `tmux` to run.
+const FALLBACK_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/run/current-system/sw/bin:$HOME/.nix-profile/bin";
+
+/// Wrap in single quotes for a POSIX shell, closing and reopening around any
+/// single quote of its own.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// Shift+Enter must insert a newline rather than submit the turn.
 ///
 /// A terminal has no way to express Shift+Enter — Return is one byte, and the
@@ -230,15 +331,9 @@ fn shell_args(name: &str, cwd: &str) -> Vec<String> {
 }
 
 impl Term {
-    pub fn attach(ctx: &egui::Context, target: &str) -> anyhow::Result<Self> {
-        Self::spawn(
-            ctx,
-            target,
-            Kind::Attached,
-            "tmux".to_string(),
-            attach_args(target),
-            None,
-        )
+    pub fn attach(ctx: &egui::Context, target: &str, reach: &Reach) -> anyhow::Result<Self> {
+        let (program, args) = reach.spawn_as(attach_args(target));
+        Self::spawn(ctx, target, Kind::Attached, program, args, None)
     }
 
     /// A shell rooted in `root`. `R-B31`, one per tab in the panel (`R-B33`).
@@ -246,8 +341,21 @@ impl Term {
     /// Under tmux when there is a tmux, on a bare pty when there is not — the
     /// difference is [`Kind`], and the pane reports it, because only one of
     /// the two survives this window closing ([ADR-0011]).
-    pub fn shell(ctx: &egui::Context, root: &str, ordinal: u32) -> anyhow::Result<Self> {
+    pub fn shell(ctx: &egui::Context, root: &str, ordinal: u32, reach: &Reach) -> anyhow::Result<Self> {
         let name = shell_session_name(root, ordinal);
+        if let Reach::Ssh(_) = reach {
+            // `working_directory` stays `None`: `root` names a directory on the
+            // *other* machine, and handing it to the local pty would fail the
+            // spawn for a path that was never meant to be local. tmux's `-c`
+            // does the rooting, over there, where the path exists.
+            //
+            // No bare-pty fallback either. Locally that fallback trades tmux's
+            // survival for a shell; here it would trade the *right machine* for
+            // a shell on the wrong one, silently — which is the bug this row
+            // exists to fix, reintroduced as a degradation.
+            let (program, args) = reach.spawn_as(shell_args(&name, root));
+            return Self::spawn(ctx, &name, Kind::Shell, program, args, None);
+        }
         if tmux_available() {
             Self::spawn(
                 ctx,
@@ -660,3 +768,176 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    /// Local is the identity case: the argv reaches tmux untouched, with no
+    /// quoting applied, because nothing re-parses it.
+    #[test]
+    fn local_spawns_tmux_directly() {
+        let (program, args) = Reach::Local.spawn_as(shell_args("mog-0", "/home/k/repo"));
+        assert_eq!(program, "tmux");
+        assert_eq!(args[0], "new-session");
+        assert!(
+            args.iter().all(|a| !a.starts_with('\'')),
+            "local args must not be quoted: {args:?}"
+        );
+    }
+
+    /// `R-I6`: the same tmux command, carried to the machine that has the files.
+    #[test]
+    fn ssh_wraps_the_same_tmux_command() {
+        let (program, args) = Reach::Ssh("dev@box".into()).spawn_as(shell_args("mog-0", "/srv/w"));
+        assert_eq!(program, "ssh");
+        assert_eq!(args[0], "-t", "tmux needs a pty on the far side");
+        assert_eq!(args[1], "dev@box");
+        assert_eq!(args.len(), 3, "one command word after the destination");
+        assert!(args[2].contains("new-session"), "the tmux verb must survive: {args:?}");
+        assert!(args[2].contains("/srv/w"), "the remote root must survive: {args:?}");
+    }
+
+    /// `ssh host cmd` runs a non-login shell, which on macOS+zsh means
+    /// `path_helper` never runs and Homebrew is absent from PATH — tmux is
+    /// installed and cannot be found. Reported from a real box:
+    /// `zsh:1: command not found: tmux`.
+    #[test]
+    fn the_remote_command_runs_through_a_login_shell() {
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(attach_args("mog:0.0"));
+        let cmd = &args[2];
+        assert!(cmd.contains(" -l -c "), "must be a login shell: {cmd}");
+        assert!(
+            cmd.starts_with("exec ${SHELL:-/bin/sh}"),
+            "must use the remote user's own shell, with a fallback: {cmd}"
+        );
+    }
+
+    /// ssh joins its trailing arguments with spaces and hands the result to a
+    /// remote shell, so anything unquoted is word-split over there. A worktree
+    /// path with a space is ordinary, and unquoted it would root the shell in
+    /// the wrong directory — or, with `-c /My` failing, in the wrong place
+    /// entirely.
+    #[test]
+    fn a_path_with_a_space_survives_the_remote_shell() {
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", "/My Code/repo"));
+        assert!(
+            args[2].contains("/My Code/repo"),
+            "the path must survive quoting: {args:?}"
+        );
+    }
+
+    /// The nastier half of quoting: a single quote inside the value must close,
+    /// escape and reopen rather than ending the quoting early.
+    #[test]
+    fn a_single_quote_cannot_break_out_of_the_remote_command() {
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(vec!["a'; rm -rf /; echo '".into()]);
+        assert!(
+            args[2].contains(r"'\''"),
+            "an embedded quote must be escaped, not left to close the string: {args:?}"
+        );
+    }
+
+    /// Attaching to a session by name has the same problem and the same fix:
+    /// the exact-match `=` prefix must not be eaten by the remote shell.
+    #[test]
+    fn an_attach_target_keeps_its_exact_match_prefix_over_ssh() {
+        let (_, args) = Reach::Ssh("box".into()).spawn_as(attach_args("mog:0.0"));
+        assert!(
+            args[2].contains("=mog:0.0"),
+            "the = prefix decides which session: {args:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_remote_reach_names_a_host() {
+        assert_eq!(Reach::Local.host_label(), None);
+        assert_eq!(Reach::Ssh("dev@box".into()).host_label(), Some("dev@box"));
+    }
+}
+
+#[cfg(test)]
+mod remote_shell_tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Run the composed command through real shells, with a stub `tmux` that
+    /// reports the argv it was given.
+    ///
+    /// Every other quoting test asserts what I believe a shell does with the
+    /// string. This one asks — and it has to, because the command is parsed
+    /// twice on the far side: once by the shell `ssh` starts, and again by the
+    /// login shell that one execs. A quoting mistake at either level is silent:
+    /// a mis-split path does not error, it roots the remote shell somewhere
+    /// else and the tab looks like it worked.
+    ///
+    /// The stub also pins the PATH rule. `PATH="$PATH:<fallbacks>"` appends, so
+    /// a tmux already on PATH — here, the stub — must still win.
+    #[test]
+    fn a_real_shell_invokes_tmux_with_the_arguments_we_meant() {
+        let root = "/My Code/re'po";
+        let (program, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", root));
+        assert_eq!(program, "ssh");
+
+        // Round one: the shell ssh starts parses this line. Its argv is what
+        // the login shell would be exec'd with.
+        let outer = words_of(&args[2]);
+        assert_eq!(outer.first().map(String::as_str), Some("exec"));
+        assert_eq!(outer.get(2).map(String::as_str), Some("-l"), "a login shell");
+        assert_eq!(outer.get(3).map(String::as_str), Some("-c"));
+        assert_eq!(outer.len(), 5, "the command must arrive as ONE word: {outer:?}");
+
+        // Round two: run that word, with a stub tmux earlier in PATH.
+        let dir = stub_tmux();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&outer[4])
+            .env("PATH", format!("{}:/usr/bin:/bin", dir.display()))
+            .output()
+            .expect("sh must exist");
+        assert!(out.status.success(), "the remote command failed: {:?}", outer[4]);
+
+        let got: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            got,
+            vec!["new-session", "-A", "-s", "mog-0", "-c", root],
+            "tmux must be invoked with exactly these arguments"
+        );
+    }
+
+    /// A `tmux` that prints the arguments it was called with, one per line.
+    fn stub_tmux() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mogeung-stub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tmux");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(f, "printf '%s\\n' \"$@\"").unwrap();
+        drop(f);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    /// What a POSIX shell makes of a command line, as a word list.
+    fn words_of(command: &str) -> Vec<String> {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s\\n' {command}"))
+            .env_remove("SHELL")
+            .output()
+            .expect("sh must exist");
+        assert!(out.status.success(), "shell rejected: {command}");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}

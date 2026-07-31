@@ -135,7 +135,16 @@ pub fn probe(addr: &str) -> Option<Probe> {
 }
 
 /// Start serving on `listener`, on a thread that dies with this process.
-pub fn host(listener: TcpListener, db: Option<PathBuf>, notify: mogeungd::notify::NotifyConfig) {
+/// `token` is the same one the window would present to a daemon elsewhere: if
+/// you are hosting rather than attaching, the secret you would have sent is the
+/// secret you require. Without it a non-loopback `--addr` is refused outright
+/// (`R-I10`), which is why it has to reach this far.
+pub fn host(
+    listener: TcpListener,
+    db: Option<PathBuf>,
+    notify: mogeungd::notify::NotifyConfig,
+    token: Option<String>,
+) {
     std::thread::Builder::new()
         .name("mogeungd".into())
         .spawn(move || {
@@ -149,6 +158,7 @@ pub fn host(listener: TcpListener, db: Option<PathBuf>, notify: mogeungd::notify
             let opts = mogeungd::server::Options {
                 db: db.unwrap_or_else(mogeungd::server::default_db),
                 notify,
+                token,
                 ..Default::default()
             };
             // Never resolves: the daemon stops when the process does, which is

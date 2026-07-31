@@ -65,6 +65,11 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn main() {
+    // Named rather than inferred: rustls picks its crypto provider from cargo
+    // features, and anything other than exactly one panics on the first TLS
+    // connection instead of failing the build. See `pin_tls_backend` in the
+    // window, which carries the longer version of this note. `R-I10`.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = parse_args();
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -132,11 +137,29 @@ async fn net_loop(url: String, handle: ksni::Handle<tray::MogeungTray>) {
                                 let Ok(msg) = serde_json::from_str::<ServerMsg>(&txt) else {
                                     continue;
                                 };
+                                // Whose count this is. `R-I11` — with one
+                                // window per daemon (ADR-0013), two trays
+                                // showing bare numbers is two numbers nobody
+                                // can tell apart.
+                                let machine = match &msg {
+                                    ServerMsg::Snapshot { daemon, .. } => {
+                                        daemon.as_ref().map(|d| d.label())
+                                    }
+                                    _ => None,
+                                };
                                 let changed = model.apply(&msg);
                                 let is_state = matches!(
                                     msg,
                                     ServerMsg::Snapshot { .. } | ServerMsg::Queue { .. }
                                 );
+                                if machine.is_some()
+                                    && handle
+                                        .update(|t| t.set_machine(machine))
+                                        .await
+                                        .is_none()
+                                {
+                                    return;
+                                }
                                 if changed || (is_state && !live) {
                                     if !live {
                                         eprintln!("mogeung-tray: connected to {url}");

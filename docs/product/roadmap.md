@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Roadmap
@@ -13,8 +13,16 @@ Effort: **S** = hours · **M** = about a day · **L** = multi-day.
 Status: **✅** = shipped and proven · **⏳** = built, installed, awaiting
 the dogfooding verdict ([A19](assumptions.md)) · **🗑** = shipped, then
 removed · blank = not started.
+
 The distinction exists because a blank box on built work read as "not
 done" and got R-D10 asked for twice.
+
+~~Struck through~~ is a fourth state and deliberately not a glyph: the idea
+was considered and **refused**, so it was never built and there is nothing
+to mark shipped or removed. The row keeps its number and its box stays
+blank; only the proposal is struck, and the reason beside it is left
+readable. A glyph would have implied it had a lifecycle. It did not — it
+had an argument.
 
 A removed row keeps its number and stays where it was. Deleting it would
 leave the ledger claiming the idea was never had, and the next person to
@@ -27,10 +35,15 @@ items in one-go"* ask — a deliberate override of the item-0 gate, recorded per
 spec (features 0015–0022) and in the ledger (A20–A25). That gamble was settled
 on 2026-07-30: `E`–`H` were used and passed, so those rows are ✅.
 
-**`I` is the exception, and stays ⏳ on purpose.** Its rows reach machines and
-tools this desk does not have — Codex with no real sessions on disk, a remote
-daemon, a second OS — so nothing here has judged them and a ✅ would be a
-claim about a machine nobody ran.
+**`I` was the exception**, because its rows reach machines and tools this desk
+does not have — Codex with no real sessions on disk, a remote daemon, a second
+OS — so a ✅ would have been a claim about a machine nobody ran. That changed
+on 2026-07-31 for the remote half: a Mac watched from a Linux window settled
+`R-I4`, `R-I5`, `R-I6`, `R-I7` and `R-I11`. What is still unjudged is `R-I1`
+(Codex, which needs real Codex use rather than a second machine), `R-I3`
+(Linux), and the two rows that need a daemon listening *beyond* loopback —
+`R-I8` discovery and `R-I10`'s direct-bind rungs — because the ssh-tunnel route
+that settled the rest never binds one.
 
 ## Identifiers
 
@@ -335,23 +348,74 @@ needs an origin to key sessions by, and honest refusals need to know whose
 filesystem is on the other end. Ordered deliberately: `R-I5` first because
 everything else assumes it, then `R-I6` and `R-I7`, which are self-contained
 and immediately useful; `R-I9` (mix mode) last of the build rows, because it is
-the only one that changes the data model rather than adding to it. `R-I10`
+the only one that changes the data model rather than adding to it — and it is
+now refused rather than last, by
+[ADR-0013](../decisions/0013-one-window-one-daemon.md), with `R-I11` in its
+place. `R-I10`
 paces the others — its first two steps are overdue already, and how far up its
 ladder we climb depends on whether `R-I6` makes ssh the transport for
 everything.
+
+**Dogfooding began 2026-07-31**, and pillar `I` stopped being the pillar
+nothing had judged: a second machine appeared — an Apple-silicon Mac watched
+from a Linux window over `ssh -L`. `R-I4`, `R-I5` and `R-I6` are ✅ on that
+evidence — including the refusals, which fired and named the machine through a
+loopback tunnel, the exact case the old heuristic got wrong. `R-I7` followed the same day —
+a running window moved between a Mac and a local daemon without a restart.
+`R-I8` and the direct-bind half of `R-I10` remain untried, because both need a
+daemon listening beyond loopback and the tunnel route never does.
+
+**It found two bugs in the first hour, both invisible locally.** The remote
+tmux was launched through a non-login shell, so macOS never ran `path_helper`;
+fixing that with `-l` was not enough either, because a login shell run with
+`-c` is still non-interactive and Homebrew's `PATH` commonly lives in `.zshrc`.
+Both produced the same line — `zsh:1: command not found: tmux` — on a machine
+where tmux was installed. This is [item 0](#0-the-non-feature)'s argument
+applied to a pillar rather than a feature: no amount of local testing reaches
+a second machine's login shell.
+
+**Progress, 2026-07-31**, on the `remote-reach` branch: `R-I10`'s
+mandatory-token rung, then `R-I5`, then `R-I6`. That last one settled
+something. ssh is now a *hard requirement* for terminals against a remote
+daemon, so "adopt ssh as the transport" has stopped being hypothetical — it is
+already half-adopted. The remaining `R-I10` question is therefore narrower than
+it looked: not *TLS or ssh*, but whether the WebSocket should join the terminals
+in the tunnel, or gain `wss://` for people who would rather run a reverse proxy.
+The one-Cargo-flag experiment ran the same day and answered it: `wss://` now
+works, so the reverse-proxy route is real. It also cost more than a flag —
+see `R-I10`.
 
 | # | Item | Effort | |
 |---|---|---|---|
 | R-I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises ([A23](assumptions.md)) | M | ⏳ |
 | R-I2 | **Gemini CLI adapter** — descoped, see above | M |  |
 | R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above | M | ⏳ |
-| R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). Shipped; guide at [guide/remote.md](../guide/remote.md) | M | ⏳ |
-| R-I5 | **Daemon identity** — the daemon names itself in the snapshot: hostname, the `~/.claude` root it watches, its repo roots, and optionally an ssh target. Replaces the window's guess-from-the-address-string check, which an `ssh -L` tunnel silently defeats today, re-enabling four actions that should refuse. Prerequisite for every row below | S | |
-| R-I6 | **Remote terminal** — the in-app terminal panel reaches the daemon's machine over ssh (`ssh -t host tmux attach -t =target`) instead of starting a local shell in a path that only exists over there. Cheap because `term.rs` already builds an argv and spawns it; the cost is credentials, resize and latency, not architecture. Also closes the unguarded-panel gap the guide currently warns about | M | |
-| R-I7 | **Connections in the window** — add, name, switch and forget daemons from the UI instead of a flag and a restart. Needs a `Net` that can be torn down and a full clear of session-keyed state on switch. The natural first step toward `R-I9`: a connection list of length one | M | |
-| R-I8 | **LAN discovery** — the daemon advertises over mDNS (`_mogeung._tcp`), the window browses and offers what it finds. Discovery must never mean auto-connect, and the broadcast itself announces *"this machine is watching Claude Code sessions"* to the segment — which makes `R-I10` more urgent, not less | M | |
-| R-I9 | **Multi-daemon mix mode** — one window, several daemons, one merged queue. The only row here that changes the data model: `SessionId` is a bare `String` and the whole client keys on it, so every session, review mark, shell tab and layout entry must become origin-qualified. Also makes the window an aggregator, which is a new kind of authority — needs an ADR before code. The cheap alternative it must beat: one window per daemon, which works today and costs nothing | L | |
-| R-I10 | **Remote security** — the ladder past A24's bet: make the token mandatory rather than warned-about for non-loopback binds (more urgent now that [ADR-0012](../decisions/0012-write-locally-never-publish.md) adds write verbs), and decide between TLS and adopting ssh as the supported transport — which `R-I6` may settle by itself. The window cannot speak `wss://` today either (`tokio-tungstenite` is built with no TLS feature), so "put it behind a reverse proxy" is one Cargo flag away from working and worth checking before designing anything larger | M | |
+| R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). **Verified 2026-07-31** over the ssh-tunnel route: the queue, sessions and diffs of a Mac, in a window on another machine. The direct-bind and token paths are still unexercised, so [A24](assumptions.md) itself is untouched by this. Guide at [guide/remote.md](../guide/remote.md) | M | ✅ |
+| R-I5 | **Daemon identity** — **verified in use 2026-07-31.** Both halves: `R-I6`'s terminals reached the Mac *through a `127.0.0.1` tunnel*, which only happens when identity rather than the address decides, and jump-to-terminal and open-in both refused and named the machine. That tunnel is precisely where the old address heuristic said "local" and acted on the wrong box. `DaemonIdentity` on the snapshot and on `/api/health`: a stable `machine_id` (`~/.mogeung/machine-id`), hostname, watched `~/.claude`, pid, version, optional ssh target. The window compares ids instead of guessing from the address string, so an `ssh -L` tunnel no longer reads as local. Repo roots were not included — nothing needed them, and the identity comparison did not | S | ✅ |
+| R-I6 | **Remote terminal** — **verified in use 2026-07-31**, an egui window on Linux driving tmux on an Apple-silicon Mac over an ssh tunnel: both panes, a worktree path containing a space, two concurrent tabs, and detach-not-kill across a window restart. Both terminal panes drive tmux over ssh when the daemon is elsewhere (`Reach::Ssh`), using the `ssh_target` from `R-I5`'s identity; without one they refuse rather than guess a hostname ssh may not want. ADR-0010 and ADR-0011 hold unchanged, one layer further out. No bare-pty fallback remotely: it would trade the right machine for a shell on the wrong one | M | ✅ |
+| R-I7 | **Connections in the window** — **verified in use 2026-07-31**, switching a running window between two daemons on different machines and back. Add, name, switch and forget daemons from the connection dot or `Alt+D`; saved in `~/.mogeung/connections.json`, written `0600` because it holds tokens. **Reopening the active one next launch was reverted 2026-07-31** on a dogfooding report: it was a sticky default that survived leaving the machine, and applying it ahead of the local-port check silently disabled ADR-0009, so no local daemon was hosted and the board was empty with no explanation. Every launch now starts on a synthetic `LOCAL` row that cannot be edited or forgotten; a remote is chosen per session. Switching drops everything the old daemon said and keeps what the window owns; terminal tabs detach rather than die. The `Net` teardown it needed turned out to be a real leak — the reconnect loop ignored a dropped receiver and would have spun for ever per switch. **Redrawn 2026-07-31** at a *"design a better view"* ask: a header saying which daemon you are on and what it watches, three labelled sections, and one card per daemon instead of a run of one-line rows carrying a name, a URL, three suffixes and three buttons at equal weight. That pass found a leak of a different kind — the window rendered `Net::url`, which is the *dialled* URL and carries `?token=`, in the connection tooltip and the old footer. `connections::redacted` now blanks it wherever it is shown, with a test that the secret cannot survive the round trip | M | ✅ |
+| R-I8 | **LAN discovery** — **built 2026-07-31.** `--advertise` publishes `_mogeung._tcp` (off by default: the broadcast announces *"this machine is watching Claude Code sessions"* to the segment); the window's Scan button browses for 2s on a thread and lists what it finds. **Finding is never connecting** — a result fills the form and waits for a hand. A loopback bind refuses to advertise, which is also the interlock that makes everything discoverable token-gated by construction (`R-I10`). **First contact with a real network, 2026-07-31, found it invisible:** `--listen 0.0.0.0` was published verbatim, and `0.0.0.0` is not an address anyone can dial, so the browse side dropped its own record as unusable. Wildcard binds now publish live interface addresses. **The client half was worse:** a 2s one-shot browse fought mdns-sd's continuous model, and the address came out of a `HashSet` via `.find()`, so repeated scans returned IPv4, then IPv6, then nothing. Now a subscription held while the panel is open, accumulating rows and merging addresses — a wifi picker, not a search box | M | ⏳ |
+| R-I9 | ~~**Multi-daemon mix mode** — one window, several daemons, one merged queue.~~ **Refused 2026-07-31 by [ADR-0013](../decisions/0013-one-window-one-daemon.md)**, and kept here with its reasoning rather than deleted. The ADR was the gate this row was always behind, and writing it settled the row: the queue is the cheapest thing to merge and the least valuable, because every pane behind a click is single-origin; the intelligence (collisions, all of `F`) is computed in the daemon and cannot be merged by a client at all; and a window that ranks across daemons is a second implementation of the ranking, against the rule that a UI has no local authority. The routing alone is 30 of 45 `ClientMsg` variants with no compiler backstop, since `SessionId` is a bare `String`. `R-I11` replaces it. If merging is ever wanted, the ADR says the shape to reconsider is **federation in the daemon**, not an aggregating window | L | |
+| R-I10 | **Remote security** — the ladder past A24's bet. **Rung (b) landed 2026-07-31:** a non-loopback bind with no token now refuses to start (`server::admit`, before the database opens), with no `--insecure` override, and the window applies the same rule to the daemon it hosts. **Rung (c) landed the same day:** both clients are built with `rustls` and dial `wss://`, so TLS is available through a reverse proxy without the daemon owning certificates or renewals — Route C in [guide/remote.md](../guide/remote.md). It was *not* the one Cargo flag it looked like: the flag alone leaves rustls with no crypto provider selected, which does not fail the build — it panics on the first TLS connection — so both binaries name `ring` explicitly and a test asserts a real ClientHello reaches the wire. Remaining: whether the daemon should ever terminate TLS itself (the answer looks like no), and A24's own verdict | M | ⏳ |
+| R-I11 | **Make one window per daemon honest** — the alternative [ADR-0013](../decisions/0013-one-window-one-daemon.md) chose, which currently has a bug in it: `prefs.json` is one fixed path written whole, so two windows on one machine fight over it and the last writer wins. Scope the client state two windows contend for, put the machine into terminal tab keys and the derived tmux session name (`shell_session_name` has no machine in it, and the same checkout path on two boxes is the normal case), and make the tray say *which* daemon a waiting count belongs to. A fraction of `R-I9`'s cost, fixes something broken now, and is the experiment that would justify reopening it. **Built 2026-07-31**, and the split is not the one this row first described: scoping the *whole* file per daemon would have meant choosing a theme once per machine, so `prefs.json` keeps what describes the window and `~/.mogeung/state/<machine_id>.json` keeps what is keyed by a session id or a path on the watched machine — including the terminal tab list, which swaps with the daemon. **The tmux session name was left alone deliberately**: this row asked for a machine in it, and that would have stranded every running shell for no gain, since each machine has its own tmux server and the names cannot collide across them. An old `prefs.json` migrates whole into the first machine adopted, which `R-I7` guarantees is LOCAL. **Verified in use 2026-07-31**, same day it was built | M | ✅ |
+
+**On the struck row.** `R-I9` is the first item here refused rather than
+shipped, removed or descoped, and those are four different things. A descope
+(`R-I2`, Gemini) means *we cannot judge this yet* — no `~/.gemini` exists to
+build against. A removal (`R-C3`, the web client) means *we shipped it and
+nobody used it*. `R-I9` is neither: it was specified, gated on an ADR, argued
+properly, and lost the argument. Nothing was built and nothing was wasted,
+which is the whole return on having had the gate.
+
+The strike is a claim about the proposal only. The reasoning beside it is not
+struck, because it is the durable part — and the row is where someone who wants
+a merged queue will look first, so it has to answer them rather than merely
+say no. What it should tell them:
+[ADR-0013](../decisions/0013-one-window-one-daemon.md) for the argument,
+`R-I11` for what is being done instead, and *federation in the daemon* as the
+shape to bring back if the case is reopened. The one thing that would reopen it
+is a named failure from actually running several windows — not a preference for
+one window.
 
 ## J. Polish
 

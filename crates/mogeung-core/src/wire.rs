@@ -422,6 +422,64 @@ pub struct ContentMatch {
     pub text: String,
 }
 
+/// Who the daemon is, and which machine's world it is describing (`R-I5`).
+///
+/// Before this existed a client worked out "am I looking at another machine?"
+/// from the address string it had dialled, which is a question about *routing*
+/// standing in for a question about *whose filesystem this is*. An
+/// `ssh -L 7717:localhost:7717` tunnel makes a remote daemon answer on
+/// `127.0.0.1`, and the guess flips to "local" — re-enabling every action that
+/// opens an editor or a terminal on a path that exists somewhere else.
+///
+/// So the daemon says who it is and the client compares, rather than inferring.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonIdentity {
+    /// Stable per machine *and* per user: `~/.mogeung/machine-id`, written once
+    /// on first run. This is the comparison that decides local-or-remote —
+    /// hostnames collide (two boxes both called `localhost`, two fresh VMs off
+    /// one image) and a collision here would silently re-enable the actions
+    /// this type exists to gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    /// For people, not for logic: "watching devbox" beats "watching
+    /// 10.0.0.4:7717". Never compared — see `machine_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The Claude Code root this daemon watches. Two daemons on one machine
+    /// pointed at different homes are genuinely different worlds.
+    pub claude_home: String,
+    pub pid: u32,
+    /// The daemon's build. A client that meets a shape it does not know can say
+    /// *which* build to blame rather than guessing.
+    pub version: String,
+    /// Where to `ssh` to reach this machine, when the daemon has been told
+    /// (`ssh_target` in the config file). Declared here so the wire shape is
+    /// settled before `R-I6` needs it, since daemon and window upgrade
+    /// separately and a field added later is a field half the fleet lacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_target: Option<String>,
+}
+
+impl DaemonIdentity {
+    /// Whether this daemon is describing the same machine as `local`.
+    ///
+    /// Unknown on either side means **not the same machine**. Refusing a local
+    /// action prints a sentence; performing one against the wrong filesystem
+    /// opens an editor on a path that is not there, or a terminal in the wrong
+    /// place. The costs are not symmetric, so the doubt resolves the safe way.
+    pub fn is_same_machine_as(&self, local: Option<&str>) -> bool {
+        match (self.machine_id.as_deref(), local) {
+            (Some(theirs), Some(ours)) => theirs == ours,
+            _ => false,
+        }
+    }
+
+    /// What to call this daemon in the UI.
+    pub fn label(&self) -> String {
+        self.host.clone().unwrap_or_else(|| "unknown host".into())
+    }
+}
+
 /// What the daemon tells clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "ev", rename_all = "snake_case")]
@@ -430,6 +488,10 @@ pub enum ServerMsg {
     Snapshot {
         sessions: Vec<Session>,
         queue: Vec<AttentionItem>,
+        /// Who is answering (`R-I5`). `None` from a daemon older than this
+        /// field — clients must fall back rather than assume.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        daemon: Option<DaemonIdentity>,
     },
     SessionUpdated { session: Box<Session> },
     SessionRemoved { session_id: SessionId },
@@ -660,4 +722,98 @@ pub enum ServerMsg {
         inventory: Box<crate::docs::DocInventory>,
     },
     Error { message: String },
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn id(machine: &str) -> DaemonIdentity {
+        DaemonIdentity {
+            machine_id: Some(machine.into()),
+            host: Some("devbox".into()),
+            claude_home: "/home/dev/.claude".into(),
+            pid: 4242,
+            version: "0.1.0".into(),
+            ssh_target: None,
+        }
+    }
+
+    /// The bug `R-I5` exists to kill.
+    ///
+    /// `ssh -N -L 7717:localhost:7717 devbox` is the *recommended* way to reach
+    /// a remote daemon, and it makes that daemon answer on `127.0.0.1`. The old
+    /// address-substring test read that as "local" and re-enabled every action
+    /// that opens an editor or a terminal — on a machine a thousand miles from
+    /// the files. Identity does not care what address carried the bytes.
+    #[test]
+    fn a_tunnelled_daemon_is_still_another_machine() {
+        let through_a_tunnel = id("devbox-id");
+        assert!(
+            !through_a_tunnel.is_same_machine_as(Some("laptop-id")),
+            "a tunnel changes the route, not the filesystem"
+        );
+    }
+
+    #[test]
+    fn the_same_machine_is_recognised_whatever_the_route() {
+        assert!(id("same").is_same_machine_as(Some("same")));
+    }
+
+    /// Two hosts can share a name — two fresh VMs off one image, two boxes both
+    /// called `localhost`. If that decided the question, the actions this gates
+    /// would come back on silently, which is the failure mode being fixed.
+    #[test]
+    fn a_shared_hostname_does_not_make_two_machines_one() {
+        let a = id("machine-a");
+        let mut b = id("machine-b");
+        b.host = a.host.clone();
+        assert_eq!(a.host, b.host);
+        assert!(!a.is_same_machine_as(b.machine_id.as_deref()));
+    }
+
+    /// Missing on either side must not read as a match.
+    #[test]
+    fn an_unknown_identity_is_never_this_machine() {
+        let mut unknown = id("x");
+        unknown.machine_id = None;
+        assert!(!unknown.is_same_machine_as(Some("x")));
+        assert!(!id("x").is_same_machine_as(None));
+        assert!(!unknown.is_same_machine_as(None));
+    }
+
+    /// Daemon and window live on different machines and upgrade at different
+    /// times, so both directions of skew have to be non-fatal.
+    #[test]
+    fn a_snapshot_survives_a_version_gap_in_both_directions() {
+        // A new daemon's snapshot, read by a client that knows the field.
+        let fresh = ServerMsg::Snapshot {
+            sessions: vec![],
+            queue: vec![],
+            daemon: Some(id("m1")),
+        };
+        let wire = serde_json::to_string(&fresh).expect("serialise");
+        assert!(wire.contains("machine_id"), "identity must reach the wire");
+
+        // An *older* daemon: no `daemon` key at all. Must still parse.
+        let older = r#"{"ev":"snapshot","sessions":[],"queue":[]}"#;
+        match serde_json::from_str::<ServerMsg>(older).expect("old snapshot must parse") {
+            ServerMsg::Snapshot { daemon, .. } => assert!(daemon.is_none()),
+            other => panic!("expected a snapshot, got {other:?}"),
+        }
+
+        // A *newer* daemon sending a field this build has never heard of: the
+        // unknown key is ignored rather than failing the whole message.
+        let newer = r#"{"ev":"snapshot","sessions":[],"queue":[],
+                        "daemon":{"claude_home":"/h","pid":1,"version":"9.9.9",
+                                  "some_future_field":true}}"#;
+        match serde_json::from_str::<ServerMsg>(newer).expect("new snapshot must parse") {
+            ServerMsg::Snapshot { daemon, .. } => {
+                let d = daemon.expect("identity present");
+                assert_eq!(d.version, "9.9.9");
+                assert!(d.machine_id.is_none(), "absent id stays absent");
+            }
+            other => panic!("expected a snapshot, got {other:?}"),
+        }
+    }
 }

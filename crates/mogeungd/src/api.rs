@@ -79,8 +79,6 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        // The thin web client (R-C3). Same WebSocket, same authority model:
-        // the phone is a projection, exactly like the desktop window.
         .route("/api/health", get(health))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
@@ -141,9 +139,14 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
         // So a client can confirm an already-running daemon is watching the
-        // same place before attaching to it.
+        // same place before attaching to it. `claude_home` and `pid` are kept
+        // at the top level as well as inside `daemon` because the window's
+        // start-up probe reads them there and probes an *older* daemon too.
         "claude_home": state.claude_home.to_string_lossy(),
         "pid": std::process::id(),
+        // Who is answering (R-I5) — the same shape the snapshot carries, so a
+        // curl and a client agree about which machine this is.
+        "daemon": state.daemon_identity(),
         "headline": h.headline(),
         "blind_ratio": h.blind_ratio(),
         "urgent_alerts": h.urgent_alerts(),

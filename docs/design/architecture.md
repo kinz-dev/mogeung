@@ -1,9 +1,10 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-30
+updated: 2026-07-31
 covers:
   - crates/mogeungd/src/main.rs
+  - crates/mogeung-ui/src/prefs.rs
   - crates/mogeungd/src/state.rs
   - crates/mogeung-ui/src/main.rs
   - crates/mogeung-ui/src/net.rs
@@ -68,6 +69,18 @@ gives — the shell runs under tmux, so what it holds is again a *view*, and a
 `claude` started in it is a session mogeung observes like any other rather than
 one it owns. Closing the window detaches. The daemon is not told, because there
 is nothing it could correctly do with the information.
+
+Against a remote daemon both panes drive tmux **over ssh** (`R-I6`): the pty is
+still local — that is what a pty is — but what runs in it is
+`ssh -t <target> tmux …` rather than `tmux …`, so the shell opens on the machine
+that has the files. The rule is untouched, one layer further out: tmux still
+owns the session, it still outlives the window, and it is still reachable from
+any terminal — on that host. The ssh destination comes from the daemon's
+published identity (`R-I5`); a remote daemon that has not been told one gets a
+refusal rather than a guess, because the hostname it reports need not resolve
+from here and need not be the name ssh wants. Locally the panel falls back to a
+bare pty when tmux is missing; remotely it does not, because that fallback would
+trade the right machine for a shell on the wrong one.
 
 The file explorer (`R-B24`) gives the daemon a second read surface: on request
 it lists and reads files under a session's *own* root — repo when known, cwd
@@ -142,6 +155,60 @@ This does not weaken the client contract below: the window talks over the same
 websocket either way and cannot tell which process the daemon is in.
 [ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md).
 
+**A hosted daemon obeys the same admission rule as a standalone one** (`R-I10`).
+`server::admit` refuses a bind beyond loopback with no token, so
+`mogeung --addr 0.0.0.0:7717` is refused exactly as `mogeungd` would be — and
+the window asks *before* spawning the thread, on the main thread, because a
+refusal printed from a background thread is a line the window opens over. The
+token the window would have presented to a daemon elsewhere is the token it
+requires when it is the daemon; that is why `--token` reaches `daemon::host`.
+
+**Daemons can announce themselves** (`R-I8`), over mDNS as `_mogeung._tcp`,
+**only** when `--advertise` says so. The broadcast is a disclosure in its own
+right — it names the machine and says there is something here worth reaching —
+and no code can tell a home network from conference wifi, so the default is off
+and stays off. Browsing produces a list the window renders; nothing dials
+anything. A loopback bind refuses to advertise, since nobody could reach it, and
+that refusal is what makes every discoverable daemon token-gated by construction:
+the only binds that *can* advertise are the ones `admit` already requires a
+token for.
+
+**The daemon can be changed without restarting** (`R-I7`). The window keeps a
+list at `~/.mogeung/connections.json` — client state, like the keymap, and
+`0600` because it holds tokens. Switching replaces the `Net`, which is how the
+old network thread learns to stop: it returns once nobody is listening on its
+event channel, rather than reconnecting for ever behind a window that has moved
+on. Everything the previous daemon said is then dropped, because it describes a
+different machine; what the *user* chose — layout, keymap, prefs — survives.
+Terminal panes detach rather than close, so tmux keeps their shells alive on the
+machine being left.
+
+**Client state is split by what it is about** (`R-I11`, after
+[ADR-0013](../decisions/0013-one-window-one-daemon.md) settled that a window
+watches one daemon and watching two machines means two windows). `prefs.json`
+is one file written whole, so two windows raced over it and the last to save
+won. Scoping the whole file per daemon would have meant choosing a theme once
+per machine, so the split is by subject instead: `~/.mogeung/prefs.json` keeps
+what describes *this window* — theme, layout, fonts, zoom, geometry, filters —
+and `~/.mogeung/state/<machine_id>.json` keeps what is keyed by a session id or
+a path on the watched machine: hidden, pinned, labels, bookmarks, editor wrap,
+and the terminal panel's tab list. The window adopts a machine's state when the
+daemon publishes its identity, which is also when it swaps the terminal tabs —
+so a tab rooted at a worktree on the dev box does not follow you to the laptop
+that happens to have the same path. Keying on `machine_id` rather than the URL
+is the same reason `R-I5` exists: an `ssh -L` tunnel makes a remote daemon
+answer on `127.0.0.1`. A pre-`R-I11` file migrates whole into the first machine
+adopted, which is always LOCAL.
+
+**The window also asks who it is talking to** (`R-I5`). The daemon publishes a
+`DaemonIdentity` — a stable `machine_id` from `~/.mogeung/machine-id`, plus
+hostname, watched `~/.claude`, pid and version — on every snapshot and on
+`/api/health`. Actions that touch a machine (open-in, jump-to-terminal,
+launch-terminal) compare that id against this machine's, rather than guessing
+from the address dialled. Both ends resolve identity through one function in
+`mogeungd::machine`, deliberately: two processes computing it differently could
+disagree about whether they are on the same desk.
+
 ## Client contract
 
 Commands are fire-and-forget; their effect returns on the event stream. Clients
@@ -167,7 +234,9 @@ digest / analytics engines), `docscan.rs` (markdown inventory,
 staleness, GC proposals), `codex.rs` (the `~/.codex` adapter; its scan
 pass maps threads into the same `Session`). A fourth binary,
 `mogeung-tray`, subscribes to the queue over the wire and shows the
-WAITING count — a client like every other, no local authority. The
+WAITING count — a client like every other, no local authority. It names
+the machine that count is for (`R-I11`), from the same `DaemonIdentity`,
+because one tray per daemon means two bare numbers otherwise. The
 terminal focus/launch and notification paths gained Linux siblings
 (attempts tables, Wayland refuses honestly), and the server takes
 `--token` for the remote case.

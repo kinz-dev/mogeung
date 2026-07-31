@@ -66,6 +66,13 @@ pub struct AppState {
     seqs: Mutex<HashMap<SessionId, u64>>,
     /// Root of the Claude Code state directory this daemon watches.
     pub claude_home: PathBuf,
+    /// Who this daemon is, resolved once at start-up because it cannot change
+    /// while the process lives and answering costs a file read (`R-I5`).
+    pub identity: mogeung_core::wire::DaemonIdentity,
+    /// Where to `ssh` to reach this machine, when configured. Held apart from
+    /// `identity` because the constructor is shared with tests that have no
+    /// config to read; `server::prepare` fills it in once.
+    pub ssh_target: std::sync::OnceLock<String>,
     /// Root of the Codex CLI state directory, watched the same read-only way
     /// when it exists. `R-I1`.
     pub codex_home: PathBuf,
@@ -107,6 +114,7 @@ impl AppState {
             sessions.insert(s.id.clone(), s);
         }
         let (tx, _) = broadcast::channel(8192);
+        let identity = crate::machine::identity(&claude_home, None);
         Ok(Arc::new(AppState {
             store,
             sessions: RwLock::new(sessions),
@@ -114,6 +122,8 @@ impl AppState {
             tx,
             tailer: Mutex::new(Tailer::default()),
             seqs: Mutex::new(seqs),
+            identity,
+            ssh_target: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
             attention: AttentionConfig::default(),
@@ -388,7 +398,19 @@ impl AppState {
     pub async fn snapshot(&self) -> ServerMsg {
         let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
         let queue = rank(&sessions, Utc::now(), &self.attention);
-        ServerMsg::Snapshot { sessions, queue }
+        ServerMsg::Snapshot {
+            sessions,
+            queue,
+            daemon: Some(self.daemon_identity()),
+        }
+    }
+
+    /// The identity as published: the fixed part, plus the ssh target if one
+    /// was configured after construction.
+    pub fn daemon_identity(&self) -> mogeung_core::wire::DaemonIdentity {
+        let mut id = self.identity.clone();
+        id.ssh_target = self.ssh_target.get().cloned();
+        id
     }
 
     pub async fn publish_queue(&self) {
