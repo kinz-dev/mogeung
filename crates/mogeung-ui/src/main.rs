@@ -152,8 +152,8 @@ A shortcut macOS reserves for itself (Cmd+Space, Cmd+Tab) will appear to
 register and then never fire — the system consumes it first. If nothing
 happens, try another combination rather than assuming it is broken.
 
-For a daemon that outlives every window — so notifications and the phone client
-keep working — run `mogeungd` separately instead.",
+For a daemon that outlives every window — so notifications keep firing and a
+window elsewhere can attach — run `mogeungd` separately instead.",
                     default = hotkey::DEFAULT
                 );
                 std::process::exit(0);

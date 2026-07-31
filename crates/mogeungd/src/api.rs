@@ -79,8 +79,6 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        // The thin web client (R-C3). Same WebSocket, same authority model:
-        // the phone is a projection, exactly like the desktop window.
         .route("/api/health", get(health))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
