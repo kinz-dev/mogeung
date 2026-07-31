@@ -647,7 +647,7 @@ impl App {
         // Before `prefs` is moved into the struct. The shells are restored
         // here but not spawned — a tab from the last run costs a tmux client
         // only once the panel is actually opened.
-        let shells = crate::shells::Shells::from_prefs(&prefs.terminal_panel);
+        let shells = crate::shells::Shells::from_prefs(&prefs.terminal_panel, &prefs.scoped.shells);
         // And before the first frame, which is the point: `set_fonts` takes
         // effect at the *next* frame boundary, and a `FontFamily::Name` egui
         // has not been told about is a panic in the paint loop rather than a
@@ -770,6 +770,10 @@ impl App {
                     if daemon.is_some() {
                         self.daemon_identity = daemon;
                     }
+                    // First moment we know whose machine this is, which is
+                    // when the view state that belongs to it can be loaded.
+                    // `R-I11`.
+                    self.adopt_scope();
                     // A reconnect invalidates our transcript cache.
                     self.hydrated.clear();
                     sessions_changed = true;
@@ -1315,7 +1319,9 @@ impl eframe::App for App {
         // on every frame of the drag — the rule the layout already follows.
         if self.shells.dirty && !ui.input(|i| i.pointer.any_down()) {
             self.shells.dirty = false;
-            self.prefs.terminal_panel = self.shells.to_prefs();
+            let (panel, tabs) = self.shells.to_prefs();
+            self.prefs.terminal_panel = panel;
+            self.prefs.scoped.shells = tabs;
             self.prefs_dirty = true;
         }
 
@@ -2529,6 +2535,45 @@ impl App {
         }
     }
 
+    /// Point the per-machine view state at whichever daemon is now answering,
+    /// and swap the terminal tabs with it. `R-I11`.
+    ///
+    /// Idempotent: called on every snapshot, and does nothing unless the
+    /// machine actually changed. Reconnects to the same daemon therefore cost
+    /// nothing, which matters because a flapping link produces a snapshot each
+    /// time it comes back.
+    fn adopt_scope(&mut self) {
+        // A daemon older than `R-I5` publishes no identity, and one that could
+        // not write `~/.mogeung/machine-id` publishes an identity without an
+        // id in it. The address is a poor substitute — a tunnel makes two
+        // machines look like one — but it is stable for as long as that daemon
+        // is the one being dialled, which is this scope's whole lifetime.
+        let origin = self
+            .daemon_identity
+            .as_ref()
+            .and_then(|id| id.machine_id.clone())
+            .unwrap_or_else(|| self.daemon_addr.clone());
+        if self.prefs.origin() == Some(origin.as_str()) {
+            return;
+        }
+        // The outgoing machine's tabs, saved before its state is swapped out.
+        let (panel, tabs) = self.shells.to_prefs();
+        self.prefs.terminal_panel = panel;
+        if self.prefs.origin().is_some() {
+            self.prefs.scoped.shells = tabs;
+        }
+        if let Some(note) = self.prefs.adopt_origin(&origin) {
+            self.errors.push(note);
+        }
+        // Dropping a tmux-backed `Term` detaches rather than kills, so the
+        // shells on the machine we just left keep running and come back with
+        // their tabs when it does.
+        self.shells = crate::shells::Shells::from_prefs(
+            &self.prefs.terminal_panel,
+            &self.prefs.scoped.shells,
+        );
+    }
+
     /// The pre-`R-I5` heuristic, kept only as the fallback above.
     fn addr_looks_remote(a: &str) -> bool {
         !(a.contains("127.0.0.1") || a.contains("localhost") || a.contains("[::1]"))
@@ -2912,7 +2957,7 @@ impl App {
                             self.prefs.reveal_hidden = !self.prefs.reveal_hidden;
                         }
                         if self.prefs.reveal_hidden && ui.small_button("unhide all").clicked() {
-                            self.prefs.hidden.clear();
+                            self.prefs.scoped.hidden.clear();
                             self.prefs_dirty = true;
                         }
                     });
@@ -6084,16 +6129,16 @@ impl App {
                     self.outline_open = !self.outline_open;
                 }
                 // R-B29: wrap is a property of the file, so it persists per path.
-                let wrapped = self.prefs.editor_wrap.contains(&path);
+                let wrapped = self.prefs.scoped.editor_wrap.contains(&path);
                 if ui
                     .selectable_label(wrapped, "wrap")
                     .on_hover_text("wrap long lines — remembered for this file")
                     .clicked()
                 {
                     if wrapped {
-                        self.prefs.editor_wrap.remove(&path);
+                        self.prefs.scoped.editor_wrap.remove(&path);
                     } else {
-                        self.prefs.editor_wrap.insert(path.clone());
+                        self.prefs.scoped.editor_wrap.insert(path.clone());
                     }
                     self.prefs_dirty = true;
                 }
@@ -6139,6 +6184,7 @@ impl App {
                 // R-B29: the jump list.
                 let marks: Vec<(String, String, u64)> = self
                     .prefs
+                    .scoped
                     .bookmarks
                     .iter()
                     .filter(|(sid, _, _)| Some(sid) == self.explorer.session.as_ref())
@@ -6346,7 +6392,7 @@ impl App {
         );
         // R-B29: per-file wrap. The width estimate leaves room for the
         // gutters; exactness does not matter, only that lines stop escaping.
-        if self.prefs.editor_wrap.contains(&path) {
+        if self.prefs.scoped.editor_wrap.contains(&path) {
             let reserved = 80.0 + if self.annotate { 240.0 } else { 0.0 };
             job.wrap.max_width = (ui.available_width() - reserved).max(200.0);
         }
@@ -6693,7 +6739,7 @@ impl App {
                     // R-B29: bookmarks, toggled where the pointer is.
                     if let Some(sid) = self.explorer.session.clone() {
                         let mark = (sid, path.clone(), line);
-                        let existing = self.prefs.bookmarks.iter().position(|b| *b == mark);
+                        let existing = self.prefs.scoped.bookmarks.iter().position(|b| *b == mark);
                         let label = if existing.is_some() {
                             format!("Remove bookmark at line {line}")
                         } else {
@@ -6702,12 +6748,12 @@ impl App {
                         if ui.button(label).clicked() {
                             match existing {
                                 Some(i) => {
-                                    self.prefs.bookmarks.remove(i);
+                                    self.prefs.scoped.bookmarks.remove(i);
                                 }
                                 None => {
-                                    self.prefs.bookmarks.push(mark);
-                                    if self.prefs.bookmarks.len() > 100 {
-                                        self.prefs.bookmarks.remove(0);
+                                    self.prefs.scoped.bookmarks.push(mark);
+                                    if self.prefs.scoped.bookmarks.len() > 100 {
+                                        self.prefs.scoped.bookmarks.remove(0);
                                     }
                                 }
                             }

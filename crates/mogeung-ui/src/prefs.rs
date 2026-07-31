@@ -13,6 +13,33 @@
 //! view filter, reversible from the panel, and the daemon never hears about it.
 //! Keeping them separate matters: "get this out of my way" and "throw away what
 //! I have read" must not be one button.
+//!
+//! ## Two files, because two different things were in one. `R-I11`
+//!
+//! [`ADR-0013`](../../../docs/decisions/0013-one-window-one-daemon.md) settled
+//! that a window watches one daemon, which means watching two machines means
+//! two windows — so this file stopped being something only one process writes.
+//! Whole-file `write` with no merge means the last one to save wins, and the
+//! other window's pins and labels are simply gone.
+//!
+//! Scoping the *whole* file per daemon would have been the obvious fix and the
+//! wrong one: you would then set your theme, your keymap and your window size
+//! again for every machine you watch. Those describe **this window**. So the
+//! split is by what the state is *about*:
+//!
+//! - `~/.mogeung/prefs.json` — the window. Theme, layout, fonts, zoom,
+//!   geometry, which filters are on. Shared by every window, and two windows
+//!   can still race here. That race costs a setting you can see and redo, and
+//!   is not worth a lock file.
+//! - `~/.mogeung/state/<machine>.json` — [`Scoped`], everything keyed by a
+//!   session id or a path on the watched machine. This is what was actually
+//!   being lost, and it is the half that was never shareable anyway: a session
+//!   id from the dev box means nothing on the laptop, and `~/projects/mogeung`
+//!   means *different files* on each.
+//!
+//! `<machine>` is `R-I5`'s `machine_id`, not the URL — an `ssh -L` tunnel makes
+//! a remote daemon answer on `127.0.0.1`, and keying on the address would file
+//! the dev box's pins under the laptop.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,8 +79,16 @@ impl Scope {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Prefs {
+/// Client state that belongs to one watched machine. `R-I11`.
+///
+/// Everything in here is keyed by a session id or by a path *on that machine*.
+/// Session ids are unique, so merging two machines' would not collide — it
+/// would just accumulate entries that can never match anything again. Paths
+/// are the real hazard: `editor_wrap` and the shell roots are worktree paths,
+/// and the same checkout path on a laptop and a dev box is the normal case,
+/// not an edge one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Scoped {
     /// Sessions to keep out of the queue. Reversible, never destructive.
     #[serde(default)]
     pub hidden: BTreeSet<String>,
@@ -64,6 +99,43 @@ pub struct Prefs {
     /// it is a name, not a tag system.
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// Paths whose Editor tab wraps long lines — per file, because wrap is a
+    /// property of prose files, not a mode you live in. `R-B29`.
+    #[serde(default)]
+    pub editor_wrap: BTreeSet<String>,
+    /// Bookmarks: `(session, path, 1-based line)`, insertion order — which
+    /// *is* the jump list. `R-B29`.
+    #[serde(default)]
+    pub bookmarks: Vec<(String, String, u64)>,
+    /// Which shells the terminal panel holds. `R-B33`.
+    ///
+    /// Here rather than in [`TerminalPanel`] with the panel's own geometry,
+    /// because a shell is rooted in a worktree *on the watched machine* while
+    /// "the panel is 300pt tall" is about this window. Restoring one machine's
+    /// tabs against another's daemon would have opened shells in directories
+    /// that happen to share a name.
+    #[serde(default)]
+    pub shells: Vec<ShellRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Prefs {
+    /// The half of this that belongs to the daemon we are watching. Never in
+    /// `prefs.json` — [`Prefs::adopt_origin`] loads and saves it separately.
+    #[serde(skip)]
+    pub scoped: Scoped,
+    /// Which machine `scoped` was loaded for, so a switch can save it back
+    /// where it came from rather than over whatever came next.
+    #[serde(skip)]
+    origin: Option<String>,
+    /// What a pre-`R-I11` `prefs.json` held, read once so it can be moved into
+    /// the first machine's [`Scoped`] and then never written again.
+    ///
+    /// Kept as a distinct field rather than loaded into `scoped` directly: at
+    /// load time we do not yet know which machine we are talking to, and
+    /// guessing would file the whole history under the wrong one.
+    #[serde(default, flatten)]
+    legacy: Legacy,
     #[serde(default)]
     pub scope: Scope,
     /// Temporarily reveal hidden sessions, so unhiding is possible.
@@ -107,15 +179,6 @@ pub struct Prefs {
     /// levels are stored, so the file stays quiet until you zoom.
     #[serde(default)]
     pub zoom: BTreeMap<String, f32>,
-
-    /// Paths whose Editor tab wraps long lines — per file, because wrap is a
-    /// property of prose files, not a mode you live in. `R-B29`.
-    #[serde(default)]
-    pub editor_wrap: BTreeSet<String>,
-    /// Bookmarks: `(session, path, 1-based line)`, insertion order — which
-    /// *is* the jump list. `R-B29`.
-    #[serde(default)]
-    pub bookmarks: Vec<(String, String, u64)>,
 
     /// Dark, light, or whatever the desktop says. `R-J6`.
     #[serde(default)]
@@ -222,12 +285,30 @@ impl Window {
     }
 }
 
+/// The machine-relative fields as a pre-`R-I11` `prefs.json` wrote them.
+///
+/// Flattened, so an old file deserialises straight into it and a migrated one
+/// writes nothing back — every field skips serialising when empty, which is
+/// what it is once [`Prefs::adopt_origin`] has moved it out.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Legacy {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    hidden: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pinned: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    labels: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    editor_wrap: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bookmarks: Vec<(String, String, u64)>,
+}
+
 /// The terminal panel's stored shape. `R-B33`.
 ///
-/// A shell is `(worktree, ordinal)` and nothing more: the pty is spawned fresh
-/// on restore, and re-attaches to the tmux session those two name. Storing
-/// anything about the *running* shell here would be storing a fact that tmux
-/// already owns and that this file cannot keep true.
+/// Geometry only, since `R-I11`: which shells are in it moved to
+/// [`Scoped::shells`], because a shell is rooted in a worktree on the *watched*
+/// machine while the panel's height is a fact about this window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalPanel {
     /// On demand: closed on a fresh install, and whatever you left it at after.
@@ -236,9 +317,14 @@ pub struct TerminalPanel {
     #[serde(default = "default_panel_height")]
     pub height: f32,
     #[serde(default)]
-    pub shells: Vec<ShellRef>,
-    #[serde(default)]
     pub active: usize,
+    /// Where the tab list used to live. Read from an old file and moved once;
+    /// empty afterwards, so it stops being written.
+    ///
+    /// `pub` only so `..Default::default()` works where the panel is rebuilt.
+    /// Nothing should read it but [`Prefs::take_legacy`].
+    #[serde(default, rename = "shells", skip_serializing_if = "Vec::is_empty")]
+    pub legacy_shells: Vec<ShellRef>,
 }
 
 impl Default for TerminalPanel {
@@ -246,8 +332,8 @@ impl Default for TerminalPanel {
         TerminalPanel {
             open: false,
             height: default_panel_height(),
-            shells: Vec::new(),
             active: 0,
+            legacy_shells: Vec::new(),
         }
     }
 }
@@ -269,6 +355,35 @@ pub struct ShellRef {
     pub name: Option<String>,
 }
 
+/// A machine id, made safe to be a filename.
+///
+/// `machine_id` is 32 hex characters and needs none of this. The fallback path
+/// does: when a daemon publishes no identity the window keys on its URL, and
+/// `ws://box:7717/ws` contains separators that would silently become
+/// directories. Anything outside `[A-Za-z0-9._-]` becomes `-`, and the result
+/// is capped, so a long URL cannot produce a filename the filesystem refuses.
+fn slug(origin: &str) -> String {
+    let cleaned: String = origin
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect();
+    let cleaned = cleaned.trim_matches('-').to_string();
+    // A name of nothing but separators, or nothing at all, would collide with
+    // every other such name — and `..` would be worse than a collision.
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        "unknown".to_string()
+    } else {
+        cleaned
+    }
+}
+
 fn default_panel_height() -> f32 {
     crate::shells::DEFAULT_HEIGHT
 }
@@ -284,9 +399,9 @@ fn yes() -> bool {
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
-            hidden: BTreeSet::new(),
-            pinned: BTreeSet::new(),
-            labels: BTreeMap::new(),
+            scoped: Scoped::default(),
+            origin: None,
+            legacy: Legacy::default(),
             scope: Scope::default(),
             reveal_hidden: false,
             queue_collapsed: false,
@@ -301,8 +416,6 @@ impl Default for Prefs {
             markdown: true,
             show_thinking: true,
             zoom: BTreeMap::new(),
-            editor_wrap: BTreeSet::new(),
-            bookmarks: Vec::new(),
             theme: crate::theme::Mode::default(),
             terminal_font: None,
             terminal_font_px: default_terminal_px(),
@@ -337,44 +450,142 @@ impl Prefs {
         }
     }
 
+    /// Where every machine's [`Scoped`] state lives.
+    fn state_dir() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(".mogeung").join("state")
+    }
+
+    /// Point this window's [`Scoped`] state at a machine.
+    ///
+    /// Called when a daemon publishes its identity — at launch, and again on
+    /// every switch — because that is the first moment the machine is known.
+    /// Before it, `scoped` is empty, which is correct rather than merely safe:
+    /// there are no sessions on screen to hide or pin yet either.
+    ///
+    /// Returns a message worth showing, never an error worth stopping for.
+    /// Losing view state is annoying; refusing to display a queue over it
+    /// would be worse.
+    pub fn adopt_origin(&mut self, origin: &str) -> Option<String> {
+        self.adopt_origin_in(&Self::state_dir(), origin)
+    }
+
+    /// [`Prefs::adopt_origin`] against a named directory.
+    ///
+    /// Split out so the tests can exercise the part that matters — that
+    /// switching machines saves one and loads the other — against a temporary
+    /// directory. Reaching `$HOME` from a test would either write to a real
+    /// person's state or need the environment mutated under every other test
+    /// in the process.
+    fn adopt_origin_in(&mut self, dir: &std::path::Path, origin: &str) -> Option<String> {
+        if self.origin.as_deref() == Some(origin) {
+            return None;
+        }
+        // Back where it came from, not over whatever comes next.
+        let carried = self.origin.take();
+        let mut note = carried.and_then(|old| self.write_scoped_in(dir, &old).err());
+
+        let path = dir.join(format!("{}.json", slug(origin)));
+        let existing = std::fs::read_to_string(&path).ok();
+        self.scoped = match existing.as_deref() {
+            Some(text) => match serde_json::from_str(text) {
+                Ok(s) => s,
+                Err(e) => {
+                    note = Some(format!("{} is unreadable ({e}) — starting empty", path.display()));
+                    Scoped::default()
+                }
+            },
+            // No file for this machine yet. If an old `prefs.json` is still
+            // carrying the pre-split state, this is where it lands — and it
+            // lands on the *first* machine adopted, which `R-I7` guarantees is
+            // LOCAL. Migrating into a remote would file the laptop's history
+            // under the dev box.
+            None => self.take_legacy(),
+        };
+        self.origin = Some(origin.to_string());
+        note
+    }
+
+    /// Whether a machine has been adopted yet. Until it has, `scoped` is empty
+    /// and nothing should be written into it — an edit made now would be saved
+    /// against the first daemon to answer, which need not be the one it was
+    /// about.
+    pub fn origin(&self) -> Option<&str> {
+        self.origin.as_deref()
+    }
+
+    /// Drain a pre-`R-I11` file's machine-relative state into one [`Scoped`].
+    ///
+    /// Draining rather than copying is what makes the migration happen once:
+    /// what is left behind is empty, every legacy field skips serialising when
+    /// empty, and the next `save` therefore writes a `prefs.json` that no
+    /// longer carries any of it.
+    fn take_legacy(&mut self) -> Scoped {
+        let legacy = std::mem::take(&mut self.legacy);
+        Scoped {
+            hidden: legacy.hidden,
+            pinned: legacy.pinned,
+            labels: legacy.labels,
+            editor_wrap: legacy.editor_wrap,
+            bookmarks: legacy.bookmarks,
+            // Nested one level down in the old file, so it does not ride the
+            // flattened struct with the rest.
+            shells: std::mem::take(&mut self.terminal_panel.legacy_shells),
+        }
+    }
+
+    fn write_scoped_in(&self, dir: &std::path::Path, origin: &str) -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{}.json", slug(origin)));
+        let json = serde_json::to_string_pretty(&self.scoped).map_err(|e| e.to_string())?;
+        std::fs::write(&path, json).map_err(|e| e.to_string())
+    }
+
     pub fn save(&self) -> Result<(), String> {
         let path = Self::path();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&path, json).map_err(|e| e.to_string())
+        std::fs::write(&path, json).map_err(|e| e.to_string())?;
+        // Both halves or neither: they are edited by the same gestures, and a
+        // window that saved its theme but not its pins would look like it had
+        // saved.
+        match &self.origin {
+            Some(o) => self.write_scoped_in(&Self::state_dir(), o),
+            None => Ok(()),
+        }
     }
 
     pub fn is_hidden(&self, id: &str) -> bool {
-        self.hidden.contains(id)
+        self.scoped.hidden.contains(id)
     }
 
     pub fn is_pinned(&self, id: &str) -> bool {
-        self.pinned.contains(id)
+        self.scoped.pinned.contains(id)
     }
 
     /// Hide a session. Un-pins it too — a pinned-but-hidden session is a
     /// contradiction that would otherwise sit in the file forever.
     pub fn hide(&mut self, id: &str) {
-        self.hidden.insert(id.to_string());
-        self.pinned.remove(id);
+        self.scoped.hidden.insert(id.to_string());
+        self.scoped.pinned.remove(id);
     }
 
     pub fn unhide(&mut self, id: &str) {
-        self.hidden.remove(id);
+        self.scoped.hidden.remove(id);
     }
 
     pub fn toggle_pin(&mut self, id: &str) {
-        if !self.pinned.remove(id) {
-            self.pinned.insert(id.to_string());
+        if !self.scoped.pinned.remove(id) {
+            self.scoped.pinned.insert(id.to_string());
             // Pinning something hidden means you want to see it.
-            self.hidden.remove(id);
+            self.scoped.hidden.remove(id);
         }
     }
 
     pub fn label(&self, id: &str) -> Option<&str> {
-        self.labels.get(id).map(String::as_str)
+        self.scoped.labels.get(id).map(String::as_str)
     }
 
     /// Set or clear in one door: saving an empty label removes it, so the
@@ -383,9 +594,9 @@ impl Prefs {
     pub fn set_label(&mut self, id: &str, label: &str) {
         let label = label.trim();
         if label.is_empty() {
-            self.labels.remove(id);
+            self.scoped.labels.remove(id);
         } else {
-            self.labels.insert(id.to_string(), label.to_string());
+            self.scoped.labels.insert(id.to_string(), label.to_string());
         }
     }
 
@@ -443,14 +654,14 @@ impl Prefs {
             let Some(pred_id) = pred else { continue };
             if self.label(succ_id).is_none() {
                 if let Some(label) = self.label(&pred_id).map(str::to_string) {
-                    self.labels.remove(&pred_id);
-                    self.labels.insert(succ_id.clone(), label);
+                    self.scoped.labels.remove(&pred_id);
+                    self.scoped.labels.insert(succ_id.clone(), label);
                     changed = true;
                 }
             }
-            if self.pinned.contains(&pred_id) && !self.pinned.contains(succ_id) {
-                self.pinned.remove(&pred_id);
-                self.pinned.insert(succ_id.clone());
+            if self.scoped.pinned.contains(&pred_id) && !self.scoped.pinned.contains(succ_id) {
+                self.scoped.pinned.remove(&pred_id);
+                self.scoped.pinned.insert(succ_id.clone());
                 changed = true;
             }
         }
@@ -461,6 +672,139 @@ impl Prefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_state(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mogeung-prefs-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A `prefs.json` as every build before `R-I11` wrote one.
+    const LEGACY: &str = r#"{
+        "hidden": ["dead-one"],
+        "pinned": ["keep-me"],
+        "labels": {"keep-me": "the refactor"},
+        "editor_wrap": ["/home/kinz/notes.md"],
+        "bookmarks": [["keep-me", "/home/kinz/src/main.rs", 42]],
+        "theme": "dark",
+        "terminal_panel": {
+            "open": true,
+            "height": 300.0,
+            "active": 1,
+            "shells": [{"root": "/home/kinz/projects/mogeung", "ordinal": 0}]
+        }
+    }"#;
+
+    /// Upgrading must not read as "someone else cleared my pins". The whole
+    /// history moves to the first machine adopted, which `R-I7` guarantees is
+    /// the local one.
+    #[test]
+    fn an_old_prefs_file_migrates_whole_into_the_first_machine() {
+        let dir = temp_state("migrate");
+        let mut p: Prefs = serde_json::from_str(LEGACY).unwrap();
+        assert!(p.scoped.hidden.is_empty(), "nothing is scoped before a machine is known");
+
+        p.adopt_origin_in(&dir, "machine-aaa");
+
+        assert!(p.is_hidden("dead-one"));
+        assert!(p.is_pinned("keep-me"));
+        assert_eq!(p.label("keep-me"), Some("the refactor"));
+        assert!(p.scoped.editor_wrap.contains("/home/kinz/notes.md"));
+        assert_eq!(p.scoped.bookmarks.len(), 1);
+        assert_eq!(p.scoped.shells.len(), 1, "terminal tabs migrate too");
+        // Window-level settings stay where they were.
+        assert!(p.terminal_panel.open);
+        assert_eq!(p.terminal_panel.height, 300.0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Migration must happen once. If the legacy fields kept being written,
+    /// every later launch would re-import them over whatever the machine's own
+    /// file had since become — quietly resurrecting hidden sessions.
+    #[test]
+    fn a_migrated_prefs_file_stops_carrying_the_machine_half() {
+        let dir = temp_state("once");
+        let mut p: Prefs = serde_json::from_str(LEGACY).unwrap();
+        p.adopt_origin_in(&dir, "machine-aaa");
+
+        let written = serde_json::to_string(&p).unwrap();
+        for gone in ["dead-one", "keep-me", "notes.md", "the refactor", "projects/mogeung"] {
+            assert!(!written.contains(gone), "{gone} is still in prefs.json: {written}");
+        }
+        // And what belongs to the window is still there.
+        assert!(written.contains("terminal_panel"));
+
+        // Re-reading what we just wrote must not resurrect anything.
+        let mut again: Prefs = serde_json::from_str(&written).unwrap();
+        again.adopt_origin_in(&dir, "machine-bbb");
+        assert!(again.scoped.hidden.is_empty(), "a second machine inherits nothing");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The defect `R-I11` exists for: two windows on two machines, each
+    /// keeping its own pins, neither overwriting the other.
+    #[test]
+    fn switching_machines_saves_one_and_loads_the_other() {
+        let dir = temp_state("switch");
+        let mut p = Prefs::default();
+
+        p.adopt_origin_in(&dir, "laptop");
+        p.hide("session-on-laptop");
+        p.set_label("session-on-laptop", "the laptop one");
+
+        p.adopt_origin_in(&dir, "devbox");
+        assert!(!p.is_hidden("session-on-laptop"), "the devbox starts clean");
+        p.hide("session-on-devbox");
+
+        p.adopt_origin_in(&dir, "laptop");
+        assert!(p.is_hidden("session-on-laptop"), "the laptop's state came back");
+        assert!(!p.is_hidden("session-on-devbox"), "and did not gain the devbox's");
+        assert_eq!(p.label("session-on-laptop"), Some("the laptop one"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Snapshots arrive continuously and a reconnect sends another. Re-adopting
+    /// the machine we are already on must not touch the disk, and above all
+    /// must not reload — an in-memory pin made since the last save would be
+    /// read back over.
+    #[test]
+    fn re_adopting_the_same_machine_changes_nothing() {
+        let dir = temp_state("idempotent");
+        let mut p = Prefs::default();
+        p.adopt_origin_in(&dir, "laptop");
+        p.hide("just-hidden");
+
+        p.adopt_origin_in(&dir, "laptop");
+        assert!(p.is_hidden("just-hidden"), "an unsaved change survived the no-op");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A daemon that publishes no `machine_id` is keyed by its URL, and a URL
+    /// is full of characters that would turn a filename into a path.
+    #[test]
+    fn an_origin_never_escapes_its_filename() {
+        assert_eq!(slug("ws://box:7717/ws"), "ws---box-7717-ws");
+        assert_eq!(slug("a1b2c3d4e5f6"), "a1b2c3d4e5f6");
+        // Traversal: no separator survives, so the result cannot leave the
+        // state directory however the origin was chosen.
+        assert_eq!(slug("../../etc/passwd"), "..-..-etc-passwd");
+        assert!(!slug("../../etc/passwd").contains(std::path::MAIN_SEPARATOR));
+        // `..` is the one that would still name a directory on its own.
+        assert_eq!(slug(".."), "unknown");
+        assert_eq!(slug("."), "unknown");
+        assert_eq!(slug(""), "unknown");
+        assert_eq!(slug("///"), "unknown");
+        // Two different machines never share a file.
+        assert_ne!(slug("machine-a"), slug("machine-b"));
+    }
 
     /// The whole point of `R-J1`: geometry survives the round trip through the
     /// file, rather than being remembered only in memory.
@@ -579,7 +923,7 @@ mod tests {
         assert_eq!(p.scope, Scope::NeedsYou);
         assert!(p.preview_on_select);
         assert!(p.hide_noise);
-        assert!(p.hidden.is_empty());
+        assert!(p.scoped.hidden.is_empty());
     }
 
     #[test]
@@ -609,28 +953,47 @@ mod tests {
     #[test]
     fn a_partial_file_keeps_the_defaults_for_everything_else() {
         // What a hand-edit or an older version produces.
-        let p: Prefs = serde_json::from_str(r#"{ "hidden": ["a", "b"] }"#).unwrap();
-        assert_eq!(p.hidden.len(), 2);
+        let mut p: Prefs = serde_json::from_str(r#"{ "hidden": ["a", "b"] }"#).unwrap();
+        // A top-level `hidden` is a pre-`R-I11` file, so it arrives as legacy
+        // and reaches the queue only once a machine is known.
+        let dir = temp_state("partial");
+        p.adopt_origin_in(&dir, "machine");
+        assert_eq!(p.scoped.hidden.len(), 2);
+        std::fs::remove_dir_all(&dir).ok();
         assert!(p.preview_on_select, "missing fields must fall back, not default to false");
         assert!(p.markdown);
         assert!(p.hide_noise);
         assert_eq!(p.scope, Scope::NeedsYou);
     }
 
+    /// Each half survives through its own file, and — the point of `R-I11` —
+    /// the machine half is not in `prefs.json` at all, because that is the file
+    /// a second window overwrites.
     #[test]
-    fn survives_a_round_trip_through_json() {
+    fn each_half_survives_a_round_trip_through_its_own_file() {
+        let dir = temp_state("roundtrip");
         let mut p = Prefs::default();
+        p.adopt_origin_in(&dir, "machine");
         p.hide("gone");
         p.toggle_pin("kept");
         p.scope = Scope::All;
         p.side_by_side = true;
 
         let json = serde_json::to_string(&p).unwrap();
-        let back: Prefs = serde_json::from_str(&json).unwrap();
-        assert!(back.is_hidden("gone"));
-        assert!(back.is_pinned("kept"));
-        assert_eq!(back.scope, Scope::All);
+        assert!(!json.contains("gone"), "a session id must not be in prefs.json");
+        assert!(!json.contains("kept"));
+
+        let mut back: Prefs = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.scope, Scope::All, "the window half rides prefs.json");
         assert!(back.side_by_side);
+        assert!(!back.is_hidden("gone"), "and carries none of the machine half");
+
+        p.write_scoped_in(&dir, "machine").unwrap();
+        back.adopt_origin_in(&dir, "machine");
+        assert!(back.is_hidden("gone"), "which comes back from the machine's own file");
+        assert!(back.is_pinned("kept"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// `reveal_hidden` is a peek, not a setting: persisting it would mean a
@@ -750,19 +1113,26 @@ mod tests {
 
     #[test]
     fn labels_set_replace_remove_and_round_trip() {
+        let dir = temp_state("labels");
         let mut p = Prefs::default();
+        // Before a machine is adopted there is nowhere for a label to live —
+        // and adopting one replaces whatever is in memory with what is on
+        // disk, so it has to come first.
+        p.adopt_origin_in(&dir, "machine");
         p.set_label("a", "risky one");
         assert_eq!(p.label("a"), Some("risky one"));
         p.set_label("a", "  safe now  ");
         assert_eq!(p.label("a"), Some("safe now"), "replacing trims and overwrites");
 
-        let json = serde_json::to_string(&p).unwrap();
-        let back: Prefs = serde_json::from_str(&json).unwrap();
+        p.write_scoped_in(&dir, "machine").unwrap();
+        let mut back = Prefs::default();
+        back.adopt_origin_in(&dir, "machine");
         assert_eq!(back.label("a"), Some("safe now"));
+        std::fs::remove_dir_all(&dir).ok();
 
         p.set_label("a", "   ");
         assert_eq!(p.label("a"), None, "an empty label is a removal");
-        assert!(p.labels.is_empty(), "removal must not leave an empty entry behind");
+        assert!(p.scoped.labels.is_empty(), "removal must not leave an empty entry behind");
     }
 
     /// `R-B32`/`R-B33`. Both settings have to survive a restart, and a file
@@ -781,16 +1151,17 @@ mod tests {
         p.terminal_panel = TerminalPanel {
             open: true,
             height: 300.0,
-            shells: vec![
-                ShellRef { root: "/home/k/repo".into(), ordinal: 0, name: None },
-                ShellRef {
-                    root: "/home/k/repo".into(),
-                    ordinal: 1,
-                    name: Some("tests".into()),
-                },
-            ],
             active: 1,
+            ..Default::default()
         };
+        p.scoped.shells = vec![
+            ShellRef { root: "/home/k/repo".into(), ordinal: 0, name: None },
+            ShellRef {
+                root: "/home/k/repo".into(),
+                ordinal: 1,
+                name: Some("tests".into()),
+            },
+        ];
         let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back.terminal_font.as_deref(), Some("MesloLGS NF"));
         assert_eq!(back.terminal_font_px, 15.0);
@@ -803,10 +1174,11 @@ mod tests {
 
         // A shell written before ordinals or names existed is the first one,
         // unnamed — not a parse error that would take the whole file down.
+        // It arrives on the legacy field, which is where `R-I11` reads it from.
         let one: TerminalPanel =
             serde_json::from_str(r#"{"open":true,"shells":[{"root":"/a"}]}"#).unwrap();
-        assert_eq!(one.shells[0].ordinal, 0);
-        assert_eq!(one.shells[0].name, None);
+        assert_eq!(one.legacy_shells[0].ordinal, 0);
+        assert_eq!(one.legacy_shells[0].name, None);
     }
 
     #[test]

@@ -13,6 +13,14 @@ use ksni::{Status, ToolTip};
 pub struct MogeungTray {
     connected: bool,
     waiting: Vec<WaitingEntry>,
+    /// Which machine this count is about. `R-I11`.
+    ///
+    /// [`ADR-0013`](../../../docs/decisions/0013-one-window-one-daemon.md) says
+    /// one window per daemon, so anyone watching two machines runs two of
+    /// these — and two trays showing a bare number is two numbers with no way
+    /// to tell which is which. `None` until the daemon says, and for daemons
+    /// older than `R-I5` that never will.
+    machine: Option<String>,
 }
 
 impl MogeungTray {
@@ -20,6 +28,7 @@ impl MogeungTray {
         MogeungTray {
             connected: false,
             waiting: Vec::new(),
+            machine: None,
         }
     }
 
@@ -27,6 +36,17 @@ impl MogeungTray {
     pub fn set_connected(&mut self, waiting: Vec<WaitingEntry>) {
         self.connected = true;
         self.waiting = waiting;
+    }
+
+    /// Name the machine this tray is counting for.
+    ///
+    /// Kept across a disconnect, unlike the count: which daemon this tray was
+    /// pointed at does not stop being true because the link dropped, and
+    /// "mogeung — devbox: daemon unreachable" is the more useful sentence.
+    pub fn set_machine(&mut self, machine: Option<String>) {
+        if machine.is_some() {
+            self.machine = machine;
+        }
     }
 
     /// The connection dropped. The old count is discarded, not dimmed —
@@ -38,13 +58,17 @@ impl MogeungTray {
     }
 
     fn summary(&self) -> String {
+        let who = match &self.machine {
+            Some(m) => format!("mogeung — {m}"),
+            None => "mogeung".to_string(),
+        };
         if !self.connected {
-            "mogeung: daemon unreachable".to_string()
+            format!("{who}: daemon unreachable")
         } else {
             match self.waiting.len() {
-                0 => "mogeung: nothing waiting".to_string(),
-                1 => "mogeung: 1 session waiting".to_string(),
-                n => format!("mogeung: {n} sessions waiting"),
+                0 => format!("{who}: nothing waiting"),
+                1 => format!("{who}: 1 session waiting"),
+                n => format!("{who}: {n} sessions waiting"),
             }
         }
     }

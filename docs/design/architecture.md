@@ -4,6 +4,7 @@ status: active
 updated: 2026-07-31
 covers:
   - crates/mogeungd/src/main.rs
+  - crates/mogeung-ui/src/prefs.rs
   - crates/mogeungd/src/state.rs
   - crates/mogeung-ui/src/main.rs
   - crates/mogeung-ui/src/net.rs
@@ -182,6 +183,23 @@ different machine; what the *user* chose — layout, keymap, prefs — survives.
 Terminal panes detach rather than close, so tmux keeps their shells alive on the
 machine being left.
 
+**Client state is split by what it is about** (`R-I11`, after
+[ADR-0013](../decisions/0013-one-window-one-daemon.md) settled that a window
+watches one daemon and watching two machines means two windows). `prefs.json`
+is one file written whole, so two windows raced over it and the last to save
+won. Scoping the whole file per daemon would have meant choosing a theme once
+per machine, so the split is by subject instead: `~/.mogeung/prefs.json` keeps
+what describes *this window* — theme, layout, fonts, zoom, geometry, filters —
+and `~/.mogeung/state/<machine_id>.json` keeps what is keyed by a session id or
+a path on the watched machine: hidden, pinned, labels, bookmarks, editor wrap,
+and the terminal panel's tab list. The window adopts a machine's state when the
+daemon publishes its identity, which is also when it swaps the terminal tabs —
+so a tab rooted at a worktree on the dev box does not follow you to the laptop
+that happens to have the same path. Keying on `machine_id` rather than the URL
+is the same reason `R-I5` exists: an `ssh -L` tunnel makes a remote daemon
+answer on `127.0.0.1`. A pre-`R-I11` file migrates whole into the first machine
+adopted, which is always LOCAL.
+
 **The window also asks who it is talking to** (`R-I5`). The daemon publishes a
 `DaemonIdentity` — a stable `machine_id` from `~/.mogeung/machine-id`, plus
 hostname, watched `~/.claude`, pid and version — on every snapshot and on
@@ -216,7 +234,9 @@ digest / analytics engines), `docscan.rs` (markdown inventory,
 staleness, GC proposals), `codex.rs` (the `~/.codex` adapter; its scan
 pass maps threads into the same `Session`). A fourth binary,
 `mogeung-tray`, subscribes to the queue over the wire and shows the
-WAITING count — a client like every other, no local authority. The
+WAITING count — a client like every other, no local authority. It names
+the machine that count is for (`R-I11`), from the same `DaemonIdentity`,
+because one tray per daemon means two bare numbers otherwise. The
 terminal focus/launch and notification paths gained Linux siblings
 (attempts tables, Wayland refuses honestly), and the server takes
 `--token` for the remote case.

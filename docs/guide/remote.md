@@ -89,6 +89,15 @@ Finding a daemon connects to nothing. **Add** fills in the new-daemon form under
 made. A daemon can only advertise from a non-loopback bind, which already
 requires a token, so anything you find here will want one.
 
+**What you hid, pinned, labelled or bookmarked belongs to the machine**, not to
+the window, and lives in `~/.mogeung/state/<machine>.json` — so two windows
+watching two daemons no longer overwrite each other's, which they did until
+2026-07-31. Your terminal tabs are in there too, and swap with the daemon: a
+tab rooted in a worktree on the dev box does not follow you to the laptop that
+happens to have the same path. The shells it leaves behind are detached, not
+killed, and come back with their tabs when you switch back. Upgrading migrates
+everything you already had into this machine's file.
+
 **Switching keeps the window and drops the daemon.** Your layout, keymap and
 prefs describe *this window* and survive. Everything the old daemon said —
 sessions, diffs, repos, open files — goes, because it describes a different
