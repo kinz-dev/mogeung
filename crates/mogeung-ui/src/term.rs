@@ -104,22 +104,32 @@ impl Reach {
                     command.push(' ');
                     command.push_str(&shell_quote(a));
                 }
-                // …and then the whole thing is quoted again, because it is run
-                // through a **login** shell. `ssh host cmd` gets a
-                // non-interactive, non-login shell, which on zsh sources only
-                // `.zshenv` — so macOS never runs `path_helper` and Homebrew's
-                // `/opt/homebrew/bin` is missing from PATH. tmux is installed
-                // and the shell cannot see it:
+                // …and then the whole thing is wrapped, because finding `tmux`
+                // over ssh is harder than it looks.
                 //
                 //     zsh:1: command not found: tmux
                 //
-                // Reported from a real Apple-silicon box on 2026-07-31. `-l`
-                // sources the profile, which is where every package manager
-                // puts its PATH.
-                let login = format!(
-                    "exec ${{SHELL:-/bin/sh}} -l -c {}",
-                    shell_quote(&command)
+                // — from an Apple-silicon Mac with tmux installed, twice, on
+                // 2026-07-31. Two separate gaps produce that same line:
+                //
+                // 1. `ssh host cmd` runs a **non-login** shell, so zsh sources
+                //    only `.zshenv`; macOS never runs `path_helper`. `-l` fixes
+                //    that by sourcing the profile.
+                // 2. A login shell run with `-c` is still **non-interactive**,
+                //    so `.zshrc` is not sourced either — and Homebrew's own
+                //    installer instructions put `brew shellenv` in `.zshrc` at
+                //    least as often as in `.zprofile`.
+                //
+                // Chasing (2) with `-i` as well invites job-control noise and
+                // prompt side effects into a pane that has to stay clean. So
+                // the fallback is explicit instead: **append** the usual
+                // package-manager directories, leaving anything the profile
+                // already set to win. Appending, not prepending — if the user
+                // has a chosen tmux earlier in PATH, it stays chosen.
+                let inner = format!(
+                    "PATH=\"$PATH:{FALLBACK_PATH}\"; exec {command}"
                 );
+                let login = format!("exec ${{SHELL:-/bin/sh}} -l -c {}", shell_quote(&inner));
                 (
                     "ssh".to_string(),
                     vec!["-t".to_string(), dest.clone(), login],
@@ -136,6 +146,13 @@ impl Reach {
         }
     }
 }
+
+/// Where package managers put binaries, for when a login profile did not say.
+///
+/// Homebrew on Apple silicon, Homebrew on Intel, MacPorts, and the two Nix
+/// shapes. Appended to `PATH`, never prepended: this is a fallback for "the
+/// profile did not mention it", not an opinion about which `tmux` to run.
+const FALLBACK_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/run/current-system/sw/bin:$HOME/.nix-profile/bin";
 
 /// Wrap in single quotes for a POSIX shell, closing and reopening around any
 /// single quote of its own.
@@ -843,40 +860,70 @@ mod reach_tests {
 #[cfg(test)]
 mod remote_shell_tests {
     use super::*;
+    use std::io::Write;
 
-    /// Hand the composed command to actual POSIX shells and count the words
-    /// that come out.
+    /// Run the composed command through real shells, with a stub `tmux` that
+    /// reports the argv it was given.
     ///
-    /// Every other quoting test here asserts what I believe a shell does with
-    /// the string. This one asks. And it asks **twice**, because the command
-    /// is parsed twice on the far side: once by the shell `ssh` starts, and
-    /// again by the login shell that one execs. A quoting mistake at either
-    /// level is silent — a mis-split path does not error, it roots the remote
-    /// shell somewhere else and the tab looks like it worked.
+    /// Every other quoting test asserts what I believe a shell does with the
+    /// string. This one asks — and it has to, because the command is parsed
+    /// twice on the far side: once by the shell `ssh` starts, and again by the
+    /// login shell that one execs. A quoting mistake at either level is silent:
+    /// a mis-split path does not error, it roots the remote shell somewhere
+    /// else and the tab looks like it worked.
+    ///
+    /// The stub also pins the PATH rule. `PATH="$PATH:<fallbacks>"` appends, so
+    /// a tmux already on PATH — here, the stub — must still win.
     #[test]
-    fn the_remote_shells_split_the_command_the_way_we_intended() {
+    fn a_real_shell_invokes_tmux_with_the_arguments_we_meant() {
         let root = "/My Code/re'po";
-        let (_, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", root));
+        let (program, args) = Reach::Ssh("box".into()).spawn_as(shell_args("mog-0", root));
+        assert_eq!(program, "ssh");
 
-        // Round one: the shell ssh starts parses the whole command line. Take
-        // its argv, standing in for `exec $SHELL -l -c …`.
+        // Round one: the shell ssh starts parses this line. Its argv is what
+        // the login shell would be exec'd with.
         let outer = words_of(&args[2]);
         assert_eq!(outer.first().map(String::as_str), Some("exec"));
-        assert_eq!(outer.get(1).map(String::as_str), Some("/bin/sh"), "SHELL is unset here, so the fallback shows");
-        assert_eq!(outer.get(2).map(String::as_str), Some("-l"));
+        assert_eq!(outer.get(2).map(String::as_str), Some("-l"), "a login shell");
         assert_eq!(outer.get(3).map(String::as_str), Some("-c"));
         assert_eq!(outer.len(), 5, "the command must arrive as ONE word: {outer:?}");
 
-        // Round two: the login shell parses that single word.
-        let inner = words_of(&outer[4]);
-        assert_eq!(inner[0], "tmux");
-        assert_eq!(inner[1], "new-session");
+        // Round two: run that word, with a stub tmux earlier in PATH.
+        let dir = stub_tmux();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&outer[4])
+            .env("PATH", format!("{}:/usr/bin:/bin", dir.display()))
+            .output()
+            .expect("sh must exist");
+        assert!(out.status.success(), "the remote command failed: {:?}", outer[4]);
+
+        let got: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
         assert_eq!(
-            inner.last().map(String::as_str),
-            Some(root),
-            "the root must survive both rounds, quote and space intact: {inner:?}"
+            got,
+            vec!["new-session", "-A", "-s", "mog-0", "-c", root],
+            "tmux must be invoked with exactly these arguments"
         );
-        assert_eq!(inner.len(), 7, "tmux + six tmux arguments: {inner:?}");
+    }
+
+    /// A `tmux` that prints the arguments it was called with, one per line.
+    fn stub_tmux() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mogeung-stub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tmux");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(f, "printf '%s\\n' \"$@\"").unwrap();
+        drop(f);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
     }
 
     /// What a POSIX shell makes of a command line, as a word list.
