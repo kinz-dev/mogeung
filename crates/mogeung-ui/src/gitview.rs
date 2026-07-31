@@ -60,6 +60,16 @@ pub struct GitView {
     /// Graph lanes for `commits`, recomputed whenever the log changes.
     pub graph: Vec<GraphRow>,
     pub status: Vec<StatusEntry>,
+    /// Which rows are ticked for a write verb. `R-D19`.
+    ///
+    /// Separate from `selection`, which decides what the diff pane shows.
+    /// Clicking a row to read it and ticking it to act on it are different
+    /// intentions, and a list where reading something arms a Discard button
+    /// is a list nobody can use quickly.
+    pub checked: std::collections::BTreeSet<String>,
+    /// Files a confirmed Discard would destroy, while the confirmation is up.
+    /// `None` when nothing is being asked. `R-D19`.
+    pub confirm_discard: Option<Vec<String>>,
     pub status_pending: bool,
     /// Set once the first status answer lands, so an empty repo reads as
     /// "clean" instead of "loading" forever.
@@ -298,7 +308,22 @@ impl GitView {
         }
         self.status_pending = false;
         self.status_loaded = true;
+        // Ticks follow the paths that still have a row. A write is answered by
+        // re-reading the tree (`R-D19`), so this runs after every one of them:
+        // a file that was staged, discarded or committed away must not stay
+        // ticked and travel into the next click.
+        self.checked
+            .retain(|p| entries.iter().any(|e| &e.path == p));
         self.status = entries;
+    }
+
+    /// The ticked paths that still exist, in the order the pane lists them.
+    pub fn checked_paths(&self) -> Vec<String> {
+        self.status
+            .iter()
+            .filter(|e| self.checked.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]

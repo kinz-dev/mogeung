@@ -4996,6 +4996,11 @@ impl App {
 
     /// The uncommitted files, staged and unstaged distinguished by colour.
     fn git_local_list(&mut self, ui: &mut egui::Ui, s: &Session) {
+        // Before the early returns below: a confirmation must not vanish
+        // because the list it was raised from went empty underneath it.
+        let ctx = ui.ctx().clone();
+        self.git_discard_confirm(&ctx, &s.id);
+
         if !self.gitview.status_loaded {
             ui.label(dim("reading the working tree…"));
             return;
@@ -5032,6 +5037,11 @@ impl App {
         }
         // Conflicts first: the one uncommitted state that is never routine.
         entries.sort_by_key(|e| !e.conflicted);
+
+        // The write bar. `R-D19` — the first thing in this pane that changes
+        // the repository rather than describing it.
+        self.git_write_bar(ui, s, &entries);
+
         for e in entries {
             let picked =
                 self.gitview.selection == crate::gitview::Selection::Local(e.path.clone());
@@ -5051,11 +5061,27 @@ impl App {
             } else {
                 format!("{} {}", e.state, e.path)
             };
-            let row = ui
-                .selectable_label(
+            let mut ticked = self.gitview.checked.contains(&e.path);
+            let mut row = None;
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Checkbox::without_text(&mut ticked))
+                    .on_hover_text("pick this file for the buttons above")
+                    .changed()
+                {
+                    if ticked {
+                        self.gitview.checked.insert(e.path.clone());
+                    } else {
+                        self.gitview.checked.remove(&e.path);
+                    }
+                }
+                row = Some(ui.selectable_label(
                     picked,
                     RichText::new(label).monospace().color(color),
-                )
+                ));
+            });
+            let row = row
+                .expect("the row is drawn on every pass")
                 .on_hover_text(if e.conflicted {
                     "unresolved merge conflict — resolving stays in the terminal"
                 } else {
@@ -5082,6 +5108,173 @@ impl App {
                     }
                 });
             }
+        }
+    }
+
+    /// Stage, unstage and discard the ticked files. `R-D19`.
+    ///
+    /// The concrete moment this exists for: you finish reading twelve changed
+    /// files, decide eight are the commit and four are debris, and then retype
+    /// from memory in a terminal the list you were just looking at.
+    ///
+    /// Discard is the only verb here with no undo, so it is the only one that
+    /// asks — and it is drawn apart from the other two, because a button that
+    /// destroys work should not sit where a hand lands by momentum.
+    fn git_write_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Session,
+        entries: &[mogeung_core::wire::StatusEntry],
+    ) {
+        let picked = self.gitview.checked_paths();
+        let any = !picked.is_empty();
+
+        ui.horizontal(|ui| {
+            // Tick-all, over the rows actually listed — the session filter and
+            // the `!!` drop mean "everything" is a smaller set than the status.
+            let all: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+            let every = !all.is_empty() && all.iter().all(|p| self.gitview.checked.contains(p));
+            let mut want = every;
+            if ui
+                .add(egui::Checkbox::without_text(&mut want))
+                .on_hover_text(if every {
+                    "clear the selection"
+                } else {
+                    "pick every file listed"
+                })
+                .changed()
+            {
+                match want {
+                    true => self.gitview.checked.extend(all),
+                    false => self.gitview.checked.clear(),
+                }
+            }
+
+            ui.add_enabled_ui(any, |ui| {
+                if ui.button("Stage").clicked() {
+                    self.net.send(ClientMsg::GitStage {
+                        session_id: s.id.clone(),
+                        paths: picked.clone(),
+                    });
+                }
+                if ui.button("Unstage").clicked() {
+                    self.net.send(ClientMsg::GitUnstage {
+                        session_id: s.id.clone(),
+                        paths: picked.clone(),
+                    });
+                }
+            });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(any, |ui| {
+                    if ui
+                        .button(RichText::new("Discard").color(pal().red))
+                        .on_hover_text("throw these changes away — asks first")
+                        .clicked()
+                    {
+                        self.gitview.confirm_discard = Some(picked.clone());
+                    }
+                });
+                if any {
+                    ui.label(dim(format!("{} picked", picked.len())));
+                }
+            });
+        });
+        ui.add_space(2.0);
+    }
+
+    /// The confirmation Discard needs, naming every file. `R-D19`.
+    ///
+    /// It counts the untracked ones separately and says out loud that git has
+    /// no copy of them, because that is the difference between an action that
+    /// is annoying to undo and one that cannot be undone at all — and the row
+    /// in the list looks identical either way.
+    fn git_discard_confirm(&mut self, ctx: &egui::Context, session_id: &str) {
+        let Some(paths) = self.gitview.confirm_discard.clone() else {
+            return;
+        };
+        // Untracked as the daemon last reported it. `??` is the porcelain's
+        // "git has never seen this file".
+        let untracked: Vec<String> = paths
+            .iter()
+            .filter(|p| {
+                self.gitview
+                    .status
+                    .iter()
+                    .any(|e| &e.path == *p && e.state.starts_with("??"))
+            })
+            .cloned()
+            .collect();
+        let n = untracked.len();
+        let (is_are, it_them) = if n == 1 { ("is", "it") } else { ("are", "them") };
+
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Discard changes?")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.label(format!(
+                    "Throw away local changes to {} file{}:",
+                    paths.len(),
+                    if paths.len() == 1 { "" } else { "s" }
+                ));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        for p in &paths {
+                            let lost = untracked.contains(p);
+                            ui.label(
+                                RichText::new(p)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(if lost { pal().red } else { pal().text }),
+                            );
+                        }
+                    });
+                ui.add_space(6.0);
+                if n > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{n} of these {is_are} untracked. Git has never seen {it_them}, \
+                             so it cannot bring {it_them} back — deleting {it_them} is permanent."
+                        ))
+                        .color(pal().red),
+                    );
+                } else {
+                    ui.label(dim(
+                        "All tracked, so git restores them from the last commit.",
+                    ));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    // Cancel first: the safe answer should be where a hand
+                    // lands, and the destructive one should take an aim.
+                    if ui.button("Cancel").clicked() {
+                        self.gitview.confirm_discard = None;
+                    }
+                    if ui
+                        .button(RichText::new("Discard").color(pal().red))
+                        .clicked()
+                    {
+                        go = true;
+                    }
+                });
+            });
+
+        if go {
+            self.net.send(ClientMsg::GitDiscard {
+                session_id: session_id.to_string(),
+                paths,
+            });
+            self.gitview.confirm_discard = None;
+        } else if !open {
+            // Closing the window is a refusal, like every other dialog here.
+            self.gitview.confirm_discard = None;
         }
     }
 

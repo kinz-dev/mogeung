@@ -73,10 +73,10 @@ commit — anchors are content hashes, which is what makes the two views
 agree. Its optional `CommitDetail` also names the branches containing
 the commit (`R-D18`, serde-defaulted so either side may be older).
 
-The `Git…` family (`R-D10`, `R-D11`) is **read-only by protocol**: there is
-no staging, commit, checkout, stash-pop, fetch or any other verb that
-mutates a repository, and none may be added without an ADR — the observer
-rule, one layer down. `GitCommits` echoes the ref scope and `GitAnnotation`
+The `Git…` family was **read-only by protocol** until 2026-07-31: no staging,
+commit, checkout, stash-pop, fetch or any other verb that mutates a
+repository, and none to be added without an ADR — the observer rule, one
+layer down. `GitCommits` echoes the ref scope and `GitAnnotation`
 the revision it blamed, so a client that has since moved on can drop the
 stray — the stray-session rule, applied to superseded scopes.
 
@@ -84,12 +84,32 @@ That ADR now exists.
 [ADR-0012](../decisions/0012-write-locally-never-publish.md) admits a write
 family — stage, unstage, discard, commit, branch, stash, resolve — and holds
 the line at the **network**, so `fetch`, `pull` and `push` remain absent by
-protocol. **None of it is built**; every shipped `Git…` message is still a
-read, and this paragraph describes the code as it stands. When the write
-family lands it arrives with a dispatch-level guard refusing any write verb
-unless the bind is loopback or a token was presented (`A24`) — the
-"unauthenticated socket must not be able to spell a flag" rule below,
-extended from arguments to verbs. See
+protocol.
+
+**The first three landed 2026-07-31** (`R-D19`): `GitStage`, `GitUnstage` and
+`GitDiscard`, each carrying a `session_id` and a list of worktree paths. They
+are grouped in the enum rather than filed beside their read siblings, so the
+guard that refuses them can name a contiguous list and a fourth is visibly
+joining a family with a rule. Commit, branch, stash and resolve
+(`R-D20`–`R-D22`) are still unbuilt.
+
+Two properties hold for every one of them:
+
+- **A dispatch-level guard**, not a per-verb check, refuses any write unless
+  the bind is loopback or a token was presented (`A24`). The write family is
+  enumerated in one function, so omitting a new verb from it is a visible gap
+  in a list of three rather than a missing line in a 45-arm match. It is
+  deliberately redundant with `server::admit`, which refuses to *start* a
+  daemon that could reach it: `admit` guards the binary, this guards the
+  router, and the router is what a test or an embedding constructs.
+- **Every write answers by re-broadcasting `GitLocalChanges`**, never by
+  reporting what it did. The client therefore holds no model of repository
+  state that could drift from git's, and the pane shows what git says one
+  round trip after the click — including when git did something other than
+  what was asked.
+
+Write failures carry **git's stderr verbatim**. A paraphrase would throw away
+the list of files and the hint that make git's own refusals actionable. See
 [feature 0025](../features/0025-git-write-local.md).
 
 Client-supplied git arguments are shape-checked before git sees them: shas
@@ -145,7 +165,9 @@ GET  /api/sessions/{id}/file?path=...
 GET  /api/sessions/{id}/tree           # every file path (R-B25)
 GET  /api/sessions/{id}/search?q=...   # literal content search (R-B25)
 GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...&grep=...&author=...&path=...
-                                       # R-D10/R-D11/R-D12, all read-only
+                                       # R-D10/R-D11/R-D12, all read-only.
+                                       # The write verbs are WebSocket-only:
+                                       # there is no REST route that writes.
 GET  /api/sessions/{id}/git/show?sha=...
 GET  /api/sessions/{id}/git/status
 GET  /api/sessions/{id}/git/diff?path=...

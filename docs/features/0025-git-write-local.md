@@ -1,7 +1,7 @@
 ---
 title: Local git writes — stage, commit, branch, stash
-status: draft
-updated: 2026-07-30
+status: active
+updated: 2026-07-31
 roadmap: [R-D19, R-D20, R-D21, R-D22, R-D23]
 depends_on: [A18, A19, A24, A26]
 ---
@@ -17,7 +17,8 @@ to support the GIT workflow"* — and scoped, from four offered tiers, to
 **local writes only**. `push` was in the question and is deliberately not in
 this feature; see [Explicitly out of scope](#explicitly-out-of-scope).
 
-**Nothing here is built.** This is a plan awaiting approval.
+**`R-D19` shipped 2026-07-31**; `R-D20`–`R-D23` are still a plan. See
+[Notes](#notes) for what building the first stage changed about the rest.
 
 ## Spec
 
@@ -68,10 +69,10 @@ decoration, it is liability.
 
 ### Acceptance
 
-- [ ] Files in Local changes can be staged, unstaged and discarded from the
+- [x] Files in Local changes can be staged, unstaged and discarded from the
       pane, individually and in multi-selection, and the list reflects the new
       state without a manual refresh
-- [ ] Discarding asks first, names every file it will destroy, and says plainly
+- [x] Discarding asks first, names every file it will destroy, and says plainly
       that git cannot bring them back
 - [ ] A commit can be written and made from the pane — message body, amend of
       the tip commit, and an optional trailer naming the session whose diff it
@@ -85,11 +86,14 @@ decoration, it is liability.
       take theirs, or mark resolved after editing elsewhere
 - [ ] Ahead/behind is never rendered as a bare number: it carries the age of
       the last fetch, or reads as unknown when nothing has fetched
-- [ ] A write verb arriving on a non-loopback bind without a token is refused
-      with a 401, and the refusal is tested
-- [ ] Every write failure surfaces git's stderr verbatim rather than a
+- [x] A write verb arriving on a non-loopback bind without a token is refused,
+      and the refusal is tested. **Not a 401**: the write verbs are
+      WebSocket-only, so the refusal is a `ServerMsg::Error` on the same
+      stream. The 401 is the HTTP token layer's answer and still applies to
+      the socket's upgrade request
+- [x] Every write failure surfaces git's stderr verbatim rather than a
       paraphrase
-- [ ] `cargo test --workspace` covers each verb against a temporary repository,
+- [x] `cargo test --workspace` covers each verb against a temporary repository,
       including one test proving `discard` cannot escape the session root
 
 ### Explicitly out of scope
@@ -204,4 +208,42 @@ verb, non-loopback, no token, expect 401.
 
 ## Notes
 
-*Filled during implementation.*
+### What `R-D19` cost that the plan did not predict (2026-07-31)
+
+The three verbs were the easy part. Two defects in the **read** path had to be
+fixed first, both invisible for as long as these strings were only displayed
+and both fatal once they became pathspecs handed back to git:
+
+- `git status --porcelain` C-quotes any path it finds unusual — a space is
+  enough for surrounding quotes, a non-ASCII byte becomes an octal escape, so
+  `café.txt` arrived as `caf\303\251.txt`. `status` now uses `-z`, which
+  quotes nothing. That also changes how renames arrive: under `-z` the source
+  path is a second record rather than an ` -> ` arrow, so the parser consumes
+  it.
+- `status` **collapses an untracked directory to a single row**, so a file
+  inside a folder an agent has just created never appears in it. `discard`
+  partitioned on that listing and classified such a file as tracked. It now
+  asks `ls-files`, which answers the question actually being put.
+
+Neither was reachable from the read path's own tests, and both were found by
+writing the temp-repo fixtures. That is the argument for the fixtures being
+part of this stage's cost rather than a later tidy-up.
+
+### Two things the plan got wrong
+
+- **"Refused with a 401."** The write verbs travel on the WebSocket, and a
+  message on an established socket has no status code. The guard answers with
+  `ServerMsg::Error` instead. The 401 exists and is the token layer's answer to
+  the *upgrade request*, which is a different and earlier check.
+- **The guard is less load-bearing than the plan feared**, because `admit`
+  (`R-I10`) already refuses to *start* a daemon that is non-loopback with no
+  token. It was still built, for a reason worth writing down: `admit` guards
+  the binary and this guards the router, and the router is what a test, an
+  embedding, or a future entry point constructs.
+
+### Still open, and now more concrete
+
+`R-D21`'s branch-switch question — what to do when a live session has files
+open and a diff base pinned — was flagged in the plan as the one most likely to
+need a human's judgement. Nothing in `R-D19` answered it, and it should be
+asked before that stage starts rather than during it.
