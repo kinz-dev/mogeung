@@ -1641,6 +1641,85 @@ impl AppState {
         .await?
     }
 
+    /// Create a branch, and optionally move onto it. `R-D21`.
+    pub async fn git_branch_create(&self, id: &str, name: String, switch_to: bool) -> Result<()> {
+        let root = self.git_root(id).await?;
+        let moved = root.clone();
+        tokio::task::spawn_blocking(move || crate::git::branch_create(&root, &name, switch_to))
+            .await??;
+        if switch_to {
+            self.unpin_diff_bases(&moved).await;
+        }
+        Ok(())
+    }
+
+    /// Move the worktree onto an existing branch. `R-D21`.
+    pub async fn git_switch(&self, id: &str, name: String) -> Result<()> {
+        let root = self.git_root(id).await?;
+        let moved = root.clone();
+        tokio::task::spawn_blocking(move || crate::git::switch(&root, &name)).await??;
+        self.unpin_diff_bases(&moved).await;
+        Ok(())
+    }
+
+    pub async fn git_stash_push(
+        &self,
+        id: &str,
+        message: String,
+        include_untracked: bool,
+    ) -> Result<()> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || {
+            crate::git::stash_push(&root, &message, include_untracked)
+        })
+        .await?
+    }
+
+    pub async fn git_stash_pop(&self, id: &str, index: u32) -> Result<()> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::stash_pop(&root, index)).await?
+    }
+
+    pub async fn git_stash_drop(&self, id: &str, index: u32) -> Result<()> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::stash_drop(&root, index)).await?
+    }
+
+    /// Forget the pinned diff base of every session in this repository. `R-D21`.
+    ///
+    /// A session's base is *the last commit before it started*, resolved once
+    /// and kept ([A9](../../../docs/product/assumptions.md)) — which is right
+    /// while HEAD only moves forward, and wrong the moment a branch switch
+    /// puts it on another line of history entirely. Left alone, the Changes
+    /// tab would go on diffing against a commit that is no longer an ancestor
+    /// of anything checked out: not an error, just a diff nobody can act on.
+    ///
+    /// Clearing it rather than recomputing it here, because the scan loop
+    /// already resolves a missing base on its next pass. One place that knows
+    /// how to compute a base beats two.
+    ///
+    /// Every session in the worktree, not only the one that asked: they share
+    /// the checkout, so they all just had the ground moved.
+    async fn unpin_diff_bases(&self, root: &Path) {
+        let root = root.to_string_lossy().to_string();
+        let mut changed = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in sessions.values_mut() {
+                if s.repo_root.as_deref() == Some(root.as_str()) && s.base_sha.is_some() {
+                    s.base_sha = None;
+                    changed.push(s.clone());
+                }
+            }
+        }
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
+    }
+
     /// The repository a write verb may touch, once every path in it has been
     /// checked. `R-D19`.
     ///

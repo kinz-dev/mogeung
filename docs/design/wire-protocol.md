@@ -91,7 +91,23 @@ carry a `session_id` and a list of worktree paths; `GitCommit` (`R-D20`) carries
 a message, an `amend` flag and a `session_trailer` flag. They are grouped in the
 enum rather than filed beside their read siblings, so the guard that refuses
 them can name a contiguous list and a fifth is visibly joining a family with a
-rule. Branch, stash and resolve (`R-D21`, `R-D22`) are still unbuilt.
+rule. `R-D21` added five more the same day — `GitBranchCreate`, `GitSwitch`,
+`GitStashPush`, `GitStashPop`, `GitStashDrop` — leaving conflict resolution
+(`R-D22`) as the last unbuilt verb.
+
+Branch names go through `valid_ref_name`, the *same* rule the read side uses to
+scope a log: narrower than git's own, refusing a leading `-`, `..` and `@{`.
+Sharing it matters more on this side, since reading a nonsense ref shows
+nothing and writing one moves the worktree. A stash is addressed by index and
+the `stash@{n}` string is built by the daemon, so no ref from outside reaches
+that argument at all.
+
+`GitSwitch` clears the pinned diff base of **every** session in that worktree
+([A9](../product/assumptions.md)): a base is the last commit before a session
+started, resolved once, and a switch can put it on another line of history
+where it is no longer an ancestor of anything checked out. Clearing rather than
+recomputing, because the scan loop already resolves a missing base — one place
+that knows how to compute a base beats two.
 
 `GitCommit` commits **only what is staged** — never `-a`. The staging list is
 the instruction, and a commit verb that could sweep in a file deliberately left

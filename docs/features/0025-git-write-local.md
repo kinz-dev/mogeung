@@ -17,7 +17,7 @@ to support the GIT workflow"* — and scoped, from four offered tiers, to
 **local writes only**. `push` was in the question and is deliberately not in
 this feature; see [Explicitly out of scope](#explicitly-out-of-scope).
 
-**`R-D19` and `R-D20` shipped 2026-07-31**; `R-D21`–`R-D23` are still a plan. See
+**`R-D19`–`R-D21` shipped 2026-07-31**; `R-D22` and `R-D23` are still a plan. See
 [Notes](#notes) for what building the first stage changed about the rest.
 
 ## Spec
@@ -79,9 +79,9 @@ decoration, it is liability.
       came from
 - [x] A commit made from the pane appears in the log below it, and its diff
       arrives already marked read where the hunks were read before committing
-- [ ] Branches can be created and switched from the refs list; a switch that
+- [x] Branches can be created and switched from the refs list; a switch that
       git refuses reports git's own words, and the pane's state does not move
-- [ ] A stash can be pushed, popped and dropped from the stash list
+- [x] A stash can be pushed, popped and dropped from the stash list
 - [ ] A conflicted file can be resolved from the three-way view — take ours,
       take theirs, or mark resolved after editing elsewhere
 - [ ] Ahead/behind is never rendered as a bare number: it carries the age of
@@ -261,9 +261,32 @@ containment and the fixtures. Three things it added that the plan did not have:
   worth pre-empting git rather than deferring to it: `git commit -m "   "`
   succeeds and produces a commit with a blank subject.
 
-### Still open, and now more concrete
+### `R-D21`, and the question it was holding (2026-07-31)
 
-`R-D21`'s branch-switch question — what to do when a live session has files
-open and a diff base pinned — was flagged in the plan as the one most likely to
-need a human's judgement. Nothing in `R-D19` answered it, and it should be
-asked before that stage starts rather than during it.
+The branch-switch question was put to the user before any code was written, and
+answered: **warn, name the live sessions, proceed on confirm** — the shape
+`discard` had already set in this pane. The two rejected options are worth
+recording. *Refuse while anything is live* blocks a common and legitimate act,
+since an agent idling at a prompt is "live" and being done with it is exactly
+when you want to switch. *Allow it silently* throws away the one thing mogeung
+knows that git does not: git refuses a switch that would **lose** work and has
+no opinion about work it merely changes underneath a reader.
+
+So the dialog appears only when something is live in that worktree. A
+confirmation that always appears is one that is always dismissed.
+
+Three smaller findings:
+
+- **`git switch -c` is the wrong way to create a branch** when the name might
+  be bad. It parses `-evil` as flags and answers *"unknown switch `e'"*, while
+  `git branch` says *"'-evil' is not a valid branch name"* and points at
+  `check-ref-format`. `--` does not help. So creation is `branch` then
+  `switch`, two commands, for the sentence.
+- **`valid_ref_name` already existed** on the read side and needed no
+  loosening to serve the write side, which is a good sign about where the
+  original line was drawn.
+- **A plain `git stash` leaves untracked files behind**, so the tree is not
+  clean afterwards. The pane's Stash-all passes `--include-untracked`, because
+  an agent's new files are exactly the ones you meant to get out of the way.
+
+### Still open

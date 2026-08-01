@@ -4586,7 +4586,7 @@ impl App {
                     // the rows they decorate.
                     ui.style_mut().interaction.selectable_labels = false;
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    self.git_ref_sections(ui);
+                    self.git_ref_sections(ui, s);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("LOG").size(11.0).color(pal().dim).strong());
                         if let Some(rev) = self.gitview.log_rev.clone() {
@@ -4712,10 +4712,171 @@ impl App {
         });
     }
 
+    /// The live sessions sharing this session's worktree. `R-D21`.
+    ///
+    /// The thing mogeung knows and git cannot: an agent may be reading these
+    /// files right now. Git refuses a switch that would *lose* work and has no
+    /// opinion at all about work it is merely changing underneath.
+    fn live_neighbours(&self, s: &Session) -> Vec<String> {
+        let Some(root) = s.repo_root.as_deref() else {
+            return Vec::new();
+        };
+        self.sessions
+            .values()
+            .filter(|o| o.alive && o.repo_root.as_deref() == Some(root))
+            .map(|o| {
+                let name = self
+                    .prefs
+                    .label(&o.id)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| crate::ui::truncate(&o.id, 8));
+                match o.live_status {
+                    Some(mogeung_core::session::LiveStatus::Busy) => format!("{name} (working)"),
+                    _ => name,
+                }
+            })
+            .collect()
+    }
+
+    /// Confirm a branch switch when something is live in the worktree.
+    /// `R-D21`.
+    ///
+    /// It only asks when there is something to say. A switch with nothing live
+    /// in the worktree is an ordinary git operation and gets no dialog —
+    /// a confirmation that always appears is one that is always dismissed.
+    fn git_switch_confirm(&mut self, ctx: &egui::Context, s: &Session) {
+        let Some(branch) = self.gitview.confirm_switch.clone() else {
+            return;
+        };
+        let live = self.live_neighbours(s);
+        // Nothing live: no question worth asking, so do it.
+        if live.is_empty() {
+            self.net.send(ClientMsg::GitSwitch {
+                session_id: s.id.clone(),
+                name: branch,
+            });
+            self.gitview.confirm_switch = None;
+            return;
+        }
+
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Switch branch under a running session?")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(480.0);
+                ui.label(format!(
+                    "Moving this worktree to {branch} while {} session{} {} running in it:",
+                    live.len(),
+                    if live.len() == 1 { "" } else { "s" },
+                    if live.len() == 1 { "is" } else { "are" },
+                ));
+                ui.add_space(4.0);
+                for name in &live {
+                    ui.label(RichText::new(name).monospace().size(12.0).color(pal().amber));
+                }
+                ui.add_space(6.0);
+                ui.label(dim(
+                    "Git will refuse if the switch would overwrite uncommitted work, and \
+                     nothing is destroyed either way. What it cannot see is that an agent \
+                     has these files open: after the switch it is reading different \
+                     content than it was told about, and it will not notice.",
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.gitview.confirm_switch = None;
+                    }
+                    if ui
+                        .button(RichText::new("Switch anyway").color(pal().amber))
+                        .clicked()
+                    {
+                        go = true;
+                    }
+                });
+            });
+
+        if go {
+            self.net.send(ClientMsg::GitSwitch {
+                session_id: s.id.clone(),
+                name: branch,
+            });
+            self.gitview.confirm_switch = None;
+        } else if !open {
+            self.gitview.confirm_switch = None;
+        }
+    }
+
+    /// Confirm dropping a stash. `R-D21`.
+    ///
+    /// `git stash drop` prints the dropped commit's sha and it stays reachable
+    /// until gc, so this is recoverable — by somebody who knows that and read
+    /// the sha as it went past. In practice it is a loss, and it asks.
+    fn git_stash_drop_confirm(&mut self, ctx: &egui::Context, s: &Session) {
+        let Some(index) = self.gitview.confirm_stash_drop else {
+            return;
+        };
+        let message = self
+            .gitview
+            .stashes
+            .iter()
+            .find(|st| st.index == index)
+            .map(|st| st.message.clone())
+            .unwrap_or_default();
+
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Drop this stash?")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(440.0);
+                ui.label(RichText::new(format!("stash@{{{index}}}")).monospace());
+                if !message.is_empty() {
+                    ui.label(dim(&message));
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "Dropping does not restore it. The changes in it are gone from \
+                         everywhere you can reach from here.",
+                    )
+                    .color(pal().red),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.gitview.confirm_stash_drop = None;
+                    }
+                    if ui.button(RichText::new("Drop").color(pal().red)).clicked() {
+                        go = true;
+                    }
+                });
+            });
+
+        if go {
+            self.net.send(ClientMsg::GitStashDrop {
+                session_id: s.id.clone(),
+                index,
+            });
+            self.gitview.confirm_stash_drop = None;
+        } else if !open {
+            self.gitview.confirm_stash_drop = None;
+        }
+    }
+
     /// The collapsible reading lists: branches, tags, stashes, submodules.
     /// Sections with nothing to say do not appear.
-    fn git_ref_sections(&mut self, ui: &mut egui::Ui) {
+    fn git_ref_sections(&mut self, ui: &mut egui::Ui, s: &Session) {
         let now = Utc::now().timestamp();
+        let ctx = ui.ctx().clone();
+        self.git_switch_confirm(&ctx, s);
+        self.git_stash_drop_confirm(&ctx, s);
         if let Some(refs) = self.gitview.refs.clone() {
             if !refs.branches.is_empty() {
                 egui::CollapsingHeader::new(
@@ -4726,6 +4887,57 @@ impl App {
                 )
                 .id_salt("git-branches")
                 .show(ui, |ui| {
+                    // `R-D21`. A field rather than a dialog: a branch name is
+                    // one short string and a modal for it would be three
+                    // clicks around a text box.
+                    match self.gitview.new_branch.as_mut() {
+                        None => {
+                            if ui
+                                .small_button(format!("{} New branch", icon::NEW_SESSION))
+                                .clicked()
+                            {
+                                self.gitview.new_branch = Some(String::new());
+                            }
+                        }
+                        Some(name) => {
+                            let mut make = false;
+                            let mut cancel = false;
+                            ui.horizontal(|ui| {
+                                let field = ui.add(
+                                    egui::TextEdit::singleline(name)
+                                        .hint_text("branch name")
+                                        .desired_width(160.0),
+                                );
+                                field.request_focus();
+                                // Enter commits the name — the field is one
+                                // short string and reaching for a button is
+                                // the slower half of typing it.
+                                make = field.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let ok = !name.trim().is_empty();
+                                if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
+                                    make = true;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    cancel = true;
+                                }
+                            });
+                            let name = name.trim().to_string();
+                            if make && !name.is_empty() {
+                                // Created *and* switched to: making a branch
+                                // you do not then move onto is a rarer want
+                                // than the one gesture everybody means.
+                                self.net.send(ClientMsg::GitBranchCreate {
+                                    session_id: s.id.clone(),
+                                    name,
+                                    switch_to: true,
+                                });
+                                self.gitview.new_branch = None;
+                            } else if cancel {
+                                self.gitview.new_branch = None;
+                            }
+                        }
+                    }
                     for b in &refs.branches {
                         let scoped = self.gitview.log_rev.as_deref() == Some(b.name.as_str());
                         let mut text = format!("{} {}", b.sha, b.name);
@@ -4755,6 +4967,12 @@ impl App {
                             });
                         }
                         row.context_menu(|ui| {
+                            // `R-D21`. Asks first when something is live in
+                            // the worktree; see `git_switch_confirm`.
+                            if !b.current && ui.button("Switch to this branch").clicked() {
+                                self.gitview.confirm_switch = Some(b.name.clone());
+                                ui.close();
+                            }
                             if !b.current
                                 && ui
                                     .button("Diff vs current, from the merge base")
@@ -4877,13 +5095,35 @@ impl App {
                             .monospace(),
                         )
                         .on_hover_text(format!(
-                            "{}\n{} · read-only: popping stays in the terminal",
+                            "{}\n{}",
                             st.message,
                             crate::gitview::age(now, st.epoch)
                         ));
                     if row.clicked() {
                         self.gitview.selection = crate::gitview::Selection::Stash(st.index);
                     }
+                    // `R-D21`. Pop restores and removes in one gesture, which
+                    // is git's own pairing; Drop asks, because it is the half
+                    // that keeps nothing.
+                    row.context_menu(|ui| {
+                        if ui
+                            .button("Pop — restore it and remove it")
+                            .clicked()
+                        {
+                            self.net.send(ClientMsg::GitStashPop {
+                                session_id: s.id.clone(),
+                                index: st.index,
+                            });
+                            ui.close();
+                        }
+                        if ui
+                            .button(RichText::new("Drop — throw it away").color(pal().red))
+                            .clicked()
+                        {
+                            self.gitview.confirm_stash_drop = Some(st.index);
+                            ui.close();
+                        }
+                    });
                 }
             });
         }
@@ -5265,6 +5505,27 @@ impl App {
                     });
                 }
             });
+
+            // Not limited to the ticked files, and said so on the hover:
+            // `git stash` takes the whole worktree, and a button beside three
+            // that respect the ticks would otherwise read as a fourth that
+            // does. `R-D21`.
+            if ui
+                .button("Stash all")
+                .on_hover_text(
+                    "Shelve every change in the worktree, tracked and untracked, and                      leave it clean. Not just the ticked files — git stash takes the                      lot. Restore it from the STASHES list below.",
+                )
+                .clicked()
+            {
+                self.net.send(ClientMsg::GitStashPush {
+                    session_id: s.id.clone(),
+                    message: String::new(),
+                    // Untracked included: an agent's new files are exactly the
+                    // ones you meant to get out of the way, and a "clean"
+                    // worktree still full of them is a surprise.
+                    include_untracked: true,
+                });
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(any, |ui| {

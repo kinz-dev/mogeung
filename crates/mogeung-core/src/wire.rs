@@ -156,6 +156,36 @@ pub enum ClientMsg {
         #[serde(default)]
         session_trailer: bool,
     },
+    /// Create a branch, and optionally move onto it. `R-D21`.
+    GitBranchCreate {
+        session_id: SessionId,
+        name: String,
+        #[serde(default)]
+        switch_to: bool,
+    },
+    /// Move the worktree onto an existing branch. `R-D21`.
+    ///
+    /// Git refuses a switch that would lose work. What it cannot know is that
+    /// an agent may be reading those files right now — the window warns about
+    /// that, because it is the only side that knows a session is live.
+    GitSwitch {
+        session_id: SessionId,
+        name: String,
+    },
+    /// Shelve the working tree. `R-D21`.
+    GitStashPush {
+        session_id: SessionId,
+        #[serde(default)]
+        message: String,
+        /// Take untracked files along. Off by default, as in git.
+        #[serde(default)]
+        include_untracked: bool,
+    },
+    /// Restore a stash and remove it. `R-D21`.
+    GitStashPop { session_id: SessionId, index: u32 },
+    /// Throw a stash away without restoring it. `R-D21`.
+    GitStashDrop { session_id: SessionId, index: u32 },
+
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile {
         session_id: SessionId,

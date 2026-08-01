@@ -241,6 +241,92 @@ pub fn commit(
 /// tool that has never heard of mogeung all keep it intact and ignore it.
 pub const SESSION_TRAILER: &str = "Mogeung-Session";
 
+/// Create a branch, and optionally move onto it. `R-D21`.
+///
+/// Created with `branch` rather than `switch -c` even when we are about to
+/// switch, because the two refuse a bad name very differently: `git branch`
+/// says *"'-evil' is not a valid branch name"* and points at
+/// `git check-ref-format`, while `switch -c` parses the same string as flags
+/// and answers *"unknown switch `e'"*. `--` does not help — git reads the
+/// argument as options anyway. Two commands, and the user gets the sentence
+/// that tells them what is wrong.
+pub fn branch_create(root: &Path, name: &str, switch_to: bool) -> Result<()> {
+    let name = check_ref(name)?;
+    run_git_write(root, &["branch", name])?;
+    if switch_to {
+        run_git_write(root, &["switch", name])?;
+    }
+    Ok(())
+}
+
+/// Move the worktree onto an existing branch. `R-D21`.
+///
+/// Nothing here protects uncommitted work, because git already does: it
+/// refuses a switch that would overwrite local changes, and its refusal names
+/// every file. What git has no opinion about — and cannot detect — is that an
+/// agent may be reading those files right now. That warning belongs in the
+/// window, which is the only place that knows a session is live.
+pub fn switch(root: &Path, name: &str) -> Result<()> {
+    let name = check_ref(name)?;
+    run_git_write(root, &["switch", name]).map(drop)
+}
+
+/// Shelve the working tree. `R-D21`.
+///
+/// `--include-untracked` is a choice the caller makes, not a default, because
+/// the two behaviours differ in whether an agent's new files come along or are
+/// left behind on the branch you are leaving.
+pub fn stash_push(root: &Path, message: &str, include_untracked: bool) -> Result<()> {
+    let mut args: Vec<&str> = vec!["stash", "push"];
+    if include_untracked {
+        args.push("--include-untracked");
+    }
+    let message = message.trim();
+    if !message.is_empty() {
+        args.push("-m");
+        args.push(message);
+    }
+    run_git_write(root, &args).map(drop)
+}
+
+/// Restore a stash and remove it. `R-D21`.
+pub fn stash_pop(root: &Path, index: u32) -> Result<()> {
+    run_git_write(root, &["stash", "pop", &stash_ref(index)]).map(drop)
+}
+
+/// Throw a stash away without restoring it. `R-D21`.
+///
+/// The second verb here with no undo — `stash drop` prints the dropped
+/// commit's sha and it stays reachable until gc, but recovering it means
+/// knowing that, so the UI must ask.
+pub fn stash_drop(root: &Path, index: u32) -> Result<()> {
+    run_git_write(root, &["stash", "drop", &stash_ref(index)]).map(drop)
+}
+
+/// `stash@{n}`, built here rather than accepted from a client — the index is
+/// a number, so there is no string from outside to spell a flag with.
+fn stash_ref(index: u32) -> String {
+    format!("stash@{{{index}}}")
+}
+
+/// A ref name a write verb may act on, or a refusal naming the reason.
+///
+/// The same rule the read side uses to scope a log ([`valid_ref_name`]), which
+/// is deliberately narrower than git's own: everything a hostile client would
+/// need — a leading `-`, `..`, `@{` — is outside it. Sharing the rule matters
+/// more here than there, since reading a nonsense ref shows nothing and
+/// writing one moves the worktree.
+fn check_ref(name: &str) -> Result<&str> {
+    let name = name.trim();
+    if !valid_ref_name(name) {
+        bail!(
+            "{name:?} is not a branch name mogeung will use — letters, digits, \
+             and . _ - / only, not starting with - . or /"
+        );
+    }
+    Ok(name)
+}
+
 /// `git <verb> -- <paths>`, with the separator that makes a path a path.
 ///
 /// Without `--`, a file called `-i` or `--hard` is an option. Agents produce

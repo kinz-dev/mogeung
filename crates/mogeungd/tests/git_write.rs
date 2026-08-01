@@ -416,3 +416,140 @@ fn a_hook_that_prompts_fails_instead_of_hanging() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// -- Branches and stashes. `R-D21`. -------------------------------------------
+
+fn branch_now(dir: &Path) -> String {
+    git_in(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).trim().to_string()
+}
+
+#[test]
+fn creating_a_branch_can_leave_you_where_you_were() {
+    let dir = repo("branch-create", false);
+    git::branch_create(&dir, "feature/a", false).unwrap();
+    assert_eq!(branch_now(&dir), "main", "created, not switched to");
+    assert!(git_in(&dir, &["branch", "--list"]).contains("feature/a"));
+
+    git::branch_create(&dir, "feature/b", true).unwrap();
+    assert_eq!(branch_now(&dir), "feature/b", "created and switched to");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `switch -c` reads a leading-dash name as flags and answers "unknown switch
+/// `e'". Creating with `branch` first means the user gets git's real sentence
+/// about branch names — and our own check refuses it before either.
+#[test]
+fn a_branch_name_that_could_be_a_flag_is_refused_with_a_reason() {
+    let dir = repo("branch-evil", false);
+    for bad in ["-evil", "--force", "..", "a..b", "main@{1}", "/leading", "trailing/", ""] {
+        let e = git::branch_create(&dir, bad, false).unwrap_err().to_string();
+        assert!(
+            e.contains("not a branch name mogeung will use"),
+            "{bad:?} → {e}"
+        );
+    }
+    // And the ordinary ones still work, including slashes and dots.
+    for good in ["feature/x", "release-1.2", "user_name/thing"] {
+        git::branch_create(&dir, good, false).unwrap();
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn switching_moves_the_worktree() {
+    let dir = repo("switch", false);
+    git::branch_create(&dir, "other", false).unwrap();
+    git::switch(&dir, "other").unwrap();
+    assert_eq!(branch_now(&dir), "other");
+    git::switch(&dir, "main").unwrap();
+    assert_eq!(branch_now(&dir), "main");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Git refuses a switch that would lose work, and its refusal names the files.
+/// mogeung must not paper over that with a sentence of its own.
+#[test]
+fn a_switch_that_would_lose_work_is_gits_refusal() {
+    let dir = repo("switch-dirty", false);
+    // A commit on `other` that touches the same file, so switching back with
+    // local edits would have to overwrite them.
+    git::branch_create(&dir, "other", true).unwrap();
+    std::fs::write(dir.join("kept.txt"), "from other\n").unwrap();
+    git::stage(&dir, &p("kept.txt")).unwrap();
+    git::commit(&dir, "other's version", false, &[]).unwrap();
+    git::switch(&dir, "main").unwrap();
+
+    std::fs::write(dir.join("kept.txt"), "uncommitted edit\n").unwrap();
+    let e = git::switch(&dir, "other").unwrap_err().to_string();
+    assert!(e.contains("kept.txt"), "git names the file: {e}");
+    assert_eq!(branch_now(&dir), "main", "and did not move");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("kept.txt")).unwrap(),
+        "uncommitted edit\n",
+        "the edit survives"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_stash_round_trips() {
+    let dir = repo("stash", false);
+    std::fs::write(dir.join("kept.txt"), "work in progress\n").unwrap();
+    git::stash_push(&dir, "wip", false).unwrap();
+
+    assert_eq!(status(&dir), "", "the tree is clean again");
+    assert_eq!(std::fs::read_to_string(dir.join("kept.txt")).unwrap(), "one\n");
+    assert!(git_in(&dir, &["stash", "list"]).contains("wip"));
+
+    git::stash_pop(&dir, 0).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("kept.txt")).unwrap(),
+        "work in progress\n"
+    );
+    assert_eq!(git_in(&dir, &["stash", "list"]).trim(), "", "popping removes it");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Untracked files are left behind by a plain stash, which is a surprise
+/// worth pinning: the tree is *not* clean afterwards.
+#[test]
+fn untracked_files_stash_only_when_asked() {
+    let dir = repo("stash-untracked", false);
+    std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+
+    git::stash_push(&dir, "without", false).unwrap();
+    assert_eq!(status(&dir), "?? new.txt\n", "left behind");
+
+    git::stash_push(&dir, "with", true).unwrap();
+    assert_eq!(status(&dir), "", "taken along");
+    git::stash_pop(&dir, 0).unwrap();
+    assert!(dir.join("new.txt").exists());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn dropping_a_stash_removes_the_right_one() {
+    let dir = repo("stash-drop", false);
+    for n in ["first", "second", "third"] {
+        std::fs::write(dir.join("kept.txt"), format!("{n}\n")).unwrap();
+        git::stash_push(&dir, n, false).unwrap();
+    }
+    // Newest is stash@{0}, so index 1 is "second".
+    git::stash_drop(&dir, 1).unwrap();
+    let list = git_in(&dir, &["stash", "list"]);
+    assert!(list.contains("third") && list.contains("first"), "{list}");
+    assert!(!list.contains("second"), "{list}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn popping_a_stash_that_is_not_there_is_gits_refusal() {
+    let dir = repo("stash-missing", false);
+    let e = git::stash_pop(&dir, 7).unwrap_err().to_string();
+    assert!(e.to_lowercase().contains("stash"), "git's words: {e}");
+    std::fs::remove_dir_all(&dir).ok();
+}

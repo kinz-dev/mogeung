@@ -738,6 +738,11 @@ fn is_write(cmd: &ClientMsg) -> bool {
             | ClientMsg::GitUnstage { .. }
             | ClientMsg::GitDiscard { .. }
             | ClientMsg::GitCommit { .. }
+            | ClientMsg::GitBranchCreate { .. }
+            | ClientMsg::GitSwitch { .. }
+            | ClientMsg::GitStashPush { .. }
+            | ClientMsg::GitStashPop { .. }
+            | ClientMsg::GitStashDrop { .. }
     )
 }
 
@@ -755,6 +760,33 @@ async fn rebroadcast_status(state: &Arc<AppState>, session_id: String) {
             message: e.to_string(),
         }),
     }
+}
+
+/// Answer a ref or stash write by re-reading what it could have moved.
+/// `R-D21`.
+///
+/// The same rule as `R-D19`'s: the client is told what git now says, never
+/// what it was asked to do.
+async fn after_ref_change(state: &Arc<AppState>, session_id: String) {
+    match state.git_refs(&session_id).await {
+        Ok(info) => state.broadcast(ServerMsg::GitRefsInfo {
+            session_id: session_id.clone(),
+            info: Box::new(info),
+        }),
+        Err(e) => state.broadcast(ServerMsg::Error {
+            message: e.to_string(),
+        }),
+    }
+    match state.git_stashes(&session_id).await {
+        Ok(stashes) => state.broadcast(ServerMsg::GitStashList {
+            session_id: session_id.clone(),
+            stashes,
+        }),
+        Err(e) => state.broadcast(ServerMsg::Error {
+            message: e.to_string(),
+        }),
+    }
+    rebroadcast_status(state, session_id).await
 }
 
 async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
@@ -1051,6 +1083,55 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 Err(e) => err(e),
             }
         }
+        ClientMsg::GitBranchCreate {
+            session_id,
+            name,
+            switch_to,
+        } => match state.git_branch_create(&session_id, name, switch_to).await {
+            // Refs *and* status: creating a branch changes the refs list, and
+            // switching onto it can change what is uncommitted.
+            Ok(()) => after_ref_change(state, session_id).await,
+            Err(e) => err(e),
+        },
+        ClientMsg::GitSwitch { session_id, name } => {
+            match state.git_switch(&session_id, name).await {
+                Ok(()) => {
+                    state.recompute_change(&session_id).await;
+                    after_ref_change(state, session_id).await
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitStashPush {
+            session_id,
+            message,
+            include_untracked,
+        } => match state
+            .git_stash_push(&session_id, message, include_untracked)
+            .await
+        {
+            Ok(()) => {
+                state.recompute_change(&session_id).await;
+                after_ref_change(state, session_id).await
+            }
+            Err(e) => err(e),
+        },
+        ClientMsg::GitStashPop { session_id, index } => {
+            match state.git_stash_pop(&session_id, index).await {
+                Ok(()) => {
+                    state.recompute_change(&session_id).await;
+                    after_ref_change(state, session_id).await
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::GitStashDrop { session_id, index } => {
+            match state.git_stash_drop(&session_id, index).await {
+                // Nothing in the worktree moved, so only the stash list did.
+                Ok(()) => after_ref_change(state, session_id).await,
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitDiscard { session_id, paths } => {
             match state.git_discard(&session_id, paths).await {
                 Ok(()) => {
@@ -1235,6 +1316,25 @@ mod write_guard_tests {
             ClientMsg::GitStage { session_id: id(), paths: paths() },
             ClientMsg::GitUnstage { session_id: id(), paths: paths() },
             ClientMsg::GitDiscard { session_id: id(), paths: paths() },
+            ClientMsg::GitCommit {
+                session_id: id(),
+                message: "m".into(),
+                amend: false,
+                session_trailer: true,
+            },
+            ClientMsg::GitBranchCreate {
+                session_id: id(),
+                name: "b".into(),
+                switch_to: true,
+            },
+            ClientMsg::GitSwitch { session_id: id(), name: "b".into() },
+            ClientMsg::GitStashPush {
+                session_id: id(),
+                message: String::new(),
+                include_untracked: true,
+            },
+            ClientMsg::GitStashPop { session_id: id(), index: 0 },
+            ClientMsg::GitStashDrop { session_id: id(), index: 0 },
         ] {
             assert!(is_write(&cmd), "{cmd:?} changes the repository");
         }
@@ -1244,6 +1344,8 @@ mod write_guard_tests {
         // like a failed one.
         for cmd in [
             ClientMsg::GitStatus { session_id: id() },
+            ClientMsg::GitRefs { session_id: id() },
+            ClientMsg::GitStashes { session_id: id() },
             ClientMsg::RefreshChange { session_id: id() },
             ClientMsg::ReviewAll { session_id: id() },
             ClientMsg::Subscribe,

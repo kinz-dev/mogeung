@@ -78,6 +78,12 @@ pub struct GitView {
     pub commit_msg: String,
     /// Replace the tip commit rather than adding one.
     pub commit_amend: bool,
+    /// A branch a Switch is waiting to be confirmed for. `R-D21`.
+    pub confirm_switch: Option<String>,
+    /// A stash index a Drop is waiting to be confirmed for. `R-D21`.
+    pub confirm_stash_drop: Option<u32>,
+    /// The new-branch name being typed, when the field is open. `R-D21`.
+    pub new_branch: Option<String>,
     /// Record which session the work came from, for `R-F2`.
     ///
     /// On by default, and a visible checkbox rather than a setting, because it
