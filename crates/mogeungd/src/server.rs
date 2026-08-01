@@ -157,6 +157,14 @@ where
     // refusal that has already done work is a refusal that leaves a mess.
     let posture = admit(&addr, opts.token.as_deref())?;
     let state = prepare(&opts).await?;
+    // The write guard reads the same decision the refusal above was made
+    // from, rather than deciding again from the same inputs. Two places that
+    // both compute "is this safe" are two places that can come to disagree,
+    // and only one of them would be the one anybody tested. `R-D19`.
+    let _ = state.writes_allowed.set(matches!(
+        posture,
+        Posture::Loopback | Posture::TokenGated
+    ));
 
     {
         let s = state.clone();

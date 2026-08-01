@@ -73,6 +73,23 @@ pub struct AppState {
     /// `identity` because the constructor is shared with tests that have no
     /// config to read; `server::prepare` fills it in once.
     pub ssh_target: std::sync::OnceLock<String>,
+    /// Whether this daemon may write to a repository at all. `R-D19`.
+    ///
+    /// A `OnceLock` for the same reason `ssh_target` is one: only the code
+    /// that *binds the socket* knows the answer, and the constructor is shared
+    /// with tests and with the window's own hosted daemon. `server::run` sets
+    /// it from [`crate::server::admit`], so the guard and the start-up refusal
+    /// cannot disagree about what "safe to write" means.
+    ///
+    /// Unset reads as **allowed**, which is the loopback posture every
+    /// unconfigured caller actually has — a state built by hand in a test, or
+    /// by a window hosting a daemon on `127.0.0.1`. That default is only
+    /// defensible because it is not the real fence: `admit` refuses a
+    /// non-loopback bind with no token *before the database opens*, so a
+    /// daemon that could reach this field with the wrong answer never starts.
+    /// This is the second lock on a door that is already bolted, and it exists
+    /// because the write verbs are the first thing here that cannot be undone.
+    pub writes_allowed: std::sync::OnceLock<bool>,
     /// Root of the Codex CLI state directory, watched the same read-only way
     /// when it exists. `R-I1`.
     pub codex_home: PathBuf,
@@ -124,6 +141,7 @@ impl AppState {
             seqs: Mutex::new(seqs),
             identity,
             ssh_target: std::sync::OnceLock::new(),
+            writes_allowed: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
             attention: AttentionConfig::default(),
@@ -1575,6 +1593,164 @@ impl AppState {
         tokio::task::spawn_blocking(move || crate::git::status(&root)).await?
     }
 
+    /// Stage paths in the session's repository. `R-D19`.
+    pub async fn git_stage(&self, id: &str, paths: Vec<String>) -> Result<()> {
+        let root = self.write_target(id, &paths).await?;
+        tokio::task::spawn_blocking(move || crate::git::stage(&root, &paths)).await?
+    }
+
+    /// Unstage paths, leaving the working tree alone. `R-D19`.
+    pub async fn git_unstage(&self, id: &str, paths: Vec<String>) -> Result<()> {
+        let root = self.write_target(id, &paths).await?;
+        tokio::task::spawn_blocking(move || crate::git::unstage(&root, &paths)).await?
+    }
+
+    /// Throw away local changes. Destroys work git has never seen. `R-D19`.
+    pub async fn git_discard(&self, id: &str, paths: Vec<String>) -> Result<()> {
+        let root = self.write_target(id, &paths).await?;
+        tokio::task::spawn_blocking(move || crate::git::discard(&root, &paths)).await?
+    }
+
+    /// Whether repository writes are permitted on this bind. `R-D19`.
+    ///
+    /// See [`AppState::writes_allowed`] for why unset means yes.
+    pub fn may_write(&self) -> bool {
+        *self.writes_allowed.get().unwrap_or(&true)
+    }
+
+    /// Commit what is staged in the session's repository. `R-D20`.
+    ///
+    /// The trailer is built here rather than by the client, so the id recorded
+    /// is the one the daemon knows the session by — a client that guessed it
+    /// would write a value `R-F2` could never look anything up with.
+    pub async fn git_commit(
+        &self,
+        id: &str,
+        message: String,
+        amend: bool,
+        session_trailer: bool,
+    ) -> Result<String> {
+        let root = self.git_root(id).await?;
+        let trailers = match session_trailer {
+            true => vec![(crate::git::SESSION_TRAILER.to_string(), id.to_string())],
+            false => Vec::new(),
+        };
+        tokio::task::spawn_blocking(move || {
+            crate::git::commit(&root, &message, amend, &trailers)
+        })
+        .await?
+    }
+
+    /// Create a branch, and optionally move onto it. `R-D21`.
+    pub async fn git_branch_create(&self, id: &str, name: String, switch_to: bool) -> Result<()> {
+        let root = self.git_root(id).await?;
+        let moved = root.clone();
+        tokio::task::spawn_blocking(move || crate::git::branch_create(&root, &name, switch_to))
+            .await??;
+        if switch_to {
+            self.unpin_diff_bases(&moved).await;
+        }
+        Ok(())
+    }
+
+    /// Move the worktree onto an existing branch. `R-D21`.
+    pub async fn git_switch(&self, id: &str, name: String) -> Result<()> {
+        let root = self.git_root(id).await?;
+        let moved = root.clone();
+        tokio::task::spawn_blocking(move || crate::git::switch(&root, &name)).await??;
+        self.unpin_diff_bases(&moved).await;
+        Ok(())
+    }
+
+    pub async fn git_stash_push(
+        &self,
+        id: &str,
+        message: String,
+        include_untracked: bool,
+    ) -> Result<()> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || {
+            crate::git::stash_push(&root, &message, include_untracked)
+        })
+        .await?
+    }
+
+    pub async fn git_stash_pop(&self, id: &str, index: u32) -> Result<()> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::stash_pop(&root, index)).await?
+    }
+
+    pub async fn git_stash_drop(&self, id: &str, index: u32) -> Result<()> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::stash_drop(&root, index)).await?
+    }
+
+    /// Resolve one conflicted file. `R-D22`.
+    pub async fn git_resolve(
+        &self,
+        id: &str,
+        path: String,
+        side: mogeung_core::wire::ResolveSide,
+    ) -> Result<()> {
+        let root = self.write_target(id, std::slice::from_ref(&path)).await?;
+        let side = match side {
+            mogeung_core::wire::ResolveSide::Ours => crate::git::Side::Ours,
+            mogeung_core::wire::ResolveSide::Theirs => crate::git::Side::Theirs,
+            mogeung_core::wire::ResolveSide::Mine => crate::git::Side::Mine,
+        };
+        tokio::task::spawn_blocking(move || crate::git::resolve(&root, &path, side)).await?
+    }
+
+    /// Forget the pinned diff base of every session in this repository. `R-D21`.
+    ///
+    /// A session's base is *the last commit before it started*, resolved once
+    /// and kept ([A9](../../../docs/product/assumptions.md)) — which is right
+    /// while HEAD only moves forward, and wrong the moment a branch switch
+    /// puts it on another line of history entirely. Left alone, the Changes
+    /// tab would go on diffing against a commit that is no longer an ancestor
+    /// of anything checked out: not an error, just a diff nobody can act on.
+    ///
+    /// Clearing it rather than recomputing it here, because the scan loop
+    /// already resolves a missing base on its next pass. One place that knows
+    /// how to compute a base beats two.
+    ///
+    /// Every session in the worktree, not only the one that asked: they share
+    /// the checkout, so they all just had the ground moved.
+    async fn unpin_diff_bases(&self, root: &Path) {
+        let root = root.to_string_lossy().to_string();
+        let mut changed = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in sessions.values_mut() {
+                if s.repo_root.as_deref() == Some(root.as_str()) && s.base_sha.is_some() {
+                    s.base_sha = None;
+                    changed.push(s.clone());
+                }
+            }
+        }
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
+    }
+
+    /// The repository a write verb may touch, once every path in it has been
+    /// checked. `R-D19`.
+    ///
+    /// One door for all three verbs, so a fourth cannot be added that forgets
+    /// to knock. It resolves the session's repository root — which is what
+    /// bounds the write, since git itself will refuse a pathspec outside the
+    /// repository — and then refuses any path that could name something
+    /// outside it.
+    async fn write_target(&self, id: &str, paths: &[String]) -> Result<PathBuf> {
+        for p in paths {
+            refuse_escape(p)?;
+        }
+        self.git_root(id).await
+    }
+
     pub async fn git_diff_file(
         &self,
         id: &str,
@@ -2662,6 +2838,35 @@ fn resolve_inside(root: &Path, rel: &str) -> Result<PathBuf> {
     Ok(full)
 }
 
+/// Refuse a path a write verb must never be pointed at. `R-D19`.
+///
+/// Deliberately **lexical**, unlike [`resolve_inside`], which canonicalises.
+/// Canonicalising cannot be the whole test here because the commonest target
+/// of `discard` is a file that does not exist — restoring a deletion is the
+/// point — and a check that has to fall back when the path is missing is a
+/// check with a hole in it exactly where the destructive verb lives.
+///
+/// No legitimate worktree path is absolute or contains `..`, so refusing both
+/// outright costs nothing real and needs no filesystem to be sure. git would
+/// refuse most of these itself; this does not rely on that, because "git
+/// happens to say no" is a property of git's argument parsing rather than a
+/// guarantee we are entitled to.
+fn refuse_escape(rel: &str) -> Result<()> {
+    if rel.trim().is_empty() {
+        anyhow::bail!("an empty path is not a file");
+    }
+    let path = Path::new(rel);
+    if path.is_absolute() || rel.starts_with('/') || rel.starts_with('\\') {
+        anyhow::bail!("{rel} is not a path inside the session");
+    }
+    // Both separators, because the check must not depend on which platform
+    // wrote the string — a client is free to be on another one.
+    if rel.split(['/', '\\']).any(|part| part == "..") {
+        anyhow::bail!("{rel} is not a path inside the session");
+    }
+    Ok(())
+}
+
 /// The most files `list_tree` will name. Past this, go-to-file over a prefix
 /// of the tree beats an answer too big to send.
 const TREE_CAP: usize = 20_000;
@@ -2901,4 +3106,59 @@ pub fn shellexpand(p: &str) -> String {
         }
     }
     p.to_string()
+}
+
+#[cfg(test)]
+mod write_containment_tests {
+    use super::*;
+
+    /// `discard` deletes files git has no copy of, so the path it is handed
+    /// decides whether an untracked file in the worktree goes or something
+    /// else does. This is the check standing between the two, and it runs
+    /// before any verb sees a path.
+    #[test]
+    fn a_write_path_cannot_leave_the_session() {
+        for bad in [
+            "../secrets.env",
+            "../../etc/passwd",
+            "src/../../out",
+            "/etc/passwd",
+            "/",
+            "..",
+            // Backslashes, because the client need not be on this platform and
+            // a check that only knows `/` is a check with a second spelling.
+            "..\\windows\\system32",
+            "src\\..\\..\\out",
+            // Nothing at all: an empty pathspec is a wildcard to some git
+            // verbs, which is the opposite of what an empty selection means.
+            "",
+            "   ",
+        ] {
+            assert!(
+                refuse_escape(bad).is_err(),
+                "{bad:?} must be refused before git sees it"
+            );
+        }
+    }
+
+    /// And the ordinary paths, including the ones that merely look alarming.
+    /// A guard that refuses real filenames gets removed by whoever hits it.
+    #[test]
+    fn ordinary_paths_are_allowed_including_awkward_ones() {
+        for good in [
+            "src/lib.rs",
+            "a file with spaces.txt",
+            "café.txt",
+            // Not `..` — a legitimate name that merely starts with dots.
+            "...hidden",
+            "..config",
+            "src/..a/b.rs",
+            // A leading dash is a pathspec problem, not a containment one, and
+            // is handled by the `--` separator in `git.rs`.
+            "--hard",
+            "-i",
+        ] {
+            assert!(refuse_escape(good).is_ok(), "{good:?} is an ordinary path");
+        }
+    }
 }

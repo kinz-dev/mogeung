@@ -52,6 +52,335 @@ fn run_git_diff(cwd: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
+/// Run a git command that **changes** the repository. `R-D19`.
+///
+/// A sibling to [`run_git`] rather than a flag on it, because the two want
+/// opposite postures and mixing them is how a write comes to fail quietly.
+/// Everything else in this file reads, and a read that fails degrades: an
+/// empty log, no blame, a diff we could not compute. That is right for reading
+/// — the pane stays usable and the health panel says what is missing.
+///
+/// It is wrong for writing. A stage that silently did nothing looks exactly
+/// like a stage that worked until you commit and find the file absent, so
+/// these fail loudly, and they fail in **git's own words**: the error is what
+/// git wrote, verbatim, not a paraphrase wrapped around it. stderr when there
+/// is any, and stdout otherwise — git splits refusals across both streams, and
+/// the commonest one of all ("nothing to commit") arrives on stdout. `git` already writes
+/// the best available sentence about why it refused, and every layer that
+/// rewrites one makes it worse — "cannot switch branch" against git's own
+/// "Your local changes to the following files would be overwritten by
+/// checkout:" plus the list.
+///
+/// See [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md)
+/// for what may be written at all: the working tree and the local repository,
+/// never a remote.
+pub fn run_git_write(cwd: &Path, args: &[&str]) -> Result<String> {
+    let out = Command::new("git")
+        .args(args)
+        // No stdin, deliberately. `commit` runs the repository's hooks and may
+        // reach for a GPG passphrase, and either can decide to prompt. A
+        // daemon has no terminal to prompt on, so an inherited stdin means a
+        // thread blocked for ever on a question nobody will ever see. With
+        // `/dev/null` the prompt gets EOF, git fails, and its complaint
+        // reaches the window — slow and wrong beats silent and stuck.
+        .stdin(std::process::Stdio::null())
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("failed to run git {args:?}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // stdout as the fallback, because git does not keep refusals on one
+        // stream. `commit` with nothing staged exits 1 and writes "nothing to
+        // commit, working tree clean" to *stdout* — which is the refusal a
+        // user hits most often, and reading only stderr rendered it as the
+        // empty message below.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let said = match stderr.trim() {
+            "" => stdout.trim(),
+            s => s,
+        };
+        // Neither stream said anything. Rare, and it would otherwise produce
+        // an empty error dialog, which reads as a bug in mogeung rather than
+        // as a refusal by git.
+        if said.is_empty() {
+            bail!(
+                "git {:?} failed with no message (exit {})",
+                args,
+                out.status.code().unwrap_or(-1)
+            );
+        }
+        bail!("{said}");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Stage the given worktree paths. `R-D19`.
+pub fn stage(root: &Path, paths: &[String]) -> Result<()> {
+    // `add` rather than `add --all`: the pathspecs are the whole instruction,
+    // and a verb that could stage more than it was handed is one nobody can
+    // predict from the list they were looking at when they clicked.
+    run_git_write(root, &pathspec_args(&["add"], paths)).map(drop)
+}
+
+/// Unstage the given paths, leaving the working tree alone. `R-D19`.
+pub fn unstage(root: &Path, paths: &[String]) -> Result<()> {
+    // Before the first commit there is no HEAD to restore the index from, and
+    // `restore --staged` says so rather than doing the obvious thing. That is
+    // not an error worth showing: "unstage" in a fresh repository means "make
+    // it untracked again", which is what `rm --cached` does.
+    if head_sha(root).is_err() {
+        return run_git_write(root, &pathspec_args(&["rm", "--cached", "-r", "-q"], paths))
+            .map(drop);
+    }
+    run_git_write(root, &pathspec_args(&["restore", "--staged"], paths)).map(drop)
+}
+
+/// Throw away local changes to the given paths. `R-D19`.
+///
+/// **The only verb here with no undo.** Everything else this daemon can do to
+/// a repository is recoverable from git's own history; this destroys work git
+/// has never seen. The confirmation belongs in the UI, but the honesty belongs
+/// here too: nothing in this function is clever, and it does exactly what the
+/// two commands below do.
+///
+/// Tracked and untracked paths need different commands and are partitioned by
+/// asking git rather than by guessing from the filesystem — a path can exist
+/// and be untracked, or not exist and be tracked (that is a deletion, and
+/// discarding it means bringing the file back).
+///
+/// The question is put to `ls-files` rather than to `status`, which is the
+/// listing the pane is built from and therefore shaped for display: `status`
+/// **collapses an untracked directory to one row**, so a file inside a folder
+/// the agent just created never appears in it and would be classified as
+/// tracked. `ls-files` answers the question actually being asked — is git
+/// tracking this exact path — and answers it for the whole selection in one
+/// call.
+pub fn discard(root: &Path, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let listed = run_git(root, &pathspec_args(&["ls-files", "-z"], paths))?;
+    let tracked: HashSet<&str> = listed.split('\0').filter(|s| !s.is_empty()).collect();
+
+    let (kept, gone): (Vec<String>, Vec<String>) = paths.iter().cloned().partition(|p| {
+        // Exactly tracked, or a directory with something tracked beneath it —
+        // a selection can name a folder, and `ls-files` answers with the files
+        // inside rather than the folder itself.
+        let prefix = format!("{p}/");
+        tracked.contains(p.as_str()) || tracked.iter().any(|t| t.starts_with(&prefix))
+    });
+
+    // Tracked first. If `clean` were to run first and then `restore` refused,
+    // the untracked files would already be gone with nothing restored — the
+    // worst half of the operation completed alone.
+    if !kept.is_empty() {
+        run_git_write(root, &pathspec_args(&["restore", "--staged", "--worktree"], &kept))?;
+    }
+    if !gone.is_empty() {
+        // `-q` because the list of what was removed is on stdout and nobody
+        // reads it; `--` is in `pathspec_args`, and is what keeps a file named
+        // `-rf` from being read as flags.
+        run_git_write(root, &pathspec_args(&["clean", "-f", "-q"], &gone))?;
+    }
+    Ok(())
+}
+
+/// Commit what is staged. `R-D20`.
+///
+/// Returns the new commit's sha, so the pane can select what it just made
+/// rather than hunting for it in a log it has to re-fetch first.
+///
+/// **Only what is staged**, never `-a`. The staging list is the instruction,
+/// and a commit verb that could include a file the user had deliberately left
+/// unstaged would make the checkboxes above it a suggestion.
+///
+/// Hooks run. Skipping them with `--no-verify` would be a silent change of
+/// meaning — a repository that refuses bad commits would start accepting them
+/// from this window and only this window — so the honest failure is git's own,
+/// which `run_git_write` returns verbatim.
+pub fn commit(
+    root: &Path,
+    message: &str,
+    amend: bool,
+    trailers: &[(String, String)],
+) -> Result<String> {
+    // git refuses an empty message itself, and its refusal is the better
+    // sentence. This one exists because a message of only whitespace passes
+    // git's check and produces a commit with a blank subject line.
+    if message.trim().is_empty() {
+        bail!("a commit needs a message");
+    }
+
+    let mut args: Vec<String> = vec!["commit".into(), "-m".into(), message.into()];
+    if amend {
+        args.push("--amend".into());
+    }
+    // `--trailer` rather than appending to the message ourselves: git knows
+    // where a trailer block goes when the message already has one, how to
+    // separate it from the body, and what to do about `Signed-off-by`.
+    // Requires git 2.32 (2021).
+    for (k, v) in trailers {
+        args.push("--trailer".into());
+        args.push(format!("{k}={v}"));
+    }
+
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_git_write(root, &borrowed)?;
+    head_sha(root)
+}
+
+/// The trailer naming the session a commit's work came from. `R-D20`.
+///
+/// This is the reason committing from the pane is worth building rather than
+/// shelling out to a terminal: mogeung knows which session produced which
+/// hunks, and a terminal never can. `R-F2` prompt-blame reads it back — from a
+/// line, to the commit, to the session, to the prompt that caused it.
+///
+/// A `Key: value` trailer rather than anything cleverer because it survives:
+/// `git log`, `git show`, GitHub, `git interpret-trailers --parse`, and every
+/// tool that has never heard of mogeung all keep it intact and ignore it.
+pub const SESSION_TRAILER: &str = "Mogeung-Session";
+
+/// Create a branch, and optionally move onto it. `R-D21`.
+///
+/// Created with `branch` rather than `switch -c` even when we are about to
+/// switch, because the two refuse a bad name very differently: `git branch`
+/// says *"'-evil' is not a valid branch name"* and points at
+/// `git check-ref-format`, while `switch -c` parses the same string as flags
+/// and answers *"unknown switch `e'"*. `--` does not help — git reads the
+/// argument as options anyway. Two commands, and the user gets the sentence
+/// that tells them what is wrong.
+pub fn branch_create(root: &Path, name: &str, switch_to: bool) -> Result<()> {
+    let name = check_ref(name)?;
+    run_git_write(root, &["branch", name])?;
+    if switch_to {
+        run_git_write(root, &["switch", name])?;
+    }
+    Ok(())
+}
+
+/// Move the worktree onto an existing branch. `R-D21`.
+///
+/// Nothing here protects uncommitted work, because git already does: it
+/// refuses a switch that would overwrite local changes, and its refusal names
+/// every file. What git has no opinion about — and cannot detect — is that an
+/// agent may be reading those files right now. That warning belongs in the
+/// window, which is the only place that knows a session is live.
+pub fn switch(root: &Path, name: &str) -> Result<()> {
+    let name = check_ref(name)?;
+    run_git_write(root, &["switch", name]).map(drop)
+}
+
+/// Shelve the working tree. `R-D21`.
+///
+/// `--include-untracked` is a choice the caller makes, not a default, because
+/// the two behaviours differ in whether an agent's new files come along or are
+/// left behind on the branch you are leaving.
+pub fn stash_push(root: &Path, message: &str, include_untracked: bool) -> Result<()> {
+    let mut args: Vec<&str> = vec!["stash", "push"];
+    if include_untracked {
+        args.push("--include-untracked");
+    }
+    let message = message.trim();
+    if !message.is_empty() {
+        args.push("-m");
+        args.push(message);
+    }
+    run_git_write(root, &args).map(drop)
+}
+
+/// Restore a stash and remove it. `R-D21`.
+pub fn stash_pop(root: &Path, index: u32) -> Result<()> {
+    run_git_write(root, &["stash", "pop", &stash_ref(index)]).map(drop)
+}
+
+/// Throw a stash away without restoring it. `R-D21`.
+///
+/// The second verb here with no undo — `stash drop` prints the dropped
+/// commit's sha and it stays reachable until gc, but recovering it means
+/// knowing that, so the UI must ask.
+pub fn stash_drop(root: &Path, index: u32) -> Result<()> {
+    run_git_write(root, &["stash", "drop", &stash_ref(index)]).map(drop)
+}
+
+/// `stash@{n}`, built here rather than accepted from a client — the index is
+/// a number, so there is no string from outside to spell a flag with.
+fn stash_ref(index: u32) -> String {
+    format!("stash@{{{index}}}")
+}
+
+/// Which version of a conflicted file to keep. `R-D22`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The version on the branch you are on — `:2:`, git's `--ours`.
+    Ours,
+    /// The version being merged in — `:3:`, git's `--theirs`.
+    Theirs,
+    /// Neither: the file on disk is already what you want, because you
+    /// resolved it by hand somewhere else.
+    Mine,
+}
+
+/// Resolve one conflicted file. `R-D22`.
+///
+/// Ours and theirs take the whole file, not a hunk, which is what the
+/// three-way view (`R-D16`) already shows and the honest limit of this verb:
+/// a resolution that mixes both sides is editing, and mogeung does not edit
+/// ([pillar K](../../../docs/product/roadmap.md)). Doing it elsewhere and then
+/// marking it resolved is [`Side::Mine`], which is why that variant exists
+/// rather than being an omission.
+///
+/// Every path ends in `git add`, because in git a conflict is resolved by
+/// *staging* the result — the file on disk is only half the answer, and one
+/// that still has `<<<<<<<` in it will be committed happily if the index says
+/// it is resolved. Taking a side without staging it would leave the pane
+/// showing a conflict that looks fixed and is not.
+pub fn resolve(root: &Path, rel: &str, side: Side) -> Result<()> {
+    let paths = [rel.to_string()];
+    match side {
+        // `checkout --ours/--theirs` reads the stage out of the index, so it
+        // works on a file whose worktree copy is full of merge markers.
+        Side::Ours => {
+            run_git_write(root, &pathspec_args(&["checkout", "--ours"], &paths))?;
+        }
+        Side::Theirs => {
+            run_git_write(root, &pathspec_args(&["checkout", "--theirs"], &paths))?;
+        }
+        Side::Mine => {}
+    }
+    run_git_write(root, &pathspec_args(&["add"], &paths)).map(drop)
+}
+
+/// A ref name a write verb may act on, or a refusal naming the reason.
+///
+/// The same rule the read side uses to scope a log ([`valid_ref_name`]), which
+/// is deliberately narrower than git's own: everything a hostile client would
+/// need — a leading `-`, `..`, `@{` — is outside it. Sharing the rule matters
+/// more here than there, since reading a nonsense ref shows nothing and
+/// writing one moves the worktree.
+fn check_ref(name: &str) -> Result<&str> {
+    let name = name.trim();
+    if !valid_ref_name(name) {
+        bail!(
+            "{name:?} is not a branch name mogeung will use — letters, digits, \
+             and . _ - / only, not starting with - . or /"
+        );
+    }
+    Ok(name)
+}
+
+/// `git <verb> -- <paths>`, with the separator that makes a path a path.
+///
+/// Without `--`, a file called `-i` or `--hard` is an option. Agents produce
+/// stranger filenames than people do, and this is a write verb: the failure is
+/// not a confusing message but the wrong command running.
+fn pathspec_args<'a>(verb: &[&'a str], paths: &'a [String]) -> Vec<&'a str> {
+    let mut args: Vec<&str> = verb.to_vec();
+    args.push("--");
+    args.extend(paths.iter().map(String::as_str));
+    args
+}
+
 pub fn is_repo(path: &Path) -> bool {
     run_git(path, &["rev-parse", "--git-dir"]).is_ok()
 }
@@ -1260,36 +1589,56 @@ pub fn file_at_rev(cwd: &Path, rev: &str, rel: &str) -> Result<(String, bool)> {
 /// do not recognise still lists, it just wears its raw `XY`. `--ignored`
 /// adds `!!` rows (directories collapsed), which clients use to *dim*, not
 /// to list.
+/// `-z` rather than line-oriented, which is not a detail. `R-D19`.
+///
+/// Plain `--porcelain` C-quotes any path it considers unusual — a space is
+/// enough for surrounding quotes, and a non-ASCII byte becomes an octal escape,
+/// so `café.txt` arrives as `caf\303\251.txt`. Stripping the quotes got the
+/// first case right and left the second wrong, which was survivable while this
+/// was only ever *displayed*.
+///
+/// It stops being survivable now that the same strings are pathspecs handed
+/// back to git by [`discard`], which partitions on exact matches: a filename
+/// git spelled differently on the way out than the way in is a path the verb
+/// classifies wrongly. `-z` emits paths raw, NUL-separated, and quotes nothing.
 pub fn status(cwd: &Path) -> Result<Vec<StatusEntry>> {
-    let out = run_git(cwd, &["status", "--porcelain", "--ignored"])?;
+    let out = run_git(cwd, &["status", "--porcelain", "-z", "--ignored"])?;
     Ok(parse_status(&out))
 }
 
 fn parse_status(out: &str) -> Vec<StatusEntry> {
-    out.lines()
-        .filter_map(|line| {
-            if line.len() < 4 {
-                return None;
-            }
-            let (code, rest) = line.split_at(2);
-            let path = rest.trim_start();
-            // "old -> new" for renames; the new name is the one you can open.
-            let path = path.rsplit(" -> ").next().unwrap_or(path);
-            let x = code.chars().next().unwrap_or(' ');
-            let y = code.chars().nth(1).unwrap_or(' ');
-            // The porcelain's unmerged table: any U, or both sides added or
-            // both deleted.
-            let conflicted =
-                x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
-            Some(StatusEntry {
-                path: path.trim_matches('"').to_string(),
-                staged: x != ' ' && x != '?' && x != '!',
-                unstaged: y != ' ' && y != '!',
-                state: code.to_string(),
-                conflicted,
-            })
-        })
-        .collect()
+    let mut entries = Vec::new();
+    let mut records = out.split('\0');
+    while let Some(rec) = records.next() {
+        // The trailing NUL leaves one empty record; a short one is not a row.
+        if rec.len() < 4 {
+            continue;
+        }
+        let (code, rest) = rec.split_at(2);
+        // Exactly one space separates the code from the path — `trim_start`
+        // here would eat the first character of a file whose name begins with
+        // one, which `-z` is otherwise careful to preserve.
+        let path = rest.strip_prefix(' ').unwrap_or(rest);
+        let x = code.chars().next().unwrap_or(' ');
+        let y = code.chars().nth(1).unwrap_or(' ');
+        // A rename or copy spends a second record on the source path. Under
+        // `-z` there is no ` -> ` to split on, and the record must be consumed
+        // or the old name is read as a row of its own.
+        if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+            let _ = records.next();
+        }
+        // The porcelain's unmerged table: any U, or both sides added or
+        // both deleted.
+        let conflicted = x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
+        entries.push(StatusEntry {
+            path: path.to_string(),
+            staged: x != ' ' && x != '?' && x != '!',
+            unstaged: y != ' ' && y != '!',
+            state: code.to_string(),
+            conflicted,
+        });
+    }
+    entries
 }
 
 /// One uncommitted file against `HEAD` — or against nothing, when it is
@@ -1710,13 +2059,15 @@ index 333..444 100644
         assert!(parse_submodules("").is_empty());
     }
 
-    /// The porcelain codes that actually occur, including the rename arrow
-    /// and the quoted-path case.
+    /// The porcelain codes that actually occur. NUL-separated, because that is
+    /// what `-z` produces and what the parser is now written against — under
+    /// `-z` a rename spends a *second record* on its source path rather than
+    /// an ` -> ` arrow.
     #[test]
     fn status_parsing_reads_the_common_codes() {
-        let out = " M crates/a.rs\nM  crates/b.rs\nMM crates/c.rs\n?? new.txt\nR  old.rs -> new.rs\n";
+        let out = " M crates/a.rs\0M  crates/b.rs\0MM crates/c.rs\0?? new.txt\0R  new.rs\0old.rs\0";
         let entries = parse_status(out);
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 5, "the rename's source is not a row of its own");
         let by = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
         assert!(!by("crates/a.rs").staged);
         assert!(by("crates/a.rs").unstaged);
@@ -1726,6 +2077,7 @@ index 333..444 100644
         assert!(!by("new.txt").staged, "untracked is not staged");
         assert!(by("new.txt").unstaged);
         assert_eq!(by("new.rs").state, "R ", "a rename lists under its new name");
+        assert!(entries.iter().all(|e| e.path != "old.rs"), "the source is consumed");
         assert!(entries.iter().all(|e| !e.conflicted));
     }
 
@@ -1734,7 +2086,7 @@ index 333..444 100644
     /// change.
     #[test]
     fn status_parsing_marks_conflicts_and_ignored() {
-        let out = "UU src/merge.rs\nAA both.rs\nDD gone.rs\nAU theirs.rs\n!! target/\n M ok.rs\n";
+        let out = "UU src/merge.rs\0AA both.rs\0DD gone.rs\0AU theirs.rs\0!! target/\0 M ok.rs\0";
         let entries = parse_status(out);
         let by = |p: &str| entries.iter().find(|e| e.path == p).unwrap();
         for p in ["src/merge.rs", "both.rs", "gone.rs", "theirs.rs"] {
@@ -1744,6 +2096,24 @@ index 333..444 100644
         let ignored = by("target/");
         assert_eq!(ignored.state, "!!");
         assert!(!ignored.staged && !ignored.unstaged, "ignored is not a change");
+    }
+
+    /// The names line-oriented porcelain spelled differently on the way out
+    /// than they exist on disk. Display could survive that; `R-D19`'s write
+    /// verbs cannot, because they hand these strings back to git as pathspecs
+    /// and `discard` partitions on an exact match.
+    #[test]
+    fn status_parsing_keeps_unusual_names_exactly_as_they_are() {
+        // Quoted by plain porcelain for the space, octal-escaped for the
+        // accent, and neither under `-z`.
+        let out = "?? with space.txt\0?? café.txt\0 M dir/a b/c.rs\0?? --hard\0";
+        let entries = parse_status(out);
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["with space.txt", "café.txt", "dir/a b/c.rs", "--hard"]);
+        assert!(
+            entries.iter().all(|e| !e.path.contains('"') && !e.path.contains('\\')),
+            "no quoting or escaping survives into a pathspec: {paths:?}"
+        );
     }
 
     /// Porcelain blame repeats a commit's details only once; every later

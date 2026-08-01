@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-07-31
+updated: 2026-08-01
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeung-ui/src/prefs.rs
@@ -101,8 +101,8 @@ never persisted, and every restore re-asks the daemon.
 
 The git view (`R-D10`–`R-D12`) is the third read surface: log, diffs,
 status, refs, stashes, blame, historical file bodies — every one a
-fire-and-forget command on the blocking pool, every one read-only by
-protocol, with client-supplied shas, ref names and filters shape-checked
+fire-and-forget command on the blocking pool, and every one read-only by
+protocol until `R-D19` added the first three writes on 2026-07-31, with client-supplied shas, ref names and filters shape-checked
 before git sees an argument. See
 [wire-protocol.md](wire-protocol.md) for the family and its hygiene rules.
 

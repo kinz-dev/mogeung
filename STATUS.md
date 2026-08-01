@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| Branch | `remote-reach` |
-| Tests | 535 passing |
-| Rust | 46369 lines |
+| Branch | `git-write-local` |
+| Tests | 574 passing |
+| Rust | 48690 lines |
 | Docs | 62 files, 13 ADRs |
 
 ## Assumptions
@@ -45,5 +45,5 @@ Untested: **11** · At risk: **3** · Supported: 11 · Refuted: 1
 | [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `shipped` | [A10] |
 | [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `shipped` | [A19] |
 | [In-app terminal](docs/features/0024-in-app-terminal.md) | `shipped` | [] |
-| [Local git writes — stage, commit, branch, stash](docs/features/0025-git-write-local.md) | `draft` | [A18, A19, A24, A26] |
+| [Local git writes — stage, commit, branch, stash](docs/features/0025-git-write-local.md) | `active` | [A18, A19, A24, A26] |
 

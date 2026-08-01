@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-07-29
+updated: 2026-08-01
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
@@ -38,6 +38,27 @@ sign all still count. Going further would start marking genuinely different code
 as already-reviewed — a silent false negative, which is the one failure this
 system must never have. Pinned in both directions by
 `reindenting_does_not_make_a_hunk_unread` and `normalisation_stops_at_whitespace`.
+
+## Writing does not disturb reading (`R-D19`)
+
+The pane gained its first write verbs on 2026-07-31 — stage, unstage, discard —
+and none of them touches a read mark, which follows from anchors being content
+hashes rather than positions.
+
+- **Staging and unstaging move nothing.** They shuffle a file between the index
+  and the worktree; the added and removed lines are identical either side, so
+  every anchor hashes the same and every hunk stays exactly as read or unread as
+  it was. This is the property that makes committing from the pane (`R-D20`,
+  unbuilt) safe by construction rather than by care.
+- **Discard removes hunks rather than marking them.** The content is gone, so
+  the anchors simply stop appearing in any diff. Their review rows are left
+  behind, harmlessly: an anchor is a hash, so a mark for content that no longer
+  exists can never match anything again, and re-creating that exact content
+  would legitimately be the same hunk.
+
+The daemon recomputes the session's Change after a discard, because the diff on
+screen was computed from files that may no longer exist — a stale hunk offers to
+discard something already gone.
 
 ## What the diff covers
 

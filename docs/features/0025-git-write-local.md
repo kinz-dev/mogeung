@@ -1,7 +1,7 @@
 ---
 title: Local git writes — stage, commit, branch, stash
-status: draft
-updated: 2026-07-30
+status: active
+updated: 2026-07-31
 roadmap: [R-D19, R-D20, R-D21, R-D22, R-D23]
 depends_on: [A18, A19, A24, A26]
 ---
@@ -17,7 +17,9 @@ to support the GIT workflow"* — and scoped, from four offered tiers, to
 **local writes only**. `push` was in the question and is deliberately not in
 this feature; see [Explicitly out of scope](#explicitly-out-of-scope).
 
-**Nothing here is built.** This is a plan awaiting approval.
+**`R-D19`–`R-D22` shipped 2026-07-31** — every write verb this feature
+proposes. `R-D23`, the one row here that is not a write, is still a plan. See
+[Notes](#notes) for what building the first stage changed about the rest.
 
 ## Spec
 
@@ -68,28 +70,31 @@ decoration, it is liability.
 
 ### Acceptance
 
-- [ ] Files in Local changes can be staged, unstaged and discarded from the
+- [x] Files in Local changes can be staged, unstaged and discarded from the
       pane, individually and in multi-selection, and the list reflects the new
       state without a manual refresh
-- [ ] Discarding asks first, names every file it will destroy, and says plainly
+- [x] Discarding asks first, names every file it will destroy, and says plainly
       that git cannot bring them back
-- [ ] A commit can be written and made from the pane — message body, amend of
+- [x] A commit can be written and made from the pane — message body, amend of
       the tip commit, and an optional trailer naming the session whose diff it
       came from
-- [ ] A commit made from the pane appears in the log below it, and its diff
+- [x] A commit made from the pane appears in the log below it, and its diff
       arrives already marked read where the hunks were read before committing
-- [ ] Branches can be created and switched from the refs list; a switch that
+- [x] Branches can be created and switched from the refs list; a switch that
       git refuses reports git's own words, and the pane's state does not move
-- [ ] A stash can be pushed, popped and dropped from the stash list
-- [ ] A conflicted file can be resolved from the three-way view — take ours,
+- [x] A stash can be pushed, popped and dropped from the stash list
+- [x] A conflicted file can be resolved from the three-way view — take ours,
       take theirs, or mark resolved after editing elsewhere
 - [ ] Ahead/behind is never rendered as a bare number: it carries the age of
       the last fetch, or reads as unknown when nothing has fetched
-- [ ] A write verb arriving on a non-loopback bind without a token is refused
-      with a 401, and the refusal is tested
-- [ ] Every write failure surfaces git's stderr verbatim rather than a
+- [x] A write verb arriving on a non-loopback bind without a token is refused,
+      and the refusal is tested. **Not a 401**: the write verbs are
+      WebSocket-only, so the refusal is a `ServerMsg::Error` on the same
+      stream. The 401 is the HTTP token layer's answer and still applies to
+      the socket's upgrade request
+- [x] Every write failure surfaces git's stderr verbatim rather than a
       paraphrase
-- [ ] `cargo test --workspace` covers each verb against a temporary repository,
+- [x] `cargo test --workspace` covers each verb against a temporary repository,
       including one test proving `discard` cannot escape the session root
 
 ### Explicitly out of scope
@@ -204,4 +209,103 @@ verb, non-loopback, no token, expect 401.
 
 ## Notes
 
-*Filled during implementation.*
+### What `R-D19` cost that the plan did not predict (2026-07-31)
+
+The three verbs were the easy part. Two defects in the **read** path had to be
+fixed first, both invisible for as long as these strings were only displayed
+and both fatal once they became pathspecs handed back to git:
+
+- `git status --porcelain` C-quotes any path it finds unusual — a space is
+  enough for surrounding quotes, a non-ASCII byte becomes an octal escape, so
+  `café.txt` arrived as `caf\303\251.txt`. `status` now uses `-z`, which
+  quotes nothing. That also changes how renames arrive: under `-z` the source
+  path is a second record rather than an ` -> ` arrow, so the parser consumes
+  it.
+- `status` **collapses an untracked directory to a single row**, so a file
+  inside a folder an agent has just created never appears in it. `discard`
+  partitioned on that listing and classified such a file as tracked. It now
+  asks `ls-files`, which answers the question actually being put.
+
+Neither was reachable from the read path's own tests, and both were found by
+writing the temp-repo fixtures. That is the argument for the fixtures being
+part of this stage's cost rather than a later tidy-up.
+
+### Two things the plan got wrong
+
+- **"Refused with a 401."** The write verbs travel on the WebSocket, and a
+  message on an established socket has no status code. The guard answers with
+  `ServerMsg::Error` instead. The 401 exists and is the token layer's answer to
+  the *upgrade request*, which is a different and earlier check.
+- **The guard is less load-bearing than the plan feared**, because `admit`
+  (`R-I10`) already refuses to *start* a daemon that is non-loopback with no
+  token. It was still built, for a reason worth writing down: `admit` guards
+  the binary and this guards the router, and the router is what a test, an
+  embedding, or a future entry point constructs.
+
+### `R-D20`, same day (2026-07-31)
+
+Cheap, as predicted — `R-D19` had already paid for `run_git_write`, the guard,
+containment and the fixtures. Three things it added that the plan did not have:
+
+- **Hooks run, and `stdin` is `/dev/null`.** Skipping hooks with `--no-verify`
+  would mean a repository that rejects bad commits everywhere except from this
+  window, so they run. But a `pre-commit` hook is free to prompt, and a daemon
+  has no terminal to prompt on — an inherited stdin would block a thread for
+  ever on a question nobody can see. With `/dev/null` the prompt gets EOF and
+  git fails loudly. Both cases are pinned by tests, including one whose only
+  real assertion is that it returns at all.
+- **stdout is a fallback for stderr.** `git commit` with nothing staged exits 1
+  and writes its refusal to *stdout*. Reading only stderr — which is what
+  "surfaces git's stderr verbatim" in the acceptance list above literally says
+  — rendered the commonest failure of all as "failed with no message".
+- **A whitespace-only message is refused before git sees it**, the one place
+  worth pre-empting git rather than deferring to it: `git commit -m "   "`
+  succeeds and produces a commit with a blank subject.
+
+### `R-D21`, and the question it was holding (2026-07-31)
+
+The branch-switch question was put to the user before any code was written, and
+answered: **warn, name the live sessions, proceed on confirm** — the shape
+`discard` had already set in this pane. The two rejected options are worth
+recording. *Refuse while anything is live* blocks a common and legitimate act,
+since an agent idling at a prompt is "live" and being done with it is exactly
+when you want to switch. *Allow it silently* throws away the one thing mogeung
+knows that git does not: git refuses a switch that would **lose** work and has
+no opinion about work it merely changes underneath a reader.
+
+So the dialog appears only when something is live in that worktree. A
+confirmation that always appears is one that is always dismissed.
+
+Three smaller findings:
+
+- **`git switch -c` is the wrong way to create a branch** when the name might
+  be bad. It parses `-evil` as flags and answers *"unknown switch `e'"*, while
+  `git branch` says *"'-evil' is not a valid branch name"* and points at
+  `check-ref-format`. `--` does not help. So creation is `branch` then
+  `switch`, two commands, for the sentence.
+- **`valid_ref_name` already existed** on the read side and needed no
+  loosening to serve the write side, which is a good sign about where the
+  original line was drawn.
+- **A plain `git stash` leaves untracked files behind**, so the tree is not
+  clean afterwards. The pane's Stash-all passes `--include-untracked`, because
+  an agent's new files are exactly the ones you meant to get out of the way.
+
+### `R-D22` (2026-07-31)
+
+Small, as predicted, and the one thing worth recording is what it does *not*
+do. Resolution is whole-file, matching what `R-D16` shows; anything finer is
+editing. `Mine` — stage what is on disk — exists so that the honest workflow of
+resolving in a real editor and coming back is a first-class path rather than a
+gap.
+
+It does not look at the content. A file still full of `<<<<<<<` is committable
+once the index says resolved, and that is git's behaviour, not a defect to be
+patched here: a validator strict enough to catch markers would also refuse a
+file that legitimately contains them. There is a test pinning the
+non-inspection, so the next reader does not mistake it for an oversight.
+
+One assertion in the tests was wrong before the code was: taking *ours*
+reproduces HEAD exactly, so `git status` goes **empty** rather than showing
+`M `. The property worth asserting is that no unmerged path remains.
+
+### Still open

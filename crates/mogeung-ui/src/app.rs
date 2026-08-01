@@ -4586,7 +4586,7 @@ impl App {
                     // the rows they decorate.
                     ui.style_mut().interaction.selectable_labels = false;
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    self.git_ref_sections(ui);
+                    self.git_ref_sections(ui, s);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("LOG").size(11.0).color(pal().dim).strong());
                         if let Some(rev) = self.gitview.log_rev.clone() {
@@ -4712,10 +4712,171 @@ impl App {
         });
     }
 
+    /// The live sessions sharing this session's worktree. `R-D21`.
+    ///
+    /// The thing mogeung knows and git cannot: an agent may be reading these
+    /// files right now. Git refuses a switch that would *lose* work and has no
+    /// opinion at all about work it is merely changing underneath.
+    fn live_neighbours(&self, s: &Session) -> Vec<String> {
+        let Some(root) = s.repo_root.as_deref() else {
+            return Vec::new();
+        };
+        self.sessions
+            .values()
+            .filter(|o| o.alive && o.repo_root.as_deref() == Some(root))
+            .map(|o| {
+                let name = self
+                    .prefs
+                    .label(&o.id)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| crate::ui::truncate(&o.id, 8));
+                match o.live_status {
+                    Some(mogeung_core::session::LiveStatus::Busy) => format!("{name} (working)"),
+                    _ => name,
+                }
+            })
+            .collect()
+    }
+
+    /// Confirm a branch switch when something is live in the worktree.
+    /// `R-D21`.
+    ///
+    /// It only asks when there is something to say. A switch with nothing live
+    /// in the worktree is an ordinary git operation and gets no dialog —
+    /// a confirmation that always appears is one that is always dismissed.
+    fn git_switch_confirm(&mut self, ctx: &egui::Context, s: &Session) {
+        let Some(branch) = self.gitview.confirm_switch.clone() else {
+            return;
+        };
+        let live = self.live_neighbours(s);
+        // Nothing live: no question worth asking, so do it.
+        if live.is_empty() {
+            self.net.send(ClientMsg::GitSwitch {
+                session_id: s.id.clone(),
+                name: branch,
+            });
+            self.gitview.confirm_switch = None;
+            return;
+        }
+
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Switch branch under a running session?")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(480.0);
+                ui.label(format!(
+                    "Moving this worktree to {branch} while {} session{} {} running in it:",
+                    live.len(),
+                    if live.len() == 1 { "" } else { "s" },
+                    if live.len() == 1 { "is" } else { "are" },
+                ));
+                ui.add_space(4.0);
+                for name in &live {
+                    ui.label(RichText::new(name).monospace().size(12.0).color(pal().amber));
+                }
+                ui.add_space(6.0);
+                ui.label(dim(
+                    "Git will refuse if the switch would overwrite uncommitted work, and \
+                     nothing is destroyed either way. What it cannot see is that an agent \
+                     has these files open: after the switch it is reading different \
+                     content than it was told about, and it will not notice.",
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.gitview.confirm_switch = None;
+                    }
+                    if ui
+                        .button(RichText::new("Switch anyway").color(pal().amber))
+                        .clicked()
+                    {
+                        go = true;
+                    }
+                });
+            });
+
+        if go {
+            self.net.send(ClientMsg::GitSwitch {
+                session_id: s.id.clone(),
+                name: branch,
+            });
+            self.gitview.confirm_switch = None;
+        } else if !open {
+            self.gitview.confirm_switch = None;
+        }
+    }
+
+    /// Confirm dropping a stash. `R-D21`.
+    ///
+    /// `git stash drop` prints the dropped commit's sha and it stays reachable
+    /// until gc, so this is recoverable — by somebody who knows that and read
+    /// the sha as it went past. In practice it is a loss, and it asks.
+    fn git_stash_drop_confirm(&mut self, ctx: &egui::Context, s: &Session) {
+        let Some(index) = self.gitview.confirm_stash_drop else {
+            return;
+        };
+        let message = self
+            .gitview
+            .stashes
+            .iter()
+            .find(|st| st.index == index)
+            .map(|st| st.message.clone())
+            .unwrap_or_default();
+
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Drop this stash?")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(440.0);
+                ui.label(RichText::new(format!("stash@{{{index}}}")).monospace());
+                if !message.is_empty() {
+                    ui.label(dim(&message));
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "Dropping does not restore it. The changes in it are gone from \
+                         everywhere you can reach from here.",
+                    )
+                    .color(pal().red),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.gitview.confirm_stash_drop = None;
+                    }
+                    if ui.button(RichText::new("Drop").color(pal().red)).clicked() {
+                        go = true;
+                    }
+                });
+            });
+
+        if go {
+            self.net.send(ClientMsg::GitStashDrop {
+                session_id: s.id.clone(),
+                index,
+            });
+            self.gitview.confirm_stash_drop = None;
+        } else if !open {
+            self.gitview.confirm_stash_drop = None;
+        }
+    }
+
     /// The collapsible reading lists: branches, tags, stashes, submodules.
     /// Sections with nothing to say do not appear.
-    fn git_ref_sections(&mut self, ui: &mut egui::Ui) {
+    fn git_ref_sections(&mut self, ui: &mut egui::Ui, s: &Session) {
         let now = Utc::now().timestamp();
+        let ctx = ui.ctx().clone();
+        self.git_switch_confirm(&ctx, s);
+        self.git_stash_drop_confirm(&ctx, s);
         if let Some(refs) = self.gitview.refs.clone() {
             if !refs.branches.is_empty() {
                 egui::CollapsingHeader::new(
@@ -4726,6 +4887,57 @@ impl App {
                 )
                 .id_salt("git-branches")
                 .show(ui, |ui| {
+                    // `R-D21`. A field rather than a dialog: a branch name is
+                    // one short string and a modal for it would be three
+                    // clicks around a text box.
+                    match self.gitview.new_branch.as_mut() {
+                        None => {
+                            if ui
+                                .small_button(format!("{} New branch", icon::NEW_SESSION))
+                                .clicked()
+                            {
+                                self.gitview.new_branch = Some(String::new());
+                            }
+                        }
+                        Some(name) => {
+                            let mut make = false;
+                            let mut cancel = false;
+                            ui.horizontal(|ui| {
+                                let field = ui.add(
+                                    egui::TextEdit::singleline(name)
+                                        .hint_text("branch name")
+                                        .desired_width(160.0),
+                                );
+                                field.request_focus();
+                                // Enter commits the name — the field is one
+                                // short string and reaching for a button is
+                                // the slower half of typing it.
+                                make = field.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let ok = !name.trim().is_empty();
+                                if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
+                                    make = true;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    cancel = true;
+                                }
+                            });
+                            let name = name.trim().to_string();
+                            if make && !name.is_empty() {
+                                // Created *and* switched to: making a branch
+                                // you do not then move onto is a rarer want
+                                // than the one gesture everybody means.
+                                self.net.send(ClientMsg::GitBranchCreate {
+                                    session_id: s.id.clone(),
+                                    name,
+                                    switch_to: true,
+                                });
+                                self.gitview.new_branch = None;
+                            } else if cancel {
+                                self.gitview.new_branch = None;
+                            }
+                        }
+                    }
                     for b in &refs.branches {
                         let scoped = self.gitview.log_rev.as_deref() == Some(b.name.as_str());
                         let mut text = format!("{} {}", b.sha, b.name);
@@ -4755,6 +4967,12 @@ impl App {
                             });
                         }
                         row.context_menu(|ui| {
+                            // `R-D21`. Asks first when something is live in
+                            // the worktree; see `git_switch_confirm`.
+                            if !b.current && ui.button("Switch to this branch").clicked() {
+                                self.gitview.confirm_switch = Some(b.name.clone());
+                                ui.close();
+                            }
                             if !b.current
                                 && ui
                                     .button("Diff vs current, from the merge base")
@@ -4877,13 +5095,35 @@ impl App {
                             .monospace(),
                         )
                         .on_hover_text(format!(
-                            "{}\n{} · read-only: popping stays in the terminal",
+                            "{}\n{}",
                             st.message,
                             crate::gitview::age(now, st.epoch)
                         ));
                     if row.clicked() {
                         self.gitview.selection = crate::gitview::Selection::Stash(st.index);
                     }
+                    // `R-D21`. Pop restores and removes in one gesture, which
+                    // is git's own pairing; Drop asks, because it is the half
+                    // that keeps nothing.
+                    row.context_menu(|ui| {
+                        if ui
+                            .button("Pop — restore it and remove it")
+                            .clicked()
+                        {
+                            self.net.send(ClientMsg::GitStashPop {
+                                session_id: s.id.clone(),
+                                index: st.index,
+                            });
+                            ui.close();
+                        }
+                        if ui
+                            .button(RichText::new("Drop — throw it away").color(pal().red))
+                            .clicked()
+                        {
+                            self.gitview.confirm_stash_drop = Some(st.index);
+                            ui.close();
+                        }
+                    });
                 }
             });
         }
@@ -4996,6 +5236,11 @@ impl App {
 
     /// The uncommitted files, staged and unstaged distinguished by colour.
     fn git_local_list(&mut self, ui: &mut egui::Ui, s: &Session) {
+        // Before the early returns below: a confirmation must not vanish
+        // because the list it was raised from went empty underneath it.
+        let ctx = ui.ctx().clone();
+        self.git_discard_confirm(&ctx, &s.id);
+
         if !self.gitview.status_loaded {
             ui.label(dim("reading the working tree…"));
             return;
@@ -5032,6 +5277,13 @@ impl App {
         }
         // Conflicts first: the one uncommitted state that is never routine.
         entries.sort_by_key(|e| !e.conflicted);
+
+        // The commit box, then the write bar. `R-D19`/`R-D20` — the first
+        // things in this pane that change the repository rather than
+        // describing it.
+        self.git_commit_box(ui, s);
+        self.git_write_bar(ui, s, &entries);
+
         for e in entries {
             let picked =
                 self.gitview.selection == crate::gitview::Selection::Local(e.path.clone());
@@ -5051,13 +5303,29 @@ impl App {
             } else {
                 format!("{} {}", e.state, e.path)
             };
-            let row = ui
-                .selectable_label(
+            let mut ticked = self.gitview.checked.contains(&e.path);
+            let mut row = None;
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Checkbox::without_text(&mut ticked))
+                    .on_hover_text("pick this file for the buttons above")
+                    .changed()
+                {
+                    if ticked {
+                        self.gitview.checked.insert(e.path.clone());
+                    } else {
+                        self.gitview.checked.remove(&e.path);
+                    }
+                }
+                row = Some(ui.selectable_label(
                     picked,
                     RichText::new(label).monospace().color(color),
-                )
+                ));
+            });
+            let row = row
+                .expect("the row is drawn on every pass")
                 .on_hover_text(if e.conflicted {
-                    "unresolved merge conflict — resolving stays in the terminal"
+                    "unresolved merge conflict — right-click to resolve it"
                 } else {
                     match (e.staged, e.unstaged) {
                         (true, true) => "staged, with further unstaged edits",
@@ -5080,8 +5348,333 @@ impl App {
                             crate::gitview::Selection::Conflict(e.path.clone());
                         ui.close();
                     }
+                    // `R-D22`. Whole-file, which is what the three-way view
+                    // above shows; a resolution mixing both sides is editing,
+                    // and that stays out of mogeung permanently.
+                    ui.separator();
+                    let mut resolve = None;
+                    if ui
+                        .button("Take ours")
+                        .on_hover_text("keep this branch's version of the whole file")
+                        .clicked()
+                    {
+                        resolve = Some(mogeung_core::wire::ResolveSide::Ours);
+                    }
+                    if ui
+                        .button("Take theirs")
+                        .on_hover_text("keep the incoming version of the whole file")
+                        .clicked()
+                    {
+                        resolve = Some(mogeung_core::wire::ResolveSide::Theirs);
+                    }
+                    if ui
+                        .button("Mark resolved")
+                        .on_hover_text(
+                            "stage the file exactly as it is on disk — for when you \
+                             fixed it in an editor. The content is not checked, so \
+                             markers left in it will be committed.",
+                        )
+                        .clicked()
+                    {
+                        resolve = Some(mogeung_core::wire::ResolveSide::Mine);
+                    }
+                    if let Some(side) = resolve {
+                        self.net.send(ClientMsg::GitResolve {
+                            session_id: s.id.clone(),
+                            path: e.path.clone(),
+                            side,
+                        });
+                        ui.close();
+                    }
                 });
             }
+        }
+    }
+
+    /// Write and make a commit. `R-D20`.
+    ///
+    /// Above the file list, IntelliJ's layout, which is already this pane's
+    /// reference from `R-D18`. Below it would put the message further from the
+    /// staged files it describes the more of them there are.
+    fn git_commit_box(&mut self, ui: &mut egui::Ui, s: &Session) {
+        let staged = self
+            .gitview
+            .status
+            .iter()
+            .filter(|e| e.staged && e.state != "!!")
+            .count();
+        let conflicts = self.gitview.status.iter().filter(|e| e.conflicted).count();
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+
+            ui.add(
+                egui::TextEdit::multiline(&mut self.gitview.commit_msg)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Commit message"),
+            );
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.gitview.commit_amend, "Amend")
+                    .on_hover_text(
+                        "Replace the last commit instead of adding one. \
+                         Rewrites history — safe until it has been pushed.",
+                    );
+                ui.checkbox(&mut self.gitview.commit_trailer, "Record session")
+                    .on_hover_text(
+                        "Add a Mogeung-Session trailer naming the session this work \
+                         came from, so a line can later be traced back to the prompt \
+                         that produced it.\n\nIt becomes part of the commit message: \
+                         permanent, and visible to anyone who reads the commit. It is \
+                         an id and carries no prompt text.",
+                    );
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Amend needs no staged files — its whole use is fixing a
+                    // message — so the two conditions differ.
+                    let has_message = !self.gitview.commit_msg.trim().is_empty();
+                    let ready = has_message && (staged > 0 || self.gitview.commit_amend);
+                    if ui
+                        .add_enabled(ready, egui::Button::new("Commit"))
+                        .on_disabled_hover_text(if !has_message {
+                            "a commit needs a message"
+                        } else {
+                            "nothing is staged — tick the files to include"
+                        })
+                        .clicked()
+                    {
+                        self.net.send(ClientMsg::GitCommit {
+                            session_id: s.id.clone(),
+                            message: self.gitview.commit_msg.clone(),
+                            amend: self.gitview.commit_amend,
+                            session_trailer: self.gitview.commit_trailer,
+                        });
+                        // Cleared optimistically, and that is a deliberate
+                        // trade: a refused commit costs a retyped message,
+                        // while a message left in the box after a successful
+                        // one gets committed twice by the next click. The
+                        // daemon's refusal arrives in the error bar with git's
+                        // own words, so the failure is never silent.
+                        self.gitview.commit_msg.clear();
+                        self.gitview.commit_amend = false;
+                        // The log on screen no longer has the tip it was drawn
+                        // from. Asking again is cheaper than a protocol message
+                        // that would exist for this one caller.
+                        self.gitview.commits.clear();
+                        self.gitview.log_pending = false;
+                    }
+                    ui.label(dim(match staged {
+                        0 => "nothing staged".to_string(),
+                        1 => "1 file staged".to_string(),
+                        n => format!("{n} files staged"),
+                    }));
+                });
+            });
+
+            // Committing over an unresolved conflict is legal git and almost
+            // never intended: it records the markers as content.
+            if conflicts > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "{} unresolved conflict{} — committing now records the \
+                         markers as code",
+                        conflicts,
+                        if conflicts == 1 { "" } else { "s" }
+                    ))
+                    .color(pal().amber)
+                    .size(12.0),
+                );
+            }
+        });
+        ui.add_space(4.0);
+    }
+
+    /// Stage, unstage and discard the ticked files. `R-D19`.
+    ///
+    /// The concrete moment this exists for: you finish reading twelve changed
+    /// files, decide eight are the commit and four are debris, and then retype
+    /// from memory in a terminal the list you were just looking at.
+    ///
+    /// Discard is the only verb here with no undo, so it is the only one that
+    /// asks — and it is drawn apart from the other two, because a button that
+    /// destroys work should not sit where a hand lands by momentum.
+    fn git_write_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Session,
+        entries: &[mogeung_core::wire::StatusEntry],
+    ) {
+        let picked = self.gitview.checked_paths();
+        let any = !picked.is_empty();
+
+        ui.horizontal(|ui| {
+            // Tick-all, over the rows actually listed — the session filter and
+            // the `!!` drop mean "everything" is a smaller set than the status.
+            let all: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+            let every = !all.is_empty() && all.iter().all(|p| self.gitview.checked.contains(p));
+            let mut want = every;
+            if ui
+                .add(egui::Checkbox::without_text(&mut want))
+                .on_hover_text(if every {
+                    "clear the selection"
+                } else {
+                    "pick every file listed"
+                })
+                .changed()
+            {
+                match want {
+                    true => self.gitview.checked.extend(all),
+                    false => self.gitview.checked.clear(),
+                }
+            }
+
+            ui.add_enabled_ui(any, |ui| {
+                if ui.button("Stage").clicked() {
+                    self.net.send(ClientMsg::GitStage {
+                        session_id: s.id.clone(),
+                        paths: picked.clone(),
+                    });
+                }
+                if ui.button("Unstage").clicked() {
+                    self.net.send(ClientMsg::GitUnstage {
+                        session_id: s.id.clone(),
+                        paths: picked.clone(),
+                    });
+                }
+            });
+
+            // Not limited to the ticked files, and said so on the hover:
+            // `git stash` takes the whole worktree, and a button beside three
+            // that respect the ticks would otherwise read as a fourth that
+            // does. `R-D21`.
+            if ui
+                .button("Stash all")
+                .on_hover_text(
+                    "Shelve every change in the worktree, tracked and untracked, and                      leave it clean. Not just the ticked files — git stash takes the                      lot. Restore it from the STASHES list below.",
+                )
+                .clicked()
+            {
+                self.net.send(ClientMsg::GitStashPush {
+                    session_id: s.id.clone(),
+                    message: String::new(),
+                    // Untracked included: an agent's new files are exactly the
+                    // ones you meant to get out of the way, and a "clean"
+                    // worktree still full of them is a surprise.
+                    include_untracked: true,
+                });
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(any, |ui| {
+                    if ui
+                        .button(RichText::new("Discard").color(pal().red))
+                        .on_hover_text("throw these changes away — asks first")
+                        .clicked()
+                    {
+                        self.gitview.confirm_discard = Some(picked.clone());
+                    }
+                });
+                if any {
+                    ui.label(dim(format!("{} picked", picked.len())));
+                }
+            });
+        });
+        ui.add_space(2.0);
+    }
+
+    /// The confirmation Discard needs, naming every file. `R-D19`.
+    ///
+    /// It counts the untracked ones separately and says out loud that git has
+    /// no copy of them, because that is the difference between an action that
+    /// is annoying to undo and one that cannot be undone at all — and the row
+    /// in the list looks identical either way.
+    fn git_discard_confirm(&mut self, ctx: &egui::Context, session_id: &str) {
+        let Some(paths) = self.gitview.confirm_discard.clone() else {
+            return;
+        };
+        // Untracked as the daemon last reported it. `??` is the porcelain's
+        // "git has never seen this file".
+        let untracked: Vec<String> = paths
+            .iter()
+            .filter(|p| {
+                self.gitview
+                    .status
+                    .iter()
+                    .any(|e| &e.path == *p && e.state.starts_with("??"))
+            })
+            .cloned()
+            .collect();
+        let n = untracked.len();
+        let (is_are, it_them) = if n == 1 { ("is", "it") } else { ("are", "them") };
+
+        let mut open = true;
+        let mut go = false;
+        egui::Window::new("Discard changes?")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.label(format!(
+                    "Throw away local changes to {} file{}:",
+                    paths.len(),
+                    if paths.len() == 1 { "" } else { "s" }
+                ));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        for p in &paths {
+                            let lost = untracked.contains(p);
+                            ui.label(
+                                RichText::new(p)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(if lost { pal().red } else { pal().text }),
+                            );
+                        }
+                    });
+                ui.add_space(6.0);
+                if n > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{n} of these {is_are} untracked. Git has never seen {it_them}, \
+                             so it cannot bring {it_them} back — deleting {it_them} is permanent."
+                        ))
+                        .color(pal().red),
+                    );
+                } else {
+                    ui.label(dim(
+                        "All tracked, so git restores them from the last commit.",
+                    ));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    // Cancel first: the safe answer should be where a hand
+                    // lands, and the destructive one should take an aim.
+                    if ui.button("Cancel").clicked() {
+                        self.gitview.confirm_discard = None;
+                    }
+                    if ui
+                        .button(RichText::new("Discard").color(pal().red))
+                        .clicked()
+                    {
+                        go = true;
+                    }
+                });
+            });
+
+        if go {
+            self.net.send(ClientMsg::GitDiscard {
+                session_id: session_id.to_string(),
+                paths,
+            });
+            self.gitview.confirm_discard = None;
+        } else if !open {
+            // Closing the window is a refusal, like every other dialog here.
+            self.gitview.confirm_discard = None;
         }
     }
 

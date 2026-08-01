@@ -60,6 +60,40 @@ pub struct GitView {
     /// Graph lanes for `commits`, recomputed whenever the log changes.
     pub graph: Vec<GraphRow>,
     pub status: Vec<StatusEntry>,
+    /// Which rows are ticked for a write verb. `R-D19`.
+    ///
+    /// Separate from `selection`, which decides what the diff pane shows.
+    /// Clicking a row to read it and ticking it to act on it are different
+    /// intentions, and a list where reading something arms a Discard button
+    /// is a list nobody can use quickly.
+    pub checked: std::collections::BTreeSet<String>,
+    /// Files a confirmed Discard would destroy, while the confirmation is up.
+    /// `None` when nothing is being asked. `R-D19`.
+    pub confirm_discard: Option<Vec<String>>,
+    /// The commit message being written. `R-D20`.
+    ///
+    /// Kept here rather than in `prefs`: a half-typed message is not a
+    /// setting, and one restored on a later launch would be a sentence about
+    /// work that has since been committed by other means.
+    pub commit_msg: String,
+    /// Replace the tip commit rather than adding one.
+    pub commit_amend: bool,
+    /// A branch a Switch is waiting to be confirmed for. `R-D21`.
+    pub confirm_switch: Option<String>,
+    /// A stash index a Drop is waiting to be confirmed for. `R-D21`.
+    pub confirm_stash_drop: Option<u32>,
+    /// The new-branch name being typed, when the field is open. `R-D21`.
+    pub new_branch: Option<String>,
+    /// Record which session the work came from, for `R-F2`.
+    ///
+    /// On by default, and a visible checkbox rather than a setting, because it
+    /// is the reason committing from here beats committing from a terminal —
+    /// off by default it would be a feature nobody finds. Visible because the
+    /// trailer becomes part of the commit message: it is a UUID and carries no
+    /// prompt text, but it is permanent, and anyone who reads the commit sees
+    /// it. That is a choice to put in front of a hand, not in a preferences
+    /// dialog.
+    pub commit_trailer: bool,
     pub status_pending: bool,
     /// Set once the first status answer lands, so an empty repo reads as
     /// "clean" instead of "loading" forever.
@@ -137,6 +171,12 @@ impl GitView {
         }
         *self = GitView {
             session: Some(id.clone()),
+            // On for each new session rather than derived, and set here
+            // because this is the one path that builds a live `GitView` — see
+            // the field for why it defaults on. Unticking it is a decision
+            // about *this* commit, so it does not follow you to the next
+            // session.
+            commit_trailer: true,
             ..Default::default()
         };
     }
@@ -298,7 +338,22 @@ impl GitView {
         }
         self.status_pending = false;
         self.status_loaded = true;
+        // Ticks follow the paths that still have a row. A write is answered by
+        // re-reading the tree (`R-D19`), so this runs after every one of them:
+        // a file that was staged, discarded or committed away must not stay
+        // ticked and travel into the next click.
+        self.checked
+            .retain(|p| entries.iter().any(|e| &e.path == p));
         self.status = entries;
+    }
+
+    /// The ticked paths that still exist, in the order the pane lists them.
+    pub fn checked_paths(&self) -> Vec<String> {
+        self.status
+            .iter()
+            .filter(|e| self.checked.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]

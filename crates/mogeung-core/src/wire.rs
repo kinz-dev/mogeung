@@ -110,6 +110,92 @@ pub enum ClientMsg {
     },
     /// The repo's uncommitted state — staged, unstaged and untracked.
     GitStatus { session_id: SessionId },
+
+    // -- The write family. `R-D19`.
+    //
+    // Everything above this line reads. These change the repository, and are
+    // the only messages in this protocol that do — see
+    // [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md),
+    // which permits the working tree and the local repository and refuses
+    // every remote verb. There is deliberately no `GitPush`, `GitPull` or
+    // `GitFetch`: that is `R-D24`, behind a second ADR that has not been
+    // written.
+    //
+    // They are grouped rather than filed beside their read siblings so that
+    // the guard which refuses them can name a contiguous list, and so that
+    // adding a fourth is visibly joining a family that has a rule.
+    /// Stage the given worktree paths.
+    GitStage {
+        session_id: SessionId,
+        paths: Vec<String>,
+    },
+    /// Unstage them, leaving the working tree untouched.
+    GitUnstage {
+        session_id: SessionId,
+        paths: Vec<String>,
+    },
+    /// Throw local changes away. **The one verb here with no undo** — for an
+    /// untracked path it means deletion, and git keeps no copy.
+    GitDiscard {
+        session_id: SessionId,
+        paths: Vec<String>,
+    },
+    /// Commit what is staged. `R-D20`.
+    ///
+    /// Only what is staged: the checkboxes above are the instruction, and a
+    /// commit that swept in unstaged files would make them a suggestion.
+    GitCommit {
+        session_id: SessionId,
+        message: String,
+        /// Replace the tip commit instead of adding one.
+        #[serde(default)]
+        amend: bool,
+        /// Record which session's work this was, for `R-F2` prompt-blame.
+        /// Optional because a commit made by hand in the pane need not have
+        /// come from an agent at all.
+        #[serde(default)]
+        session_trailer: bool,
+    },
+    /// Create a branch, and optionally move onto it. `R-D21`.
+    GitBranchCreate {
+        session_id: SessionId,
+        name: String,
+        #[serde(default)]
+        switch_to: bool,
+    },
+    /// Move the worktree onto an existing branch. `R-D21`.
+    ///
+    /// Git refuses a switch that would lose work. What it cannot know is that
+    /// an agent may be reading those files right now — the window warns about
+    /// that, because it is the only side that knows a session is live.
+    GitSwitch {
+        session_id: SessionId,
+        name: String,
+    },
+    /// Shelve the working tree. `R-D21`.
+    GitStashPush {
+        session_id: SessionId,
+        #[serde(default)]
+        message: String,
+        /// Take untracked files along. Off by default, as in git.
+        #[serde(default)]
+        include_untracked: bool,
+    },
+    /// Restore a stash and remove it. `R-D21`.
+    GitStashPop { session_id: SessionId, index: u32 },
+    /// Throw a stash away without restoring it. `R-D21`.
+    GitStashDrop { session_id: SessionId, index: u32 },
+    /// Resolve one conflicted file. `R-D22`.
+    ///
+    /// Whole-file, matching what `R-D16`'s three-way view shows. A resolution
+    /// that mixes both sides is editing, which mogeung does not do — you do it
+    /// elsewhere and send [`ResolveSide::Mine`] to say it is done.
+    GitResolve {
+        session_id: SessionId,
+        path: String,
+        side: ResolveSide,
+    },
+
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile {
         session_id: SessionId,
@@ -386,6 +472,19 @@ pub struct WorktreeInfo {
     pub sha: String,
     /// Checked-out branch, or `None` when detached.
     pub branch: Option<String>,
+}
+
+/// Which version of a conflicted file to keep. `R-D22`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolveSide {
+    /// The version on the branch you are on — git's `--ours`.
+    Ours,
+    /// The version being merged in — git's `--theirs`.
+    Theirs,
+    /// Neither: what is on disk is already the answer, resolved by hand
+    /// somewhere else, and all that is missing is telling git so.
+    Mine,
 }
 
 /// One stash in a [`ClientMsg::GitStashes`] answer.

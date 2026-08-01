@@ -72,7 +72,7 @@ Never edit its output.
 mprocs                      # same two, side by side, with test/docs on a key
 
 cargo build --release
-cargo test --workspace      # all free — nothing spawns an agent
+cargo test --workspa[V3_PERF_INVESTIGATION.md](../../perf-test/20260731_A/reports/V3_PERF_INVESTIGATION.md)ce      # all free — nothing spawns an agent
 ./scripts/check-docs.sh     # REQUIRED after any doc change — see above
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```
@@ -86,3 +86,5 @@ database carried over from an older build can mislead you.
 
 Before handing work back: `cargo test --workspace` **and**
 `./scripts/check-docs.sh` must both pass.
+
+## Testing
