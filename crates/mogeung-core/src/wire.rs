@@ -185,6 +185,16 @@ pub enum ClientMsg {
     GitStashPop { session_id: SessionId, index: u32 },
     /// Throw a stash away without restoring it. `R-D21`.
     GitStashDrop { session_id: SessionId, index: u32 },
+    /// Resolve one conflicted file. `R-D22`.
+    ///
+    /// Whole-file, matching what `R-D16`'s three-way view shows. A resolution
+    /// that mixes both sides is editing, which mogeung does not do — you do it
+    /// elsewhere and send [`ResolveSide::Mine`] to say it is done.
+    GitResolve {
+        session_id: SessionId,
+        path: String,
+        side: ResolveSide,
+    },
 
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile {
@@ -462,6 +472,19 @@ pub struct WorktreeInfo {
     pub sha: String,
     /// Checked-out branch, or `None` when detached.
     pub branch: Option<String>,
+}
+
+/// Which version of a conflicted file to keep. `R-D22`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolveSide {
+    /// The version on the branch you are on — git's `--ours`.
+    Ours,
+    /// The version being merged in — git's `--theirs`.
+    Theirs,
+    /// Neither: what is on disk is already the answer, resolved by hand
+    /// somewhere else, and all that is missing is telling git so.
+    Mine,
 }
 
 /// One stash in a [`ClientMsg::GitStashes`] answer.

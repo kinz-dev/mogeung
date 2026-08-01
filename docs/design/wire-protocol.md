@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-07-31
+updated: 2026-08-01
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -92,8 +92,9 @@ a message, an `amend` flag and a `session_trailer` flag. They are grouped in the
 enum rather than filed beside their read siblings, so the guard that refuses
 them can name a contiguous list and a fifth is visibly joining a family with a
 rule. `R-D21` added five more the same day — `GitBranchCreate`, `GitSwitch`,
-`GitStashPush`, `GitStashPop`, `GitStashDrop` — leaving conflict resolution
-(`R-D22`) as the last unbuilt verb.
+`GitStashPush`, `GitStashPop`, `GitStashDrop` — and `R-D22` added the last one, `GitResolve`.
+The write family is complete: `R-D23` is a rendering change, and `R-D24`
+(`fetch`, `pull`, `push`) stays refused by ADR-0012.
 
 Branch names go through `valid_ref_name`, the *same* rule the read side uses to
 scope a log: narrower than git's own, refusing a leading `-`, `..` and `@{`.
@@ -101,6 +102,15 @@ Sharing it matters more on this side, since reading a nonsense ref shows
 nothing and writing one moves the worktree. A stash is addressed by index and
 the `stash@{n}` string is built by the daemon, so no ref from outside reaches
 that argument at all.
+
+`GitResolve` takes a whole file — ours, theirs, or "what is on disk is already
+right". Whole-file because that is what `R-D16`'s three-way view shows, and a
+resolution mixing both sides is editing, which stays out permanently. Every
+path ends in `git add`, because in git a conflict is resolved by *staging* the
+result: a verb that wrote the file and left the index unmerged would show a
+conflict that looks fixed and is not. The content is deliberately **not**
+inspected — markers left in a file are committable once the index says
+resolved, and a validator refusing them would refuse legitimate content too.
 
 `GitSwitch` clears the pinned diff base of **every** session in that worktree
 ([A9](../product/assumptions.md)): a base is the last commit before a session

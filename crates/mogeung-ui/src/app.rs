@@ -5325,7 +5325,7 @@ impl App {
             let row = row
                 .expect("the row is drawn on every pass")
                 .on_hover_text(if e.conflicted {
-                    "unresolved merge conflict — resolving stays in the terminal"
+                    "unresolved merge conflict — right-click to resolve it"
                 } else {
                     match (e.staged, e.unstaged) {
                         (true, true) => "staged, with further unstaged edits",
@@ -5346,6 +5346,44 @@ impl App {
                     {
                         self.gitview.selection =
                             crate::gitview::Selection::Conflict(e.path.clone());
+                        ui.close();
+                    }
+                    // `R-D22`. Whole-file, which is what the three-way view
+                    // above shows; a resolution mixing both sides is editing,
+                    // and that stays out of mogeung permanently.
+                    ui.separator();
+                    let mut resolve = None;
+                    if ui
+                        .button("Take ours")
+                        .on_hover_text("keep this branch's version of the whole file")
+                        .clicked()
+                    {
+                        resolve = Some(mogeung_core::wire::ResolveSide::Ours);
+                    }
+                    if ui
+                        .button("Take theirs")
+                        .on_hover_text("keep the incoming version of the whole file")
+                        .clicked()
+                    {
+                        resolve = Some(mogeung_core::wire::ResolveSide::Theirs);
+                    }
+                    if ui
+                        .button("Mark resolved")
+                        .on_hover_text(
+                            "stage the file exactly as it is on disk — for when you \
+                             fixed it in an editor. The content is not checked, so \
+                             markers left in it will be committed.",
+                        )
+                        .clicked()
+                    {
+                        resolve = Some(mogeung_core::wire::ResolveSide::Mine);
+                    }
+                    if let Some(side) = resolve {
+                        self.net.send(ClientMsg::GitResolve {
+                            session_id: s.id.clone(),
+                            path: e.path.clone(),
+                            side,
+                        });
                         ui.close();
                     }
                 });

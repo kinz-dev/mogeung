@@ -17,7 +17,8 @@ to support the GIT workflow"* — and scoped, from four offered tiers, to
 **local writes only**. `push` was in the question and is deliberately not in
 this feature; see [Explicitly out of scope](#explicitly-out-of-scope).
 
-**`R-D19`–`R-D21` shipped 2026-07-31**; `R-D22` and `R-D23` are still a plan. See
+**`R-D19`–`R-D22` shipped 2026-07-31** — every write verb this feature
+proposes. `R-D23`, the one row here that is not a write, is still a plan. See
 [Notes](#notes) for what building the first stage changed about the rest.
 
 ## Spec
@@ -82,7 +83,7 @@ decoration, it is liability.
 - [x] Branches can be created and switched from the refs list; a switch that
       git refuses reports git's own words, and the pane's state does not move
 - [x] A stash can be pushed, popped and dropped from the stash list
-- [ ] A conflicted file can be resolved from the three-way view — take ours,
+- [x] A conflicted file can be resolved from the three-way view — take ours,
       take theirs, or mark resolved after editing elsewhere
 - [ ] Ahead/behind is never rendered as a bare number: it carries the age of
       the last fetch, or reads as unknown when nothing has fetched
@@ -288,5 +289,23 @@ Three smaller findings:
 - **A plain `git stash` leaves untracked files behind**, so the tree is not
   clean afterwards. The pane's Stash-all passes `--include-untracked`, because
   an agent's new files are exactly the ones you meant to get out of the way.
+
+### `R-D22` (2026-07-31)
+
+Small, as predicted, and the one thing worth recording is what it does *not*
+do. Resolution is whole-file, matching what `R-D16` shows; anything finer is
+editing. `Mine` — stage what is on disk — exists so that the honest workflow of
+resolving in a real editor and coming back is a first-class path rather than a
+gap.
+
+It does not look at the content. A file still full of `<<<<<<<` is committable
+once the index says resolved, and that is git's behaviour, not a defect to be
+patched here: a validator strict enough to catch markers would also refuse a
+file that legitimately contains them. There is a test pinning the
+non-inspection, so the next reader does not mistake it for an oversight.
+
+One assertion in the tests was wrong before the code was: taking *ours*
+reproduces HEAD exactly, so `git status` goes **empty** rather than showing
+`M `. The property worth asserting is that no unmerged path remains.
 
 ### Still open

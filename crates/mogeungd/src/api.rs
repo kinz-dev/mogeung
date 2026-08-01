@@ -743,6 +743,7 @@ fn is_write(cmd: &ClientMsg) -> bool {
             | ClientMsg::GitStashPush { .. }
             | ClientMsg::GitStashPop { .. }
             | ClientMsg::GitStashDrop { .. }
+            | ClientMsg::GitResolve { .. }
     )
 }
 
@@ -1132,6 +1133,17 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 Err(e) => err(e),
             }
         }
+        ClientMsg::GitResolve {
+            session_id,
+            path,
+            side,
+        } => match state.git_resolve(&session_id, path, side).await {
+            Ok(()) => {
+                state.recompute_change(&session_id).await;
+                rebroadcast_status(state, session_id).await
+            }
+            Err(e) => err(e),
+        },
         ClientMsg::GitDiscard { session_id, paths } => {
             match state.git_discard(&session_id, paths).await {
                 Ok(()) => {
@@ -1335,6 +1347,11 @@ mod write_guard_tests {
             },
             ClientMsg::GitStashPop { session_id: id(), index: 0 },
             ClientMsg::GitStashDrop { session_id: id(), index: 0 },
+            ClientMsg::GitResolve {
+                session_id: id(),
+                path: "a.rs".into(),
+                side: mogeung_core::wire::ResolveSide::Ours,
+            },
         ] {
             assert!(is_write(&cmd), "{cmd:?} changes the repository");
         }

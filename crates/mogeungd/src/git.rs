@@ -309,6 +309,48 @@ fn stash_ref(index: u32) -> String {
     format!("stash@{{{index}}}")
 }
 
+/// Which version of a conflicted file to keep. `R-D22`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The version on the branch you are on — `:2:`, git's `--ours`.
+    Ours,
+    /// The version being merged in — `:3:`, git's `--theirs`.
+    Theirs,
+    /// Neither: the file on disk is already what you want, because you
+    /// resolved it by hand somewhere else.
+    Mine,
+}
+
+/// Resolve one conflicted file. `R-D22`.
+///
+/// Ours and theirs take the whole file, not a hunk, which is what the
+/// three-way view (`R-D16`) already shows and the honest limit of this verb:
+/// a resolution that mixes both sides is editing, and mogeung does not edit
+/// ([pillar K](../../../docs/product/roadmap.md)). Doing it elsewhere and then
+/// marking it resolved is [`Side::Mine`], which is why that variant exists
+/// rather than being an omission.
+///
+/// Every path ends in `git add`, because in git a conflict is resolved by
+/// *staging* the result — the file on disk is only half the answer, and one
+/// that still has `<<<<<<<` in it will be committed happily if the index says
+/// it is resolved. Taking a side without staging it would leave the pane
+/// showing a conflict that looks fixed and is not.
+pub fn resolve(root: &Path, rel: &str, side: Side) -> Result<()> {
+    let paths = [rel.to_string()];
+    match side {
+        // `checkout --ours/--theirs` reads the stage out of the index, so it
+        // works on a file whose worktree copy is full of merge markers.
+        Side::Ours => {
+            run_git_write(root, &pathspec_args(&["checkout", "--ours"], &paths))?;
+        }
+        Side::Theirs => {
+            run_git_write(root, &pathspec_args(&["checkout", "--theirs"], &paths))?;
+        }
+        Side::Mine => {}
+    }
+    run_git_write(root, &pathspec_args(&["add"], &paths)).map(drop)
+}
+
 /// A ref name a write verb may act on, or a refusal naming the reason.
 ///
 /// The same rule the read side uses to scope a log ([`valid_ref_name`]), which

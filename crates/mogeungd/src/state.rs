@@ -1685,6 +1685,22 @@ impl AppState {
         tokio::task::spawn_blocking(move || crate::git::stash_drop(&root, index)).await?
     }
 
+    /// Resolve one conflicted file. `R-D22`.
+    pub async fn git_resolve(
+        &self,
+        id: &str,
+        path: String,
+        side: mogeung_core::wire::ResolveSide,
+    ) -> Result<()> {
+        let root = self.write_target(id, std::slice::from_ref(&path)).await?;
+        let side = match side {
+            mogeung_core::wire::ResolveSide::Ours => crate::git::Side::Ours,
+            mogeung_core::wire::ResolveSide::Theirs => crate::git::Side::Theirs,
+            mogeung_core::wire::ResolveSide::Mine => crate::git::Side::Mine,
+        };
+        tokio::task::spawn_blocking(move || crate::git::resolve(&root, &path, side)).await?
+    }
+
     /// Forget the pinned diff base of every session in this repository. `R-D21`.
     ///
     /// A session's base is *the last commit before it started*, resolved once

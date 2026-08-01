@@ -553,3 +553,114 @@ fn popping_a_stash_that_is_not_there_is_gits_refusal() {
     assert!(e.to_lowercase().contains("stash"), "git's words: {e}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// -- Conflict resolution. `R-D22`. --------------------------------------------
+
+/// A repo mid-merge, with `conflicted.txt` unresolvable by git.
+fn conflicted(tag: &str) -> PathBuf {
+    let dir = repo(tag, false);
+    std::fs::write(dir.join("conflicted.txt"), "base\n").unwrap();
+    git_in(&dir, &["add", "conflicted.txt"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+
+    git_in(&dir, &["switch", "-q", "-c", "theirs"]);
+    std::fs::write(dir.join("conflicted.txt"), "their version\n").unwrap();
+    git_in(&dir, &["commit", "-q", "-am", "theirs"]);
+
+    git_in(&dir, &["switch", "-q", "main"]);
+    std::fs::write(dir.join("conflicted.txt"), "our version\n").unwrap();
+    git_in(&dir, &["commit", "-q", "-am", "ours"]);
+
+    // Expected to fail — that is the point.
+    let _ = Command::new("git")
+        .args(["merge", "theirs"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        status(&dir).contains("UU conflicted.txt"),
+        "the fixture must actually conflict: {}",
+        status(&dir)
+    );
+    dir
+}
+
+#[test]
+fn taking_ours_keeps_this_branchs_version_and_stages_it() {
+    let dir = conflicted("resolve-ours");
+    git::resolve(&dir, "conflicted.txt", git::Side::Ours).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("conflicted.txt")).unwrap(),
+        "our version\n"
+    );
+    // Empty, not `M `: taking ours reproduces HEAD exactly, so once the index
+    // is no longer unmerged there is nothing left that differs from it. The
+    // property that matters is that the conflict is gone.
+    assert!(!status(&dir).contains("UU"), "still unmerged: {}", status(&dir));
+    assert_eq!(
+        git_in(&dir, &["diff", "--name-only", "--diff-filter=U"]).trim(),
+        "",
+        "no unmerged paths remain"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn taking_theirs_keeps_the_incoming_version_and_stages_it() {
+    let dir = conflicted("resolve-theirs");
+    git::resolve(&dir, "conflicted.txt", git::Side::Theirs).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("conflicted.txt")).unwrap(),
+        "their version\n"
+    );
+    assert_eq!(status(&dir), "M  conflicted.txt\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Resolved by hand elsewhere: the file on disk is already right, and all
+/// that is missing is telling git so.
+#[test]
+fn marking_resolved_stages_whatever_is_on_disk() {
+    let dir = conflicted("resolve-mine");
+    std::fs::write(dir.join("conflicted.txt"), "a blend of both\n").unwrap();
+    git::resolve(&dir, "conflicted.txt", git::Side::Mine).unwrap();
+    assert_eq!(status(&dir), "M  conflicted.txt\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("conflicted.txt")).unwrap(),
+        "a blend of both\n",
+        "the hand-made resolution is untouched"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// In git a conflict is resolved by *staging* the result. A verb that wrote
+/// the file but left the index unmerged would show a conflict that looks
+/// fixed and is not — and `git commit` would still refuse.
+#[test]
+fn resolving_leaves_the_merge_committable() {
+    let dir = conflicted("resolve-commit");
+    git::resolve(&dir, "conflicted.txt", git::Side::Ours).unwrap();
+    git::commit(&dir, "take ours", false, &[]).unwrap();
+    assert_eq!(status(&dir), "", "the merge is done");
+    assert!(
+        !std::fs::read_to_string(dir.join("conflicted.txt"))
+            .unwrap()
+            .contains("<<<<<<<"),
+        "no markers survived into the commit"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Markers left in the file are committed happily once the index says
+/// resolved — which is exactly why `Mine` stages what is on disk rather than
+/// checking it. Pinned so nobody later mistakes that for a bug and "fixes" it
+/// into a validator that would refuse legitimate content.
+#[test]
+fn marking_resolved_does_not_inspect_the_content() {
+    let dir = conflicted("resolve-markers");
+    let with_markers = std::fs::read_to_string(dir.join("conflicted.txt")).unwrap();
+    assert!(with_markers.contains("<<<<<<<"));
+    git::resolve(&dir, "conflicted.txt", git::Side::Mine).unwrap();
+    assert_eq!(status(&dir), "M  conflicted.txt\n");
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-07-31
+updated: 2026-08-01
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -36,6 +36,14 @@ Attribution comes from `Edit`/`Write` tool calls, so an agent that changes a
 file through a shell command is invisible to it ([A8](../product/assumptions.md)).
 It reports overlap, not conflict: two sessions editing different functions in
 one file is flagged, and is usually fine.
+
+**Git writes do not clear it.** `state.rs` gained the write verbs in
+`R-D19`–`R-D22`, and none of them participates in this signal: a collision is
+computed from what sessions *touched*, recorded from their transcripts, not
+from what the working tree currently holds. So discarding a file, or committing
+it, leaves the warning standing until the window lapses or a side exits — which
+is right. Both agents did edit that file, and undoing the edit on disk does not
+unmake the fact that two of them were working on it at once.
 
 ## Permission vs. instruction (`R-B4`)
 
