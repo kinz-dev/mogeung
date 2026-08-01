@@ -1,7 +1,8 @@
 ---
 title: mogeung writes to the repository, and never publishes
-status: active
-updated: 2026-07-30
+status: superseded
+updated: 2026-08-01
+superseded_by: 0014
 decided: 2026-07-30
 ---
 

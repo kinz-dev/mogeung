@@ -185,6 +185,14 @@ pub enum ClientMsg {
     GitStashPop { session_id: SessionId, index: u32 },
     /// Throw a stash away without restoring it. `R-D21`.
     GitStashDrop { session_id: SessionId, index: u32 },
+    /// Update remote-tracking refs. `R-D25`.
+    ///
+    /// The one message here that reaches a network beyond this machine, and
+    /// the only remote verb there is:
+    /// [ADR-0014](../../../docs/decisions/0014-fetch-is-not-publishing.md)
+    /// admits `fetch` and refuses `pull` and `push`. Never sent on a timer —
+    /// a human asks, or it does not happen.
+    GitFetch { session_id: SessionId },
     /// Resolve one conflicted file. `R-D22`.
     ///
     /// Whole-file, matching what `R-D16`'s three-way view shows. A resolution
@@ -703,6 +711,21 @@ pub enum ServerMsg {
     GitRefsInfo {
         session_id: SessionId,
         info: Box<RefsInfo>,
+    },
+    /// What a fetch did. `R-D25`.
+    ///
+    /// Always sent, including when nothing moved: a sync that succeeds
+    /// silently cannot be told from one that silently did nothing, which is
+    /// the failure ADR-0014 exists to stop.
+    GitFetched {
+        session_id: SessionId,
+        /// Ref updates, in git's own words, one per line. Empty means the
+        /// remotes had nothing new — which is worth saying, not hiding.
+        updates: Vec<String>,
+        /// The current branch's upstream, when it has one.
+        upstream: Option<String>,
+        ahead: u32,
+        behind: u32,
     },
     /// The stash list.
     GitStashList {

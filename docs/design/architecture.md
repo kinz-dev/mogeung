@@ -106,6 +106,14 @@ protocol until `R-D19` added the first three writes on 2026-07-31, with client-s
 before git sees an argument. See
 [wire-protocol.md](wire-protocol.md) for the family and its hygiene rules.
 
+**One outbound network call exists**, and only one: `git fetch`, on an explicit
+keystroke (`Ctrl+T`), admitted 2026-08-01 by
+[ADR-0014](../decisions/0014-fetch-is-not-publishing.md). Everything else this
+process does is localhost, the local filesystem, or the user's own LAN. Worth
+stating plainly because "mogeung is entirely local" stops being true as a
+blanket claim: a fetch can be slow, hang on DNS, or fail in ways nothing else
+here fails. It never runs on a timer, and it never pushes or merges.
+
 `~/.claude` is read and never written, permanently — that is
 [ADR-0003](../decisions/0003-observe-do-not-spawn.md) and the diagram above.
 The *repository* is a separate question, and was answered differently on

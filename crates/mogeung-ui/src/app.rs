@@ -977,6 +977,24 @@ impl App {
                     session_id,
                     stashes,
                 } => self.gitview.ingest_stashes(&session_id, stashes),
+                ServerMsg::GitFetched {
+                    session_id,
+                    updates,
+                    upstream,
+                    ahead,
+                    behind,
+                } => {
+                    self.gitview.fetching = false;
+                    if self.gitview.session.as_ref() == Some(&session_id) {
+                        self.gitview.fetched = Some(crate::gitview::Fetched {
+                            updates,
+                            upstream,
+                            ahead,
+                            behind,
+                            at: std::time::Instant::now(),
+                        });
+                    }
+                }
                 ServerMsg::GitStashDiff {
                     session_id,
                     index,
@@ -1028,6 +1046,10 @@ impl App {
                     .explorer
                     .ingest_rev_file(&session_id, &sha, &path, content, truncated),
                 ServerMsg::Error { message } => {
+                    // A failed fetch answers with this and never with
+                    // `GitFetched`, so the in-flight flag has to be cleared
+                    // here or `Ctrl+T` is dead for the rest of the session.
+                    self.gitview.fetching = false;
                     self.errors.push(message);
                     if self.errors.len() > 6 {
                         self.errors.remove(0);
@@ -1989,6 +2011,20 @@ impl App {
     fn run(&mut self, action: crate::keymap::Action, ui: &mut egui::Ui) {
         use crate::keymap::Action as A;
         match action {
+            // `R-D25`. The only key here that reaches a network beyond this
+            // machine, which is why it does nothing without a session to say
+            // *which* repository, and refuses to start a second fetch.
+            A::SyncRemote => {
+                if let Some(id) = self.selected.clone() {
+                    if !self.gitview.fetching {
+                        self.gitview.fetching = true;
+                        self.net.send(ClientMsg::GitFetch { session_id: id });
+                    }
+                } else {
+                    self.errors
+                        .push("pick a session first — a fetch needs to know which repo".into());
+                }
+            }
             A::PageDown => self.scroll = Some(ScrollRequest::Pages(1.0)),
             A::PageUp => self.scroll = Some(ScrollRequest::Pages(-1.0)),
             A::ScrollTop => self.scroll = Some(ScrollRequest::Top),
@@ -4938,14 +4974,66 @@ impl App {
                             }
                         }
                     }
+                    // `R-D25`. Beside the numbers it refreshes, because a
+                    // key nobody knows about does not fix a stale count.
+                    ui.horizontal(|ui| {
+                        let busy = self.gitview.fetching;
+                        if ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new(if busy {
+                                    format!("{} Syncing…", icon::RESCAN)
+                                } else {
+                                    format!("{} Sync", icon::RESCAN)
+                                }),
+                            )
+                            .on_hover_text(format!(
+                                "Fetch from the remotes and update these counts ({}).\n\n\
+                                 Never pushes and never merges — mogeung fetches only.",
+                                self.keymap.describe(crate::keymap::Action::SyncRemote)
+                            ))
+                            .clicked()
+                        {
+                            self.gitview.fetching = true;
+                            self.net.send(ClientMsg::GitFetch {
+                                session_id: s.id.clone(),
+                            });
+                        }
+                        ui.label(dim(match refs.fetch_epoch {
+                            Some(e) => format!("last fetch {}", crate::gitview::age(now, e)),
+                            None => "never fetched".to_string(),
+                        }));
+                    });
+
+                    // `R-D23`. Ahead/behind is measured against a
+                    // remote-tracking ref, which only moves when something
+                    // fetches — and until ADR-0014 nothing here could. So the
+                    // counts are never rendered bare: they carry how old the
+                    // measurement is, or say they were never measured at all.
+                    // A number that cannot be refreshed and does not admit it
+                    // is the confident lie this pane exists not to tell.
+                    let staleness = match refs.fetch_epoch {
+                        Some(e) => format!("as of {}", crate::gitview::age(now, e)),
+                        None => "never fetched — these counts mean nothing yet".to_string(),
+                    };
                     for b in &refs.branches {
                         let scoped = self.gitview.log_rev.as_deref() == Some(b.name.as_str());
                         let mut text = format!("{} {}", b.sha, b.name);
+                        let tracked = b.upstream.is_some();
                         if b.ahead > 0 {
                             text.push_str(&format!(" ⬆{}", b.ahead));
                         }
                         if b.behind > 0 {
                             text.push_str(&format!(" ⬇{}", b.behind));
+                        }
+                        // The qualifier goes on the row, not only the hover:
+                        // the hover is where you look once you already doubt
+                        // the number, and the point is to be doubted in time.
+                        if tracked && (b.ahead > 0 || b.behind > 0) {
+                            text.push_str(&match refs.fetch_epoch {
+                                Some(e) => format!(" ({})", crate::gitview::age(now, e)),
+                                None => " (unverified)".to_string(),
+                            });
                         }
                         let mut rich = RichText::new(text).monospace();
                         if b.current {
@@ -4954,10 +5042,11 @@ impl App {
                         let row = ui
                             .selectable_label(scoped, rich)
                             .on_hover_text(format!(
-                                "{} · {}{}\nclick to scope the log to this branch — nothing is checked out",
+                                "{} · {}\n{}{}\nclick to scope the log to this branch — nothing is checked out",
                                 crate::gitview::age(now, b.epoch),
                                 b.upstream.as_deref().unwrap_or("no upstream"),
-                                if b.current { "\nthe checked-out branch" } else { "" },
+                                if tracked { format!("ahead/behind {staleness}\n") } else { String::new() },
+                                if b.current { "the checked-out branch\n" } else { "" },
                             ));
                         if row.clicked() {
                             self.gitview.set_log_rev(if scoped {
@@ -5488,6 +5577,91 @@ impl App {
             }
         });
         ui.add_space(4.0);
+    }
+
+    /// What the fetch did, said out loud. `R-D25`.
+    ///
+    /// ADR-0014 makes reporting non-separable from the verb: a sync that
+    /// succeeds silently cannot be told from one that silently did nothing,
+    /// and being confidently wrong about how current you are is the whole
+    /// problem the fetch was admitted to solve.
+    ///
+    /// It dismisses itself when there is nothing to act on and waits when
+    /// there is. "Up to date" is worth a glance and never worth a click;
+    /// "6 behind" is a thing you have to do something about, and something you
+    /// have to do something about should not evaporate while you read it.
+    fn git_fetch_popup(&mut self, ctx: &egui::Context) {
+        let Some(f) = &self.gitview.fetched else {
+            return;
+        };
+        const LINGER: std::time::Duration = std::time::Duration::from_secs(7);
+        if !f.needs_a_merge() && f.at.elapsed() > LINGER {
+            self.gitview.fetched = None;
+            return;
+        }
+        // Repaint as the deadline passes, or an idle window sits on a popup
+        // that expired a minute ago.
+        if !f.needs_a_merge() {
+            ctx.request_repaint_after(LINGER.saturating_sub(f.at.elapsed()));
+        }
+
+        let headline = f.headline();
+        let behind = f.behind;
+        let updates = f.updates.clone();
+        let mut dismiss = false;
+
+        egui::Window::new("Sync")
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            // Bottom right: it is a report, not a question, and it must not
+            // land over the list it is reporting on.
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(380.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(icon::DOT)
+                            .color(if behind > 0 { pal().amber } else { pal().green }),
+                    );
+                    ui.label(RichText::new(&headline).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(icon::HIDE).on_hover_text("dismiss").clicked() {
+                            dismiss = true;
+                        }
+                    });
+                });
+
+                if updates.is_empty() {
+                    // Worth saying rather than leaving blank: "no output" and
+                    // "did not run" look identical when both are empty.
+                    ui.label(dim("No refs moved — the remotes had nothing new."));
+                } else {
+                    ui.add_space(2.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            for line in &updates {
+                                ui.label(mono(line).size(11.0));
+                            }
+                        });
+                }
+
+                if behind > 0 {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "Merging stays in a terminal — mogeung fetches and never pulls.",
+                        )
+                        .color(pal().dim)
+                        .size(11.0),
+                    );
+                }
+            });
+
+        if dismiss {
+            self.gitview.fetched = None;
+        }
     }
 
     /// Stage, unstage and discard the ticked files. `R-D19`.
@@ -11391,7 +11565,15 @@ impl App {
     /// The rule the layout follows: the list is written on change, not on
     /// every frame. Unlike the layout there is no drag to debounce, so a save
     /// per edit is exactly right.
+    fn git_fetch_popup_entry(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
+        self.git_fetch_popup(&ctx);
+    }
+
     fn connections_window(&mut self, root: &mut egui::Ui) {
+        // The sync report is drawn here rather than in the Git tab: `Ctrl+T`
+        // works from anywhere, so its answer must appear anywhere too.
+        self.git_fetch_popup_entry(root);
         if !self.show_connections {
             return;
         }

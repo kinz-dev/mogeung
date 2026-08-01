@@ -744,6 +744,11 @@ fn is_write(cmd: &ClientMsg) -> bool {
             | ClientMsg::GitStashPop { .. }
             | ClientMsg::GitStashDrop { .. }
             | ClientMsg::GitResolve { .. }
+            // Not a repository write. Gated with them because it is the one
+            // verb that reaches a network beyond this machine (ADR-0014), and
+            // "an open socket must not be able to make this daemon talk to
+            // someone else's server" is the same rule wearing a different hat.
+            | ClientMsg::GitFetch { .. }
     )
 }
 
@@ -1133,6 +1138,21 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 Err(e) => err(e),
             }
         }
+        ClientMsg::GitFetch { session_id } => match state.git_fetch(&session_id).await {
+            Ok(r) => {
+                state.broadcast(ServerMsg::GitFetched {
+                    session_id: session_id.clone(),
+                    updates: r.updates,
+                    upstream: r.upstream,
+                    ahead: r.ahead,
+                    behind: r.behind,
+                });
+                // Ahead/behind live on the refs answer too, so the lists
+                // behind the popup agree with what it just said.
+                after_ref_change(state, session_id).await
+            }
+            Err(e) => err(e),
+        },
         ClientMsg::GitResolve {
             session_id,
             path,
@@ -1352,6 +1372,11 @@ mod write_guard_tests {
                 path: "a.rs".into(),
                 side: mogeung_core::wire::ResolveSide::Ours,
             },
+            // Not a repository write, but gated with them deliberately: it is
+            // the one verb that reaches a network beyond this machine
+            // (ADR-0014), and an open socket must not be able to make this
+            // daemon talk to someone else's server.
+            ClientMsg::GitFetch { session_id: id() },
         ] {
             assert!(is_write(&cmd), "{cmd:?} changes the repository");
         }
