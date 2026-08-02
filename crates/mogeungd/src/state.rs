@@ -1691,6 +1691,61 @@ impl AppState {
         tokio::task::spawn_blocking(move || crate::git::fetch(&root)).await?
     }
 
+    /// Every note. `R-B35`.
+    pub async fn notes(&self) -> Result<Vec<mogeung_core::wire::Note>> {
+        self.store.load_notes()
+    }
+
+    /// Create or update a note, and mirror it. `R-B35`.
+    ///
+    /// The store is written first and the mirror second, deliberately: the
+    /// mirror is a copy, and a copy that cannot be written must not cost the
+    /// user the writing it was meant to protect
+    /// ([ADR-0015](../../../docs/decisions/0015-markdown-is-the-truth.md)).
+    pub async fn save_note(
+        &self,
+        id: String,
+        body: String,
+        session_id: Option<String>,
+        seq: Option<u64>,
+        repo: Option<String>,
+    ) -> Result<Vec<mogeung_core::wire::Note>> {
+        let now = Utc::now().timestamp();
+        let existing = self
+            .store
+            .load_notes()?
+            .into_iter()
+            .find(|n| n.id == id && !id.is_empty());
+        let note = mogeung_core::wire::Note {
+            created: existing.as_ref().map(|n| n.created).unwrap_or(now),
+            id: if id.is_empty() {
+                crate::notes::new_id()
+            } else {
+                id
+            },
+            body,
+            updated: now,
+            session_id,
+            seq,
+            repo,
+        };
+        self.store.save_note(&note)?;
+        if let Err(e) = crate::notes::mirror(&note) {
+            // Worth saying once, and worth not failing over.
+            tracing::warn!("could not mirror note {} to disk: {e}", note.id);
+        }
+        self.store.load_notes()
+    }
+
+    /// Forget a note. The one destructive verb over content nothing can
+    /// recompute, so it takes the mirror with it — a file left behind would
+    /// read as a live note to everything that is not mogeung.
+    pub async fn delete_note(&self, id: &str) -> Result<Vec<mogeung_core::wire::Note>> {
+        self.store.delete_note(id)?;
+        crate::notes::unmirror(id);
+        self.store.load_notes()
+    }
+
     /// Resolve one conflicted file. `R-D22`.
     pub async fn git_resolve(
         &self,

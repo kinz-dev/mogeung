@@ -52,14 +52,14 @@ than a handful of notes, this comes out rather than being decorated.
 
 ### Acceptance
 
-- [ ] A turn in the Transcript can carry a note, written and edited in place
-- [ ] Notes are visible without opening each turn — the transcript shows where
+- [x] A turn in the Transcript can carry a note, written and edited in place
+- [x] Notes are visible without opening each turn — the transcript shows where
       they are
 - [ ] A note survives the session ending, being forgotten, and the window
       restarting
-- [ ] Notes are one set across windows: two windows on one daemon show the same
+- [x] Notes are one set across windows: two windows on one daemon show the same
       note the moment it is saved
-- [ ] Every note also exists as a `.md` file under `~/.mogeung/notes/`, and
+- [x] Every note also exists as a `.md` file under `~/.mogeung/notes/`, and
       deleting mogeung's database loses history but not the writing
 - [ ] A document can be written, listed, renamed and deleted from a pane
 - [ ] A `- [ ]` line in any document appears in a task list, and ticking it in

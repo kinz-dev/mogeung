@@ -1153,6 +1153,27 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }
             Err(e) => err(e),
         },
+        // -- Notes. `R-B35`. Every one answers with the whole set, so two
+        // windows on one daemon cannot drift — the property daemon ownership
+        // was chosen for (ADR-0015).
+        ClientMsg::NoteList => match state.notes().await {
+            Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
+            Err(e) => err(e),
+        },
+        ClientMsg::NoteSave {
+            id,
+            body,
+            session_id,
+            seq,
+            repo,
+        } => match state.save_note(id, body, session_id, seq, repo).await {
+            Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
+            Err(e) => err(e),
+        },
+        ClientMsg::NoteDelete { id } => match state.delete_note(&id).await {
+            Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
+            Err(e) => err(e),
+        },
         ClientMsg::GitResolve {
             session_id,
             path,

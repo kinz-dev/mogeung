@@ -5,6 +5,7 @@
 //! matters far less than being able to change `Run` without a migration.
 
 use anyhow::Result;
+use mogeung_core::wire::Note;
 use mogeung_core::{Session, TranscriptEvent};
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
@@ -44,6 +45,26 @@ impl Store {
                 anchor TEXT NOT NULL,
                 PRIMARY KEY (run_id, anchor)
             );
+
+            -- The user's own writing (R-B35, pillar L). Everything else in
+            -- this database is derived and can be recomputed from ~/.claude
+            -- and git; this cannot, which is why it is mirrored to disk as
+            -- well. See ADR-0015.
+            --
+            -- `session_id` and `seq` together anchor a note to one turn of one
+            -- transcript. Both are nullable and both are *tags*: a note keeps
+            -- existing when the session is forgotten, which is the whole point
+            -- of tagging rather than nesting.
+            CREATE TABLE IF NOT EXISTS notes (
+                id         TEXT PRIMARY KEY,
+                body       TEXT NOT NULL,
+                created    INTEGER NOT NULL,
+                updated    INTEGER NOT NULL,
+                session_id TEXT,
+                seq        INTEGER,
+                repo       TEXT
+            );
+            CREATE INDEX IF NOT EXISTS notes_by_session ON notes (session_id, seq);
 
             -- Per-repo signal command and its last run (R-E2). The command
             -- is the user's own, run only on an explicit click.
@@ -93,6 +114,62 @@ impl Store {
         c.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         c.execute("DELETE FROM events WHERE run_id = ?1", params![id])?;
         c.execute("DELETE FROM reviewed WHERE run_id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Every note, newest first. `R-B35`.
+    ///
+    /// The whole set rather than a page: this is the user's own writing, it is
+    /// small by nature, and a client that has all of it can show "notes on
+    /// this turn" without a round trip per turn.
+    pub fn load_notes(&self) -> Result<Vec<Note>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare(
+            "SELECT id, body, created, updated, session_id, seq, repo \
+             FROM notes ORDER BY updated DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Note {
+                id: r.get(0)?,
+                body: r.get(1)?,
+                created: r.get(2)?,
+                updated: r.get(3)?,
+                session_id: r.get(4)?,
+                seq: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
+                repo: r.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Insert or update one note.
+    pub fn save_note(&self, n: &Note) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO notes (id, body, created, updated, session_id, seq, repo) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(id) DO UPDATE SET body = ?2, updated = ?4, \
+             session_id = ?5, seq = ?6, repo = ?7",
+            params![
+                n.id,
+                n.body,
+                n.created,
+                n.updated,
+                n.session_id,
+                n.seq.map(|v| v as i64),
+                n.repo
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_note(&self, id: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
         Ok(())
     }
 

@@ -447,6 +447,15 @@ pub struct App {
     /// When the subscription started, so the panel can say "still looking"
     /// rather than "nothing there" during the seconds before the first answer.
     scan_since: Option<std::time::Instant>,
+    /// Every note the daemon holds. `R-B35`.
+    ///
+    /// Daemon-owned, so this is a cache of theirs rather than a store of ours
+    /// — replaced wholesale on every `Notes` message, never edited in place.
+    /// That is what makes two windows agree (ADR-0015).
+    notes: Vec<mogeung_core::wire::Note>,
+    /// The turn whose note is open for editing, and the text so far.
+    /// `(session_id, seq, body)`.
+    note_draft: Option<(String, u64, String)>,
     /// This machine's id, resolved once — the other half of the comparison.
     this_machine: Option<String>,
 
@@ -713,6 +722,8 @@ impl App {
             scan: None,
             scanned: Vec::new(),
             scan_since: None,
+            notes: Vec::new(),
+            note_draft: None,
             this_machine: mogeungd::machine::machine_id(),
             pane: Pane::Queue,
             keymap,
@@ -774,6 +785,11 @@ impl App {
                     // when the view state that belongs to it can be loaded.
                     // `R-I11`.
                     self.adopt_scope();
+                    // And the notes, which belong to the *daemon* rather than
+                    // to this machine (`R-B35`, ADR-0015) — so they are asked
+                    // for rather than loaded, and re-asked on every reconnect
+                    // because another window may have written one meanwhile.
+                    self.net.send(ClientMsg::NoteList);
                     // A reconnect invalidates our transcript cache.
                     self.hydrated.clear();
                     sessions_changed = true;
@@ -977,6 +993,10 @@ impl App {
                     session_id,
                     stashes,
                 } => self.gitview.ingest_stashes(&session_id, stashes),
+                // `R-B35`. The whole set, every time — the daemon owns them,
+                // so this is a replacement rather than a merge and two windows
+                // cannot drift apart (ADR-0015).
+                ServerMsg::Notes { notes } => self.notes = notes,
                 ServerMsg::GitFetched {
                     session_id,
                     updates,
@@ -8291,6 +8311,146 @@ impl App {
         }
     }
 
+    /// The note on one turn, and the affordance to write one. `R-B35`.
+    ///
+    /// A mark and a note are the same object at two depths: a note with an
+    /// empty body *is* a bookmark. That is one concept rather than two, and it
+    /// means marking a turn and writing about it are the same gesture — you
+    /// never have to decide which you are doing before you start.
+    fn note_on_turn(&mut self, ui: &mut egui::Ui, session_id: &str, seq: u64) {
+        let existing = self
+            .notes
+            .iter()
+            .find(|n| n.session_id.as_deref() == Some(session_id) && n.seq == Some(seq))
+            .cloned();
+        let editing = self
+            .note_draft
+            .as_ref()
+            .is_some_and(|(s, q, _)| s == session_id && *q == seq);
+
+        if !editing {
+            // Nothing here until there is something to say, or the pointer is
+            // over the row: a transcript is for reading, and a column of
+            // buttons down the side of it is a column of noise.
+            let marked = existing.is_some();
+            let hovered = ui.rect_contains_pointer(ui.max_rect());
+            if !marked && !hovered {
+                return;
+            }
+            ui.horizontal(|ui| {
+                let (glyph, tip) = match &existing {
+                    Some(n) if n.body.trim().is_empty() => {
+                        (icon::FLAG, "bookmarked — click to write a note")
+                    }
+                    Some(_) => (icon::FLAG, "click to edit this note"),
+                    None => (icon::FLAG, "bookmark this turn, or write a note on it"),
+                };
+                let tint = if marked { pal().amber } else { pal().dim };
+                if ui::icon_button(ui, glyph, tip, marked, Some(tint)).clicked() {
+                    self.note_draft = Some((
+                        session_id.to_string(),
+                        seq,
+                        existing.as_ref().map(|n| n.body.clone()).unwrap_or_default(),
+                    ));
+                }
+                if let Some(n) = &existing {
+                    if !n.body.trim().is_empty() {
+                        // The note itself, rendered where it was written. It is
+                        // yours, so it reads as prose rather than as metadata.
+                        ui.label(
+                            RichText::new(crate::ui::truncate(n.body.trim(), 90))
+                                .color(pal().amber)
+                                .size(12.0),
+                        );
+                    }
+                }
+            });
+            return;
+        }
+
+        // The editor, in place. Deliberately not a dialog: a note about a turn
+        // is written while looking at the turn, and a modal would cover it.
+        let mut save = false;
+        let mut cancel = false;
+        let mut discard = false;
+        egui::Frame::NONE
+            .fill(pal().bg_raised)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if let Some((_, _, body)) = self.note_draft.as_mut() {
+                    let field = ui.add(
+                        egui::TextEdit::multiline(body)
+                            .desired_rows(3)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("what you want to remember about this turn"),
+                    );
+                    field.request_focus();
+                    // Ctrl+Enter saves, Escape abandons — the two things hands
+                    // already do in every other text box in this window.
+                    if field.has_focus() {
+                        let (enter, esc) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::Enter) && i.modifiers.command,
+                                i.key_pressed(egui::Key::Escape),
+                            )
+                        });
+                        save |= enter;
+                        cancel |= esc;
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if existing.is_some()
+                            && ui
+                                .button(RichText::new("Delete").color(pal().red))
+                                .on_hover_text(
+                                    "there is no undo — a note is the one thing here \
+                                     nothing can recompute",
+                                )
+                                .clicked()
+                        {
+                            discard = true;
+                        }
+                        ui.label(dim("Ctrl+Enter saves · Esc cancels"));
+                    });
+                });
+            });
+
+        if save {
+            if let Some((sid, q, body)) = self.note_draft.take() {
+                // An emptied note is a deletion, not a blank one — except when
+                // there was never a note, where it is a plain bookmark. The
+                // difference is whether you cleared something or marked
+                // something.
+                match (existing.as_ref(), body.trim().is_empty()) {
+                    (Some(n), true) => self.net.send(ClientMsg::NoteDelete { id: n.id.clone() }),
+                    _ => self.net.send(ClientMsg::NoteSave {
+                        id: existing.as_ref().map(|n| n.id.clone()).unwrap_or_default(),
+                        body,
+                        session_id: Some(sid),
+                        seq: Some(q),
+                        repo: None,
+                    }),
+                }
+            }
+        } else if discard {
+            if let Some(n) = &existing {
+                self.net.send(ClientMsg::NoteDelete { id: n.id.clone() });
+            }
+            self.note_draft = None;
+        } else if cancel {
+            self.note_draft = None;
+        }
+    }
+
     fn transcript_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
         let z = self.pane_zoom(ui, "transcript");
         scale_text(ui, z);
@@ -8392,9 +8552,12 @@ impl App {
                         .focus_event_ts
                         .map(|t| ev.ts >= t)
                         .unwrap_or(false);
+                    let seq = ev.seq;
                     let resp = ui
                         .scope(|ui| event_row(ui, ev, &mut self.md_cache, &self.prefs))
                         .response;
+                    // `R-B35`, under the turn it is about.
+                    self.note_on_turn(ui, &s.id, seq);
                     if focus_here {
                         resp.scroll_to_me(Some(egui::Align::Center));
                         self.focus_event_ts = None;

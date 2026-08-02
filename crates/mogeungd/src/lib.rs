@@ -10,6 +10,7 @@ pub mod git;
 pub mod insight;
 pub mod health;
 pub mod machine;
+pub mod notes;
 pub mod notify;
 pub mod runner;
 pub mod server;

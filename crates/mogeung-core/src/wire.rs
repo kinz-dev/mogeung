@@ -193,6 +193,30 @@ pub enum ClientMsg {
     /// admits `fetch` and refuses `pull` and `push`. Never sent on a timer —
     /// a human asks, or it does not happen.
     GitFetch { session_id: SessionId },
+    // -- Notes. `R-B35`, pillar L.
+    //
+    // Not in the write family above: those change a *repository*, and the
+    // guard that refuses them is about not letting an open socket run git.
+    // These change the daemon's own store, like `SetHunkReviewed` and
+    // `SetSignalCommand` already do, and are gated by the token layer along
+    // with everything else when the bind is not loopback.
+    /// Send every note. Small by nature, so it is not paged.
+    NoteList,
+    /// Create or update one. An empty `id` mints a new note and the daemon
+    /// answers with the id it chose.
+    NoteSave {
+        #[serde(default)]
+        id: String,
+        body: String,
+        #[serde(default)]
+        session_id: Option<SessionId>,
+        #[serde(default)]
+        seq: Option<u64>,
+        #[serde(default)]
+        repo: Option<String>,
+    },
+    NoteDelete { id: String },
+
     /// Resolve one conflicted file. `R-D22`.
     ///
     /// Whole-file, matching what `R-D16`'s three-way view shows. A resolution
@@ -482,6 +506,35 @@ pub struct WorktreeInfo {
     pub branch: Option<String>,
 }
 
+/// A piece of the user's own writing. `R-B35`, pillar L.
+///
+/// The only thing this daemon stores that it could not recompute — see
+/// [ADR-0015](../../../docs/decisions/0015-markdown-is-the-truth.md), which is
+/// also why it is mirrored to disk as markdown.
+///
+/// `session_id` and `seq` are **tags, not a location**. Together they anchor a
+/// note to one turn of one transcript; a note keeps existing when that session
+/// ends, is forgotten, or the repository moves. A note with neither is a
+/// free-standing document, which is what `R-L2` will be made of.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    /// Markdown. Empty is legal and means a plain bookmark — the mark *is* the
+    /// note, so marking a turn and writing about it are one gesture with two
+    /// depths rather than two features.
+    pub body: String,
+    /// Unix seconds.
+    pub created: i64,
+    pub updated: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    /// Which turn, within that session's transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
 /// Which version of a conflicted file to keep. `R-D22`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -727,6 +780,12 @@ pub enum ServerMsg {
         ahead: u32,
         behind: u32,
     },
+    /// Every note the daemon holds. `R-B35`.
+    ///
+    /// Always the whole set, and always after any change, so two windows on
+    /// one daemon cannot drift — which is the property daemon ownership was
+    /// chosen for.
+    Notes { notes: Vec<Note> },
     /// The stash list.
     GitStashList {
         session_id: SessionId,

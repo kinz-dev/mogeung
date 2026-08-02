@@ -278,3 +278,94 @@ async fn rescan_is_safe_to_request_over_the_wire() {
     .await;
     assert!(queued.is_some(), "rescan produced no queue update");
 }
+
+/// Notes, end to end over the wire — `R-B35`, pillar L.
+///
+/// The properties ADR-0015 chose daemon ownership for: one set of notes
+/// whatever is connected, and writing that outlives the process holding it.
+#[tokio::test]
+async fn a_note_reaches_every_client_and_lands_on_disk() {
+    let h = boot("notes").await;
+    let (mut a, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
+    let (mut b, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
+
+    send(
+        &mut a,
+        ClientMsg::NoteSave {
+            id: String::new(),
+            body: "the agent's claim about the cache is wrong".into(),
+            session_id: Some("sess-1".into()),
+            seq: Some(12),
+            repo: None,
+        },
+    )
+    .await;
+
+    // Both clients see it: the answer is a broadcast of the whole set rather
+    // than a reply to whoever asked.
+    let mut id = String::new();
+    for ws in [&mut a, &mut b] {
+        let notes = wait_for(ws, 5, |m| match m {
+            ServerMsg::Notes { notes } if !notes.is_empty() => Some(notes.clone()),
+            _ => None,
+        })
+        .await
+        .expect("every connected client is told");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].session_id.as_deref(), Some("sess-1"));
+        assert_eq!(notes[0].seq, Some(12));
+        assert!(notes[0].body.contains("cache is wrong"));
+        assert!(!notes[0].id.is_empty(), "the daemon minted an id");
+        id = notes[0].id.clone();
+    }
+
+    // Editing keeps the id rather than making a second note.
+    send(
+        &mut a,
+        ClientMsg::NoteSave {
+            id: id.clone(),
+            body: "checked it — the claim is right after all".into(),
+            session_id: Some("sess-1".into()),
+            seq: Some(12),
+            repo: None,
+        },
+    )
+    .await;
+    let notes = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::Notes { notes } => {
+            notes.first().filter(|n| n.body.contains("after all")).map(|_| notes.clone())
+        }
+        _ => None,
+    })
+    .await
+    .expect("the edit came back");
+    assert_eq!(notes.len(), 1, "edited, not duplicated");
+    assert_eq!(notes[0].id, id);
+
+    // The mirror holds the writing, which is the whole mitigation for keeping
+    // this in a database at all (ADR-0015).
+    let mirror = mogeungd::notes::mirror_dir();
+    let named = |id: &str| -> Vec<String> {
+        std::fs::read_dir(mirror.clone())
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| n.starts_with(&format!("{id}-")))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let found = named(&id);
+    assert_eq!(found.len(), 1, "exactly one mirror file: {found:?}");
+    let text = std::fs::read_to_string(mirror.join(&found[0])).unwrap();
+    assert!(text.contains("right after all"), "{text}");
+
+    send(&mut a, ClientMsg::NoteDelete { id: id.clone() }).await;
+    let gone = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::Notes { notes } if notes.is_empty() => Some(()),
+        _ => None,
+    })
+    .await;
+    assert!(gone.is_some(), "the delete came back");
+    assert!(named(&id).is_empty(), "the mirror went with it");
+}
