@@ -131,10 +131,14 @@ it to take.
   actually exercises it: drop the derived table, restart, assert nothing but
   history is missing.
 - **Notes follow the daemon, not the window.** Watching a remote machine shows
-  that machine's notes. Correct, and the exact opposite of what `R-I11` decided
-  for pins and labels a day earlier. Both are right for their own reasons and
+  that machine's notes, while pins and labels for the same machine sit in a
+  file on the machine the *window* runs on (`R-I11`, one day earlier). They
+  agree about scope and disagree about who holds the bytes, so two windows on
+  one daemon show the same notes and different pins. Both are defensible and
   the pair will confuse somebody; the guide has to explain them together rather
-  than separately.
+  than separately. **`R-I12` records the argument that `R-I11` should move**,
+  which would remove the asymmetry — filed rather than acted on, because it
+  reverses a shipped decision that has not been used yet.
 - **Ticking a box rewrites a document under the user.** If the document is open
   in the editor pane at the time, two writers exist. Unknown whether to refuse,
   reload, or merge — and it is the same class of question `R-D21` asked about
