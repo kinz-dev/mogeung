@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| Branch | `fix-linux-launch` |
-| Tests | 581 passing |
-| Rust | 49341 lines |
+| Branch | `main` |
+| Tests | 582 passing |
+| Rust | 49471 lines |
 | Docs | 63 files, 14 ADRs |
 
 ## Assumptions

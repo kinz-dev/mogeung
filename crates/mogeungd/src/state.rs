@@ -2072,10 +2072,19 @@ fn claude_binary() -> String {
     "claude".to_string()
 }
 
+/// What `yolomo` adds, and the whole of what "yolo mode" means here:
+/// `claude` stops asking before it runs a tool.
+///
+/// Asked for directly 2026-08-02. It is the agent's own flag and mogeung only
+/// passes it — this is still not wrapping the conversation ([ADR-0003]) — but
+/// it changes what a click costs, so the window says so in the dialog rather
+/// than leaving it to be discovered.
+const SKIP_PERMISSIONS: &str = "--dangerously-skip-permissions";
+
 fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<String> {
     let claude = claude_binary();
     if !tmux_available {
-        return vec![claude];
+        return vec![claude, SKIP_PERMISSIONS.to_string()];
     }
     let safe: String = Path::new(dir)
         .file_name()
@@ -2092,6 +2101,7 @@ fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<Stri
         "-c".to_string(),
         dir.to_string(),
         claude,
+        SKIP_PERMISSIONS.to_string(),
     ]
 }
 
@@ -2735,7 +2745,7 @@ mod terminal_tests {
     #[test]
     fn the_launch_command_names_claude_by_absolute_path() {
         let cmd = in_terminal_command("/some/repo", true, "0102-030405");
-        let last = cmd.last().expect("the command ends with the agent");
+        let last = &cmd[cmd.len() - 2];
         // On a machine that has it, this is absolute. On one that does not,
         // the bare name survives on purpose, so the terminal's own "command
         // not found" is what the user sees rather than silence.
@@ -2748,7 +2758,7 @@ mod terminal_tests {
         }
         // And the no-tmux path agrees with the tmux path about what to run.
         let bare = in_terminal_command("/some/repo", false, "0102-030405");
-        assert_eq!(bare, vec![last.clone()]);
+        assert_eq!(bare, vec![last.clone(), SKIP_PERMISSIONS.to_string()]);
     }
 
     /// Regression, reported from a Linux desktop: **"+" did nothing.**
@@ -2961,16 +2971,14 @@ mod terminal_tests {
         // The agent is named by absolute path where one can be found — see
         // `the_launch_command_names_claude_by_absolute_path` for why — so this
         // asserts the shape rather than the literal.
-        assert!(
-            cmd.last().unwrap().ends_with("claude"),
-            "{:?}",
-            cmd.last()
-        );
+        let agent = &cmd[cmd.len() - 2];
+        assert!(agent.ends_with("claude"), "{agent}");
+        assert_eq!(cmd.last().unwrap(), SKIP_PERMISSIONS, "yolo mode, asked for");
 
-        // Without tmux: the agent alone, and the same one either way.
+        // Without tmux: the agent and its flag, and the same one either way.
         assert_eq!(
             in_terminal_command("/x", false, "s"),
-            vec![cmd.last().unwrap().clone()]
+            vec![agent.clone(), SKIP_PERMISSIONS.to_string()]
         );
     }
 

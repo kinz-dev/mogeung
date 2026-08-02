@@ -1498,7 +1498,8 @@ impl App {
                     if icon_button(
                         ui,
                         icon::NEW_SESSION,
-                        "New session — opens a real interactive claude in your terminal",
+                        "New session — a real interactive claude in your terminal, \
+                         with permission prompts skipped",
                         false,
                         None,
                     )
@@ -10251,6 +10252,18 @@ impl App {
                 ui.label(dim(
                     "mogeung does not wrap the conversation — you drive it exactly as usual, and it shows up in the queue.",
                 ));
+                // Said here rather than left to be discovered. The flag is the
+                // agent's own and mogeung only passes it, but it changes what
+                // this button costs, and a permission prompt that never comes
+                // is not something anyone should meet by surprise.
+                ui.label(
+                    RichText::new(
+                        "Started in yolo mode: --dangerously-skip-permissions. The agent \
+                         will not ask before editing files or running commands.",
+                    )
+                    .color(pal().amber)
+                    .size(12.0),
+                );
                 ui.add_space(8.0);
 
                 ui.label(dim("directory"));
