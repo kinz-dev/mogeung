@@ -1,7 +1,7 @@
 ---
 title: Assumption ledger
 status: active
-updated: 2026-07-30
+updated: 2026-08-02
 ---
 
 # Assumption ledger
@@ -60,6 +60,7 @@ assumption — not to build the feature.**
 | A24 | A read-only daemon is safe to reach over a trusted network with a shared token, without TLS | `UNTESTED` | `--token` is enforced on HTTP and WS (`R-I4`) and, since 2026-07-31, is **mandatory** beyond loopback — a public bind without one refuses to start rather than warning (`R-I10`). So the assumption is now the thing actually being tested, rather than a bet nobody was held to. There is still no TLS. **The word "read-only" in this row is load-bearing**, and [ADR-0012](../decisions/0012-write-locally-never-publish.md) is about to make the daemon capable of writing a repository — which is why that ADR refuses write verbs unless the bind is loopback or a token was presented. Without that guard the feature would void this assumption rather than depend on it. TLS stays out until the assumption fails | — |
 | A25 | A glanceable waiting count outliving the window earns its keep against notifications | `UNTESTED` | The roadmap itself flags `R-C1` banners as possibly making `R-C2` redundant, and left it open deliberately. Built at the one-go ask; if unglanced in the week it is a removal candidate | — |
 | A26 | The user will commit from mogeung rather than from the terminal tab open beside it | `UNTESTED` | Asked for directly 2026-07-30 — *"Do we support git commit and push in the GIT UI now?"* — and, offered four tiers, local-writes chosen over the cheaper compose-the-command path. A want, and a deliberate one, but the competitor is unusually strong: [feature 0024](../features/0024-in-app-terminal.md) put a real shell one keystroke away and it already knows git. The failure mode is not week one but a build that widened the product for nothing, so the removal condition is written before the code: unused through a dogfooding week and the verbs come out, replaced by the composed-command alternative ADR-0012 kept as its fallback | [ADR-0012](../decisions/0012-write-locally-never-publish.md); [feature 0025](../features/0025-git-write-local.md) |
+| A27 | The user will write notes inside mogeung rather than in the editor already open beside it | `UNTESTED` | Asked for directly 2026-08-02 (*"Tasks / Scratch pad concept"*) and designed the same day. The same shape as A26 and a harder bet: the competing tool is not a terminal but an editor that is already open, already has your keybindings, and already holds the file you are talking about. Tested deliberately at the smallest scale first — a note against a transcript turn (`R-B35`) is the one place a note has an obvious home and nothing is closer to hand. **Removal condition agreed in advance:** fewer than a handful of notes in a week and it comes out rather than being decorated | [ADR-0015](../decisions/0015-markdown-is-the-truth.md), [feature 0026](../features/0026-notes-and-tasks.md) |
 
 ## Notes on the most dangerous ones
 
