@@ -1,7 +1,7 @@
 ---
 title: Concept
 status: active
-updated: 2026-07-30
+updated: 2026-08-01
 ---
 
 # mogeung
@@ -121,8 +121,11 @@ implementation was lost to one that was not. ([assumptions.md](assumptions.md))
 - **Not multi-user or cloud.** Single developer, local-first, localhost-only.
 - **Not a replacement for git.** It reads git, and — since
   [ADR-0012](../decisions/0012-write-locally-never-publish.md), 2026-07-30 —
-  may stage, commit, branch, stash and resolve **locally**. It never talks to
-  a remote: no fetch, no pull, no push. The line is the network.
+  may stage, commit, branch, stash and resolve **locally**.
+  [ADR-0014](../decisions/0014-fetch-is-not-publishing.md) then added `fetch`
+  on 2026-08-01, because the line was drawn at the network and the network was
+  the wrong thing: fetching reads someone else's server and changes nothing
+  there. **No pull, no push.** The line is publishing and merging.
 
 ## 6. What success and failure look like
 

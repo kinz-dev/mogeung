@@ -309,6 +309,99 @@ fn stash_ref(index: u32) -> String {
     format!("stash@{{{index}}}")
 }
 
+/// What a fetch did, in enough detail to say so out loud. `R-D25`.
+#[derive(Debug, Clone, Default)]
+pub struct FetchReport {
+    /// Ref updates git reported, one line each, in its own words.
+    pub updates: Vec<String>,
+    /// The current branch's upstream, and where it now stands against it.
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+/// Update remote-tracking refs. `R-D25`,
+/// [ADR-0014](../../../docs/decisions/0014-fetch-is-not-publishing.md).
+///
+/// **The only outbound network call this process makes.** Everything else is
+/// localhost or the local filesystem, which is why two of that ADR's
+/// constraints are in the code here rather than in a note about intent:
+///
+/// - `GIT_TERMINAL_PROMPT=0`, plus the no-stdin that [`run_git_write`] already
+///   establishes. A private remote wanting a passphrase must *say so* and
+///   fail. A daemon has no terminal, so an interactive prompt is a thread
+///   parked for ever on a question nobody will ever see.
+/// - Nothing calls this on a timer, and nothing may. A fetch reaches someone
+///   else's server; a tool that does that on a schedule is one nobody can
+///   reason about on a metered connection.
+///
+/// `--prune` because the point is an accurate picture, and a remote-tracking
+/// ref for a branch deleted a month ago is the same confident lie this exists
+/// to stop.
+pub fn fetch(root: &Path) -> Result<FetchReport> {
+    let out = Command::new("git")
+        .args(["fetch", "--all", "--prune"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Belt and braces: an ssh remote asks through `SSH_ASKPASS` rather
+        // than through git's own prompt, and would otherwise sidestep the
+        // variable above.
+        .env("GIT_ASKPASS", "")
+        .stdin(std::process::Stdio::null())
+        .current_dir(root)
+        .output()
+        .context("failed to run git fetch")?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let said = stderr.trim();
+        bail!(
+            "{}",
+            if said.is_empty() {
+                "git fetch failed with no message".to_string()
+            } else {
+                said.to_string()
+            }
+        );
+    }
+
+    // The interesting part of a fetch — the ref updates — goes to stderr, and
+    // stdout gets nothing. That is where progress lives, not an error signal.
+    let said = String::from_utf8_lossy(&out.stderr);
+    let updates: Vec<String> = said
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        // Progress noise, and the `From <url>` banner, which names a host we
+        // would rather not paste into a popup on someone's screen.
+        .filter(|l| !l.starts_with("From ") && !l.starts_with("remote:"))
+        .map(str::to_string)
+        .collect();
+
+    // Where the current branch now stands. Absent when it has no upstream,
+    // which is an ordinary state rather than a failure.
+    let upstream = run_git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (mut ahead, mut behind) = (0, 0);
+    if upstream.is_some() {
+        if let Ok(counts) =
+            run_git(root, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+        {
+            let mut parts = counts.split_whitespace();
+            behind = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            ahead = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        }
+    }
+
+    Ok(FetchReport {
+        updates,
+        upstream,
+        ahead,
+        behind,
+    })
+}
+
 /// Which version of a conflicted file to keep. `R-D22`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {

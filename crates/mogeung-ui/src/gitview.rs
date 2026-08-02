@@ -78,6 +78,11 @@ pub struct GitView {
     pub commit_msg: String,
     /// Replace the tip commit rather than adding one.
     pub commit_amend: bool,
+    /// The last fetch's result, while the popup is showing it. `R-D25`.
+    pub fetched: Option<Fetched>,
+    /// A fetch is in flight. The button says so and refuses to start a second
+    /// one — a network call behind a keystroke is a keystroke people repeat.
+    pub fetching: bool,
     /// A branch a Switch is waiting to be confirmed for. `R-D21`.
     pub confirm_switch: Option<String>,
     /// A stash index a Drop is waiting to be confirmed for. `R-D21`.
@@ -162,6 +167,35 @@ pub struct GitView {
 /// The context widths the ± control cycles through; the last is "all of
 /// it" for any file that is not generated output.
 pub const CONTEXT_STEPS: [u32; 4] = [3, 10, 30, 400];
+
+/// What a fetch did, as the popup needs it. `R-D25`.
+pub struct Fetched {
+    pub updates: Vec<String>,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// When it landed, so the popup can dismiss itself rather than needing a
+    /// click for something that is only ever good news.
+    pub at: std::time::Instant,
+}
+
+impl Fetched {
+    /// The one-line verdict, which is the sentence people actually read.
+    pub fn headline(&self) -> String {
+        match (&self.upstream, self.behind, self.ahead) {
+            (None, _, _) => "Fetched. This branch tracks nothing.".into(),
+            (Some(u), 0, 0) => format!("Fetched. Up to date with {u}."),
+            (Some(u), 0, a) => format!("Fetched. {a} ahead of {u}, nothing to catch up on."),
+            (Some(u), b, 0) => format!("Fetched. {b} behind {u}."),
+            (Some(u), b, a) => format!("Fetched. {a} ahead and {b} behind {u} — diverged."),
+        }
+    }
+
+    /// Whether the user has anything to do about it.
+    pub fn needs_a_merge(&self) -> bool {
+        self.behind > 0
+    }
+}
 
 impl GitView {
     /// Point the cache at `id`, dropping everything when it moves.

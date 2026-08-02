@@ -93,8 +93,21 @@ enum rather than filed beside their read siblings, so the guard that refuses
 them can name a contiguous list and a fifth is visibly joining a family with a
 rule. `R-D21` added five more the same day — `GitBranchCreate`, `GitSwitch`,
 `GitStashPush`, `GitStashPop`, `GitStashDrop` — and `R-D22` added the last one, `GitResolve`.
-The write family is complete: `R-D23` is a rendering change, and `R-D24`
-(`fetch`, `pull`, `push`) stays refused by ADR-0012.
+The write family is complete.
+
+**One verb reaches beyond this machine**, added 2026-08-01: `GitFetch`, and its
+answer `GitFetched`. [ADR-0014](../decisions/0014-fetch-is-not-publishing.md)
+supersedes ADR-0012 and moves the line from *the network* to *publishing and
+merging* — `fetch` reads a remote and changes nothing there, `push` publishes,
+`pull` merges under a possibly-running agent. `R-D24` keeps its number and now
+means those last two, still refused by protocol.
+
+`GitFetch` passes the same guard as the write verbs, which is not a category
+error: "an open socket must not be able to make this daemon talk to someone
+else's server" is the same rule wearing a different hat. It is never sent on a
+timer, runs with `GIT_TERMINAL_PROMPT=0` and no stdin so a credential prompt
+fails rather than parking a thread for ever, and always answers — including
+when nothing moved, since a silent success cannot be told from a silent no-op.
 
 Branch names go through `valid_ref_name`, the *same* rule the read side uses to
 scope a log: narrower than git's own, refusing a leading `-`, `..` and `@{`.

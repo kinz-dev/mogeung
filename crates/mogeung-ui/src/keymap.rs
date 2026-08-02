@@ -158,6 +158,12 @@ pub enum Action {
     ToggleConnections,
     OpenKeymap,
     Rescan,
+    /// Update remote-tracking refs for the selected session's repository.
+    /// `R-D25` — the only action here that reaches a network beyond this
+    /// machine, and bound rather than buried because
+    /// [ADR-0014](../../../docs/decisions/0014-fetch-is-not-publishing.md)
+    /// requires it to be a deliberate act and never a timer.
+    SyncRemote,
 }
 
 impl Action {
@@ -216,6 +222,7 @@ impl Action {
         Action::OpenKeymap,
         Action::CycleTheme,
         Action::Rescan,
+        Action::SyncRemote,
     ];
 
     pub fn group(self) -> &'static str {
@@ -268,7 +275,8 @@ impl Action {
             | Action::ToggleConnections
             | Action::OpenKeymap
             | Action::CycleTheme
-            | Action::Rescan => "Windows",
+            | Action::Rescan
+            | Action::SyncRemote => "Windows",
         }
     }
 
@@ -328,6 +336,7 @@ impl Action {
             Action::OpenKeymap => "Open this keyboard settings window",
             Action::CycleTheme => "Theme — dark, light, or follow the desktop",
             Action::Rescan => "Rescan sessions now",
+            Action::SyncRemote => "Fetch from the remote (never pushes, never merges)",
         }
     }
 }
@@ -549,6 +558,7 @@ impl Default for Keymap {
         set(Action::ToggleConnections, &["Alt+D"]);
         set(Action::OpenKeymap, &["Alt+K"]);
         set(Action::Rescan, &["Alt+R"]);
+        set(Action::SyncRemote, &["Ctrl+T"]);
         // Alt+T rather than a bare letter: switching theme mid-review is a
         // once-in-a-while act, and the letters belong to triage.
         set(Action::CycleTheme, &["Alt+T"]);

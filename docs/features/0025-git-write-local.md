@@ -17,8 +17,9 @@ to support the GIT workflow"* — and scoped, from four offered tiers, to
 **local writes only**. `push` was in the question and is deliberately not in
 this feature; see [Explicitly out of scope](#explicitly-out-of-scope).
 
-**`R-D19`–`R-D22` shipped 2026-07-31** — every write verb this feature
-proposes. `R-D23`, the one row here that is not a write, is still a plan. See
+**Complete as of 2026-08-01.** `R-D19`–`R-D22` (every write verb) shipped
+2026-07-31; `R-D23` the next day, alongside `R-D25` — a row this feature did
+not contain, because using it produced an ADR that changed the fence. See
 [Notes](#notes) for what building the first stage changed about the rest.
 
 ## Spec
@@ -85,7 +86,7 @@ decoration, it is liability.
 - [x] A stash can be pushed, popped and dropped from the stash list
 - [x] A conflicted file can be resolved from the three-way view — take ours,
       take theirs, or mark resolved after editing elsewhere
-- [ ] Ahead/behind is never rendered as a bare number: it carries the age of
+- [x] Ahead/behind is never rendered as a bare number: it carries the age of
       the last fetch, or reads as unknown when nothing has fetched
 - [x] A write verb arriving on a non-loopback bind without a token is refused,
       and the refusal is tested. **Not a 401**: the write verbs are
@@ -307,5 +308,27 @@ non-inspection, so the next reader does not mistake it for an oversight.
 One assertion in the tests was wrong before the code was: taking *ours*
 reproduces HEAD exactly, so `git status` goes **empty** rather than showing
 `M `. The property worth asserting is that no unmerged path remains.
+
+### The fence moved while this was being built (2026-08-01)
+
+`R-D23` was specified as a *label* on a number that could not be refreshed,
+because ADR-0012 kept `fetch` out. Building it made the shape of that
+compromise obvious: "3 behind, as of nine days ago" is an honest way of saying
+you still have to leave.
+
+The repository this was written in then demonstrated it — sitting six commits
+behind its origin, with `git status` reporting nothing, because the
+`origin/main` ref had not moved since the merge. The pane would have said
+**0 ahead, 0 behind**. Not a missing feature: a *shipped feature that lies*,
+made likelier by `R-D20`'s success at keeping people out of terminals.
+
+[ADR-0014](../decisions/0014-fetch-is-not-publishing.md) supersedes ADR-0012
+and moves the line from *the network* to *publishing and merging*. The three
+verbs ADR-0012 grouped share a transport and not a risk: `fetch` reads a remote
+and changes nothing there, `push` publishes, `pull` merges under a
+possibly-running agent — which `R-D21` already established we warn about.
+
+So `R-D25` is fetch, and only fetch. `R-D24` keeps its number and now means
+`pull` and `push`.
 
 ### Still open

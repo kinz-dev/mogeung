@@ -664,3 +664,106 @@ fn marking_resolved_does_not_inspect_the_content() {
     assert_eq!(status(&dir), "M  conflicted.txt\n");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// -- Fetch. `R-D25`, ADR-0014. ------------------------------------------------
+
+/// A repo with a real remote — a second local repository, so the test needs no
+/// network and still exercises the actual code path.
+fn with_remote(tag: &str) -> (PathBuf, PathBuf) {
+    let upstream = repo(&format!("{tag}-up"), false);
+    let dir = std::env::temp_dir().join(format!("mogeung-gitwrite-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let out = Command::new("git")
+        .args(["clone", "-q", upstream.to_str().unwrap(), dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    git_in(&dir, &["config", "user.email", "t@example.com"]);
+    git_in(&dir, &["config", "user.name", "t"]);
+    (dir, upstream)
+}
+
+#[test]
+fn fetching_with_nothing_new_says_so_rather_than_nothing() {
+    let (dir, up) = with_remote("fetch-quiet");
+    let r = git::fetch(&dir).unwrap();
+    assert!(r.updates.is_empty(), "{:?}", r.updates);
+    assert_eq!((r.ahead, r.behind), (0, 0));
+    assert!(r.upstream.is_some(), "a clone tracks its origin");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&up).ok();
+}
+
+/// The case that prompted ADR-0014: the remote moved and the local ref did
+/// not, so `behind` was zero and wrong until something fetched.
+#[test]
+fn fetching_learns_how_far_behind_you_are() {
+    let (dir, up) = with_remote("fetch-behind");
+    for n in ["second", "third"] {
+        std::fs::write(up.join(format!("{n}.txt")), "x\n").unwrap();
+        git_in(&up, &["add", "-A"]);
+        git_in(&up, &["commit", "-q", "-m", n]);
+    }
+    // Before the fetch, git itself believes nothing has changed.
+    let stale = git_in(&dir, &["rev-list", "--count", "@{upstream}..HEAD"]);
+    assert_eq!(stale.trim(), "0");
+
+    let r = git::fetch(&dir).unwrap();
+    assert_eq!(r.behind, 2, "the two upstream commits are now visible");
+    assert_eq!(r.ahead, 0);
+    assert!(
+        r.updates.iter().any(|l| l.contains("main")),
+        "git named the ref it moved: {:?}",
+        r.updates
+    );
+
+    // And it fetched only: the working tree was not merged into.
+    assert!(!dir.join("second.txt").exists(), "fetch must never merge");
+
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&up).ok();
+}
+
+#[test]
+fn fetching_reports_both_directions_when_diverged() {
+    let (dir, up) = with_remote("fetch-diverged");
+    std::fs::write(up.join("theirs.txt"), "x\n").unwrap();
+    git_in(&up, &["add", "-A"]);
+    git_in(&up, &["commit", "-q", "-m", "theirs"]);
+
+    std::fs::write(dir.join("mine.txt"), "y\n").unwrap();
+    git::stage(&dir, &p("mine.txt")).unwrap();
+    git::commit(&dir, "mine", false, &[]).unwrap();
+
+    let r = git::fetch(&dir).unwrap();
+    assert_eq!((r.ahead, r.behind), (1, 1), "diverged both ways");
+
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&up).ok();
+}
+
+/// A remote that is not there must fail loudly and quickly. The constraint
+/// that matters is the one this cannot assert directly — that it *returns*
+/// rather than sitting on a credential prompt for ever.
+#[test]
+fn a_dead_remote_fails_instead_of_hanging() {
+    let dir = repo("fetch-dead", false);
+    git_in(
+        &dir,
+        &["remote", "add", "origin", "/nonexistent/path/to/nowhere.git"],
+    );
+    let e = git::fetch(&dir).unwrap_err().to_string();
+    assert!(!e.is_empty(), "git said something");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A branch with no upstream is an ordinary state, not a failure, and the
+/// report has to distinguish "0 behind" from "there is nothing to be behind".
+#[test]
+fn a_branch_with_no_upstream_reports_no_upstream() {
+    let dir = repo("fetch-no-upstream", false);
+    let r = git::fetch(&dir).unwrap();
+    assert!(r.upstream.is_none());
+    assert_eq!((r.ahead, r.behind), (0, 0));
+    std::fs::remove_dir_all(&dir).ok();
+}

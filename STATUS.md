@@ -4,10 +4,10 @@
 
 | | |
 |---|---|
-| Branch | `git-write-local` |
-| Tests | 574 passing |
-| Rust | 48690 lines |
-| Docs | 62 files, 13 ADRs |
+| Branch | `git-fetch` |
+| Tests | 579 passing |
+| Rust | 49166 lines |
+| Docs | 63 files, 14 ADRs |
 
 ## Assumptions
 

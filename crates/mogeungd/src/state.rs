@@ -1685,6 +1685,12 @@ impl AppState {
         tokio::task::spawn_blocking(move || crate::git::stash_drop(&root, index)).await?
     }
 
+    /// Update remote-tracking refs. `R-D25`.
+    pub async fn git_fetch(&self, id: &str) -> Result<crate::git::FetchReport> {
+        let root = self.git_root(id).await?;
+        tokio::task::spawn_blocking(move || crate::git::fetch(&root)).await?
+    }
+
     /// Resolve one conflicted file. `R-D22`.
     pub async fn git_resolve(
         &self,
