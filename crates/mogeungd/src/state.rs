@@ -2030,6 +2030,54 @@ type LaunchAttempt = (String, Vec<String>, Option<String>);
 /// visible but not hostable. The stamp keeps names unique without probing the
 /// server, and the name is sanitised the way `yolomo` does it — `:` and `.`
 /// are tmux target separators, so a raw directory name could be unaddressable.
+/// The tmux session name for a launch: `mogeung-<place>-<stamp>`.
+///
+/// `<place>` is the directory's own name, except when that *is* the stamp —
+/// which is exactly what an isolated worktree looks like, since
+/// [`crate::git::add_worktree`] lays them out as
+/// `<root>/<repo>/<stamp>`. Naming it from the basename there produced
+/// `mogeung-0802-013329-0802-013329`: the timestamp twice, and the repository
+/// nowhere.
+///
+/// So a directory named after the stamp defers to its parent, which in that
+/// layout is the repository — giving `mogeung-<repo>-<stamp>`, the name you
+/// would have written yourself. Nothing else changes: an ordinary directory
+/// still names itself.
+fn session_name(dir: &str, stamp: &str) -> String {
+    let clean = |s: &str| -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    };
+    let path = Path::new(dir);
+    let own = clean(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    let place = if own.is_empty() || own == stamp {
+        // The parent, when it adds anything. A worktree root that is itself
+        // called by the stamp would leave this empty, and a bare
+        // `mogeung-<stamp>` is still unique and still readable.
+        clean(
+            &path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
+    } else {
+        own
+    };
+    if place.is_empty() {
+        format!("mogeung-{stamp}")
+    } else {
+        format!("mogeung-{place}-{stamp}")
+    }
+}
+
 /// Where `claude` actually is, as an absolute path. `R-I3`.
 ///
 /// The launcher spawns a terminal which runs `tmux` which execs this — none of
@@ -2086,18 +2134,11 @@ fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<Stri
     if !tmux_available {
         return vec![claude, SKIP_PERMISSIONS.to_string()];
     }
-    let safe: String = Path::new(dir)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
-        .collect();
     vec![
         "tmux".to_string(),
         "new-session".to_string(),
         "-s".to_string(),
-        format!("mogeung-{safe}-{stamp}"),
+        session_name(dir, stamp),
         "-c".to_string(),
         dir.to_string(),
         claude,
@@ -2729,6 +2770,45 @@ fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod terminal_tests {
     use super::*;
+
+    /// Noticed 2026-08-02 in a real `tmux ls`:
+    /// `mogeung-0802-013329-0802-013329` — the timestamp twice, and no clue
+    /// which repository it belonged to.
+    ///
+    /// An isolated worktree lives at `<root>/<repo>/<stamp>`, so its own
+    /// directory name *is* the stamp. Deferring to the parent puts the
+    /// repository back in the name, which is the thing you actually search
+    /// `tmux ls` for.
+    #[test]
+    fn a_worktrees_session_is_named_after_its_repo_not_the_stamp_twice() {
+        let stamp = "0802-013329";
+        assert_eq!(
+            session_name("/home/k/.mogeung/worktrees/mogeung/0802-013329", stamp),
+            "mogeung-mogeung-0802-013329"
+        );
+        // An ordinary directory is unaffected, including an awkward one.
+        assert_eq!(
+            session_name("/home/me/my proj.v2", "0729-101500"),
+            "mogeung-my-proj-v2-0729-101500"
+        );
+        // Degenerate paths still produce something unique and typeable.
+        assert_eq!(session_name("/", stamp), format!("mogeung-{stamp}"));
+        assert_eq!(session_name(stamp, stamp), format!("mogeung-{stamp}"));
+        // And nothing anywhere carries the stamp twice.
+        for dir in [
+            "/home/k/.mogeung/worktrees/mogeung/0802-013329",
+            "/home/me/my proj.v2",
+            "/",
+            "0802-013329",
+        ] {
+            let name = session_name(dir, stamp);
+            assert_eq!(
+                name.matches(stamp).count(),
+                1,
+                "{dir} produced {name}"
+            );
+        }
+    }
 
     /// Regression, reported 2026-08-02 once the window finally opened: it
     /// closed again inside a second.
