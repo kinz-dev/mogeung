@@ -2030,9 +2030,52 @@ type LaunchAttempt = (String, Vec<String>, Option<String>);
 /// visible but not hostable. The stamp keeps names unique without probing the
 /// server, and the name is sanitised the way `yolomo` does it — `:` and `.`
 /// are tmux target separators, so a raw directory name could be unaddressable.
+/// Where `claude` actually is, as an absolute path. `R-I3`.
+///
+/// The launcher spawns a terminal which runs `tmux` which execs this — none of
+/// which is a login shell, and none of which reads `.zshrc`. `claude` normally
+/// lives in `~/.local/bin`, which is put on `PATH` by exactly those files. So
+/// the name alone resolves in the terminal you type in and **not** in the one
+/// mogeung opens: tmux fails to exec it, the session dies at once, and the
+/// window vanishes inside a second with nothing written anywhere.
+///
+/// This is the same lesson as `R-I6`'s remote tmux — a spawned shell does not
+/// have your profile — arriving locally, which is the half that was not fixed
+/// then.
+///
+/// The daemon's own `PATH` is tried first because it was usually started from
+/// a shell that had one, then the places installers actually use. Falling back
+/// to the bare name is deliberate: if none of this finds it, the error should
+/// be git— the *terminal's* own "command not found", which at least names what
+/// it looked for.
+fn claude_binary() -> String {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("claude");
+            if cand.is_file() {
+                return cand.to_string_lossy().into_owned();
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for cand in [
+        format!("{home}/.local/bin/claude"),
+        format!("{home}/.claude/local/claude"),
+        format!("{home}/bin/claude"),
+        "/opt/homebrew/bin/claude".to_string(),
+        "/usr/local/bin/claude".to_string(),
+    ] {
+        if Path::new(&cand).is_file() {
+            return cand;
+        }
+    }
+    "claude".to_string()
+}
+
 fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<String> {
+    let claude = claude_binary();
     if !tmux_available {
-        return vec!["claude".to_string()];
+        return vec![claude];
     }
     let safe: String = Path::new(dir)
         .file_name()
@@ -2048,7 +2091,7 @@ fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<Stri
         format!("mogeung-{safe}-{stamp}"),
         "-c".to_string(),
         dir.to_string(),
-        "claude".to_string(),
+        claude,
     ]
 }
 
@@ -2677,6 +2720,37 @@ fn shell_quote(s: &str) -> String {
 mod terminal_tests {
     use super::*;
 
+    /// Regression, reported 2026-08-02 once the window finally opened: it
+    /// closed again inside a second.
+    ///
+    /// `claude` lives in `~/.local/bin`, which reaches `PATH` through `.zshrc`
+    /// — and nothing in this chain is a login shell, let alone an interactive
+    /// one. The terminal runs tmux, tmux execs `claude`, the exec fails, the
+    /// session dies immediately and the window goes with it. Nothing is
+    /// written anywhere, because from tmux's point of view the session simply
+    /// ended.
+    ///
+    /// So the command must carry an absolute path, resolved by the daemon,
+    /// which does have a usable `PATH`.
+    #[test]
+    fn the_launch_command_names_claude_by_absolute_path() {
+        let cmd = in_terminal_command("/some/repo", true, "0102-030405");
+        let last = cmd.last().expect("the command ends with the agent");
+        // On a machine that has it, this is absolute. On one that does not,
+        // the bare name survives on purpose, so the terminal's own "command
+        // not found" is what the user sees rather than silence.
+        if last != "claude" {
+            assert!(
+                Path::new(last).is_absolute(),
+                "must be absolute or the bare fallback: {last}"
+            );
+            assert!(last.ends_with("claude"), "{last}");
+        }
+        // And the no-tmux path agrees with the tmux path about what to run.
+        let bare = in_terminal_command("/some/repo", false, "0102-030405");
+        assert_eq!(bare, vec![last.clone()]);
+    }
+
     /// Regression, reported from a Linux desktop: **"+" did nothing.**
     ///
     /// `x-terminal-emulator` is a Debian *alternatives* symlink, and the table
@@ -2884,10 +2958,20 @@ mod terminal_tests {
         assert_eq!(name, "mogeung-my-proj-v2-0729-101500");
         let dir = &cmd[cmd.iter().position(|a| a == "-c").unwrap() + 1];
         assert_eq!(dir, "/home/me/my proj.v2", "the directory itself must stay verbatim");
-        assert_eq!(cmd.last().unwrap(), "claude");
+        // The agent is named by absolute path where one can be found — see
+        // `the_launch_command_names_claude_by_absolute_path` for why — so this
+        // asserts the shape rather than the literal.
+        assert!(
+            cmd.last().unwrap().ends_with("claude"),
+            "{:?}",
+            cmd.last()
+        );
 
-        // Without tmux: bare claude, same as the macOS command has always run.
-        assert_eq!(in_terminal_command("/x", false, "s"), vec!["claude".to_string()]);
+        // Without tmux: the agent alone, and the same one either way.
+        assert_eq!(
+            in_terminal_command("/x", false, "s"),
+            vec![cmd.last().unwrap().clone()]
+        );
     }
 
     /// The spec's words: on Wayland the answer is an honest refusal that says
