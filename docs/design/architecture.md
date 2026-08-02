@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-01
+updated: 2026-08-02
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeung-ui/src/prefs.rs
@@ -246,5 +246,11 @@ WAITING count — a client like every other, no local authority. It names
 the machine that count is for (`R-I11`), from the same `DaemonIdentity`,
 because one tray per daemon means two bare numbers otherwise. The
 terminal focus/launch and notification paths gained Linux siblings
-(attempts tables, Wayland refuses honestly), and the server takes
+(attempts tables, Wayland refuses honestly — and since 2026-08-02 the launch
+side treats *spawning* and *launching* as different events, because they are:
+a terminal handed flags it does not understand starts, prints usage and exits,
+and `spawn` has already returned `Ok`. It waits, asks whether the child is
+still alive, and reports that terminal's own stderr when it is not).
+The `x-terminal-emulator` alternatives symlink is resolved to whatever it
+points at so it gets that program's flags rather than xterm's. The server takes
 `--token` for the remote case.

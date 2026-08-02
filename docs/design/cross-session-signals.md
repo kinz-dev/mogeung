@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-01
+updated: 2026-08-02
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -98,6 +98,24 @@ could poison the async runtime.
 
 Off unless asked for (`--notify`, `--push-url`). A tool that starts posting
 banners the first time you run it has overstepped.
+
+## Starting one, and knowing whether you did (`R-B2`, `R-I3`)
+
+Launching is the other half of jumping, and on Linux it is a table of
+candidate terminals tried in order. Two things learned from it on 2026-08-02,
+both the kind that only a second machine teaches:
+
+**`spawn()` succeeding is not a launch.** It means the process started. A
+terminal given flags it does not understand starts, prints a usage error and
+exits — by which time `spawn` has long since returned `Ok`. So a launch waits,
+asks whether the child is still alive, and only then calls it a success.
+Exiting **zero** immediately is also success and deliberately distinguished:
+`gnome-terminal` hands the window to its own daemon and returns at once.
+
+**`x-terminal-emulator` is not a terminal.** It is a Debian alternatives
+symlink to whichever one the user chose, and the flag that carries a command
+differs between them — `-e` takes argv for xterm and a single string for
+terminator. It is resolved to its real target so the row matches the program.
 
 ## Jump to terminal (`R-B2`)
 

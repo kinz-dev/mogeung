@@ -146,6 +146,11 @@ wrong one is [item 0](#0-the-non-feature) doing exactly what it is for.
 | R-B33 | **Terminal as a workspace panel** — the shell leaves the pane tree for a panel across the bottom, on demand, with a tab per shell and no tie to any session: a terminal is where you *start* an agent, so it must outlast the selection and exist before there is one. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | M | ✅ |
 | R-B34 | **Name a terminal tab** — double-click a tab, or right-click it, to call it what it is doing; blank puts the folder name back. The label only: the tmux session stays keyed by worktree and ordinal, so a rename cannot strand a shell. Asked for directly, built 2026-07-30. See [feature 0024](../features/0024-in-app-terminal.md) | S | ✅ |
 
+| R-B35 | **Bookmarks and notes in the Transcript** — toggle a mark on a turn, a view listing them, and free text against one. Asked for directly 2026-08-02. `prefs` already carries a bookmark shape from `R-B29` (`(session, path, line)`), and this is the same idea keyed by turn rather than by line — worth reusing rather than inventing a second one. A note is the first thing in this product that is *the user's own writing* rather than a view of something the agent did, which is what makes it the small end of `R-L1` and worth building first | M | |
+| R-B36 | **Search inside the Transcript panel** — find within the conversation you are reading, rather than across every session (`R-F1` already does that). Asked for 2026-08-02 with a specific shape: run substring, regex, `rg` and fuzzy in **parallel** and show whichever answers best. That shape is the interesting part and the risky part — "best" needs defining before code, and it shares the external-tool question with `R-F10` | M | |
+| R-B37 | **Resize the Editor's tree and content independently** — the file tree and the file body currently move together. Asked for 2026-08-02. Small, and the kind of thing that is only noticed by someone actually reading in it | S | |
+| R-B38 | **Search a rendered Markdown preview** — find in the preview, not only in the source. `R-B29` shipped the preview; searching it means searching rendered text and mapping a hit back to a source line, which is the whole of the work | S | |
+
 ## C. Notifications and reach — **shipped and verified end to end; `R-C2`'s verdict landed 2026-07-30**
 
 Delivered by [feature 0002](../features/0002-sharpen-triage-and-review.md).
@@ -287,6 +292,10 @@ nine.
 | R-F8 | **Subagent trees** — visualise `isSidechain` work | M | ✅ |
 | R-F9 | **Blame → transcript** — from a session-attributed commit, open that session's transcript at the turns that produced it. The cheap precursor to `R-F2`, riding `R-D11`'s attribution | M | ✅ |
 
+| R-F10 | **Fuzzy and parallel search across the Insight views** — substring, regex, `rg` and fuzzy run together, best answer wins. Asked for 2026-08-02, and the largest single ask in that list. **Two things need deciding before code.** *What "best" means*: four rankings over one corpus do not compose by themselves, and a search box that silently prefers one engine is worse than one that says which it used. *Whether mogeung may shell out to `rg` and `fzf` at all* — they may not be installed, and every other external dependency here (`git`, `tmux`) is either required up front or degrades to a named fallback. Speed is the stated motive, so a measurement comes first: `R-J2` was gated the same way and closed by finding the slow thing was already fast enough | L | |
+| R-F11 | **Charts in the Insight views** — the prompt and analytics tables want shape, not rows. Asked for 2026-08-02. The honest constraint is [ADR-0005](../decisions/0005-tokens-not-dollars.md): tokens and counts, never money, however tempting an axis label | M | |
+| R-F12 | **Resizable Insight panes** — the content is fixed where every other pane in the window can be dragged. Asked for 2026-08-02; small, and the same complaint as `R-B37` in a different tab | S | |
+
 ## G. Rate limits and cost — **shipped and verified 2026-07-30 (feature [0015](../features/0015-rate-limits.md))**
 
 `R-G1`'s premise was wrong on contact with disk: no structured limit
@@ -390,7 +399,7 @@ see `R-I10`.
 |---|---|---|---|
 | R-I1 | **Codex adapter** — read its on-disk format. Tests whether the Session model generalises ([A23](assumptions.md)) | M | ⏳ |
 | R-I2 | **Gemini CLI adapter** — descoped, see above | M |  |
-| R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above | M | ⏳ |
+| R-I3 | **Linux** — terminal focus/launch and notifications; Windows descoped, see above. **First real defect found 2026-08-02**: "+" new session did nothing, silently. `x-terminal-emulator` is a Debian *alternatives* symlink and had been handed xterm's `-e argv…`; on a desktop where it resolves to terminator — whose `-e` takes one string — that is a usage error. What made it invisible was treating `spawn()` returning `Ok` as a successful launch, which only means the process started. The symlink is now resolved to its real program's flags, and a launch waits to see whether the child is still alive, reporting the terminal's own stderr when it is not | M | ⏳ |
 | R-I4 | **Remote daemon** — watch a dev box, run the UI locally ([A24](assumptions.md)). **Verified 2026-07-31** over the ssh-tunnel route: the queue, sessions and diffs of a Mac, in a window on another machine. The direct-bind and token paths are still unexercised, so [A24](assumptions.md) itself is untouched by this. Guide at [guide/remote.md](../guide/remote.md) | M | ✅ |
 | R-I5 | **Daemon identity** — **verified in use 2026-07-31.** Both halves: `R-I6`'s terminals reached the Mac *through a `127.0.0.1` tunnel*, which only happens when identity rather than the address decides, and jump-to-terminal and open-in both refused and named the machine. That tunnel is precisely where the old address heuristic said "local" and acted on the wrong box. `DaemonIdentity` on the snapshot and on `/api/health`: a stable `machine_id` (`~/.mogeung/machine-id`), hostname, watched `~/.claude`, pid, version, optional ssh target. The window compares ids instead of guessing from the address string, so an `ssh -L` tunnel no longer reads as local. Repo roots were not included — nothing needed them, and the identity comparison did not | S | ✅ |
 | R-I6 | **Remote terminal** — **verified in use 2026-07-31**, an egui window on Linux driving tmux on an Apple-silicon Mac over an ssh tunnel: both panes, a worktree path containing a space, two concurrent tabs, and detach-not-kill across a window restart. Both terminal panes drive tmux over ssh when the daemon is elsewhere (`Reach::Ssh`), using the `ssh_target` from `R-I5`'s identity; without one they refuse rather than guess a hostname ssh may not want. ADR-0010 and ADR-0011 hold unchanged, one layer further out. No bare-pty fallback remotely: it would trade the right machine for a shell on the wrong one | M | ✅ |
@@ -450,11 +459,47 @@ pillar is shipped end to end.
 | R-J5 | **Empty states** — seventeen sites where "nothing here" cannot be told apart from a failed fetch | S | ✅ |
 | R-J6 | **Light theme** — two hand-written palettes behind one lookup, a `dark`/`light`/`system` preference, and contrast tests over every pair that has to hold. Built last, deliberately: the only row that touches every pane | L | ✅ |
 
+| R-J7 | **A loading state at start-up** — with progress, while the first scan builds the queue. Asked for 2026-08-02. Today an empty board during the first scan is indistinguishable from an empty board because nothing is running, which is the exact confusion `R-J5`'s empty states were built to remove and this is the one place they do not reach. The daemon already counts what it is reading (`health.rs`), so this is mostly carrying a number that exists | S | |
+
+## L. A place to think
+
+Asked for 2026-08-02, and unlike every pillar above it this one is not a view
+of something else. Everything mogeung shows today is derived — sessions,
+diffs, commits, transcripts, all of it produced by an agent or by git and
+rendered here. A scratchpad is **the user's own writing**, and that is a
+different kind of thing to own: nothing else can regenerate it, so losing it
+is a real loss rather than a refresh.
+
+It needs a design session before rows become work. The shape of the question:
+what a task *is* (a checkbox, a note, a thing bound to a session?), where the
+documents live, and whether they are per-repo, per-session or global.
+
+**Two boundaries this pillar has to be explicit about**, because both are one
+careless feature away from moving:
+
+- **These are your notes, not the repo's files.** Editing a worktree file is
+  what [pillar K](#k-explicitly-not) forbids; a document in `~/.mogeung` that
+  never touches the worktree is a different thing. If that distinction is not
+  written down it will erode a feature at a time.
+- **`R-L4` is a question, not a plan.** Relaxing the editor handoff was raised
+  on 2026-08-02 and explicitly left open — *"let's keep it for next phase,
+  nothing decided yet"*. It is filed so it cannot be lost, not so it can be
+  assumed.
+
+| # | Item | Effort | |
+|---|---|---|---|
+| R-L1 | **Design session: tasks and scratchpad** — what a task is, where documents live, what they attach to, and what happens to them when a session ends or a repo moves. Ends in a feature spec and probably an ADR; no code until it does. The one row here that must come first | M | |
+| R-L2 | **Notes and documents** — markdown documents you write, stored under `~/.mogeung`, edited in the window. The scratchpad half of `R-L1`, and never the worktree's files | L | |
+| R-L3 | **Tasks** — the checklist half. Whether it is a real task model or a markdown convention is exactly what `R-L1` decides; building it as a model first is how it becomes a project manager nobody asked for | M | |
+| R-L4 | **Question: may the editor edit?** — pillar K says handoff to IntelliJ/VS Code, permanently, and `R-B24` has been a viewer with no write path since it shipped. Raised 2026-08-02: once `R-L2` exists, allowing *simple* edits to worktree files may be worth reconsidering. **Nothing is decided.** It needs its own ADR arguing against a line that has held from the beginning, and the honest first question is whether the want survives having a scratchpad — a good deal of "let me just fix this typo" may turn out to have been "let me write this down somewhere" | S | |
+
 ## K. Explicitly not
 
 - **An editor.** Handoff to IntelliJ/VS Code, permanently. `R-B24` reads files
   and nothing more — a viewer with no write path is the line this bullet
-  draws, not an exception to it.
+  draws, not an exception to it. *(A revisit was raised 2026-08-02 and filed
+  as `R-L4`. Nothing is decided, and until an ADR says otherwise this bullet
+  is what stands.)*
 - **Anything that re-acquires the conversation loop.** See
   [ADR-0003](../decisions/0003-observe-do-not-spawn.md).
 - **Cloud or multiplayer.**
