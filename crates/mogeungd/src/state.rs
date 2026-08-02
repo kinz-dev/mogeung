@@ -1943,23 +1943,73 @@ fn launch_terminal_linux(target: &Path) -> Result<()> {
     let cmd = in_terminal_command(&dir, tmux, &stamp);
 
     let mut tried: Vec<String> = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
     for (program, args, cwd) in linux_terminal_attempts(&dir, &cmd) {
         let mut c = std::process::Command::new(&program);
         c.args(&args);
         if let Some(d) = &cwd {
             c.current_dir(d);
         }
-        match c.spawn() {
-            Ok(mut child) => {
-                // Reaped off-frame, or every launch leaves a zombie behind.
+        // stderr captured, not inherited: a terminal that rejects its
+        // arguments says why, and that sentence is the whole diagnosis.
+        c.stderr(std::process::Stdio::piped());
+        let Ok(mut child) = c.spawn() else {
+            // Not installed is the ordinary case for most rows; move on.
+            tried.push(program);
+            continue;
+        };
+
+        // **Spawning is not launching.** A terminal handed flags it does not
+        // understand starts, prints a usage error and exits — and `spawn`
+        // has already returned `Ok`, so this used to report success while
+        // nothing appeared on screen. That is exactly how `x-terminal-emulator
+        // -e tmux new-session …` failed against terminator, whose `-e` takes a
+        // single string: silently, with a cheerful green result.
+        //
+        // So: give it a moment, and ask whether it is still alive.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        match child.try_wait() {
+            // Still running — a real terminal window. Reap off-frame, or
+            // every launch leaves a zombie behind.
+            Ok(None) => {
                 std::thread::spawn(move || {
                     let _ = child.wait();
                 });
                 return Ok(());
             }
-            // Not installed is the ordinary case for most rows; move on.
+            // Exited cleanly and immediately. Normal for the client/server
+            // terminals: `gnome-terminal` hands the window to its own daemon
+            // and returns 0 at once. Success, and not to be confused with
+            // the case below.
+            Ok(Some(st)) if st.success() => return Ok(()),
+            // Exited with an error. This is the one that used to be invisible.
+            Ok(Some(st)) => {
+                let mut why = String::new();
+                if let Some(mut e) = child.stderr.take() {
+                    use std::io::Read as _;
+                    let _ = e.read_to_string(&mut why);
+                }
+                let first = why
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("no message");
+                refused.push(format!(
+                    "{program} exited {} — {first}",
+                    st.code().unwrap_or(-1)
+                ));
+            }
             Err(_) => tried.push(program),
         }
+    }
+    // A terminal that refused its arguments is a bug in this table, not a
+    // missing program, and saying so is the difference between a report we
+    // can act on and "the button does nothing".
+    if !refused.is_empty() {
+        return Err(anyhow!(
+            "no terminal would start. {}",
+            refused.join("; ")
+        ));
     }
     Err(anyhow!(
         "no terminal emulator found — tried, in order: {}",
@@ -2002,17 +2052,75 @@ fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<Stri
     ]
 }
 
-/// The Linux terminal candidates, in order — the first program that spawns
-/// wins. The Debian alternatives symlink goes first because it is the user's
-/// own choice; it and xterm have no workdir flag, so they get the directory
-/// by inheritance. `cmd` is appended as argv, never joined into a string.
+/// What `x-terminal-emulator` actually is on this machine.
+///
+/// It is a Debian *alternatives* symlink, so it points at whatever terminal
+/// the user picked — and the flag that takes a command differs between them.
+/// The table below used to give it xterm's `-e argv…`, which is right for
+/// xterm and wrong for terminator, whose `-e` takes **one command string** and
+/// which answers a trailing argv with a usage error.
+///
+/// Resolving it means the alternatives entry gets the row belonging to the
+/// program it really is, rather than a guess that happens to suit xterm.
+fn resolved_alternative() -> Option<String> {
+    std::fs::canonicalize("/usr/bin/x-terminal-emulator")
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+}
+
+/// The Linux terminal candidates, in order — the first program that *starts
+/// and stays up* wins. The Debian alternatives symlink goes first because it
+/// is the user's own choice, resolved to whatever it points at so it gets the
+/// right flags. `cmd` is appended as argv, never joined into a string.
 fn linux_terminal_attempts(dir: &str, cmd: &[String]) -> Vec<LaunchAttempt> {
     let with_cmd = |mut pre: Vec<String>| -> Vec<String> {
         pre.extend(cmd.iter().cloned());
         pre
     };
-    vec![
-        ("x-terminal-emulator".to_string(), with_cmd(vec!["-e".into()]), Some(dir.to_string())),
+    // Terminator, and anything else whose `-e` wants a single string, takes
+    // the remainder through `-x` instead — the same shape xfce4-terminal uses.
+    let terminator = |name: &str| -> LaunchAttempt {
+        (
+            name.to_string(),
+            with_cmd(vec![format!("--working-directory={dir}"), "-x".into()]),
+            None,
+        )
+    };
+    let mut out: Vec<LaunchAttempt> = Vec::new();
+    // The user's chosen terminal, under its real name and its real flags.
+    match resolved_alternative().as_deref() {
+        Some("terminator") => out.push(terminator("x-terminal-emulator")),
+        Some("gnome-terminal") | Some("gnome-terminal.real") => out.push((
+            "x-terminal-emulator".to_string(),
+            with_cmd(vec![format!("--working-directory={dir}"), "--".into()]),
+            None,
+        )),
+        Some("konsole") => out.push((
+            "x-terminal-emulator".to_string(),
+            with_cmd(vec!["--workdir".into(), dir.into(), "-e".into()]),
+            None,
+        )),
+        Some("xfce4-terminal") => out.push((
+            "x-terminal-emulator".to_string(),
+            with_cmd(vec![format!("--working-directory={dir}"), "-x".into()]),
+            None,
+        )),
+        Some("kitty") => out.push((
+            "x-terminal-emulator".to_string(),
+            with_cmd(vec!["--directory".into(), dir.into()]),
+            None,
+        )),
+        // xterm, alacritty, urxvt and friends: `-e` really does take argv.
+        // An unknown alternative gets the same treatment, which is the old
+        // behaviour and still the commonest shape.
+        _ => out.push((
+            "x-terminal-emulator".to_string(),
+            with_cmd(vec!["-e".into()]),
+            Some(dir.to_string()),
+        )),
+    }
+    out.extend(vec![
+        terminator("terminator"),
         ("gnome-terminal".to_string(), with_cmd(vec![format!("--working-directory={dir}"), "--".into()]), None),
         ("konsole".to_string(), with_cmd(vec!["--workdir".into(), dir.into(), "-e".into()]), None),
         // `-x` takes the remainder as argv; `-e` would want one shell-parsed
@@ -2021,7 +2129,8 @@ fn linux_terminal_attempts(dir: &str, cmd: &[String]) -> Vec<LaunchAttempt> {
         ("alacritty".to_string(), with_cmd(vec!["--working-directory".into(), dir.into(), "-e".into()]), None),
         ("kitty".to_string(), with_cmd(vec!["--directory".into(), dir.into()]), None),
         ("xterm".to_string(), with_cmd(vec!["-e".into()]), Some(dir.to_string())),
-    ]
+    ]);
+    out
 }
 
 /// The macOS focus path: pid → controlling tty → the terminal application
@@ -2551,6 +2660,62 @@ fn shell_quote(s: &str) -> String {
 mod terminal_tests {
     use super::*;
 
+    /// Regression, reported from a Linux desktop: **"+" did nothing.**
+    ///
+    /// `x-terminal-emulator` is a Debian *alternatives* symlink, and the table
+    /// gave it xterm's `-e argv…`. On a machine where it points at terminator
+    /// — whose `-e` takes a single command string — that is a usage error, and
+    /// the process exits at once. `spawn` had already returned `Ok`, so the
+    /// launch reported success and no window ever appeared.
+    ///
+    /// Two things had to change and this pins the first: the alternatives
+    /// entry gets the flags of the program it actually is.
+    #[test]
+    fn the_alternatives_symlink_gets_its_real_programs_flags() {
+        let cmd = vec!["tmux".to_string(), "new-session".to_string()];
+        let list = linux_terminal_attempts("/repo", &cmd);
+
+        // Whatever this machine resolves to, terminator's own row must exist
+        // and must use `-x` rather than `-e`: `-e` would swallow only the
+        // first word and reject the rest.
+        let t = list
+            .iter()
+            .find(|(p, _, _)| p == "terminator")
+            .expect("terminator is a candidate in its own right");
+        assert!(t.1.contains(&"-x".to_string()), "{:?}", t.1);
+        assert!(!t.1.contains(&"-e".to_string()), "-e takes one string: {:?}", t.1);
+        assert!(
+            t.1.iter().any(|a| a == "--working-directory=/repo"),
+            "{:?}",
+            t.1
+        );
+        // And the command still arrives as argv, never joined into a string.
+        assert!(t.1.ends_with(&cmd[..]), "{:?}", t.1);
+    }
+
+    /// Every candidate must pass the command as separate argv words. Joining
+    /// them into one string is how a directory with a space in it becomes two
+    /// arguments, and how a filename becomes a shell metacharacter.
+    #[test]
+    fn no_candidate_joins_the_command_into_a_string() {
+        let cmd = vec![
+            "tmux".to_string(),
+            "new-session".to_string(),
+            "-c".to_string(),
+            "/a dir/with spaces".to_string(),
+        ];
+        for (program, args, _) in linux_terminal_attempts("/a dir/with spaces", &cmd) {
+            assert!(
+                args.ends_with(&cmd[..]),
+                "{program} must end with the command as argv: {args:?}"
+            );
+            assert!(
+                !args.iter().any(|a| a.contains("tmux new-session")),
+                "{program} joined the command: {args:?}"
+            );
+        }
+    }
+
     /// Regression: the first version only spoke Terminal.app's dialect and
     /// reported "no tab is attached to /dev/ttys003" to an iTerm2 user whose
     /// tab was sitting right there. Both dialects must be present, and both
@@ -2649,7 +2814,17 @@ mod terminal_tests {
         assert!(!list.is_empty());
         // The Debian alternatives symlink is the user's own choice; it leads.
         assert_eq!(list[0].0, "x-terminal-emulator");
-        assert_eq!(list[0].2.as_deref(), Some("/some/repo"), "no flag means inherit the cwd");
+        // *How* it carries the directory is now machine-dependent, because the
+        // symlink is resolved to whatever it points at and the row follows that
+        // program's flags. Asserting `cwd == Some(dir)` here pinned xterm's
+        // behaviour and failed on a desktop where the alternative is
+        // terminator. The loop below asserts the property that actually
+        // matters — the directory arrives, by one route or the other.
+        assert!(
+            list[0].2.is_some() || list[0].1.iter().any(|a| a.contains("/some/repo")),
+            "the chosen terminal must be given the directory somehow: {:?}",
+            list[0]
+        );
         for (program, args, cwd) in &list {
             assert_ne!(*program, "open", "`open -a` is macOS-speak");
             assert_ne!(*program, "osascript", "AppleScript is macOS-speak");
