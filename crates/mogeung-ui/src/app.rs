@@ -4636,7 +4636,10 @@ impl App {
             }
         }
 
-        egui::Panel::left("git-left").default_size(320.0).show(ui, |ui| {
+        egui::Panel::left("git-left")
+            .default_size(320.0)
+            .resizable(true)
+            .show(ui, |ui| {
             self.git_header(ui);
             ui.separator();
             ui.horizontal(|ui| {
@@ -7077,6 +7080,7 @@ impl App {
             egui::Panel::right(egui::Id::new(("outline", group)))
                 .frame(egui::Frame::NONE.fill(pal().bg_panel).inner_margin(6))
                 .default_size(220.0)
+                .resizable(true)
                 .show(ui, |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.outline_filter)
@@ -8736,7 +8740,10 @@ impl App {
         // Deferred out of the row loop: opening mutates the explorer and the
         // tab layout, which must not happen under the borrow of `change`.
         let mut open_in_explorer: Option<String> = None;
-        egui::Panel::left("files").default_size(300.0).show(ui, |ui| {
+        egui::Panel::left("files")
+            .default_size(300.0)
+            .resizable(true)
+            .show(ui, |ui| {
             let focused = self.pane == Pane::Files || self.pane == Pane::Diff;
             ui.horizontal(|ui| {
                 ui.label(
