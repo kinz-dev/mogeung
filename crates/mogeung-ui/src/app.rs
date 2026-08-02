@@ -447,6 +447,9 @@ pub struct App {
     /// When the subscription started, so the panel can say "still looking"
     /// rather than "nothing there" during the seconds before the first answer.
     scan_since: Option<std::time::Instant>,
+    /// What the Transcript's find box holds. `R-B36`. Not persisted — a
+    /// half-typed query is not a setting.
+    transcript_find: String,
     /// Whether a snapshot has ever arrived. `R-J7`.
     ///
     /// Not the same as being connected: the socket is up well before the
@@ -728,6 +731,7 @@ impl App {
             scan: None,
             scanned: Vec::new(),
             scan_since: None,
+            transcript_find: String::new(),
             first_snapshot: false,
             notes: Vec::new(),
             note_draft: None,
@@ -8553,9 +8557,58 @@ impl App {
             ui.separator();
         }
 
+        // `R-B36`. Searching *this* conversation, which `R-F1` cannot do —
+        // that one searches across every session and answers with sessions.
+        let mut jump_to: Option<u64> = None;
+        ui.horizontal(|ui| {
+            ui.label(dim("find"));
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.transcript_find)
+                    .hint_text("in this transcript")
+                    .desired_width(220.0),
+            );
+            let q = self.transcript_find.trim().to_string();
+            if !q.is_empty() {
+                // Every turn scored by the same scale, best first. The engine
+                // that won is named, because a search that silently prefers
+                // one is worse than one that says why it matched.
+                let mut hits: Vec<(i32, u64, crate::search::Engine)> = events
+                    .iter()
+                    .filter_map(|ev| {
+                        crate::search::best(&q, &event_text(&ev.kind))
+                            .map(|h| (h.score, ev.seq, h.engine))
+                    })
+                    .collect();
+                hits.sort_by(|a, b| b.0.cmp(&a.0));
+                if hits.is_empty() {
+                    ui.label(dim("no match"));
+                } else {
+                    ui.label(dim(format!(
+                        "{} turn(s) · best is {}",
+                        hits.len(),
+                        hits[0].2.label()
+                    )));
+                    if ui.button("Go").on_hover_text("jump to the best match").clicked()
+                        || (field.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
+                        jump_to = Some(hits[0].1);
+                    }
+                }
+            }
+            if !self.transcript_find.is_empty() && ui.small_button(icon::HIDE).clicked() {
+                self.transcript_find.clear();
+            }
+        });
+
         // A jump to a moment must be able to reach skipped history.
-        if self.focus_event_ts.is_some() {
+        if self.focus_event_ts.is_some() || jump_to.is_some() {
             self.transcript_limit = self.transcript_limit.max(events.len());
+        }
+        if let Some(seq) = jump_to {
+            // Reuse the existing focus mechanism rather than growing a second
+            // one: it already knows how to scroll a turn into the middle.
+            self.focus_event_ts = events.iter().find(|e| e.seq == seq).map(|e| e.ts);
         }
 
         // Only the tail is drawn: markdown is parsed per visible event per
@@ -10333,6 +10386,20 @@ fn message_header(ui: &mut egui::Ui, time: &str, who: &str, color: Color32, body
             }
         });
     });
+}
+
+/// The searchable text of one turn. `R-B36`.
+///
+/// Prose and prompts are what people look for; a tool call contributes its
+/// name and its detail, because "when did it touch config.rs" is the other
+/// half of what searching a transcript is for.
+fn event_text(kind: &EventKind) -> String {
+    match kind {
+        EventKind::UserPrompt { text }
+        | EventKind::AssistantText { text }
+        | EventKind::Thinking { text } => text.clone(),
+        other => format!("{other:?}"),
+    }
 }
 
 fn event_row(

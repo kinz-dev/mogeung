@@ -24,6 +24,7 @@ mod layout;
 mod net;
 mod palette;
 mod prefs;
+mod search;
 mod shells;
 mod symbols;
 mod term;
