@@ -2077,12 +2077,29 @@ fn linux_terminal_attempts(dir: &str, cmd: &[String]) -> Vec<LaunchAttempt> {
         pre.extend(cmd.iter().cloned());
         pre
     };
-    // Terminator, and anything else whose `-e` wants a single string, takes
-    // the remainder through `-x` instead — the same shape xfce4-terminal uses.
+    // Terminator needs two things, and the second is the one that made the
+    // first look like it had not worked.
+    //
+    // `-x` rather than `-e`, because its `-e` takes a single command string
+    // and answers a trailing argv with a usage error.
+    //
+    // `-u` (`--no-dbus`) because terminator is a **DBus application**: with an
+    // instance already running — which there always is, since that is the
+    // terminal the user lives in — a new invocation hands the request to the
+    // existing process and exits 0 straight away. The running instance opens a
+    // window from its own defaults and drops the `-x` command entirely, so
+    // `claude` never starts. Nothing reports a failure because, as far as the
+    // process tree is concerned, nothing failed: exit 0, immediately, which is
+    // also exactly how `gnome-terminal` succeeds. `-u` forces a fresh instance
+    // that honours its own arguments.
     let terminator = |name: &str| -> LaunchAttempt {
         (
             name.to_string(),
-            with_cmd(vec![format!("--working-directory={dir}"), "-x".into()]),
+            with_cmd(vec![
+                "-u".into(),
+                format!("--working-directory={dir}"),
+                "-x".into(),
+            ]),
             None,
         )
     };
@@ -2683,6 +2700,14 @@ mod terminal_tests {
             .find(|(p, _, _)| p == "terminator")
             .expect("terminator is a candidate in its own right");
         assert!(t.1.contains(&"-x".to_string()), "{:?}", t.1);
+        // Without `-u` the request goes over DBus to the instance the user is
+        // already sitting in, which opens a window from its own defaults and
+        // silently drops the command — exit 0, no `claude`, nothing to read.
+        assert!(
+            t.1.contains(&"-u".to_string()),
+            "terminator must not delegate over DBus: {:?}",
+            t.1
+        );
         assert!(!t.1.contains(&"-e".to_string()), "-e takes one string: {:?}", t.1);
         assert!(
             t.1.iter().any(|a| a == "--working-directory=/repo"),
