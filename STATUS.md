@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| Branch | `git-fetch` |
-| Tests | 579 passing |
-| Rust | 49166 lines |
+| Branch | `fix-linux-launch` |
+| Tests | 581 passing |
+| Rust | 49341 lines |
 | Docs | 63 files, 14 ADRs |
 
 ## Assumptions
