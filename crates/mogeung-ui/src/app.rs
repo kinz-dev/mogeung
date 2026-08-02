@@ -447,6 +447,12 @@ pub struct App {
     /// When the subscription started, so the panel can say "still looking"
     /// rather than "nothing there" during the seconds before the first answer.
     scan_since: Option<std::time::Instant>,
+    /// Whether a snapshot has ever arrived. `R-J7`.
+    ///
+    /// Not the same as being connected: the socket is up well before the
+    /// first scan finishes, and the gap between them is exactly the moment an
+    /// empty board is misleading.
+    first_snapshot: bool,
     /// Every note the daemon holds. `R-B35`.
     ///
     /// Daemon-owned, so this is a cache of theirs rather than a store of ours
@@ -722,6 +728,7 @@ impl App {
             scan: None,
             scanned: Vec::new(),
             scan_since: None,
+            first_snapshot: false,
             notes: Vec::new(),
             note_draft: None,
             this_machine: mogeungd::machine::machine_id(),
@@ -781,6 +788,7 @@ impl App {
                     if daemon.is_some() {
                         self.daemon_identity = daemon;
                     }
+                    self.first_snapshot = true;
                     // First moment we know whose machine this is, which is
                     // when the view state that belongs to it can be loaded.
                     // `R-I11`.
@@ -3112,7 +3120,36 @@ impl App {
                         if vis.is_empty() {
                             ui.add_space(20.0);
                             ui.vertical_centered(|ui| {
-                                if !self.filter.trim().is_empty() {
+                                // `R-J7`. Until the first snapshot lands, an
+                                // empty board and a board that is empty
+                                // *because nothing is running* look identical
+                                // — which is the one confusion `R-J5`'s empty
+                                // states were built to remove and the single
+                                // place they did not reach, because there was
+                                // no state to describe yet.
+                                if !self.first_snapshot {
+                                    ui.add(egui::Spinner::new().size(18.0));
+                                    ui.add_space(4.0);
+                                    if !self.net.connected {
+                                        ui.label(dim("connecting to the daemon…"));
+                                    } else {
+                                        ui.label(dim("reading your sessions…"));
+                                    }
+                                    // Progress where there is any. The daemon
+                                    // counts what it reads for the health
+                                    // panel, so this costs a field rather than
+                                    // a mechanism.
+                                    if self.health.transcripts_found > 0 {
+                                        ui.label(dim(format!(
+                                            "{} transcript(s) read",
+                                            self.health.transcripts_found
+                                        )));
+                                    }
+                                    ui.add_space(6.0);
+                                    ui.label(dim(
+                                        "a first scan of a long history takes a moment",
+                                    ));
+                                } else if !self.filter.trim().is_empty() {
                                     ui.label(dim("nothing matches that filter"));
                                 } else if self.prefs.scope != crate::prefs::Scope::All
                                     && !self.sessions.is_empty()
@@ -6646,7 +6683,13 @@ impl App {
         }
 
         let root_label = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
-        egui::Panel::left("explorer-tree").default_size(280.0).show(ui, |ui| {
+        // `R-B37`. Draggable, because how much room a tree wants depends on
+        // how deep the project nests and that is not something a default can
+        // know — asked for 2026-08-02 by someone actually reading in it.
+        egui::Panel::left("explorer-tree")
+            .default_size(280.0)
+            .resizable(true)
+            .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("WORKTREE").size(11.0).color(pal().dim).strong())
                     .on_hover_text(&root_label);
@@ -6695,6 +6738,7 @@ impl App {
             let half = ui.available_width() * 0.5;
             egui::Panel::right("editor-split")
                 .default_size(half)
+                .resizable(true)
                 .show(ui, |ui| {
                     self.editor_group(ui, 1);
                 });
