@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-07-29
+updated: 2026-08-02
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -34,11 +34,27 @@ to us.
 
 ## Persistence
 
-SQLite at `~/.mogeung/mogeung.db`, three tables:
+SQLite at `~/.mogeung/mogeung.db`:
 
 - `sessions(id, created_at, json)` — the whole struct as a JSON blob
 - `events(session_id, seq, json)`
 - `reviewed(session_id, anchor)` — which hunks you have read
+- `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
+- `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
+  writing (`R-B35`)
+
+**`notes` is the odd one, and deliberately.** Everything else here is derived:
+lose it and a rescan of `~/.claude` and git rebuilds it. A note cannot be
+recomputed from anything, which is why
+[ADR-0015](../decisions/0015-markdown-is-the-truth.md) also requires a one-way
+mirror to `~/.mogeung/notes/*.md` — the writing must not be reachable only
+through a database that only mogeung can open. The mirror is never read back.
+
+`session_id` and `seq` on a note are **tags, not a location**: together they
+anchor it to one turn of one transcript, and `seq` works as an anchor because
+it is persisted with the events and resumes from `max_seq` at startup. A note
+outlives the session being forgotten, which is what tagging rather than nesting
+buys.
 
 Blob storage is a deliberate v0.x choice: the schema is still moving, and being
 able to change `Session` without a migration matters more than query planning at

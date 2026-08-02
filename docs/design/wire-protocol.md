@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-01
+updated: 2026-08-02
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -159,6 +159,22 @@ commonest of all, `commit`'s "nothing to commit, working tree clean", arrives
 on stdout with a non-zero exit. A paraphrase would throw away
 the list of files and the hint that make git's own refusals actionable. See
 [feature 0025](../features/0025-git-write-local.md).
+
+## Notes (`R-B35`)
+
+`NoteList`, `NoteSave`, `NoteDelete`, answered by `Notes` with the **whole
+set** every time. Not a page and not a delta: notes are small by nature, and
+replacing the client's copy wholesale is what makes two windows on one daemon
+unable to drift — the property daemon ownership was chosen for
+([ADR-0015](../decisions/0015-markdown-is-the-truth.md)).
+
+They are not in the write family and do not pass its guard. That guard is about
+not letting an open socket run **git**; these change the daemon's own store,
+like `SetHunkReviewed` and `SetSignalCommand` already did, and are covered by
+the token layer along with everything else when the bind is not loopback.
+
+An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
+it chose, so a client never invents one.
 
 Client-supplied git arguments are shape-checked before git sees them: shas
 must be hex (one trailing `^` allowed — "the parent of"), ref names are
