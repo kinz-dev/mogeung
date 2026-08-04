@@ -59,9 +59,13 @@ import { setDock } from "@/lib/panes";
  * the pane itself does not have to know it can be scaled.
  */
 const pane =
-  (id: string, Body: React.FunctionComponent): React.FunctionComponent<IDockviewPanelProps> =>
+  (
+    id: string,
+    Body: React.FunctionComponent,
+    opts: { scale?: boolean } = {},
+  ): React.FunctionComponent<IDockviewPanelProps> =>
   () => (
-    <ZoomPane name={id}>
+    <ZoomPane name={id} scale={opts.scale}>
       <Body />
     </ZoomPane>
   );
@@ -96,7 +100,8 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   changes: pane("changes", ChangesPane),
   transcript: pane("transcript", TranscriptPane),
   agent: pane("agent", AgentPane),
-  code: pane("code", CodePane),
+  // Monaco takes the factor as a font size instead — see `ZoomPane`'s `scale`.
+  code: pane("code", CodePane, { scale: false }),
 };
 
 const LAYOUT_KEY = "mogeung.layout";

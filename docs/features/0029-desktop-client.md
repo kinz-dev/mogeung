@@ -677,3 +677,34 @@ class matching this codebase's own naming must have a rule in `index.css`. It is
 narrow on purpose — checking every class against Tailwind's real utility set
 needs Tailwind's resolver, and a guard that cries wolf gets deleted. It fails on
 the tree without the stylesheet, which is the only proof that matters.
+
+**Ctrl+wheel over the Code pane, and the same bug's second half.**
+
+The first half was written up above: React's `onWheel` is passive, so the
+handler ran and the browser ignored its `preventDefault`. A native listener
+fixed every pane except one — the editor. Reported as "I can't Ctrl+wheel to
+resize the code", and the cause is the mirror image of the first: **Monaco's
+scrollable element consumes the wheel and calls `stopPropagation`**, so the
+event never reached the wrapper at all. A bubble-phase listener cannot see an
+event that never bubbles.
+
+Registered in the **capture** phase instead, which runs root-first, so the
+modifier case is claimed before the editor sees it. Worth generalising: the
+pattern is *any* embedded component with its own scrolling — xterm has the same
+shape — and capture is what makes a wrapper's gesture win over a child that
+handles its own input.
+
+The fix also had to avoid a second bug it would otherwise have created. The
+wrapper scales its pane with CSS `zoom`, and the Code pane *already* hands the
+factor to Monaco as `fontSize: 12 * zoom` — so the first working Ctrl+wheel
+would have applied it twice. `ZoomPane` grew a `scale` prop for that: the Code
+pane keeps the wheel handling and the remembered factor, and scales itself.
+Monaco also measures in device pixels to map a click to a character, which a
+CSS scaling context throws off, so this is the right way round rather than a
+tidier one.
+
+Two tests, both of which fail on a bubble-phase listener: a child that
+`stopPropagation`s still lets the wrapper zoom, and a bare wheel is left alone
+so the content scrolls. There is deliberately no test for the CSS half — jsdom
+does not implement the non-standard `zoom` property, so the assertion could not
+tell the two behaviours apart.
