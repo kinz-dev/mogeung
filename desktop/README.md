@@ -124,7 +124,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
 | Connections window (`R-I7`) — switching daemons | not built; `setUrl` exists and nothing calls it, so the URL comes only from `?url=` or localStorage |
 | Launch a session, prompt builder, ambient window | not built |
-| Verification pillar — set a signal command, run it, coverage (`R-E2`, `R-E5`) | not built; `InfoPane` *does* show observed `verify_runs` and claims |
+| Verification — observed runs and claims, plus the signal runner and coverage (`R-E2`, `R-E5`) | done — the command runs only when you press it |
 | Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
 | Blame gutter, symbol outline, markdown preview, bookmarks-in-file | not built |
 | Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |

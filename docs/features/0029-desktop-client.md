@@ -790,3 +790,29 @@ wire types and the store already handled the reply. What was missing was a
 button. It sits on the file header, and its first version folded the file it was
 asking about — `IconButton` swallowed the event, so a button inside a clickable
 row had no way to stop it. The signature now hands the event on.
+
+**Pillar E's other half.**
+
+The Info pane already showed `verify_runs` and `claims` — what the agent
+happened to run, scraped from its own transcript. What was missing is the half
+where *you* ask: one command per repository, held by the daemon, `R-E2`, with
+`R-E5`'s coverage on changed lines underneath it.
+
+The rule that shapes the UI is that it **never runs on its own** — not on a
+scan, not when a session goes quiet, not when the pane opens. mogeung observes;
+a tool that ran your suite on its own initiative would be spending your machine
+and your tokens on a decision you did not make, which is ADR-0003's line drawn
+around a different verb. The button is the entire consent model, and the caption
+above it says so rather than leaving it to be inferred.
+
+Two details carried over deliberately. A daemon broadcast does not overwrite the
+box while you are typing in it — the same rule the label editor follows — and
+`exit: null` is rendered as **did not run** rather than folded in with a
+non-zero exit, because "never started" and "ran and failed" are opposite
+answers. Coverage says *no data* when there is none: an invented zero reads as
+"nothing is covered", which is a much louder claim than the truth.
+
+`unverified` came across as a helper on the wire types with four tests, since it
+is the one that decides whether a session is marked as having edited files
+nobody checked — and it means **no completed check**, not no passing check. A
+session whose tests failed has been verified, badly.

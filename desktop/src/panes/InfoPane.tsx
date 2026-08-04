@@ -5,7 +5,8 @@
 import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, Mono, PaneHeader } from "@/ui/primitives";
 import { compact, fmtDur, num, secsSince, stamp } from "@/lib/format";
-import { repoName, sessionLabel } from "@/wire/types";
+import { repoName, sessionLabel, unverified } from "@/wire/types";
+import { SignalRunner } from "@/ui/SignalRunner";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -63,6 +64,16 @@ export function InfoPane() {
           </Field>
         )}
 
+        {/* Pillar E's two halves, adjacent on purpose: what the agent
+            happened to run, and what you can ask for yourself. */}
+        {unverified(s) && (
+          <Field label="verification">
+            <span className="text-[var(--amber)]">
+              no build, test or typecheck completed in this session
+            </span>
+          </Field>
+        )}
+
         {s.verify_runs.length > 0 && (
           <>
             <div className="mt-2 px-3 text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase">
@@ -92,6 +103,8 @@ export function InfoPane() {
             ))}
           </>
         )}
+
+        <SignalRunner sessionId={s.id} repo={s.repo_root ?? s.cwd} />
 
         {s.touched_files.length > 0 && (
           <>

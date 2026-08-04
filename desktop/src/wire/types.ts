@@ -932,6 +932,15 @@ export function sessionLabel(s: Session): string {
   return s.title || s.last_prompt || s.name || `session ${s.id.slice(0, 8)}`;
 }
 
+/**
+ * `Session::unverified` — it edited files and nothing it ran ever reported a
+ * result. Deliberately "no completed check", not "no passing check": a session
+ * whose tests failed has been verified, and badly.
+ */
+export function unverified(s: Session): boolean {
+  return s.touched_files.length > 0 && !s.verify_runs.some((r) => r.ok !== null);
+}
+
 /** `Session::repo_name`. */
 export function repoName(s: Session): string {
   const p = s.repo_root || s.cwd;
