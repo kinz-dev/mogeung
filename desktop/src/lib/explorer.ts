@@ -9,6 +9,7 @@
  */
 
 import { useStore, emptyExplorer, type ExplorerState, type FileTab } from "@/store";
+import { showPane } from "@/lib/panes";
 import type { SessionId } from "@/wire/types";
 
 /**
@@ -66,6 +67,12 @@ export function toggleDir(id: SessionId, path: string): void {
  * stops a morning of clicking through a tree leaving forty tabs open.
  */
 export function openFile(id: SessionId, path: string, opts: { pin?: boolean; line?: number; rev?: string | null } = {}): void {
+  // First, so the pane exists and is forward before the tab arrives — the
+  // Code pane's reveal effect measures a list it has to be laying out. Every
+  // caller of this is a promise to show a file: the diff row's button even
+  // says "open this file in the Code pane". Opening one behind whatever tab
+  // you are on keeps that promise in the state and breaks it on the screen.
+  showPane("code", "Code");
   const { explorer, patchExplorer } = useStore.getState();
   const st = explorer[id] ?? emptyExplorer();
   const rev = opts.rev ?? null;

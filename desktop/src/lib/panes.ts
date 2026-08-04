@@ -1,4 +1,5 @@
 import type { DockviewApi } from "dockview";
+import { useStore } from "@/store";
 
 /**
  * Bring a pane forward, adding it back if it was closed. The port of
@@ -34,4 +35,28 @@ export function setDock(api: DockviewApi): void {
  */
 export function showPane(id: string, title: string): void {
   focusPane(dock, id, title);
+}
+
+/**
+ * Go to a marked turn: its session, the Transcript, that turn.
+ *
+ * The raise is the part that was missing. A bookmark clicked from the rail set
+ * the session and the turn and stopped there, so with the Agent or Git tab
+ * forward the click did nothing you could see — and a row that answers a click
+ * with no visible change reads as broken, not as "the destination is behind
+ * another tab".
+ *
+ * Order matters twice. `select` clears the focus fields when the session
+ * changes, so it has to come first or the jump it is meant to set up is wiped
+ * on the way. And the pane is raised **before** the seq is published, so the
+ * Transcript's scroll effect runs against a pane that is on screen: a
+ * virtualised list cannot scroll to an index it is not currently laying out.
+ */
+export function jumpToTurn(sessionId: string, seq: number | null): void {
+  useStore.getState().select(sessionId);
+  showPane("transcript", "Transcript");
+  // By **seq**, not timestamp: a session this window has never opened has no
+  // loaded events to take a timestamp from, and a seq stays pending until the
+  // events arrive rather than silently missing.
+  useStore.setState({ focusSeq: seq, highlightSeq: seq });
 }

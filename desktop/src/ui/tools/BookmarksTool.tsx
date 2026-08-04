@@ -13,13 +13,13 @@ import { X } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, Empty, Row } from "@/ui/primitives";
 import { oneLine, stamp } from "@/lib/format";
+import { jumpToTurn } from "@/lib/panes";
 import { eventText, repoName, sessionLabel } from "@/wire/types";
 
 export function BookmarksTool() {
   const notes = useStore((s) => s.notes);
   const sessions = useStore((s) => s.sessions);
   const events = useStore((s) => s.events);
-  const select = useStore((s) => s.select);
   const send = useStore((s) => s.send);
   const pushError = useStore((s) => s.pushError);
   const selected = useStore((s) => s.selected);
@@ -68,12 +68,9 @@ export function BookmarksTool() {
                 );
                 return;
               }
-              select(n.session_id);
-              // By **seq**, not timestamp. A session this window has never
-              // opened has no loaded events to take a timestamp from, so the
-              // old jump silently did nothing; a seq stays pending until the
-              // events arrive and then lands exactly on the marked turn.
-              useStore.setState({ focusSeq: n.seq ?? null, highlightSeq: n.seq ?? null });
+              // Selects the session, raises the Transcript and points it at the
+              // turn — in that order, for the reasons `jumpToTurn` gives.
+              jumpToTurn(n.session_id, n.seq ?? null);
             }}
             className="border-b border-[var(--border)] py-1"
             title={session ? sessionLabel(session) : "this session is no longer being watched"}

@@ -708,3 +708,28 @@ Two tests, both of which fail on a bubble-phase listener: a child that
 so the content scrolls. There is deliberately no test for the CSS half — jsdom
 does not implement the non-standard `zoom` property, so the assertion could not
 tell the two behaviours apart.
+
+**Navigation that did not navigate.**
+
+Clicking a bookmark selected its session and set the turn and did nothing else,
+so with the Agent or Git tab forward the click had no visible effect at all. The
+state was right the whole time — the destination was simply behind another tab,
+which from the outside is indistinguishable from a broken row.
+
+The fix is `jumpToTurn`, and its two ordering rules are the interesting part.
+`select` **clears** `focusSeq`/`highlightSeq` when the session changes, so
+publishing the seq first would wipe the very jump it is setting up; and the pane
+is raised *before* the seq is published, because the Transcript's scroll effect
+asks a virtualised list to scroll to an index, and a list that is not being laid
+out cannot answer.
+
+Two more places had the same hole, found by looking rather than by being
+reported. The global search jumps to a turn the same way — now raises the
+Transcript. And **every** caller of `openFile` promised a file it did not show:
+the diff row's button says "open this file in the Code pane" in its own tooltip.
+The raise went into `openFile` rather than into its six call sites, which is the
+same one-door rule `explorerFetch` follows. A comment in the Files tool claiming
+"the Code pane is raised by the pane itself" was simply wrong, and is corrected.
+
+Four tests, with a fake `DockviewApi`; the first fails without the raise,
+verified by removing it.

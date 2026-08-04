@@ -189,8 +189,8 @@ export function FilesTool() {
                 onClick={() => {
                   if (r.isDir) toggleDir(id, r.path);
                   // Single click previews, double click pins — the tree's
-                  // existing rule. The Code pane is raised by the pane itself
-                  // when a file arrives, so a click is never a no-op.
+                  // existing rule. `openFile` raises the Code pane, so a click
+                  // from here is never a no-op, whatever tab is forward.
                   else openFile(id, r.path);
                 }}
                 onDoubleClick={() => {

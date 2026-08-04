@@ -21,6 +21,7 @@ import { useStore } from "@/store";
 import { Checkbox, Dim, Empty, Input, Mono } from "@/ui/primitives";
 import { best, searchMove, type Engine } from "@/lib/search";
 import { openFile } from "@/lib/explorer";
+import { showPane } from "@/lib/panes";
 import { cn } from "@/lib/cn";
 import { oneLine, shortDir, base, stamp } from "@/lib/format";
 import { eventText, type SearchHit } from "@/wire/types";
@@ -172,6 +173,9 @@ export function SearchTool({ onOpened }: { onOpened?: () => void } = {}) {
     if (sel.kind === "file") {
       if (selectedId) openFile(selectedId, sel.path, { pin: true, line: sel.line });
     } else if (sel.kind === "turn") {
+      // Raised for the same reason a bookmark raises it: this hit is *in* the
+      // Transcript, and with another tab forward the jump happens off screen.
+      showPane("transcript", "Transcript");
       const ev = events?.find((e) => e.seq === sel.seq);
       useStore.setState({ focusEventTs: ev?.ts ?? null, highlightSeq: sel.seq });
     } else if (sessions[sel.session]) {
@@ -179,6 +183,7 @@ export function SearchTool({ onOpened }: { onOpened?: () => void } = {}) {
       // cross-session corpus is usually one this window has never hydrated,
       // and landing on an empty Transcript is the failure this jump avoids.
       select(sel.session);
+      showPane("transcript", "Transcript");
       useStore.setState({ focusEventTs: sel.ts });
     }
   };
