@@ -110,7 +110,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 
 | | state |
 |---|---|
-| Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip | done |
+| Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip, group by repo (`R-B6`), label (`R-B26`), forget | done |
 | Transcript — virtualised, markdown, find (`R-B36`), mark a turn | done |
 | Code — Monaco, read-only, tabs, split, preview/pinned tabs, per-file wrap | done |
 | Changes — hunks, risk flags, read marks, hide-read, hide-noise | done |
@@ -121,7 +121,12 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Keyboard — the egui bindings, kept | done |
 | **Agent pane** (tmux attach) | built — Tauri only, and the Rust needs webkit's headers to compile |
 | **Terminal panel** (your shells) | built — same |
-| Health / keymap / connections windows | not built |
+| Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
+| Connections window (`R-I7`) — switching daemons | not built; `setUrl` exists and nothing calls it, so the URL comes only from `?url=` or localStorage |
+| Launch a session, prompt builder, ambient window | not built |
+| Blast radius (`R-D9`), side-by-side, word diff | not built — `wordDiff`/`sideBySide` are ported prefs nothing reads yet |
+| Verification pillar — set a signal command, run it, coverage (`R-E2`, `R-E5`) | not built; `InfoPane` *does* show observed `verify_runs` and claims |
+| Desktop notification banners (`R-C1`) | not built — the plugin is a dependency and is never imported. The tray is a separate Rust binary and still works |
 | Blame gutter, symbol outline, markdown preview, bookmarks-in-file | not built |
 | Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |
 

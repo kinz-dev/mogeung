@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronLeft, ChevronRight, Pin, EyeOff, Clock, Tag } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Pin, Tag } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } from "@/ui/primitives";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
@@ -337,9 +337,23 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
       <MenuItem onSelect={() => void navigator.clipboard?.writeText(session.id)}>
         Copy session id
       </MenuItem>
+      <MenuSeparator />
+      {/* Last, behind a separator, and unconfirmed — the same shape the egui
+          client gives it. It drops the session and its review marks from the
+          daemon's record; it does not touch `~/.claude`, so a session whose
+          transcript is still there comes back on the next scan as one nobody
+          has read yet. */}
+      <MenuItem onSelect={() => send({ cmd: "forget_session", session_id: session.id })}>
+        Forget this session
+      </MenuItem>
     </ContextMenu>
   );
 }
+
+/** One line of the list: a repo heading, or a session. */
+type DisplayRow =
+  | { kind: "header"; repo: string; count: number; needing: number; collapsed: boolean }
+  | { kind: "row"; item: AttentionItem; session: Session };
 
 export function QueuePanel() {
   const prefs = useStore((s) => s.prefs);
@@ -351,24 +365,60 @@ export function QueuePanel() {
   const parentRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(prefs.queueWidth);
   const dragging = useRef(false);
+  // Not persisted, matching the egui client: which repos you folded away is a
+  // property of this sitting, and a queue that opens with its urgent half
+  // collapsed from last week would hide the thing it exists to show.
+  const [collapsedRepos, setCollapsedRepos] = useState<string[]>([]);
+
+  // `R-B6`. Grouping preserves rank **within** a repo, and orders the repos by
+  // their most urgent session — first appearance in an already-ranked list is
+  // exactly that — so the top of the panel is still the top of the queue.
+  const display = useMemo<DisplayRow[]>(() => {
+    if (!prefs.groupByRepo) return rows.map((r) => ({ kind: "row", ...r }) as DisplayRow);
+    const order: string[] = [];
+    const by = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const repo = repoName(r.session);
+      const bucket = by.get(repo);
+      if (bucket) bucket.push(r);
+      else {
+        by.set(repo, [r]);
+        order.push(repo);
+      }
+    }
+    const out: DisplayRow[] = [];
+    for (const repo of order) {
+      const items = by.get(repo) ?? [];
+      const collapsed = collapsedRepos.includes(repo);
+      out.push({
+        kind: "header",
+        repo,
+        count: items.length,
+        needing: items.filter((r) => needsHuman(r.item.reason)).length,
+        collapsed,
+      });
+      if (!collapsed) for (const r of items) out.push({ kind: "row", ...r });
+    }
+    return out;
+  }, [rows, prefs.groupByRepo, collapsedRepos]);
 
   // Follow the selection with the viewport. Arrowing down a long queue that
   // does not scroll walks the highlight straight off the bottom, and the list
   // then looks like it stopped responding.
   useEffect(() => {
     if (!selected) return;
-    const at = rows.findIndex((r) => r.session.id === selected);
+    const at = display.findIndex((r) => r.kind === "row" && r.session.id === selected);
     if (at >= 0) rowVirtualizer.scrollToIndex(at, { align: "auto" });
-    // `rows` deliberately absent: this follows the *selection*, not every
+    // `display` deliberately absent: this follows the *selection*, not every
     // re-rank the daemon sends, or a queue that reorders under you would yank
     // the viewport while you are reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: display.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 74,
+    estimateSize: (i) => (display[i]?.kind === "header" ? 24 : 74),
     overscan: 8,
   });
 
@@ -405,6 +455,13 @@ export function QueuePanel() {
           </span>
           <span className="text-2xs text-[var(--dim)]">{rows.length}</span>
           <div className="ml-auto flex items-center gap-1">
+            <IconButton
+              title="group by repository  (R-B6)"
+              active={prefs.groupByRepo}
+              onClick={() => setPrefs({ groupByRepo: !prefs.groupByRepo })}
+            >
+              <FolderTree size={13} />
+            </IconButton>
             <IconButton title="collapse the queue  ([)" onClick={() => setPrefs({ queueCollapsed: true })}>
               <ChevronLeft size={14} />
             </IconButton>
@@ -456,16 +513,46 @@ export function QueuePanel() {
             </Empty>
           ) : (
             <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
-              {rowVirtualizer.getVirtualItems().map((v) => (
-                <div
-                  key={rows[v.index].session.id}
-                  ref={rowVirtualizer.measureElement}
-                  data-index={v.index}
-                  style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start}px)` }}
-                >
-                  <QueueRow item={rows[v.index].item} session={rows[v.index].session} />
-                </div>
-              ))}
+              {rowVirtualizer.getVirtualItems().map((v) => {
+                const r = display[v.index];
+                return (
+                  <div
+                    key={r.kind === "header" ? `repo:${r.repo}` : r.session.id}
+                    ref={rowVirtualizer.measureElement}
+                    data-index={v.index}
+                    style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start}px)` }}
+                  >
+                    {r.kind === "header" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedRepos((c) =>
+                            c.includes(r.repo) ? c.filter((x) => x !== r.repo) : [...c, r.repo],
+                          )
+                        }
+                        className="flex w-full items-center gap-1 bg-[var(--bg-faint)] px-2 py-0.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
+                      >
+                        {r.collapsed ? (
+                          <ChevronRight size={11} className="shrink-0 text-[var(--dim)]" />
+                        ) : (
+                          <ChevronDown size={11} className="shrink-0 text-[var(--dim)]" />
+                        )}
+                        <span className="truncate text-xs font-semibold text-[var(--text-strong)]">
+                          {r.repo}
+                        </span>
+                        <Dim className="shrink-0 text-2xs">
+                          {r.count} session{r.count === 1 ? "" : "s"}
+                          {/* Only when there are any: a repo that needs nothing
+                              should read as quiet, not as a zero to check. */}
+                          {r.needing > 0 && `, ${r.needing} need you`}
+                        </Dim>
+                      </button>
+                    ) : (
+                      <QueueRow item={r.item} session={r.session} />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

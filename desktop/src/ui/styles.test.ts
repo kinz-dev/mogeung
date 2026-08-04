@@ -93,6 +93,40 @@ describe("colour", () => {
   });
 });
 
+describe("the app's own classes", () => {
+  /**
+   * A class this app invents has to exist in `index.css`.
+   *
+   * `prose-mogeung` was applied by the Transcript from the day markdown was
+   * turned on and never defined, so `react-markdown` produced correct HTML that
+   * preflight had already flattened: no bullets, no heading sizes, no rules.
+   * Nothing failed — it simply looked like markdown was switched off, which is
+   * the class of bug a type checker cannot see and a screenshot can.
+   *
+   * Deliberately narrow: only the families this codebase names itself, matched
+   * by `mogeung` or `prose` in the token. A general "is this a real Tailwind
+   * utility" check would need Tailwind's own resolver to avoid failing on
+   * arbitrary valid utilities, and a guard that cries wolf gets deleted.
+   */
+  it("defines every one of them", () => {
+    const css = readFileSync("src/index.css", "utf8");
+    const defined = new Set(
+      [...css.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]),
+    );
+    const missing = new Set<string>();
+    for (const path of sources()) {
+      const src = readFileSync(path, "utf8");
+      for (const m of src.matchAll(/class(?:Name)?="([^"]*)"/g)) {
+        for (const token of m[1].split(/\s+/)) {
+          if (!/mogeung|prose/.test(token)) continue;
+          if (!defined.has(token)) missing.add(`${path}: ${token}`);
+        }
+      }
+    }
+    expect([...missing]).toEqual([]);
+  });
+});
+
 describe("focus", () => {
   /**
    * The rule this whole pass existed for.

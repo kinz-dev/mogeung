@@ -301,3 +301,171 @@ textarea {
 .xterm .xterm-viewport {
   background-color: transparent !important;
 }
+
+/* ------------------------------------------------------------------ */
+/* Markdown in the transcript                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * `prose-mogeung` was applied by the Transcript from the day markdown was
+ * turned on, and never defined — so `react-markdown` produced correct HTML that
+ * Tailwind's preflight had already stripped to nothing. Headings, lists, rules
+ * and emphasis all rendered as plain paragraphs, which reads as "markdown is
+ * off" rather than "the stylesheet is missing".
+ *
+ * Written by hand rather than pulled from @tailwindcss/typography: that plugin
+ * ships its own colour and size scale, and this has to sit inside a dense pane
+ * at the sizes the rest of the window uses. Everything below is in the palette
+ * variables, so it follows the theme toggle for free.
+ */
+.prose-mogeung {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.prose-mogeung > :first-child {
+  margin-top: 0;
+}
+.prose-mogeung > :last-child {
+  margin-bottom: 0;
+}
+
+.prose-mogeung p,
+.prose-mogeung ul,
+.prose-mogeung ol,
+.prose-mogeung blockquote,
+.prose-mogeung pre,
+.prose-mogeung table {
+  margin: 0.5em 0;
+}
+
+.prose-mogeung h1,
+.prose-mogeung h2,
+.prose-mogeung h3,
+.prose-mogeung h4,
+.prose-mogeung h5,
+.prose-mogeung h6 {
+  margin: 0.9em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-strong);
+}
+
+/* Modest steps. A transcript is a conversation, not a document, and an `# H1`
+   typed by an agent must not shout over the message around it. */
+.prose-mogeung h1 { font-size: 1.25em; }
+.prose-mogeung h2 { font-size: 1.15em; }
+.prose-mogeung h3 { font-size: 1.05em; }
+.prose-mogeung h4,
+.prose-mogeung h5,
+.prose-mogeung h6 { font-size: 1em; }
+
+.prose-mogeung strong {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.prose-mogeung em {
+  font-style: italic;
+}
+.prose-mogeung del {
+  text-decoration: line-through;
+  color: var(--dim);
+}
+
+/* Preflight zeroes list markers and padding; both come back here. */
+.prose-mogeung ul,
+.prose-mogeung ol {
+  padding-left: 1.4em;
+}
+.prose-mogeung ul {
+  list-style: disc;
+}
+.prose-mogeung ul ul {
+  list-style: circle;
+}
+.prose-mogeung ol {
+  list-style: decimal;
+}
+.prose-mogeung li {
+  margin: 0.15em 0;
+}
+.prose-mogeung li > ul,
+.prose-mogeung li > ol {
+  margin: 0.15em 0;
+}
+/* GFM task lists: the checkbox is the marker, so the disc would be a second. */
+.prose-mogeung li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.2em;
+}
+.prose-mogeung li > input[type="checkbox"] {
+  margin-right: 0.4em;
+}
+
+.prose-mogeung code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  background: var(--bg-faint);
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+}
+
+/* A block is already set apart by its background; the inline padding and
+   rounding on `code` would double it. */
+.prose-mogeung pre {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5em 0.7em;
+  overflow-x: auto;
+}
+.prose-mogeung pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+  white-space: pre;
+}
+
+.prose-mogeung blockquote {
+  border-left: 2px solid var(--border-hover);
+  padding-left: 0.7em;
+  color: var(--dim);
+}
+
+.prose-mogeung a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose-mogeung hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
+}
+
+/* GFM tables. `block` so a wide one scrolls inside the pane rather than
+   widening it — a transcript that scrolls sideways loses its left edge. */
+.prose-mogeung table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.prose-mogeung th,
+.prose-mogeung td {
+  border: 1px solid var(--border);
+  padding: 0.25em 0.5em;
+  text-align: left;
+}
+.prose-mogeung th {
+  background: var(--bg-faint);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.prose-mogeung img {
+  max-width: 100%;
+}

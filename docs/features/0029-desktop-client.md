@@ -647,3 +647,33 @@ discovers that.
 
 The egui client's rail has no filter box at all, so nothing there to port back
 yet.
+
+**The queue's last two gaps, and a stylesheet that never existed.**
+
+`R-B6`'s grouping and forget-a-session were the two things the queue still could
+not do. Both are ports, and grouping is the one with a rule worth restating: it
+preserves rank *within* a repo and orders the repos by their most urgent
+session — which falls out of taking first appearance in an already-ranked list —
+so the top of the panel is still the top of the queue. Which repos you have
+folded away is per-sitting state and deliberately not persisted, the same as the
+egui client: a queue that opened with its urgent half collapsed from last week
+would hide the thing it exists to show. Forget sits last behind a separator and
+does not ask twice; it drops the session and its review marks from the daemon's
+record and touches nothing under `~/.claude`, so a session whose transcript is
+still on disk returns on the next scan as one nobody has read.
+
+**The transcript's markdown was never styled.** `prose-mogeung` was applied from
+the day markdown was turned on and defined nowhere, so `react-markdown` produced
+correct HTML that Tailwind's preflight had already flattened — no bullets, no
+heading sizes, no rules. Nothing errored; it simply looked like the markdown
+toggle did nothing, which is why it survived so long. Written by hand rather
+than by adding `@tailwindcss/typography`, whose scale is built for documents and
+would have to be argued back down to the size of a dense pane, and the headings
+are deliberately modest steps: a transcript is a conversation, and an `# H1`
+typed by an agent must not shout over the message beside it.
+
+The guard is in `styles.test.ts`, with the rest of the design-system rules: a
+class matching this codebase's own naming must have a rule in `index.css`. It is
+narrow on purpose — checking every class against Tailwind's real utility set
+needs Tailwind's resolver, and a guard that cries wolf gets deleted. It fails on
+the tree without the stylesheet, which is the only proof that matters.
