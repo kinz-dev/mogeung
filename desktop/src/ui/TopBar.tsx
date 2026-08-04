@@ -9,12 +9,13 @@
  * nowhere you can see while using it.
  */
 
-import { Activity, Command, Keyboard, Moon, RefreshCw, Sun, Monitor, HeartPulse, SquareTerminal } from "lucide-react";
+import { Activity, Bell, BellOff, Command, Keyboard, Moon, RefreshCw, Sun, Monitor, HeartPulse, SquareTerminal } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
 import { showPane } from "@/lib/panes";
 import { WindowControls } from "@/ui/WindowControls";
+import { ensurePermission } from "@/lib/notify";
 
 const THEMES = ["dark", "light", "system"] as const;
 
@@ -147,6 +148,36 @@ export function TopBar() {
           }}
         >
           <Activity size={13} />
+        </IconButton>
+        <IconButton
+          title={
+            prefs.notify
+              ? daemonStatus?.mode === "hosting"
+                ? "banners on — you will be told when a session starts needing you"
+                : "banners on, but this window only attached to its daemon. That daemon announces its own queue — run it with --notify"
+              : "tell me when a session needs me, while this window is in the background"
+          }
+          active={prefs.notify}
+          onClick={() => {
+            if (prefs.notify) {
+              setPrefs({ notify: false });
+              return;
+            }
+            // Permission is asked for on the way in, not at startup: a prompt
+            // for a feature nobody has asked for is the overstep.
+            void ensurePermission().then((ok) => {
+              setPrefs({ notify: ok });
+              if (!ok) {
+                useStore
+                  .getState()
+                  .pushError(
+                    "the system refused notification permission — banners stay off until it is granted",
+                  );
+              }
+            });
+          }}
+        >
+          {prefs.notify ? <Bell size={13} /> : <BellOff size={13} />}
         </IconButton>
         <IconButton title="keyboard shortcuts  (Alt+K)" onClick={() => useStore.setState({ showKeymap: true })}>
           <Keyboard size={13} />

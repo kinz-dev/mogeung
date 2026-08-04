@@ -77,6 +77,16 @@ export interface Prefs {
   markdown: boolean;
   showThinking: boolean;
 
+  /**
+   * Post a desktop banner when a session starts needing you. `R-C1`.
+   *
+   * Off until asked for, which is the rule `notify.rs` states and the reason
+   * `mogeungd` hides delivery behind `--notify`: a tool that starts posting
+   * banners the first time you run it has overstepped. One click in the top
+   * bar, and the OS permission is asked for then rather than at startup.
+   */
+  notify: boolean;
+
   /** Per-pane content zoom. Only levels that are not 1.0 are stored. */
   zoom: Record<string, number>;
   /** The whole window's scale. A Tauri webview has no browser zoom of its own. */
@@ -131,6 +141,7 @@ export const defaultPrefs = (): Prefs => ({
   sideBySide: false,
   markdown: true,
   showThinking: true,
+  notify: false,
   zoom: {},
   appZoom: 1,
   keymap: {},

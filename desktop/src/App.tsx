@@ -50,6 +50,7 @@ import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
 import { setDock } from "@/lib/panes";
+import { useNotifications } from "@/lib/notify";
 
 /**
  * The panes, by the id the saved layout stores.
@@ -146,6 +147,7 @@ export default function App() {
   const theme = useStore((s) => s.prefs.theme);
   const dockRef = useRef<DockviewApi | null>(null);
   useKeymap(dockRef);
+  useNotifications();
 
   // The theme is an attribute on the root, so the CSS variables switch without
   // a re-render of anything that reads them. `system` follows the desktop.

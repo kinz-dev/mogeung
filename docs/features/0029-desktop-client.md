@@ -733,3 +733,33 @@ same one-door rule `explorerFetch` follows. A comment in the Files tool claiming
 
 Four tests, with a fake `DockviewApi`; the first fails without the raise,
 verified by removing it.
+
+**Banners, and the question of who speaks.**
+
+`R-C1` was the gap worth closing first, because it was the only one where the
+missing piece was the product's own promise rather than a view: mogeung exists
+to tell you which session needs you *while you are looking elsewhere*, and in
+this client it could not. The plumbing had been there all along — the Tauri
+shell registers `tauri-plugin-notification` and the capability is granted — and
+nothing imported it.
+
+The interesting part is not delivery, it is that **two processes can post the
+same banner**. `mogeungd --notify` announces its queue; a daemon hosted by this
+window is started with notifications off, on the reasoning already written into
+`daemon.rs` — the window is right there in front of you. That leaves exactly one
+uncovered case, and it is the one that matters: this window hosting a daemon
+while you work in another application. So the window speaks only when it hosts,
+and only while it is unfocused. A daemon you merely attached to is someone
+else's to announce.
+
+Everything else is a port of `notify.rs`, deliberately faithful: the transition
+*into* needing you, once, per session, with the seen-state rebuilt from the
+queue so a session that leaves and comes back is heard again. The seen-state
+advances **even while silent**, which is the difference between a notifier and a
+backlog — without it, turning banners on, or coming back after an hour, would
+fire one for every session that had been waiting all along.
+
+Off until asked for, which is the rule the daemon states and the reason
+`--notify` is a flag rather than a default. The OS permission is requested when
+you turn it on, not at startup: prompting for a feature nobody has asked for is
+the same overstep in a different costume. Six tests over the pure half.

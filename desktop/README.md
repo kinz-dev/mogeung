@@ -126,7 +126,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Launch a session, prompt builder, ambient window | not built |
 | Blast radius (`R-D9`), side-by-side, word diff | not built — `wordDiff`/`sideBySide` are ported prefs nothing reads yet |
 | Verification pillar — set a signal command, run it, coverage (`R-E2`, `R-E5`) | not built; `InfoPane` *does* show observed `verify_runs` and claims |
-| Desktop notification banners (`R-C1`) | not built — the plugin is a dependency and is never imported. The tray is a separate Rust binary and still works |
+| Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
 | Blame gutter, symbol outline, markdown preview, bookmarks-in-file | not built |
 | Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |
 
