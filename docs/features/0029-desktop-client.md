@@ -816,3 +816,26 @@ answers. Coverage says *no data* when there is none: an invented zero reads as
 is the one that decides whether a session is marked as having edited files
 nobody checked — and it means **no completed check**, not no passing check. A
 session whose tests failed has been verified, badly.
+
+**Switching daemons, from the window.**
+
+`R-I7`'s hard part had been done for months: `store.setUrl` clears the board and
+re-points the socket, and nothing called it. So the address came from `?url=` or
+from whatever localStorage happened to hold, and moving between a laptop's
+daemon and a dev box's meant editing a query string. The window is a list you
+can add to, rename in place, switch by clicking, and forget from — written on
+change, because a dialog dismissed with Escape must not lose the daemon you just
+added.
+
+The list is client-side and local, like the keymap and the layout: which daemons
+*you* watch is not daemon state, and a remote daemon has no business holding a
+list of its peers. A URL is the identity, deliberately — `ws://localhost:7717/ws`
+through an `ssh -L` tunnel and `ws://devbox:7717/ws` are the same process by two
+routes, and which route works is exactly what you are switching between. Whether
+it is the same *machine* stays a separate question, answered by the daemon's own
+identity (`R-I5`).
+
+One thing the egui window has and this does not: browsing the LAN. That is
+multicast, which a webview cannot do at all — it would have to move into the
+Tauri half. The window says so rather than leaving an empty list to be
+interpreted.

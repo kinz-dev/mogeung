@@ -136,7 +136,9 @@ export function Button({
   type = "button",
 }: {
   children: React.ReactNode;
-  onClick?: () => void;
+  /** Handed on for the same reason `IconButton` does — a button inside a
+   *  clickable row needs to be able to stop it. */
+  onClick?: (e: React.MouseEvent) => void;
   title?: string;
   disabled?: boolean;
   active?: boolean;

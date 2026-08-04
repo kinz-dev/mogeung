@@ -311,6 +311,8 @@ export interface AppState {
   paletteMode: "actions" | "files";
   showHealth: boolean;
   showKeymap: boolean;
+  /** The daemon switcher. `R-I7`. */
+  showConnections: boolean;
   showTerminal: boolean;
   /** The global-search overlay. `R-F13`, the ask-and-go half. */
   searchOpen: boolean;
@@ -381,6 +383,7 @@ export const useStore = create<AppState>((set, get) => ({
   paletteMode: "actions",
   showHealth: false,
   showKeymap: false,
+  showConnections: false,
   showTerminal: false,
   searchOpen: false,
   machineId: null,

@@ -67,11 +67,19 @@ export function TopBar() {
       <Tooltip
         content={
           conn === "open"
-            ? `connected to ${url}${daemon ? `\n${daemon.host ?? "unknown host"} · ${daemon.version}` : ""}`
-            : `${conn} — ${url}`
+            ? `connected to ${url}${daemon ? `\n${daemon.host ?? "unknown host"} · ${daemon.version}` : ""}\nclick to switch daemons`
+            : `${conn} — ${url}\nclick to switch daemons`
         }
       >
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: dot }} />
+        {/* The dot is the connection, so it is also the way to change it. */}
+        <button
+          type="button"
+          aria-label="connections"
+          onClick={() => useStore.setState({ showConnections: true })}
+          className="grid h-4 w-4 shrink-0 place-items-center rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
+        >
+          <span className="h-2 w-2 rounded-full" style={{ background: dot }} />
+        </button>
       </Tooltip>
 
       {daemonStatus?.mode === "hosting" && (

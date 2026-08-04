@@ -122,7 +122,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | **Agent pane** (tmux attach) | built — Tauri only, and the Rust needs webkit's headers to compile |
 | **Terminal panel** (your shells) | built — same |
 | Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
-| Connections window (`R-I7`) — switching daemons | not built; `setUrl` exists and nothing calls it, so the URL comes only from `?url=` or localStorage |
+| Connections window (`R-I7`) — add, name, switch, forget | done — no LAN browsing, which needs multicast the webview cannot do |
 | Launch a session, prompt builder, ambient window | not built |
 | Verification — observed runs and claims, plus the signal runner and coverage (`R-E2`, `R-E5`) | done — the command runs only when you press it |
 | Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
