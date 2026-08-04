@@ -483,3 +483,27 @@ textarea {
 .prose-mogeung img {
   max-width: 100%;
 }
+
+/* ------------------------------------------------------------------ */
+/* The Code pane's two margins                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Blame is injected text rather than a real gutter — Monaco's glyph margin
+ * takes an icon and nothing else. Dim and monospaced so it reads as a margin
+ * and not as part of the line: it is already occupying the space the code
+ * would have had, and it must not also compete for attention with it.
+ */
+.blame-gutter {
+  color: var(--dim) !important;
+  opacity: 0.75;
+  font-size: 0.85em;
+  white-space: pre;
+}
+
+/* A bookmarked line, marked in the glyph margin that its click toggles. */
+.bookmark-mark {
+  background: var(--amber);
+  width: 3px !important;
+  margin-left: 3px;
+}

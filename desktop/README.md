@@ -112,7 +112,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 |---|---|
 | Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip, group by repo (`R-B6`), label (`R-B26`), forget | done |
 | Transcript — virtualised, markdown, find (`R-B36`), mark a turn | done |
-| Code — Monaco, read-only, tabs, split, preview/pinned tabs, per-file wrap | done |
+| Code — Monaco, read-only, tabs, split, per-file wrap, symbol outline (`R-B28`), markdown preview (`R-B29`), blame gutter (`R-D10`), in-file bookmarks | done |
 | Changes — hunks, risk flags, read marks, hide-read, hide-noise, word diff (`R-D5`), side-by-side (`R-D6`), syntax colour (`R-D4`), blast radius (`R-D9`) | done |
 | Git — log, filters, commit diff, local changes, refs, stashes, fetch | done |
 | Insight — **redesigned**: charts for analytics and burn, plus all eight views | done |
@@ -126,7 +126,6 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Launch a session, prompt builder, ambient window | not built |
 | Verification — observed runs and claims, plus the signal runner and coverage (`R-E2`, `R-E5`) | done — the command runs only when you press it |
 | Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
-| Blame gutter, symbol outline, markdown preview, bookmarks-in-file | not built |
 | Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |
 
 **The Code pane is a viewer and stays one.** Monaco runs with `readOnly: true`

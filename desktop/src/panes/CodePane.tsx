@@ -14,16 +14,20 @@
  * are reading.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
-import { Pin, X, WrapText, Columns2 } from "lucide-react";
+import { Pin, X, WrapText, Columns2, ListTree, Eye, UserRound, Bookmark } from "lucide-react";
 import { useStore } from "@/store";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
 import { closeTab, explorerFetch, languageOf } from "@/lib/explorer";
 import { cn } from "@/lib/cn";
 import { base } from "@/lib/format";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
+import { outline, symbolGlyph } from "@/lib/symbols";
+import { Input } from "@/ui/primitives";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { FileIcon } from "@/ui/FileIcon";
 
 function TabStrip({ group }: { group: 0 | 1 }) {
@@ -88,7 +92,15 @@ function Viewer({ group }: { group: 0 | 1 }) {
   const wrapPaths = useStore((s) => s.scoped().editorWrap);
   const setScoped = useStore((s) => s.setScoped);
   const zoom = useStore((s) => s.prefs.zoom["code"] ?? 1);
+  const send = useStore((s) => s.send);
+  const scoped = useStore((s) => s.scoped());
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
+  const decorations = useRef<editor.IEditorDecorationsCollection | null>(null);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineFilter, setOutlineFilter] = useState("");
+  const [preview, setPreview] = useState(false);
+  const [blameOn, setBlameOn] = useState(false);
 
   const index = st?.active[group] ?? null;
   const tab = index !== null && st ? st.open[index] : null;
@@ -104,6 +116,65 @@ function Viewer({ group }: { group: 0 | 1 }) {
       .patchExplorer(id, { open: st.open.map((t, i) => (i === index ? { ...t, gotoLine: null } : t)) });
   }, [tab?.gotoLine, tab?.content, id, index, st]);
 
+  const ext = tab ? tab.path.slice(tab.path.lastIndexOf(".") + 1).toLowerCase() : "";
+  const isMarkdown = ext === "md" || ext === "markdown";
+  const blameKey = tab && id ? `${id}:${tab.rev ?? ""}:${tab.path}` : "";
+  const blame = useStore((s) => (blameKey ? s.blame[blameKey] : undefined));
+  const marks = useMemo(
+    () => (id && tab ? scoped.bookmarks.filter(([sid, p]) => sid === id && p === tab.path) : []),
+    [scoped.bookmarks, id, tab],
+  );
+
+  // Asked for once per (file, revision) and only while the gutter is on: blame
+  // is a `git blame` per file, which is real work on the daemon's side and must
+  // not happen because a tab was opened.
+  useEffect(() => {
+    if (!blameOn || !id || !tab || blame) return;
+    send({ cmd: "git_blame", session_id: id, path: tab.path, rev: tab.rev });
+  }, [blameOn, id, tab, blame, send]);
+
+  /**
+   * The gutter and the bookmark marks, as Monaco decorations.
+   *
+   * Blame is **injected text**, not a real gutter: Monaco's glyph margin holds
+   * an icon and nothing else, and a second synchronised scroll pane beside the
+   * editor is a lot of machinery to keep aligned. Injected text moves the code
+   * right, which is the honest cost of putting words in a margin that has none.
+   *
+   * Repeats are blank, the way `git blame` reads on a terminal — a column that
+   * says the same sha forty times is noise with a value in it.
+   */
+  useEffect(() => {
+    const ed = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!ed || !monaco) return;
+    if (!decorations.current) decorations.current = ed.createDecorationsCollection([]);
+
+    const next: editor.IModelDeltaDecoration[] = [];
+    if (blameOn && blame) {
+      let prev = "";
+      blame.lines.forEach((l, i) => {
+        const repeat = l.sha === prev;
+        prev = l.sha;
+        const when = new Date(l.epoch * 1000).toISOString().slice(0, 10);
+        const text = repeat ? "" : `${l.sha.slice(0, 8)} ${l.author.slice(0, 14)} ${when}`;
+        next.push({
+          range: new monaco.Range(i + 1, 1, i + 1, 1),
+          options: {
+            before: { content: text.padEnd(34, " "), inlineClassName: "blame-gutter" },
+          },
+        });
+      });
+    }
+    for (const [, , line] of marks) {
+      next.push({
+        range: new monaco.Range(line, 1, line, 1),
+        options: { isWholeLine: true, linesDecorationsClassName: "bookmark-mark" },
+      });
+    }
+    decorations.current.set(next);
+  }, [blameOn, blame, marks]);
+
   if (!tab) {
     return (
       <Empty hint="Alt+4 for the worktree · Ctrl+P to open by name">
@@ -114,11 +185,30 @@ function Viewer({ group }: { group: 0 | 1 }) {
   if (tab.content === null) return <Empty>loading {base(tab.path)}…</Empty>;
 
   const wrap = wrapPaths.includes(tab.path);
+  const symbols = outline(tab.content, ext);
+
+  const toggleMark = (line: number) => {
+    if (!id) return;
+    const has = marks.some(([, , l]) => l === line);
+    setScoped({
+      bookmarks: has
+        ? scoped.bookmarks.filter(([sid, p, l]) => !(sid === id && p === tab.path && l === line))
+        : [...scoped.bookmarks, [id, tab.path, line]],
+    });
+  };
 
   const onMount: OnMount = (ed, monaco) => {
     editorRef.current = ed;
+    monacoRef.current = monaco;
     defineMogeungThemes(monaco);
     monaco.editor.setTheme(monacoTheme(theme));
+    // The glyph margin is the gesture: a click in it marks the line. Nothing
+    // else lives there, so there is nothing to collide with.
+    ed.onMouseDown((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+      const line = e.target.position?.lineNumber;
+      if (line) toggleMark(line);
+    });
   };
 
   return (
@@ -131,6 +221,43 @@ function Viewer({ group }: { group: 0 | 1 }) {
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {isMarkdown && (
+            <IconButton
+              title="read it as markdown rather than as source"
+              active={preview}
+              onClick={() => setPreview(!preview)}
+            >
+              <Eye size={12} />
+            </IconButton>
+          )}
+          <IconButton
+            title="blame — who last touched each line, and when  (R-D10)"
+            active={blameOn}
+            onClick={() => setBlameOn(!blameOn)}
+          >
+            <UserRound size={12} />
+          </IconButton>
+          <IconButton
+            title={
+              marks.length > 0
+                ? `${marks.length} bookmark(s) in this file — click the glyph margin to add or remove`
+                : "bookmarks: click the glyph margin beside a line"
+            }
+            active={marks.length > 0}
+            onClick={() => {
+              const line = editorRef.current?.getPosition()?.lineNumber;
+              if (line) toggleMark(line);
+            }}
+          >
+            <Bookmark size={12} />
+          </IconButton>
+          <IconButton
+            title="symbol outline  (R-B28). A line scanner, not a parser — it will miss things"
+            active={outlineOpen}
+            onClick={() => setOutlineOpen(!outlineOpen)}
+          >
+            <ListTree size={12} />
+          </IconButton>
           <IconButton
             title="wrap long lines — per file, because wrap is a property of prose"
             active={wrap}
@@ -144,6 +271,17 @@ function Viewer({ group }: { group: 0 | 1 }) {
           </IconButton>
         </div>
       </div>
+      <div className="flex min-h-0 flex-1">
+      {/* Markdown is *read* here, not previewed beside its source: a viewer's
+          job is the rendered thing, and a split would spend half a narrow pane
+          on syntax you did not open it for. The toggle goes back. */}
+      {preview && isMarkdown ? (
+        <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+          <div className="prose-mogeung">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{tab.content}</ReactMarkdown>
+          </div>
+        </div>
+      ) : (
       <div className="min-h-0 flex-1">
         <Editor
           path={`${tab.path}@${tab.rev ?? "worktree"}`}
@@ -170,8 +308,50 @@ function Viewer({ group }: { group: 0 | 1 }) {
             folding: true,
             contextmenu: true,
             automaticLayout: true,
+            // The margin the bookmark gesture lives in. Off by default in
+            // Monaco, and a click target that is not drawn is not a gesture.
+            glyphMargin: true,
           }}
         />
+      </div>
+      )}
+
+      {outlineOpen && (
+        <div className="flex w-56 shrink-0 flex-col border-l border-[var(--border)] bg-[var(--bg-panel)]">
+          <div className="shrink-0 p-1">
+            <Input value={outlineFilter} onChange={setOutlineFilter} placeholder="go to symbol…" />
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto pb-2">
+            {symbols.length === 0 ? (
+              <Dim className="block px-2 py-1 text-2xs">
+                no symbols recognised in this file
+              </Dim>
+            ) : (
+              symbols
+                .filter(
+                  (sym) =>
+                    !outlineFilter.trim() ||
+                    sym.name.toLowerCase().includes(outlineFilter.trim().toLowerCase()),
+                )
+                .map((sym, i) => (
+                  <div
+                    key={`${sym.line}:${i}`}
+                    onClick={() => {
+                      editorRef.current?.revealLineInCenter(sym.line);
+                      editorRef.current?.setPosition({ lineNumber: sym.line, column: 1 });
+                      editorRef.current?.focus();
+                    }}
+                    title={`line ${sym.line}`}
+                    className="cursor-default overflow-hidden px-2 py-px font-mono text-2xs whitespace-nowrap hover:bg-[var(--bg-faint)]"
+                    style={{ paddingLeft: 8 + sym.depth * 10 }}
+                  >
+                    <span className="text-[var(--dim)]">{symbolGlyph(sym.kind)}</span> {sym.name}
+                  </div>
+                ))
+            )}
+          </div>
+        </div>
+      )}
       </div>
     </div>
   );

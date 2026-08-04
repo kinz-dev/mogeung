@@ -839,3 +839,33 @@ One thing the egui window has and this does not: browsing the LAN. That is
 multicast, which a webview cannot do at all — it would have to move into the
 Tauri half. The window says so rather than leaving an empty list to be
 interpreted.
+
+**The Code pane's four.**
+
+Outline, markdown preview, blame and in-file bookmarks, and each one had to
+answer a question about *where* it belongs in a viewer rather than an IDE.
+
+*The outline* is `symbols.rs`'s posture rather than its code: line scanners, not
+parsers, per language family, with an unknown extension getting an empty outline
+and never a guess. Bounded the same way — 4096 characters of a line, 2000
+symbols, 256 characters of a name — so a machine-generated file clips instead of
+hanging. The first version called `if (ready) {` a method, which is exactly what
+the ported test was written to catch; the fix is a keyword blocklist, and the
+comment says that the blocklist *is* the rule's precision.
+
+*Markdown is read, not previewed beside its source.* A viewer's job is the
+rendered thing, and a split would spend half a narrow pane on syntax you did not
+open the file for. It reuses the same `prose-mogeung` the transcript needed.
+
+*Blame is injected text*, not a gutter. Monaco's glyph margin holds an icon and
+nothing else, and a second synchronised scroll pane beside the editor is a lot
+of machinery to keep aligned; injected text moves the code right, which is the
+honest cost of putting words in a margin that has none. Repeats are blank, the
+way `git blame` reads on a terminal. It is asked for only while the toggle is on
+— a `git blame` per opened tab would be real work on the daemon for something
+nobody asked to see.
+
+*Bookmarks* claim the glyph margin, which is now drawn for the purpose: a click
+in it marks the line. Nothing else lives there, so the gesture collides with
+nothing, and the marks ride in the machine-scoped preferences beside the session
+labels.
