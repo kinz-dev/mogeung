@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-07-30
+updated: 2026-08-04
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -42,9 +42,6 @@ OS (`kill(pid, 0)`), or every session that ever ran looks alive. Pinned by a
 test.
 
 ## `~/.claude/projects/<slug>/<session-id>.jsonl` — transcripts
-
-Append-only, one JSON object per line. `<slug>` is the cwd with separators
-replaced.
 
 Append-only, one JSON object per line. `<slug>` is the cwd with separators
 replaced.
@@ -92,6 +89,21 @@ The largest transcript in the corpus is 11.2 MB. Files over
 `MAX_TRANSCRIPT_BYTES` (4 MiB) are followed from a line boundary near their end
 rather than read whole, and the skipped span is reported as a
 `history_skipped` alert — see [health-and-canary.md](health-and-canary.md).
+
+### Where reading resumes (`R-A6`)
+
+Append-only is what makes tailing possible at all, and `Tailer` keeps a byte
+offset per file. That offset is **not only process state**: it is seeded from
+the database at start-up (`Tailer::seed`) and written back after each batch is
+folded in, because a tailer that starts empty over a database that remembers
+the sessions re-reads every transcript whole and appends the history a second
+time. [data-model.md](data-model.md#read-positions-are-part-of-the-record-r-a6)
+has what that cost and how it is repaired.
+
+The one thing append-only does not guarantee is that a file never gets
+*shorter*. If it does, it was rewritten or rotated, and the offset is discarded
+on sight and the file read again from the start — the same rule whether the
+offset came from this process or from the last one.
 
 ## `~/.claude/file-history/<session-id>/<hash>@v<n>`
 

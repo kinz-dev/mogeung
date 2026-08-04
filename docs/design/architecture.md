@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-03
+updated: 2026-08-04
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeung-ui/src/prefs.rs
@@ -127,7 +127,15 @@ isolation action.
 
 ## The scan loop
 
-Every `--poll-ms` (default 1500):
+Once, before the first scan: the repair pass
+(`AppState::repair_reingested_history`, gated on `store::SCHEMA_VERSION`). It
+runs first so the pass that follows folds onto a clean record rather than on top
+of a duplicated one — see
+[data-model.md](data-model.md#repair). A failure is logged and start-up
+continues: a database that cannot be repaired is still a database worth
+watching from.
+
+Then every `--poll-ms` (default 1500):
 
 1. Read `~/.claude/sessions/*.json`; drop entries whose pid is not running.
 2. Scan `~/.claude/projects/**/*.jsonl` modified within 14 days. A file over

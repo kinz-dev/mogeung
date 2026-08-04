@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-02
+updated: 2026-08-04
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -92,6 +92,25 @@ first sighting gets. Derived state is rebuilt, never patched, and nothing
 original is touched —
 [ADR-0016](../decisions/0016-rebuild-derived-state.md) has the reasoning and the
 alternatives, including why the counters cannot simply be divided down.
+
+Two sessions cannot be rebuilt that way, and each is handled by saying so rather
+than by guessing:
+
+- **The transcript is gone.** Nothing remains to recount from, so its event log
+  is deduplicated in place — `dedupe_events` keeps the earliest `seq` of each
+  otherwise-identical event — and its counters are left as they are. The
+  deduplication is a guess by construction: a transcript really can carry the
+  same prompt twice on one timestamp, and this collapses that pair. It is the
+  last resort, it repairs a log and can do nothing for a counter, and a record
+  left visibly odd is better than one divided by an invented number.
+- **It is a Codex thread.** Skipped entirely. Codex rollouts are re-read whole
+  on every scan and never went through the offset path, so they were never
+  duplicated; folding one through the Claude Code adapter would invent history
+  rather than repair it.
+
+The pass ends with `VACUUM` when it dropped anything. Deleting rows frees pages
+inside the file and returns nothing to the disk, so a database bloated by this
+bug would otherwise stay bloated after being fixed.
 
 ## Ephemeral state
 

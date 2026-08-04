@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-02
+updated: 2026-08-04
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -44,6 +44,17 @@ from what the working tree currently holds. So discarding a file, or committing
 it, leaves the warning standing until the window lapses or a side exits — which
 is right. Both agents did edit that file, and undoing the edit on disk does not
 unmake the fact that two of them were working on it at once.
+
+### What a repair does to them
+
+Every input these signals read — `recent_touches`, `open_tools`, `recent_tools`,
+`loop_signal` — is derived from the transcript, so the `R-A6` repair pass
+(`repair_reingested_history`, and
+[data-model.md](data-model.md#repair)) zeroes them and folds the file in again
+rather than patching them. A signal computed from a doubled history is wrong in
+a way no correction factor fixes: the same touch counted twice is not a
+collision, and a tool call counted twice is four repeats where there were two.
+The rebuild is why the loop threshold below can stay a bare count.
 
 ## Permission vs. instruction (`R-B4`)
 
