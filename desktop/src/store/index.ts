@@ -58,6 +58,7 @@ import {
   type DaemonStatus,
 } from "@/lib/tauri";
 import { applyAppZoom } from "@/lib/zoom";
+import type { FlaggedHunk } from "@/lib/prompt";
 import { defaultPrefs, emptyScoped, loadPrefs, savePrefs, setZoom, type Prefs, type ScopedPrefs } from "./prefs";
 
 /** Which detail pane is forward. Serialised into the dockview layout. */
@@ -319,6 +320,13 @@ export interface AppState {
   showKeymap: boolean;
   /** The daemon switcher. `R-I7`. */
   showConnections: boolean;
+  /** The follow-up prompt builder, and what has been flagged for it. */
+  showPrompt: boolean;
+  flagged: FlaggedHunk[];
+  /** The big board for a second monitor. `R-C5`. */
+  ambient: boolean;
+  /** Start a session in a terminal. `R-B2`. */
+  showLaunch: boolean;
   showTerminal: boolean;
   /** The global-search overlay. `R-F13`, the ask-and-go half. */
   searchOpen: boolean;
@@ -390,6 +398,10 @@ export const useStore = create<AppState>((set, get) => ({
   showHealth: false,
   showKeymap: false,
   showConnections: false,
+  showPrompt: false,
+  flagged: [],
+  ambient: false,
+  showLaunch: false,
   showTerminal: false,
   searchOpen: false,
   machineId: null,

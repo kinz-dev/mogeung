@@ -14,13 +14,14 @@
 
 import * as React from "react";
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, FileText, Zap } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Flag, Zap } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, IconButton, Mono } from "@/ui/primitives";
 import { cn } from "@/lib/cn";
 import { openFile } from "@/lib/explorer";
 import { FileIcon } from "@/ui/FileIcon";
 import { highlight, pairs, sideBySide, wordDiff, type Tok } from "@/lib/diff";
+import { changedLines } from "@/lib/prompt";
 import { riskFromScore, type FileChange, type Hunk, type RiskLevel } from "@/wire/types";
 
 function riskColor(level: RiskLevel): string {
@@ -162,6 +163,9 @@ function HunkBlock({
   const [open, setOpen] = useState(true);
   const risk = riskFromScore(hunk.score);
   const paired = useMemo(() => pairs(hunk.lines), [hunk.lines]);
+  const flaggedHere = useStore((s) =>
+    s.flagged.some((f) => f.path === path && f.header === hunk.header),
+  );
 
   if (hideNoise && risk === "noise" && hunk.reviewed) return null;
 
@@ -196,6 +200,33 @@ function HunkBlock({
             }
           >
             <Check size={12} />
+          </IconButton>
+          <IconButton
+            title={
+              flaggedHere
+                ? "flagged for the follow-up prompt — press again to unflag"
+                : "flag this hunk for a follow-up prompt you will paste yourself"
+            }
+            active={flaggedHere}
+            onClick={() => {
+              const flagged = useStore.getState().flagged;
+              useStore.setState({
+                flagged: flaggedHere
+                  ? flagged.filter((f) => !(f.path === path && f.header === hunk.header))
+                  : [
+                      ...flagged,
+                      {
+                        sessionId,
+                        path,
+                        header: hunk.header,
+                        note: "",
+                        body: changedLines(hunk.lines),
+                      },
+                    ],
+              });
+            }}
+          >
+            <Flag size={11} />
           </IconButton>
           <IconButton
             title="open this file in the Code pane"

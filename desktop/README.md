@@ -123,7 +123,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | **Terminal panel** (your shells) | built — same |
 | Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
 | Connections window (`R-I7`) — add, name, switch, forget | done — no LAN browsing, which needs multicast the webview cannot do |
-| Launch a session, prompt builder, ambient window | not built |
+| Launch a session (`R-B2`), follow-up prompt builder, ambient board (`R-C5`) | done |
 | Verification — observed runs and claims, plus the signal runner and coverage (`R-E2`, `R-E5`) | done — the command runs only when you press it |
 | Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
 | Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |

@@ -894,3 +894,35 @@ read, and the markers in the worktree file are the one view that shows neither
 original. The write family stays unsent for the reason it always has — ADR-0012
 anticipated exactly this pressure, and taking it up is a decision rather than a
 port.
+
+**The last three windows, and the one that is a refusal.**
+
+*Launch a session* (`R-B2`) is the only place mogeung causes an agent to exist,
+and the shape is what keeps it inside ADR-0003: the daemon opens a **real
+terminal window** in a directory and stops there. Nothing is wrapped, nothing is
+proxied, and the session is read afterwards exactly like one you started
+yourself. The `--dangerously-skip-permissions` warning is stated in the window
+rather than left to be discovered — the flag is the agent's own and the daemon
+only passes it, but a permission prompt that never comes is not something to
+meet by surprise. The worktree option is offered for what it prevents: two
+agents in one checkout is the collision the queue can only report after the
+fact.
+
+*The follow-up prompt builder* is the feature whose whole design is a refusal.
+mogeung assembles what you flagged while reading a diff into text — and there is
+no send button, and no wire message behind one, because writing into a session
+is steering and steering is what made v0.1 worse than the terminal it wrapped.
+The clipboard is deliberately the widest part of the pipe: a human is on the
+other end of it deciding whether the text is right. Flagging is a button on each
+hunk, and the quoted body is the changed lines only, since context is what the
+reader can look up.
+
+*The ambient board* (`R-C5`) is the queue at a size you can read across a room:
+only the sessions that need you, only the reason and the label, nothing to
+click. When there is nothing it says **All clear** in green rather than showing
+an empty list — an ambient display you have to walk over and inspect is not one.
+
+That closes the gap list. Everything still typed on the wire and never sent is
+now the deliberate set: `git_stage`, `git_commit`, `git_discard`, `git_switch`,
+`git_branch_create`, the three stash verbs and `git_resolve` — the write family
+ADR-0012 anticipated, which is a decision rather than a port.

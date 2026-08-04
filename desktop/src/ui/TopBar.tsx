@@ -9,7 +9,7 @@
  * nowhere you can see while using it.
  */
 
-import { Activity, Bell, BellOff, Command, Keyboard, Moon, RefreshCw, Sun, Monitor, HeartPulse, SquareTerminal } from "lucide-react";
+import { Activity, Bell, BellOff, Command, Flag, Keyboard, Moon, RefreshCw, Rocket, ScreenShare, Sun, Monitor, HeartPulse, SquareTerminal } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
@@ -33,6 +33,7 @@ export function TopBar() {
   const showTerminal = useStore((s) => s.showTerminal);
   const rescanning = useStore((s) => s.rescanning);
   const daemonStatus = useStore((s) => s.daemonStatus);
+  const flaggedCount = useStore((s) => s.flagged.length);
 
   const live = Object.values(sessions).filter((s) => s.alive).length;
   const dot = conn === "open" ? "var(--green)" : conn === "connecting" ? "var(--amber)" : "var(--red)";
@@ -111,6 +112,29 @@ export function TopBar() {
       </Dim>
 
       <div className="ml-auto flex items-center gap-0.5">
+        <IconButton
+          title="start a session — opens a terminal on the daemon's machine, and mogeung watches it like any other"
+          onClick={() => useStore.setState({ showLaunch: true })}
+        >
+          <Rocket size={13} />
+        </IconButton>
+        <IconButton
+          title={
+            flaggedCount > 0
+              ? `follow-up prompt — ${flaggedCount} flagged hunk(s). mogeung writes it, you paste it`
+              : "follow-up prompt — flag hunks in a diff first. Nothing is ever sent to a session"
+          }
+          active={flaggedCount > 0}
+          onClick={() => useStore.setState({ showPrompt: true })}
+        >
+          <Flag size={13} />
+        </IconButton>
+        <IconButton
+          title="ambient board — big enough to read across a room"
+          onClick={() => useStore.setState({ ambient: true })}
+        >
+          <ScreenShare size={13} />
+        </IconButton>
         <IconButton title="command palette  (Ctrl+K)" onClick={() => useStore.setState({ paletteOpen: true })}>
           <Command size={13} />
         </IconButton>

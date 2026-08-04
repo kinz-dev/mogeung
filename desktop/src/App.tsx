@@ -39,6 +39,9 @@ import { Palette } from "@/ui/Palette";
 import { HealthWindow } from "@/ui/HealthWindow";
 import { KeymapWindow } from "@/ui/KeymapWindow";
 import { ConnectionsWindow } from "@/ui/ConnectionsWindow";
+import { PromptWindow } from "@/ui/PromptWindow";
+import { LaunchWindow } from "@/ui/LaunchWindow";
+import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { ResizeGrip } from "@/ui/WindowControls";
@@ -240,6 +243,9 @@ export default function App() {
         <HealthWindow />
         <KeymapWindow />
       <ConnectionsWindow />
+      <PromptWindow />
+      <LaunchWindow />
+      <AmbientWindow />
         <LabelWindow />
         <SearchOverlay />
         <NoticesWindow />
