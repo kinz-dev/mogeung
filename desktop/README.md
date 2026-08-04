@@ -38,6 +38,74 @@ showing a black rectangle.
 What has *not* happened yet is a pty actually being opened. It builds and
 exports its five commands; the first real `tmux attach` is still ahead.
 
+## Building a binary you can hand to someone
+
+```sh
+cd desktop
+npm install                # once
+npm run tauri build        # frontend, then the native shell, then the bundles
+```
+
+One command does all three stages: `beforeBuildCommand` runs `tsc --noEmit &&
+vite build` into `dist/`, cargo builds the shell in release, and Tauri packages
+the result. On this machine that produces, under
+`desktop/src-tauri/target/release/`:
+
+| | what it is |
+|---|---|
+| `mogeung-desktop` | the executable itself, ~32 MB, no installer around it |
+| `bundle/deb/mogeung_0.1.0_amd64.deb` | installs to `/usr/bin/mogeung-desktop` with icons and a desktop entry |
+| `bundle/rpm/mogeung-0.1.0-1.x86_64.rpm` | the same, for rpm distributions |
+| `bundle/appimage/mogeung_0.1.0_amd64.AppImage` | ~90 MB, self-contained — `chmod +x` and run it anywhere |
+
+The AppImage is the one to send to someone who has nothing installed; it carries
+webkit and its libraries. The `.deb` and `.rpm` are ~15 MB because they do not,
+and expect the system's own.
+
+Useful variants — the flags belong to the tauri CLI, so they go after `--`:
+
+```sh
+npm run tauri build -- --no-bundle          # just the executable, skip packaging
+npm run tauri build -- --bundles deb        # only the format you want
+npm run tauri build -- --debug              # release layout, debug symbols
+```
+
+**The version and the name come from `src-tauri/tauri.conf.json`**, not from
+`package.json` — `version` names the artefacts and `productName` is what the
+window and the desktop entry say. Bump it there or every build overwrites the
+last one's files.
+
+### What it needs installed
+
+Linux wants webkit's headers and the packaging tools; on Debian/Ubuntu that is:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+macOS needs the Xcode command-line tools and produces `.app` and `.dmg` instead;
+the bundle targets are `"all"`, so each platform makes what it can. The first
+AppImage build downloads `linuxdeploy` and caches it under `~/.cache/tauri` —
+that step, and only that step, needs the network.
+
+The first build is minutes, not seconds: this shell compiles **the daemon too**,
+because `mogeungd` is a path dependency. Later builds reuse the cache.
+
+### It is one executable, like the egui one
+
+The built app hosts a daemon on a thread when nothing is already listening, and
+attaches when something is — [ADR-0009](../docs/decisions/0009-the-window-may-host-a-daemon.md),
+ported faithfully in `src-tauri/src/daemon.rs`. So the binary alone is enough,
+and the top bar says `hosting` when it is the one watching. Closing that window
+stops the watching; run `mogeungd --notify` separately if you want notifications
+to outlive it.
+
+Note that `cargo build --release` at the repo root does **not** build this.
+`src-tauri` is its own cargo workspace on purpose — see the comment at the top of
+`src-tauri/Cargo.toml` — so a machine without webkit's headers can still run the
+`cargo test --workspace` that CLAUDE.md gates on.
+
 ## What is here, and what is not
 
 | | state |

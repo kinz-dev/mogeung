@@ -49,6 +49,24 @@ the last 14 days, it appears. Nothing is ever written to `~/.claude`.
 
 → [Getting started](docs/guide/getting-started.md)
 
+### The second client
+
+There is a React window packaged with Tauri, speaking the same protocol against
+the same daemon — [ADR-0018](docs/decisions/0018-a-second-client-in-typescript.md).
+It builds to a real binary, plus a `.deb`, `.rpm` and an AppImage:
+
+```sh
+cd desktop && npm install && npm run tauri build
+# → desktop/src-tauri/target/release/mogeung-desktop
+#   desktop/src-tauri/target/release/bundle/{deb,rpm,appimage}/
+```
+
+`cargo build --release` at the repo root does not build it: `desktop/src-tauri`
+is deliberately its own cargo workspace, so a machine without webkit's headers
+can still build and test the daemon.
+
+→ [Building it, and what it needs installed](desktop/README.md#building-a-binary-you-can-hand-to-someone)
+
 ## The queue
 
 ```
