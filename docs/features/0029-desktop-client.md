@@ -619,3 +619,31 @@ together as one phrase — `immix-trading-v2 main` reads as a four-word name unt
 you stop and parse it. The branch is now blue in **both** clients, which is the
 tint the egui status bar already gives git identity, so the two agree rather
 than each inventing a convention.
+
+**The tree's filter box searched the wrong thing.**
+
+It matched a literal substring against the rows the tree had already
+materialised — and the tree only walks a directory that is expanded, so a file
+two collapsed folders down could not be found however exactly you typed its
+name. That is the worst kind of empty result: "no such file" and "you have not
+opened that folder" looked identical.
+
+Two changes, and the second is the one that matters. The box is now a **regex**,
+tried against the file name *and* the whole path, because anchors mean different
+things on each — `^use` asks for names, `^src/` asks for a subtree, `\.tsx$`
+wants the name — and a filter that tested only one of them is wrong half the
+time. And a filter now searches the **whole worktree**: typing asks for
+`list_tree`, the same walk the palette's go-to-file already uses, and the
+results are a flat list carrying their directory rather than a tree indented by
+parents that are not on screen.
+
+Smart-cased, matching the daemon's content search, so the two boxes do not
+disagree about what `Foo` means. An uncompilable pattern is **not** an error —
+`explorer(` on the way to `explorer(1)` falls back to a literal substring and
+says so under the box, because a red "nothing matches" mid-keystroke is
+indistinguishable from a query with no hits. Results are capped at 300 rows with
+the cap stated: these are plain divs, and `.*` over a monorepo must not be what
+discovers that.
+
+The egui client's rail has no filter box at all, so nothing there to port back
+yet.

@@ -14,7 +14,7 @@ import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { FileIcon } from "@/ui/FileIcon";
 import { useStore } from "@/store";
 import { Dim, Empty, IconButton, Input, Loading } from "@/ui/primitives";
-import { explorerFetch, join, openFile, toggleDir } from "@/lib/explorer";
+import { basename, explorerFetch, fileFilter, join, openFile, toggleDir } from "@/lib/explorer";
 import { cn } from "@/lib/cn";
 import { repoName } from "@/wire/types";
 import { useState } from "react";
@@ -27,11 +27,16 @@ interface FlatRow {
   open: boolean;
 }
 
+/** Rows drawn for one query. Plain divs, not a virtual list — `.*` over a
+ *  monorepo must not be what discovers that. */
+const HIT_CAP = 300;
+
 export function FilesTool() {
   const id = useStore((s) => s.selected);
   const session = useStore((s) => (s.selected ? s.sessions[s.selected] : null));
   const st = useStore((s) => (s.selected ? s.explorer[s.selected] : undefined));
   const patchExplorer = useStore((s) => s.patchExplorer);
+  const send = useStore((s) => s.send);
   const [filter, setFilter] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -41,6 +46,21 @@ export function FilesTool() {
   useEffect(() => {
     if (id) explorerFetch(id);
   });
+
+  const match = useMemo(() => fileFilter(filter), [filter]);
+
+  // A filter searches the **whole worktree**, not the part that happens to be
+  // expanded. Filtering the visible rows was the obvious implementation and the
+  // wrong feature: a file two collapsed folders down could not be found however
+  // exactly you typed its name, which reads as "the filter is broken" rather
+  // than "you have not opened that folder". Asked for on first keystroke and
+  // kept until the refresh button drops it.
+  useEffect(() => {
+    if (!id || match.empty) return;
+    if (st?.treePaths || st?.treePending) return;
+    patchExplorer(id, { treePending: true });
+    send({ cmd: "list_tree", session_id: id });
+  }, [id, match.empty, st?.treePaths, st?.treePending, patchExplorer, send]);
 
   const rows = useMemo<FlatRow[]>(() => {
     if (!st) return [];
@@ -56,10 +76,16 @@ export function FilesTool() {
       }
     };
     walk("", 0);
-    if (!filter.trim()) return out;
-    const q = filter.trim().toLowerCase();
-    return out.filter((r) => r.path.toLowerCase().includes(q));
-  }, [st, filter]);
+    return out;
+  }, [st]);
+
+  // Matches are flat and carry their directory, because a hit three levels down
+  // needs to say where it is — and indenting a filtered list by a depth whose
+  // parents are not on screen only looks like damage.
+  const hits = useMemo<string[]>(() => {
+    if (match.empty || !st?.treePaths) return [];
+    return st.treePaths.filter((p) => match.test(p)).slice(0, HIT_CAP);
+  }, [match, st?.treePaths]);
 
   const activePath = st && st.active[st.focus] !== null ? st.open[st.active[st.focus]!]?.path : null;
 
@@ -80,7 +106,16 @@ export function FilesTool() {
         <div className="ml-auto">
           <IconButton
             title="re-list the directories that are open"
-            onClick={() => patchExplorer(id, { dirs: {}, pending: [] })}
+            // The walk goes too: a refresh that re-listed the open folders and
+            // left the filter answering from a remembered tree would be the
+            // stalest possible half-refresh.
+            // `treePending` is cleared as well as the paths, so this is also
+            // the way out of a walk that errored: the reply that would have
+            // lowered the flag never arrives, and without this the filter would
+            // say "walking the worktree" until the window was restarted.
+            onClick={() =>
+              patchExplorer(id, { dirs: {}, pending: [], treePaths: null, treePending: false })
+            }
           >
             <RefreshCw size={12} />
           </IconButton>
@@ -88,14 +123,63 @@ export function FilesTool() {
       </div>
 
       <div className="shrink-0 px-2 py-1">
-        <Input value={filter} onChange={setFilter} placeholder="filter this tree" />
+        <Input
+          value={filter}
+          onChange={setFilter}
+          placeholder="filter — regex, over name and path"
+        />
+        {!match.empty && !match.regex && (
+          <Dim className="mt-0.5 block text-2xs">
+            not a valid pattern — matching it literally
+          </Dim>
+        )}
       </div>
 
+      {!match.empty ? (
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pb-2">
+          {!st?.treePaths ? (
+            <Loading what="walking the worktree" />
+          ) : hits.length === 0 ? (
+            <Empty hint="the pattern is matched against the file name and its whole path">
+              nothing matches
+            </Empty>
+          ) : (
+            <div className="min-w-max">
+              {hits.map((p) => (
+                <div
+                  key={p}
+                  title={p}
+                  onClick={() => openFile(id, p)}
+                  onDoubleClick={() => openFile(id, p, { pin: true })}
+                  className={cn(
+                    "flex cursor-default items-center gap-1 whitespace-nowrap py-px pr-3 pl-2 text-sm hover:bg-[var(--bg-faint)]",
+                    activePath === p && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                  )}
+                >
+                  <FileIcon name={basename(p)} className="shrink-0" />
+                  <span className="text-[var(--text)]">{basename(p)}</span>
+                  {/* The directory, dimmed and after the name: two files called
+                      `mod.rs` are told apart by where they are, and that is the
+                      part you read second. */}
+                  {p.includes("/") && (
+                    <Dim className="text-2xs">{p.slice(0, p.lastIndexOf("/"))}</Dim>
+                  )}
+                </div>
+              ))}
+              {hits.length === HIT_CAP && (
+                <Dim className="block px-2 py-1 text-2xs">
+                  first {HIT_CAP} matches — narrow the pattern to see the rest
+                </Dim>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pb-2">
         {!st?.dirs[""] ? (
           <Loading what="listing" />
         ) : rows.length === 0 ? (
-          <Empty>{filter ? "nothing matches" : "this folder is empty"}</Empty>
+          <Empty>this folder is empty</Empty>
         ) : (
           <div className="min-w-max">
             {rows.map((r) => (
@@ -136,6 +220,7 @@ export function FilesTool() {
           </div>
         )}
       </div>
+      )}
 
       {st?.treeTruncated && (
         <div className="shrink-0 border-t border-[var(--border)] px-2 py-1">

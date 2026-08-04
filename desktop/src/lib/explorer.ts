@@ -153,6 +153,68 @@ export function join(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
+export interface FileFilter {
+  /** Nothing typed: everything matches and the caller shows its normal view. */
+  empty: boolean;
+  /** False when the pattern did not compile and is being read literally. */
+  regex: boolean;
+  test(path: string): boolean;
+}
+
+/**
+ * The Files filter: a regex, tried against **the name and the whole path**.
+ *
+ * Both, because anchors mean different things on each and a filter that picked
+ * one would be wrong half the time: `^use` is how you ask for names beginning
+ * with `use`, `^src/` is how you ask for a subtree, and `\.tsx$` wants the name.
+ * Testing the path alone loses the first; testing the name alone loses the
+ * second.
+ *
+ * **Smart case** — a lowercase pattern ignores case, one containing an
+ * uppercase letter does not. The same rule the daemon's content search uses, so
+ * the two boxes do not disagree about what `Foo` means.
+ *
+ * **An unfinished pattern is not an error.** Typing `foo(` on the way to
+ * `foo(bar)` leaves a regex that does not compile, and a filter that answered
+ * "nothing matches" mid-keystroke would be indistinguishable from a query with
+ * no hits. So an uncompilable pattern falls back to a literal substring of
+ * itself, and `regex: false` lets the UI say which of the two it did.
+ */
+export function fileFilter(query: string): FileFilter {
+  const q = query.trim();
+  if (!q) return { empty: true, regex: false, test: () => true };
+
+  // Smart case, computed once rather than per candidate.
+  const flags = /[A-Z]/.test(q) ? "" : "i";
+  let re: RegExp | null = null;
+  try {
+    re = new RegExp(q, flags);
+  } catch {
+    re = null;
+  }
+
+  if (re) {
+    const rx = re;
+    return {
+      empty: false,
+      regex: true,
+      test: (path) => rx.test(path) || rx.test(basename(path)),
+    };
+  }
+
+  const needle = flags === "i" ? q.toLowerCase() : q;
+  return {
+    empty: false,
+    regex: false,
+    test: (path) => (flags === "i" ? path.toLowerCase() : path).includes(needle),
+  };
+}
+
+export function basename(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? path : path.slice(at + 1);
+}
+
 /** The Monaco language id for a path. Extension-based, like the Rust side. */
 export function languageOf(path: string): string {
   const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
