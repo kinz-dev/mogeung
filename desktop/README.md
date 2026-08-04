@@ -114,7 +114,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Transcript — virtualised, markdown, find (`R-B36`), mark a turn | done |
 | Code — Monaco, read-only, tabs, split, per-file wrap, symbol outline (`R-B28`), markdown preview (`R-B29`), blame gutter (`R-D10`), in-file bookmarks | done |
 | Changes — hunks, risk flags, read marks, hide-read, hide-noise, word diff (`R-D5`), side-by-side (`R-D6`), syntax colour (`R-D4`), blast radius (`R-D9`) | done |
-| Git — log, filters, commit diff, local changes, refs, stashes, fetch | done |
+| Git — log with author/path/pickaxe filters, commit diff, local changes, refs, stashes, reflog, worktrees, submodules, branch compare, range diff, three-way conflict view, fetch (`R-D11`–`R-D16`) | done |
 | Insight — **redesigned**: charts for analytics and burn, plus all eight views | done |
 | Rail — Files, Search, Notes, Bookmarks (`R-B40`, `R-B41`, `R-F13`) | done |
 | Command palette — actions and go-to-file, Tab switches | done |

@@ -133,6 +133,10 @@ export interface GitState {
   fileDiff: Record<string, FileChange[]>;
   fetching: boolean;
   fetched: string[] | null;
+  /** The three stages of a conflicted file, read-only. `R-D16`. */
+  conflict: { path: string; base: string; ours: string; theirs: string; truncated: boolean } | null;
+  /** What the diff pane is currently showing, so its header can say. */
+  diffLabel: string | null;
 }
 
 export const emptyGit = (): GitState => ({
@@ -155,6 +159,8 @@ export const emptyGit = (): GitState => ({
   fileDiff: {},
   fetching: false,
   fetched: null,
+  conflict: null,
+  diffLabel: null,
 });
 
 export interface InsightState {
@@ -751,10 +757,28 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
       case "git_range_diff":
+        get().patchGit(msg.session_id, {
+          diff: msg.files,
+          detail: null,
+          conflict: null,
+          // `git_compare` answers with this event too, so the label says which
+          // two ends were compared rather than leaving the pane unattributed.
+          diffLabel: `${msg.from.slice(0, 8)}..${msg.to.slice(0, 8)}`,
+        });
+        break;
       case "git_stash_diff":
-        get().patchGit(msg.session_id, { diff: msg.files });
+        get().patchGit(msg.session_id, { diff: msg.files, detail: null, conflict: null });
         break;
       case "git_conflict_stages":
+        get().patchGit(msg.session_id, {
+          conflict: {
+            path: msg.path,
+            base: msg.base,
+            ours: msg.ours,
+            theirs: msg.theirs,
+            truncated: msg.truncated,
+          },
+        });
         break;
 
       // -- insight --------------------------------------------------------

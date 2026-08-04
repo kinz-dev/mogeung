@@ -869,3 +869,28 @@ nobody asked to see.
 in it marks the line. Nothing else lives there, so the gesture collides with
 nothing, and the marks ride in the machine-scoped preferences beside the session
 labels.
+
+**Git depth, which was the largest gap and the shallowest work.**
+
+Every command was already on the wire and typed; the store already had slots for
+`reflog`, `worktrees`, `submodules`, `author`, `path` and `pickaxe`. What was
+missing was the asking. So `R-D11`–`R-D16` is mostly wiring, and the two things
+that were not are worth recording.
+
+`git_conflict_stages` arrived at a `case` whose entire body was `break`. The
+daemon answered, the client dropped the answer, and the pane sat on its empty
+state — the failure that looks exactly like the daemon not implementing the
+feature. It has state now, and a test that fails without it.
+
+And the log's filters had to become **one** query. Five things narrow it —
+message, author, path, pickaxe and the branch scope — and the second call site
+that forgets one of them looks precisely like a filter being ignored, so there
+is a single `askLog` and both the box and *load more* go through it.
+
+The three-way conflict view shows ours, base and theirs read-only and says in
+the header that resolving is git's job in your terminal. `git_resolve` is on the
+wire and this client does not send it: what a conflict needs first is to be
+read, and the markers in the worktree file are the one view that shows neither
+original. The write family stays unsent for the reason it always has — ADR-0012
+anticipated exactly this pressure, and taking it up is a decision rather than a
+port.
