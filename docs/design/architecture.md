@@ -1,10 +1,11 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-02
+updated: 2026-08-03
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeung-ui/src/prefs.rs
+  - crates/mogeung-ui/src/app.rs
   - crates/mogeungd/src/state.rs
   - crates/mogeung-ui/src/main.rs
   - crates/mogeung-ui/src/net.rs
@@ -133,7 +134,11 @@ Every `--poll-ms` (default 1500):
    4 MiB is followed from near its end rather than read whole.
 3. Tail each file from its recorded byte offset; classify and fold every line
    into its session. **Every line is accounted for**, including discarded ones —
-   see [health-and-canary.md](health-and-canary.md).
+   see [health-and-canary.md](health-and-canary.md). The offset is recorded in
+   the database once those lines are folded in, so a restart resumes rather than
+   re-reading the file whole (`R-A6`, and see
+   [data-model.md](data-model.md#read-positions-are-part-of-the-record-r-a6)
+   for what re-reading it did).
 4. Apply liveness to **every** known session, not only ones that moved — a
    session going busy→idle produces no transcript line, and that transition is
    the most important signal we have. The same pass resolves each live session's
@@ -226,6 +231,52 @@ request/response correlation layer.
 The UI runs a dedicated OS thread with a small tokio runtime holding the
 WebSocket, bridged into the egui frame loop over a plain std channel. That keeps
 the whole UI synchronous and immediate-mode with no async colouring.
+
+### Two clients
+
+Since 2026-08-04 there are two, and they run at once against one daemon —
+[ADR-0018](../decisions/0018-a-second-client-in-typescript.md).
+
+- `crates/mogeung-ui` — the egui window. What works today.
+- `desktop/` — React, Monaco and dockview, packaged with Tauri. Growing a pane
+  at a time; the egui client is retired at parity, not before.
+
+The daemon was not changed to make this possible and does not know there are
+two. That is the property "every UI is a client" was always claiming, tested for
+the second time — `R-C3`'s phone client was the first, at the same cost of
+nothing.
+
+The Tauri process keeps a small native half, and it is native for one reason
+each: it **holds the ptys**, so ADR-0010 and ADR-0011 stay true (what a client
+holds is a view of a tmux session; closing the window detaches); it owns the
+global shortcut (`R-B10`); and it reads `~/.mogeung/machine-id` so local-versus-
+remote is decided by identity rather than by the address dialled (`R-I5`).
+
+`desktop/src-tauri` is deliberately **its own cargo workspace**. As a member it
+would put Tauri's Linux system dependencies in the path of
+`cargo test --workspace`, and that command is a gate for the daemon.
+
+### Chrome and panes
+
+The window docks things two ways, and which one a thing uses is a decision
+rather than a habit —
+[ADR-0017](../decisions/0017-the-rail-is-chrome.md).
+
+**Panes** are views of a session — Changes, Transcript, Info, Debt, Agent,
+Editor, Git, Insight. They live in an `egui_tiles` tree, are draggable and
+splittable, and their arrangement is saved as `layout.json`.
+
+**Chrome** is everything that must stay reachable whichever pane is forward: the
+Attention queue on the left, the terminal across the bottom, and since
+2026-08-03 the tool-window rail on the right (`R-B40`), which holds the worktree
+tree (`R-B41`) and global search (`R-F13`). None of these are tiles; each is an
+`egui::Panel` declared before the central panel, because a `CentralPanel` claims
+whatever is left and anything declared after it has already lost.
+
+Chrome state rides in `prefs.rs` rather than in egui's own `PanelState`: eframe
+is built here without its `persistence` feature, so egui's copy dies with the
+process. Widths are copied back out of the panel response and written only while
+the pointer is up, so dragging a divider does not touch the disk on every frame.
 
 ## What is deliberately absent
 

@@ -148,6 +148,20 @@ pub struct Prefs {
     #[serde(default)]
     pub queue_collapsed: bool,
 
+    /// Which tool window the right rail is showing, or `None` for the strip.
+    /// `R-B40`. Persisted for the same reason `queue_collapsed` is.
+    ///
+    /// An unknown name — a tool this build does not have, from a newer one —
+    /// reads as `None` rather than refusing the whole file. A rail that opens
+    /// collapsed is a smaller loss than preferences that fail to load.
+    #[serde(default, deserialize_with = "forgiving_rail")]
+    pub rail: Option<RailTool>,
+    /// How wide the open rail is. In our own store because eframe's
+    /// persistence is off, so egui's `PanelState` dies with the process —
+    /// see [`crate::app`]'s panel notes.
+    #[serde(default = "default_rail_width")]
+    pub rail_width: f32,
+
     #[serde(default)]
     pub group_by_repo: bool,
     #[serde(default)]
@@ -218,6 +232,56 @@ pub struct Prefs {
     /// of thing is how they drift.
     #[serde(default)]
     pub window: Option<Window>,
+}
+
+/// Which tool window the right rail is showing. `R-B40`.
+///
+/// The rail is chrome, not a pane in the tile tree — see
+/// [ADR-0017](../../../docs/decisions/0017-the-rail-is-chrome.md). Adding a
+/// variant here is most of what adding a tool window costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RailTool {
+    /// The session's worktree. `R-B41` — it used to live inside the Editor.
+    Files,
+    /// One query over three corpora. `R-F13`.
+    Search,
+}
+
+impl RailTool {
+    pub const ALL: [RailTool; 2] = [RailTool::Files, RailTool::Search];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RailTool::Files => "Files",
+            RailTool::Search => "Search",
+        }
+    }
+
+    /// The glyph the collapsed strip shows. Text, like every other piece of
+    /// chrome in this window — an icon font would be a dependency and a
+    /// theming problem for a decoration.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            RailTool::Files => crate::ui::icon::FOLDER,
+            RailTool::Search => crate::ui::icon::BLAST,
+        }
+    }
+}
+
+/// `null` for anything this build does not recognise, rather than an error.
+///
+/// The whole preferences file is one `serde_json::from_str`, so a tool name
+/// written by a newer build would otherwise cost every setting in it.
+fn forgiving_rail<'de, D>(d: D) -> Result<Option<RailTool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<RailTool>::deserialize(d).unwrap_or(None))
+}
+
+fn default_rail_width() -> f32 {
+    300.0
 }
 
 /// A remembered window: outer position and inner size, in logical points.
@@ -405,6 +469,8 @@ impl Default for Prefs {
             scope: Scope::default(),
             reveal_hidden: false,
             queue_collapsed: false,
+            rail: None,
+            rail_width: default_rail_width(),
             group_by_repo: false,
             auto_select: false,
             preview_on_select: true,
@@ -1023,6 +1089,44 @@ mod tests {
         assert_eq!(p.zoom_of("diff"), 0.5);
         p.set_zoom("diff", 1.02);
         assert!(p.zoom.is_empty(), "near-1.0 must erase the entry, not store it");
+    }
+
+    /// `R-B40`. Which tool the rail is showing, and how wide it is, have to
+    /// survive a restart — egui's own `PanelState` does not, because eframe is
+    /// built here without its `persistence` feature.
+    ///
+    /// The second half is the one that bites: a `prefs.json` written before
+    /// the rail existed must still load, with the rail closed and a usable
+    /// width, rather than failing and taking every other setting with it.
+    #[test]
+    fn the_rail_survives_a_restart_and_an_older_file() {
+        let mut p = Prefs::default();
+        assert_eq!(p.rail, None, "the rail starts collapsed");
+        p.rail = Some(RailTool::Search);
+        p.rail_width = 420.0;
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.rail, Some(RailTool::Search));
+        assert_eq!(back.rail_width, 420.0);
+
+        let older: Prefs = serde_json::from_str(r#"{"markdown":false}"#).unwrap();
+        assert_eq!(older.rail, None);
+        assert_eq!(older.rail_width, default_rail_width(), "and is usable wide");
+        assert!(!older.markdown, "without losing what the file did hold");
+    }
+
+    /// A tool window this build does not have — written by a newer one, or
+    /// by a hand — must cost the rail and nothing else.
+    ///
+    /// The whole file is one `from_str`, so the plain derive would answer an
+    /// unknown variant by rejecting every preference in it: theme, geometry,
+    /// keybindings-adjacent state, the lot. That is a large loss for a small
+    /// unknown.
+    #[test]
+    fn an_unknown_rail_tool_costs_the_rail_and_nothing_else() {
+        let p: Prefs = serde_json::from_str(r#"{"rail":"notes","rail_width":333.0}"#)
+            .expect("an unknown tool must not fail the whole file");
+        assert_eq!(p.rail, None, "unknown reads as collapsed");
+        assert_eq!(p.rail_width, 333.0, "and the rest of the file survives");
     }
 
     /// The `/clear` case: same pid, new session id — the label and pin

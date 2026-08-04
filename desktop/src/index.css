@@ -1,0 +1,303 @@
+@import "tailwindcss";
+
+/*
+ * The palettes, ported verbatim from `crates/mogeung-ui/src/theme.rs`.
+ *
+ * `R-J6` shipped two hand-written palettes behind one lookup, with contrast
+ * tests over every pair that has to hold. Those values are the tested ones —
+ * the light palette in particular is *not* a mirror of the dark one (accents
+ * darken, amber moves furthest, the page is warm off-white rather than pure
+ * white) and re-deriving it here would throw that work away.
+ */
+
+/*
+ * The design system.
+ *
+ * Material's *system* — a type ramp, an elevation scale, state layers, motion
+ * tokens — at developer-tool density. Not Material's **metrics**: 48dp targets
+ * and 16dp gutters are right for a thumb on a phone and wrong for a dense board
+ * read beside a terminal, where halving the rows on screen is a real cost.
+ *
+ * Declared in `@theme` so Tailwind generates real utilities (`text-xs`,
+ * `rounded-sm`, `duration-fast`). Before this the codebase held six ad-hoc font
+ * sizes — including `text-[11.5px]` — and four radii, which is what "no design
+ * system" looks like from the inside.
+ */
+@theme {
+  --font-mono: "MesloLGS NF", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type. Six steps, each with a line height, on a 4px rhythm.
+     `2xs` is metadata and badges; `sm` is the workhorse row; `base` is what
+     you actually read for minutes at a time. */
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 16px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+  --text-lg: 15px;
+  --text-lg--line-height: 22px;
+  --text-xl: 18px;
+  --text-xl--line-height: 26px;
+
+  /* Radius. Three steps and a pill — chrome is `sm`, floating surfaces `md`. */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  /* Motion. Material's standard easing, at durations a tool can live with:
+     anything longer than ~150ms on a control you press all day reads as lag. */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+}
+
+:root {
+  /* Elevation. On a dark surface height reads as *lighter*, not as shadow, so
+     levels 0–2 are the surface ladder the palette already defines and only
+     genuinely floating things (popovers, dialogs) also cast one. */
+  --elev-1: 0 1px 2px rgb(0 0 0 / 0.24);
+  --elev-2: 0 4px 12px rgb(0 0 0 / 0.32);
+  --elev-3: 0 12px 32px rgb(0 0 0 / 0.44);
+
+  /*
+   * State layers — Material's best idea, and the one this app most needed.
+   *
+   * A translucent wash of the *content* colour over whatever surface is
+   * underneath, rather than a hard-coded grey. That is what makes one hover
+   * rule work on the queue, the tree, a tab strip and a menu without any of
+   * them knowing what they are sitting on.
+   */
+  --state-hover: color-mix(in srgb, var(--text) 8%, transparent);
+  --state-focus: color-mix(in srgb, var(--text) 12%, transparent);
+  --state-press: color-mix(in srgb, var(--text) 16%, transparent);
+
+  /* The focus ring. Its own token because it has to clear both the page and a
+     selected row, and those are different colours. */
+  --ring: var(--blue);
+
+  /* Motion. Anything past ~150ms on a control you press all day reads as lag. */
+  --dur-fast: 80ms;
+  --dur-base: 140ms;
+}
+
+/*
+ * Respect the system setting. A tool people keep open all day is exactly where
+ * motion sensitivity matters, and "reduce" means reduce, not decorate slower.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:root[data-theme="light"] {
+  --elev-1: 0 1px 2px rgb(15 23 42 / 0.10);
+  --elev-2: 0 4px 12px rgb(15 23 42 / 0.14);
+  --elev-3: 0 12px 32px rgb(15 23 42 / 0.18);
+}
+
+:root,
+:root[data-theme="dark"] {
+  --bg: #141518;
+  --bg-panel: #1a1c20;
+  --bg-raised: #22252a;
+  --bg-faint: #2a2d33;
+
+  --text: #d4d7dd;
+  --text-strong: #f0f2f6;
+  --dim: #8a8a90;
+
+  --red: #e5484f;
+  --amber: #e09b24;
+  --blue: #4c8eda;
+  --green: #3fa85e;
+  --purple: #9a6fd0;
+
+  --border: #2c2f35;
+  --border-hover: #434852;
+  --window-stroke: #33373e;
+  --selection-bg: #2a4e78;
+  --selection-stroke: #f0f2f6;
+  --on-accent: #ffffff;
+  --on-accent-dark: #12141a;
+
+  --add-bg: #143a21;
+  --del-bg: #451a1d;
+  --add-fg: #8fe0a6;
+  --del-fg: #f09ca0;
+  --ctx-fg: #a8a8b0;
+  --add-emph: #256b3c;
+  --del-emph: #742b30;
+  --conflict-bg: #6b253c;
+
+  --urgent: #ff6b35;
+  --noise: #5a5a60;
+  --read-dim: #606060;
+  --read-base: #7a7a7a;
+  --unread-base: #dcdcdc;
+
+  --graph-0: #4c8eda;
+  --graph-1: #3fa85e;
+  --graph-2: #e09b24;
+  --graph-3: #b06ad8;
+  --graph-4: #3fb3b3;
+  --graph-5: #d86a9a;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #e8eaee;
+  --bg-panel: #f7f8fa;
+  --bg-raised: #ffffff;
+  --bg-faint: #e4e7ec;
+
+  --text: #25282e;
+  --text-strong: #0d0f14;
+  --dim: #676c76;
+
+  --red: #c0252c;
+  --amber: #8a5a00;
+  --blue: #1b64b0;
+  --green: #1b6e3c;
+  --purple: #663fa6;
+
+  --border: #d5d9e0;
+  --border-hover: #aeb5c0;
+  --window-stroke: #c6cbd4;
+  --selection-bg: #c5dcf5;
+  --selection-stroke: #1b64b0;
+  --on-accent: #ffffff;
+  --on-accent-dark: #12141a;
+
+  --add-bg: #ddf4e3;
+  --del-bg: #fbdfe1;
+  --add-fg: #11502c;
+  --del-fg: #8c1d25;
+  --ctx-fg: #3c4048;
+  --add-emph: #a8e6bd;
+  --del-emph: #f6b9bd;
+  --conflict-bg: #f9cfdc;
+
+  --urgent: #c44208;
+  --noise: #999ea8;
+  --read-dim: #9398a2;
+  --read-base: #747983;
+  --unread-base: #1b1e24;
+
+  --graph-0: #1b64b0;
+  --graph-1: #1b6e3c;
+  --graph-2: #8a5a00;
+  --graph-3: #663fa6;
+  --graph-4: #0e6a6a;
+  --graph-5: #a83f6a;
+
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbars that belong to a dense tool rather than to a document. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hover) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* Nothing here is a document: text selection is for content, not for chrome. */
+.no-select {
+  user-select: none;
+}
+
+input,
+textarea {
+  font-family: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* dockview, dressed in mogeung's palette rather than its own default. */
+/* ------------------------------------------------------------------ */
+
+.dockview-theme-mogeung {
+  --dv-background-color: var(--bg);
+  --dv-paneview-background-color: var(--bg);
+  --dv-group-view-background-color: var(--bg-panel);
+  --dv-tabs-and-actions-container-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--bg-panel);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--bg);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg-panel);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--text-strong);
+  --dv-activegroup-hiddenpanel-tab-color: var(--dim);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--text);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--dim);
+  --dv-separator-border: var(--border);
+  --dv-paneview-header-border-color: var(--border);
+  --dv-tabs-container-scrollbar-color: var(--border-hover);
+  --dv-icon-hover-background-color: var(--bg-faint);
+  --dv-drag-over-background-color: color-mix(in srgb, var(--blue) 22%, transparent);
+  --dv-drag-over-border-color: var(--blue);
+  --dv-tab-divider-color: var(--border);
+  --dv-active-sash-color: var(--blue);
+  --dv-tabs-and-actions-container-font-size: 11px;
+  --dv-tabs-and-actions-container-height: 30px;
+}
+
+.dockview-theme-mogeung .dv-tab {
+  border-right: 1px solid var(--border);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* The active tab wears a top rule in the accent, the way the panes did. */
+.dockview-theme-mogeung .dv-tab.dv-active-tab {
+  box-shadow: inset 0 2px 0 var(--blue);
+}
+
+/* ------------------------------------------------------------------ */
+/* xterm                                                               */
+/* ------------------------------------------------------------------ */
+
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+}

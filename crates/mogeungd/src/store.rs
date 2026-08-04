@@ -12,6 +12,14 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
+/// Bumped when a stored *value* needs repairing, not when a table is added —
+/// every `CREATE TABLE` here is `IF NOT EXISTS` and needs no version at all.
+///
+/// 1: transcripts were re-read from byte 0 on every restart, so events and
+///    counters carry one extra copy per restart. See
+///    `AppState::repair_reingested_history`.
+pub const SCHEMA_VERSION: u32 = 1;
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -72,6 +80,20 @@ impl Store {
                 repo     TEXT PRIMARY KEY,
                 command  TEXT NOT NULL,
                 last_run TEXT
+            );
+
+            -- How far into each transcript we have read (R-A6). Keyed by path
+            -- rather than session id because that is what the tailer keys on,
+            -- and because a session's transcript path is not always known
+            -- before its first line is folded.
+            --
+            -- This has to outlive the process. Without it a restart re-read
+            -- every transcript from byte 0 and folded the whole history in
+            -- again — new `seq`s, so nothing collided, and both the event log
+            -- and every counted field grew by one copy per restart.
+            CREATE TABLE IF NOT EXISTS tail_offsets (
+                path   TEXT PRIMARY KEY,
+                offset INTEGER NOT NULL
             );
             "#,
         )?;
@@ -170,6 +192,96 @@ impl Store {
     pub fn delete_note(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Tail offsets (R-A6)
+    // -----------------------------------------------------------------------
+
+    /// Every recorded read position, for seeding the tailer at startup.
+    pub fn load_tail_offsets(&self) -> Result<Vec<(String, u64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT path, offset FROM tail_offsets")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Record how far a transcript has been read.
+    ///
+    /// Written *after* the lines it covers have been folded in, so a crash
+    /// mid-fold costs a re-read of one batch rather than losing it.
+    pub fn save_tail_offset(&self, path: &str, offset: u64) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO tail_offsets (path, offset) VALUES (?1, ?2)
+             ON CONFLICT(path) DO UPDATE SET offset = excluded.offset",
+            params![path, offset as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_tail_offset(&self, path: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM tail_offsets WHERE path = ?1", params![path])?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Schema version and repair
+    // -----------------------------------------------------------------------
+
+    pub fn schema_version(&self) -> u32 {
+        let c = self.conn.lock().unwrap();
+        c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .map(|v| v.max(0) as u32)
+            .unwrap_or(0)
+    }
+
+    pub fn set_schema_version(&self, v: u32) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        // PRAGMA takes no bind parameters.
+        c.execute_batch(&format!("PRAGMA user_version = {v};"))?;
+        Ok(())
+    }
+
+    /// Drop one session's events. Used by the repair pass before re-folding a
+    /// transcript that is still on disk.
+    pub fn delete_events(&self, run_id: &str) -> Result<usize> {
+        let c = self.conn.lock().unwrap();
+        Ok(c.execute("DELETE FROM events WHERE run_id = ?1", params![run_id])?)
+    }
+
+    /// Collapse repeats of the same event, keeping the earliest `seq` of each.
+    ///
+    /// Identity is the whole stored event minus its `seq`: same session, same
+    /// timestamp, same kind. That is a guess, not a fact — a transcript really
+    /// can carry the same prompt twice on the same timestamp, and this would
+    /// collapse the pair. It is the last resort, for sessions whose transcript
+    /// is gone and which therefore cannot be rebuilt from the file; it repairs
+    /// the log and can do nothing for a counter. Returns how many rows went.
+    pub fn dedupe_events(&self, run_id: &str) -> Result<usize> {
+        let c = self.conn.lock().unwrap();
+        Ok(c.execute(
+            "DELETE FROM events WHERE run_id = ?1 AND seq NOT IN (
+                 SELECT MIN(seq) FROM events WHERE run_id = ?1
+                 GROUP BY json_remove(json, '$.seq')
+             )",
+            params![run_id],
+        )?)
+    }
+
+    /// Reclaim the space a repair freed. Slow and standalone by nature —
+    /// callers run it once, not per pass.
+    pub fn vacuum(&self) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute_batch("VACUUM;")?;
         Ok(())
     }
 

@@ -135,6 +135,12 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
         );
     }
 
+    // Before the first scan, so the pass that follows starts from a clean
+    // record rather than folding on top of a duplicated one. `R-A6`.
+    if let Err(e) = state.repair_reingested_history().await {
+        tracing::warn!("could not repair re-ingested history: {e}");
+    }
+
     state.scan().await;
     tracing::info!(
         "watching {} — {} session(s) known",

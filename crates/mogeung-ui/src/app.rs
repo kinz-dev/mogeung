@@ -450,6 +450,12 @@ pub struct App {
     /// What the Transcript's find box holds. `R-B36`. Not persisted — a
     /// half-typed query is not a setting.
     transcript_find: String,
+    /// Which tool the rail shows when it is opened without being told which.
+    /// `R-B40`. Not persisted: it only has to survive a collapse, and a
+    /// preference that remembered it would be a second copy of `prefs.rail`.
+    last_rail: crate::prefs::RailTool,
+    /// The rail's global search. `R-F13`.
+    search: SearchPanel,
     /// Whether a snapshot has ever arrived. `R-J7`.
     ///
     /// Not the same as being connected: the socket is up well before the
@@ -550,6 +556,154 @@ pub struct App {
     blame_menu_line: Option<mogeung_core::wire::BlameLine>,
 
     errors: Vec<String>,
+}
+
+/// The rail's global search: one box over three corpora. `R-F13`.
+///
+/// Not one search. Three, with three different costs, kept apart so the
+/// cheapest is never held up by the dearest:
+///
+/// - **this transcript** is [`crate::search`] over events already in memory,
+///   and runs on every keystroke because it is free;
+/// - **this session's files** and **every session** are daemon round-trips and
+///   wait for Enter, which is the rule `R-F1` shipped with — the corpus is
+///   tens of MB and a per-keystroke scan would punish typing.
+///
+/// The two daemon answers echo their query back, so each group drops a reply
+/// to a question that has since been retyped without knowing anything about
+/// the other.
+struct SearchPanel {
+    /// What the box holds. Not what was asked — see `issued`.
+    query: String,
+    /// The query the daemon groups were actually sent. Kept apart from
+    /// `query` so the panel can say "press Enter" while you are still typing,
+    /// and so a stale answer can be recognised by comparing against what was
+    /// asked rather than against what is now typed.
+    issued: String,
+    files: Group<mogeung_core::wire::ContentMatch>,
+    insight: Group<mogeung_core::insight::SearchHit>,
+    /// Search every session, or only the selected one.
+    ///
+    /// **On by default**, though it is the expensive half. Three groups is
+    /// what this panel is for — a cross-session group that arrived switched
+    /// off would be a feature you have to discover before it is a feature at
+    /// all. The toggle exists to turn the slow one *off* when you already know
+    /// the answer is in front of you.
+    everywhere: bool,
+    sel: Option<SearchSel>,
+    /// Every visible row, in the order they are drawn, rebuilt each paint.
+    ///
+    /// The keyboard handler runs *before* the panel draws, so it steers by
+    /// last frame's list. One frame stale is the immediate-mode bargain and
+    /// costs nothing here: the list only changes when an answer lands or you
+    /// type, and both already redraw.
+    rows: Vec<SearchSel>,
+    /// The arrows are walking the results rather than the query box.
+    ///
+    /// This is what makes Enter mean two things safely: **run the search**
+    /// while you are typing, **open this row** once you have arrowed into the
+    /// list. Down enters the list, Up off the top leaves it.
+    in_list: bool,
+    /// Bring the selected row into view. Armed by keyboard moves only — an
+    /// unconditional scroll pins the list to the selection and puts every row
+    /// below the fold out of the mouse's reach.
+    scroll_row: bool,
+    /// The previewed file's body, as `(path, content)`. One at a time — this
+    /// is a preview, not a second editor.
+    preview: Option<(String, String)>,
+    /// The path a preview was asked for, so one request goes out rather than
+    /// one per frame for as long as the answer is in flight.
+    preview_asked: Option<String>,
+    /// Bring the matched line into view — **once**, when the selection moves.
+    ///
+    /// Armed by a click and consumed by the paint that has a body to scroll,
+    /// which may be several frames later. Scrolling unconditionally instead
+    /// would pin the preview to the hit and make every other line of the file
+    /// unreachable by mouse: the same trap the palette's cursor documents.
+    preview_scroll: bool,
+    /// Take the caret this frame, because the key that opened the panel meant
+    /// "let me type".
+    focus: bool,
+}
+
+impl Default for SearchPanel {
+    fn default() -> Self {
+        SearchPanel {
+            query: String::new(),
+            issued: String::new(),
+            files: Group::default(),
+            insight: Group::default(),
+            everywhere: true,
+            sel: None,
+            rows: Vec::new(),
+            in_list: false,
+            scroll_row: false,
+            preview: None,
+            preview_asked: None,
+            preview_scroll: false,
+            focus: false,
+        }
+    }
+}
+
+/// One group's answer, and whether it is still coming.
+///
+/// `hits: None` is *not yet answered* and `Some(vec![])` is *answered, and
+/// there is nothing* — `R-J5`'s distinction, which is the whole reason this is
+/// not a bare `Vec`.
+struct Group<T> {
+    running: bool,
+    hits: Option<Vec<T>>,
+    truncated: bool,
+}
+
+impl<T> Default for Group<T> {
+    fn default() -> Self {
+        Group {
+            running: false,
+            hits: None,
+            truncated: false,
+        }
+    }
+}
+
+impl<T> Group<T> {
+    /// Forget the answer and mark the question asked.
+    fn asked(&mut self) {
+        self.running = true;
+        self.hits = None;
+        self.truncated = false;
+    }
+
+    fn idle(&mut self) {
+        self.running = false;
+        self.hits = None;
+        self.truncated = false;
+    }
+
+    fn count(&self) -> Option<usize> {
+        self.hits.as_ref().map(|h| h.len())
+    }
+}
+
+/// The selected result, and therefore what the preview pane shows.
+#[derive(Clone, PartialEq)]
+enum SearchSel {
+    /// A turn of the selected session's transcript, by `seq`.
+    Turn(u64),
+    /// A line of a worktree file of the selected session.
+    File { path: String, line: u64 },
+    /// A line of some session's transcript, from the cross-session corpus.
+    ///
+    /// Carries its own preview text because that clip is all the daemon
+    /// returns for one — unlike the other two, there is nothing further to
+    /// fetch without a wire message that does not exist yet.
+    Hit {
+        session: String,
+        line: u64,
+        ts: Option<chrono::DateTime<Utc>>,
+        preview: String,
+    },
 }
 
 /// Which Insight sub-view is forward.
@@ -732,6 +886,8 @@ impl App {
             scanned: Vec::new(),
             scan_since: None,
             transcript_find: String::new(),
+            last_rail: crate::prefs::RailTool::Files,
+            search: SearchPanel::default(),
             first_snapshot: false,
             notes: Vec::new(),
             note_draft: None,
@@ -866,6 +1022,14 @@ impl App {
                     st.command = command;
                 }
                 ServerMsg::InsightSearchResults { query, results } => {
+                    // Two askers, each dropping what is not theirs. Neither
+                    // clobbers the other, because the daemon echoes the query
+                    // and both compare against their own. `R-F13`.
+                    if self.search.issued == query && self.search.everywhere {
+                        self.search.insight.running = false;
+                        self.search.insight.hits = Some(results.hits.clone());
+                        self.search.insight.truncated = results.truncated;
+                    }
                     self.insight.search_pending = false;
                     // Only the answer to the query still on screen.
                     if query == self.insight.query.trim() {
@@ -922,9 +1086,18 @@ impl App {
                     path,
                     content,
                     truncated,
-                } => self
-                    .explorer
-                    .ingest_file(&session_id, path, content, truncated),
+                } => {
+                    // Two consumers, neither aware of the other. The Editor
+                    // fills whichever tabs hold this path; the search panel's
+                    // preview takes it only if this is the file it asked for.
+                    // `R-F13` — a preview that opened a tab would be a
+                    // selection changing the thing it is previewing.
+                    if self.search.preview_asked.as_deref() == Some(path.as_str()) {
+                        self.search.preview = Some((path.clone(), content.clone()));
+                    }
+                    self.explorer
+                        .ingest_file(&session_id, path, content, truncated)
+                }
                 ServerMsg::TreeListing {
                     session_id,
                     paths,
@@ -935,9 +1108,22 @@ impl App {
                     query,
                     matches,
                     truncated,
-                } => self
-                    .explorer
-                    .ingest_matches(&session_id, &query, matches, truncated),
+                } => {
+                    // The palette and the search panel both ask this, and both
+                    // are fed here rather than sharing a slot on the explorer
+                    // state — two writers into one `SearchState` would blank
+                    // each other's results and each other's in-flight flag.
+                    // `R-F13`.
+                    if self.search.issued == query
+                        && self.selected.as_ref() == Some(&session_id)
+                    {
+                        self.search.files.running = false;
+                        self.search.files.hits = Some(matches.clone());
+                        self.search.files.truncated = truncated;
+                    }
+                    self.explorer
+                        .ingest_matches(&session_id, &query, matches, truncated)
+                }
                 ServerMsg::GitCommits {
                     session_id,
                     skip,
@@ -1116,6 +1302,19 @@ impl App {
     fn select(&mut self, id: SessionId) {
         self.selected = Some(id.clone());
         self.selected_file = None;
+        // Two of the search panel's three groups are scoped to the selected
+        // session, so they now describe somewhere else. Dropped rather than
+        // re-run: a selection change is not a search, and re-issuing one on
+        // every click through the queue would be a scan per click. `R-F13`.
+        self.search.files.idle();
+        self.search.preview = None;
+        self.search.preview_asked = None;
+        if matches!(
+            self.search.sel,
+            Some(SearchSel::Turn(_) | SearchSel::File { .. })
+        ) {
+            self.search.sel = None;
+        }
         if self.hydrated.insert(id.clone()) {
             self.net.send(ClientMsg::FetchEvents {
                 session_id: id.clone(),
@@ -1340,6 +1539,11 @@ impl eframe::App for App {
         self.handle_keys(ui);
         self.top_bar(ui);
         self.queue_panel(ui);
+        // Beside the queue and on the opposite edge, deliberately: both are
+        // chrome rather than panes (ADR-0017), and declaring them together is
+        // what keeps them symmetric — each full height, with the status bar
+        // spanning between them.
+        self.rail_panel(ui);
         // Before the detail pane: a `CentralPanel` claims whatever is left, so
         // every other panel has to be declared first. The status bar is
         // declared before the terminal, which is what puts it *below* it —
@@ -1732,8 +1936,20 @@ impl App {
     /// Returns the pane's factor; call once at the top of a pane and feed
     /// the result to [`scale_text`].
     fn pane_zoom(&mut self, ui: &egui::Ui, pane: &str) -> f32 {
+        self.zoom_over(ui, pane, ui.max_rect())
+    }
+
+    /// [`pane_zoom`] over an explicit rect, for a pane that wants more than
+    /// one zoom inside it. A pane whose regions are laid out with
+    /// [`egui::Panel`] cannot use `max_rect` for the leftover region: a panel
+    /// moves the parent's *cursor*, not its `max_rect`, so the leftover ui
+    /// still claims the whole pane and would swallow a wheel over the panel
+    /// too. Pass `available_rect_before_wrap()` for that region instead.
+    ///
+    /// [`pane_zoom`]: Self::pane_zoom
+    fn zoom_over(&mut self, ui: &egui::Ui, pane: &str, rect: egui::Rect) -> f32 {
         let mut z = self.prefs.zoom_of(pane);
-        if ui.rect_contains_pointer(ui.max_rect()) {
+        if ui.rect_contains_pointer(rect) {
             let delta = ui.input(|i| i.zoom_delta());
             if (delta - 1.0).abs() > 1e-4 {
                 z = (z * delta).clamp(0.5, 2.5);
@@ -1899,6 +2115,51 @@ impl App {
             } else if up {
                 self.palette.move_cursor(-1, len);
             }
+            return;
+        }
+
+        // The search panel drives its own results while its box has focus,
+        // the same contract the keyboard window's filter has below: arrows
+        // walk the list without leaving the box, so refining a query and
+        // reading its answers is one uninterrupted gesture.
+        //
+        // `R-F13`. Read before the generic dispatch, because `J`/`K`/`Down`
+        // are queue navigation out here and would move the *selection* while
+        // you were reading search results.
+        if self.prefs.rail == Some(crate::prefs::RailTool::Search)
+            && ui.memory(|m| m.has_focus(search_field_id()))
+        {
+            let (enter, down, up) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::ArrowUp),
+                )
+            });
+            let len = self.search.rows.len();
+            let at = self
+                .search
+                .sel
+                .as_ref()
+                .and_then(|s| self.search.rows.iter().position(|r| r == s));
+            if down || up {
+                let (in_list, to) = search_move(self.search.in_list, at, len, down);
+                self.search.in_list = in_list;
+                if to != at {
+                    if let Some(i) = to.and_then(|i| self.search.rows.get(i)) {
+                        self.search.sel = Some(i.clone());
+                        self.search.scroll_row = true;
+                        self.search.preview_scroll = true;
+                    }
+                }
+            } else if enter && self.search.in_list {
+                if let Some(sel) = self.search.sel.clone() {
+                    self.open_search_hit(&sel);
+                }
+            }
+            // Everything else is typing, and belongs to the box. Enter while
+            // *not* in the list falls through to the panel, which reads it as
+            // "run this query".
             return;
         }
 
@@ -2238,6 +2499,23 @@ impl App {
                 } else {
                     Pane::Queue
                 };
+            }
+            // `R-B40`. Collapsing remembers nothing on purpose: the strip
+            // shows which tool was last open, so reopening lands where you
+            // left rather than on a default you did not choose.
+            A::ToggleRailPanel => {
+                self.prefs.rail = match self.prefs.rail {
+                    Some(_) => None,
+                    None => Some(self.last_rail),
+                };
+                self.prefs_dirty = true;
+            }
+            A::RailFiles => self.show_rail(crate::prefs::RailTool::Files),
+            A::RailSearch => {
+                self.show_rail(crate::prefs::RailTool::Search);
+                // A search you asked for by key wants the caret, not another
+                // click. The panel consumes this the frame it draws.
+                self.search.focus = true;
             }
             A::ResetLayout => {
                 self.tree = Some(crate::layout::default_tree());
@@ -3470,6 +3748,692 @@ impl App {
             });
     }
 
+    /// Show a tool in the rail — or collapse the rail, if it is the tool
+    /// already showing. One key both ways, the rule `ToggleTerminalFocus`
+    /// already follows: reaching a thing and leaving it should not be two
+    /// chords to learn.
+    fn show_rail(&mut self, tool: crate::prefs::RailTool) {
+        self.last_rail = tool;
+        self.prefs.rail = if self.prefs.rail == Some(tool) {
+            None
+        } else {
+            Some(tool)
+        };
+        self.prefs_dirty = true;
+    }
+
+    /// The right rail: an always-present strip of tool windows, and whichever
+    /// one is open. `R-B40`.
+    ///
+    /// Chrome, not a pane —
+    /// [ADR-0017](../../../docs/decisions/0017-the-rail-is-chrome.md). Two
+    /// things about where this sits are load-bearing:
+    ///
+    /// - It is declared beside [`Self::queue_panel`] and before the central
+    ///   panel, because a `CentralPanel` claims whatever is left and anything
+    ///   declared after it has already lost the argument.
+    /// - The **strip** is declared before the open tool, so the strip keeps the
+    ///   outermost edge. Panels claim edges in the order they are shown, and a
+    ///   strip that slid inboard whenever a tool opened would move the very
+    ///   button you are about to click to close it.
+    fn rail_panel(&mut self, root: &mut egui::Ui) {
+        use crate::keymap::Action;
+        use crate::prefs::RailTool;
+
+        let open = self.prefs.rail;
+        let mut pick: Option<RailTool> = None;
+        egui::Panel::right("rail-strip")
+            .resizable(false)
+            .exact_size(30.0)
+            .frame(
+                egui::Frame::NONE
+                    .fill(pal().bg)
+                    .inner_margin(egui::Margin::symmetric(4, 8)),
+            )
+            .show(root, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    for tool in RailTool::ALL {
+                        let on = open == Some(tool);
+                        let key = self.keymap.describe(match tool {
+                            RailTool::Files => Action::RailFiles,
+                            RailTool::Search => Action::RailSearch,
+                        });
+                        let btn = egui::Button::new(
+                            RichText::new(tool.glyph())
+                                .size(14.0)
+                                .color(if on { pal().blue } else { pal().dim }),
+                        )
+                        .frame(false);
+                        if ui
+                            .add(btn)
+                            .on_hover_text(format!("{}  ({key})", tool.label()))
+                            .clicked()
+                        {
+                            pick = Some(tool);
+                        }
+                    }
+                });
+            });
+        if let Some(t) = pick {
+            self.show_rail(t);
+        }
+
+        let Some(tool) = self.prefs.rail else {
+            return;
+        };
+        self.last_rail = tool;
+        let close_key = self.keymap.describe(Action::ToggleRailPanel);
+        let mut collapse = false;
+        let resp = egui::Panel::right("rail")
+            .default_size(self.prefs.rail_width)
+            .size_range(200.0..=760.0)
+            .show(root, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(tool.label().to_uppercase())
+                            .size(11.0)
+                            .color(pal().dim)
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("»").size(13.0).color(pal().dim))
+                                    .frame(false),
+                            )
+                            .on_hover_text(format!("collapse to the strip  ({close_key})"))
+                            .clicked()
+                        {
+                            collapse = true;
+                        }
+                    });
+                });
+                ui.separator();
+                match tool {
+                    RailTool::Files => self.rail_files(ui),
+                    RailTool::Search => self.rail_search(ui),
+                }
+            });
+
+        // The panel owns its width while you drag it; this copies the result
+        // back, because egui's own `PanelState` dies with the process — eframe
+        // is built here without its `persistence` feature, so every panel width
+        // in this window would otherwise reset at the next launch. Written to
+        // disk only once the pointer is up, the rule the layout and the
+        // terminal panel both follow.
+        let now = resp.response.rect.width();
+        if (now - self.prefs.rail_width).abs() > 0.5 {
+            self.prefs.rail_width = now;
+            self.prefs_dirty = true;
+        }
+        if collapse {
+            self.prefs.rail = None;
+            self.prefs_dirty = true;
+        }
+    }
+
+    /// The worktree, in the rail. `R-B41`.
+    ///
+    /// This is the tree that used to sit inside the Editor tab. It is here so
+    /// it is readable with the Transcript, the Git pane or a terminal forward
+    /// — a map of the project is the wrong thing to be able to see only from
+    /// one tab.
+    fn rail_files(&mut self, ui: &mut egui::Ui) {
+        let Some(s) = self.selected_session().cloned() else {
+            ui.add_space(8.0);
+            ui.label(dim("no session selected"));
+            ui.add_space(2.0);
+            ui.label(dim("a worktree belongs to one — pick a session in the queue"));
+            return;
+        };
+        self.explorer.ensure_session(&s.id);
+        self.explorer_fetch(&s);
+
+        // Kept on the `editor-tree` zoom key it was written under. `R-B39`
+        // shipped that key the day before the tree moved, and renaming it now
+        // would silently reset a preference somebody had already set.
+        let z = self.zoom_over(ui, "editor-tree", ui.max_rect());
+        scale_text(ui, z);
+
+        let root_label = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
+        ui.horizontal(|ui| {
+            let name = root_label
+                .rsplit('/')
+                .next()
+                .unwrap_or(&root_label)
+                .to_string();
+            ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+                .on_hover_text(&root_label);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("↻")
+                    .on_hover_text("re-list the directories that are open")
+                    .clicked()
+                {
+                    // Dropping the listings is enough: `explorer_fetch` above
+                    // re-requests the root and everything expanded.
+                    let st = self.explorer.current_mut();
+                    st.dirs.clear();
+                    st.pending.clear();
+                }
+            });
+        });
+
+        // Both axes, *and* wrap forced off. The scroll area alone was not
+        // enough: egui deliberately hands content the visible width even with
+        // horizontal scrolling on ("better to wrap text … than showing a
+        // horizontal scrollbar", scroll_area.rs), so rows kept folding at the
+        // pane edge and the horizontal bar never had anything to do. Extend
+        // makes each row lay out at its natural width; only then does a narrow
+        // panel scroll — and a tree whose rows fold onto two lines stops
+        // reading as a tree.
+        egui::ScrollArea::both()
+            .id_salt("rail-tree-scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                ui.spacing_mut().item_spacing.y = 1.0;
+                if !self.explorer.current().dirs.contains_key("") {
+                    ui.add_space(8.0);
+                    ui.label(dim("listing…"));
+                    return;
+                }
+                self.explorer_dir(ui, "", 0);
+            });
+    }
+
+    /// One query over three corpora. `R-F13`.
+    ///
+    /// See [`SearchPanel`] for why the three are kept apart. The layout is
+    /// results above, preview below, with a draggable divider — a rail is
+    /// narrow, and side-by-side at 300pt would be two columns of nothing.
+    fn rail_search(&mut self, ui: &mut egui::Ui) {
+        let z = self.zoom_over(ui, "search", ui.max_rect());
+        scale_text(ui, z);
+
+        let session = self.selected_session().cloned();
+        let mut run = false;
+
+        ui.add_space(2.0);
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut self.search.query)
+                .id(search_field_id())
+                .hint_text("find…")
+                .desired_width(f32::INFINITY),
+        );
+        if std::mem::take(&mut self.search.focus) {
+            field.request_focus();
+        }
+        // Only while the arrows are still in the box. Once they are walking
+        // the results, Enter belongs to the row under them — see
+        // [`SearchPanel::in_list`].
+        if !self.search.in_list
+            && field.lost_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        {
+            run = true;
+        }
+        if field.changed() {
+            // Typing is leaving the list, whichever row you had reached.
+            self.search.in_list = false;
+            // ...and it invalidates the two daemon groups the moment the box
+            // stops agreeing with what was asked. Showing yesterday's hits
+            // under today's query is the one failure mode a search must not
+            // have.
+            if self.search.issued != self.search.query.trim() {
+                self.search.files.idle();
+                self.search.insight.idle();
+            }
+        }
+
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(&mut self.search.everywhere, "every session")
+                .on_hover_text(
+                    "Search the transcripts and prompt history of every session ever run \
+                     (`R-F1`), not only this one's files and conversation. It is the slow \
+                     half of this box.",
+                )
+                .changed()
+            {
+                run = !self.search.query.trim().is_empty();
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("search")
+                    .on_hover_text("or press Enter in the box")
+                    .clicked()
+                {
+                    run = true;
+                }
+            });
+        });
+
+        if run {
+            self.issue_global_search(session.as_deref());
+            // Enter surrenders a singleline's focus in egui, and without this
+            // the very next keystroke — the Down that walks into the results
+            // you just asked for — would go to the queue instead.
+            self.search.focus = true;
+            self.search.in_list = false;
+        }
+
+        let q = self.search.query.trim().to_string();
+
+        // The free group. Recomputed every frame from events already in
+        // memory, which is what lets it answer while you type — the two below
+        // cannot, and the panel says which is which rather than pretending
+        // they are one search.
+        let turns: Vec<(u64, crate::search::Engine, String)> = match &session {
+            Some(s) if !q.is_empty() => {
+                let mut v: Vec<(i32, u64, crate::search::Engine, String)> = self
+                    .events
+                    .get(&s.id)
+                    .map(|evs| {
+                        evs.iter()
+                            .filter_map(|ev| {
+                                let text = event_text(&ev.kind);
+                                crate::search::best(&q, &text)
+                                    .map(|h| (h.score, ev.seq, h.engine, one_line(&text, 200)))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                v.sort_by(|a, b| b.0.cmp(&a.0));
+                v.truncate(200);
+                v.into_iter().map(|(_, seq, e, t)| (seq, e, t)).collect()
+            }
+            _ => Vec::new(),
+        };
+
+        ui.add_space(4.0);
+
+        // Declared before the list, so the list gets what is left rather than
+        // pushing the preview off the bottom.
+        egui::Panel::bottom("search-preview")
+            .resizable(true)
+            .default_size(220.0)
+            .show(ui, |ui| {
+                self.search_preview(ui, session.as_deref());
+            });
+
+        let mut open: Option<SearchSel> = None;
+        // Rebuilt every paint, in draw order, so the keyboard has a list to
+        // walk. Read once here rather than taken per group: one keyboard move
+        // must scroll exactly the group the selection landed in.
+        let scroll_row = std::mem::take(&mut self.search.scroll_row);
+        self.search.rows.clear();
+        egui::ScrollArea::vertical()
+            .id_salt("search-results")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if q.is_empty() {
+                    ui.add_space(8.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(dim("type to search this conversation"));
+                        ui.label(dim("Enter also searches files and sessions"));
+                    });
+                    return;
+                }
+
+                // -- this conversation ---------------------------------
+                let head = match &session {
+                    Some(_) => format!("this conversation · {} turn(s)", turns.len()),
+                    None => "this conversation · no session selected".to_string(),
+                };
+                search_group(ui, "turns", &head, |ui| {
+                    if session.is_none() {
+                        return;
+                    }
+                    if turns.is_empty() {
+                        ui.label(dim("no match"));
+                        return;
+                    }
+                    for (seq, engine, text) in &turns {
+                        let sel = SearchSel::Turn(*seq);
+                        let picked = self.search.sel.as_ref() == Some(&sel);
+                        self.search.rows.push(sel.clone());
+                        let r =
+                            search_row(ui, picked, picked && scroll_row, engine.label(), text);
+                        if r.clicked() {
+                            self.search.sel = Some(sel.clone());
+                            self.search.preview_scroll = true;
+                        }
+                        if r.double_clicked() {
+                            open = Some(sel);
+                        }
+                    }
+                });
+
+                // -- this session's files ------------------------------
+                let head = group_head(
+                    "this session's files",
+                    &self.search.files,
+                    session.is_none().then_some("no session"),
+                );
+                search_group(ui, "files", &head, |ui| {
+                    let Some(hits) = &self.search.files.hits else {
+                        return;
+                    };
+                    if hits.is_empty() {
+                        ui.label(dim("no match"));
+                        return;
+                    }
+                    for m in hits {
+                        let sel = SearchSel::File {
+                            path: m.path.clone(),
+                            line: m.line,
+                        };
+                        let picked = self.search.sel.as_ref() == Some(&sel);
+                        self.search.rows.push(sel.clone());
+                        let (dir, base) = short_path(&m.path);
+                        let r = search_row(
+                            ui,
+                            picked,
+                            picked && scroll_row,
+                            &format!("{dir}{base}:{}", m.line),
+                            m.text.trim(),
+                        );
+                        if r.clicked() {
+                            self.search.sel = Some(sel.clone());
+                            self.search.preview_scroll = true;
+                        }
+                        if r.double_clicked() {
+                            open = Some(sel);
+                        }
+                    }
+                    if self.search.files.truncated {
+                        ui.label(dim("… capped — narrow the query"));
+                    }
+                });
+
+                // -- every session -------------------------------------
+                let head = group_head(
+                    "every session",
+                    &self.search.insight,
+                    (!self.search.everywhere).then_some("off"),
+                );
+                search_group(ui, "insight", &head, |ui| {
+                    if !self.search.everywhere {
+                        ui.label(dim("off — tick “every session” above"));
+                        return;
+                    }
+                    let Some(hits) = &self.search.insight.hits else {
+                        return;
+                    };
+                    if hits.is_empty() {
+                        ui.label(dim("no match"));
+                        return;
+                    }
+                    for h in hits {
+                        let sel = SearchSel::Hit {
+                            session: h.session_id.clone(),
+                            line: h.line,
+                            ts: h.timestamp,
+                            preview: h.preview.clone(),
+                        };
+                        let picked = self.search.sel.as_ref() == Some(&sel);
+                        self.search.rows.push(sel.clone());
+                        let src = match h.source {
+                            mogeung_core::insight::SearchSource::History => "hist",
+                            mogeung_core::insight::SearchSource::Prompt => "you",
+                            mogeung_core::insight::SearchSource::Transcript => "sess",
+                        };
+                        let tag = format!(
+                            "{src} {}",
+                            &h.session_id[..8.min(h.session_id.len())]
+                        );
+                        let r = search_row(ui, picked, picked && scroll_row, &tag, h.preview.trim());
+                        if r.clicked() {
+                            self.search.sel = Some(sel.clone());
+                            self.search.preview_scroll = true;
+                        }
+                        if r.double_clicked() {
+                            open = Some(sel);
+                        }
+                    }
+                    if self.search.insight.truncated {
+                        ui.label(dim("… capped — narrow the query"));
+                    }
+                });
+            });
+
+        if let Some(sel) = open {
+            self.open_search_hit(&sel);
+        }
+    }
+
+    /// Send the two daemon halves. The free one needs no sending.
+    fn issue_global_search(&mut self, session: Option<&Session>) {
+        let q = self.search.query.trim().to_string();
+        self.search.issued = q.clone();
+        if q.is_empty() {
+            self.search.files.idle();
+            self.search.insight.idle();
+            return;
+        }
+        match session {
+            Some(s) => {
+                self.search.files.asked();
+                self.net.send(ClientMsg::SearchContent {
+                    session_id: s.id.clone(),
+                    query: q.clone(),
+                });
+            }
+            // Nothing to search, and nothing pending — a group that spun for
+            // ever because no session was selected would read as a hang.
+            None => self.search.files.idle(),
+        }
+        if self.search.everywhere {
+            self.search.insight.asked();
+            self.net.send(ClientMsg::InsightSearch { query: q });
+        } else {
+            self.search.insight.idle();
+        }
+    }
+
+    /// What the selected result looks like, at more than one line of it.
+    ///
+    /// Three kinds of result, three fidelities, and the difference is visible
+    /// on purpose: a file and a turn can be shown in full because we can
+    /// fetch them, a cross-session hit cannot, because the ~200-char clip is
+    /// the whole of what the daemon returns for one. `R-F13` files closing
+    /// that gap as a separate wire message rather than guessing here.
+    fn search_preview(&mut self, ui: &mut egui::Ui, session: Option<&Session>) {
+        let Some(sel) = self.search.sel.clone() else {
+            ui.add_space(6.0);
+            ui.vertical_centered(|ui| ui.label(dim("pick a result")));
+            return;
+        };
+        match sel {
+            SearchSel::Turn(seq) => {
+                // Taken owned before the pane is drawn: the buttons below need
+                // `&mut self`, and holding a borrow of `self.events` across
+                // them would be the borrow checker's problem to state and
+                // ours to have caused.
+                let found = session
+                    .and_then(|s| self.events.get(&s.id))
+                    .and_then(|evs| evs.iter().find(|e| e.seq == seq))
+                    .map(|ev| (ev.ts, event_text(&ev.kind)));
+                let Some((ts, text)) = found else {
+                    ui.label(dim("that turn is no longer in this transcript"));
+                    return;
+                };
+                let when = ts.format("%m-%d %H:%M").to_string();
+                ui.horizontal(|ui| {
+                    ui.label(dim(format!("turn {seq} · {when}")));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("open").clicked() {
+                            let sel = SearchSel::Turn(seq);
+                            self.open_search_hit(&sel);
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("search-preview-turn")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(mono(&text).size(11.5)).wrap());
+                    });
+            }
+            SearchSel::File { path, line } => {
+                let Some(s) = session else {
+                    ui.label(dim("no session selected"));
+                    return;
+                };
+                // One request per path, not one per frame. The answer lands
+                // through the same `FileContent` the Editor uses.
+                if self.search.preview_asked.as_deref() != Some(path.as_str()) {
+                    self.search.preview_asked = Some(path.clone());
+                    self.search.preview = None;
+                    self.net.send(ClientMsg::FetchFile {
+                        session_id: s.id.clone(),
+                        path: path.clone(),
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(dim(format!("{path}:{line}"))).truncate());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("open").clicked() {
+                            let sel = SearchSel::File {
+                                path: path.clone(),
+                                line,
+                            };
+                            self.open_search_hit(&sel);
+                        }
+                    });
+                });
+                let body = self
+                    .search
+                    .preview
+                    .as_ref()
+                    .filter(|(p, _)| *p == path)
+                    .map(|(_, c)| c.clone());
+                let Some(body) = body else {
+                    ui.label(dim("reading…"));
+                    return;
+                };
+                // Consumed here rather than at the click: the body may be
+                // several frames behind the selection, and a flag spent before
+                // there was anything to scroll would scroll nothing.
+                let scroll_to_hit = std::mem::take(&mut self.search.preview_scroll);
+                egui::ScrollArea::both()
+                    .id_salt("search-preview-file")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (i, l) in body.lines().enumerate() {
+                            let n = i as u64 + 1;
+                            let hit = n == line;
+                            let row = ui.horizontal(|ui| {
+                                ui.label(
+                                    mono(format!("{n:>5} "))
+                                        .size(11.0)
+                                        .color(pal().dim),
+                                );
+                                ui.label(if hit {
+                                    mono(l).size(11.5).color(pal().amber)
+                                } else {
+                                    mono(l).size(11.5)
+                                });
+                            });
+                            if hit && scroll_to_hit {
+                                row.response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                        }
+                    });
+            }
+            SearchSel::Hit {
+                session: sid,
+                line,
+                ts,
+                preview,
+            } => {
+                let known = self.sessions.contains_key(&sid);
+                ui.horizontal(|ui| {
+                    let when = ts
+                        .map(|t| t.format("%m-%d %H:%M").to_string())
+                        .unwrap_or_default();
+                    ui.label(dim(format!(
+                        "{} L{line} {when}",
+                        &sid[..8.min(sid.len())]
+                    )));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn = ui
+                            .add_enabled(known, egui::Button::new("open").small())
+                            .on_disabled_hover_text(
+                                "this session is not in the queue — the search found it on \
+                                 disk, but nothing here is watching it",
+                            );
+                        if btn.clicked() {
+                            let sel = SearchSel::Hit {
+                                session: sid.clone(),
+                                line,
+                                ts,
+                                preview: preview.clone(),
+                            };
+                            self.open_search_hit(&sel);
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("search-preview-hit")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(mono(&preview).size(11.5)).wrap());
+                        ui.add_space(6.0);
+                        // Said rather than hidden. The clip is all there is,
+                        // and a preview pane that looked truncated without
+                        // saying why would read as a bug in the fetch.
+                        ui.label(dim(
+                            "this is the whole clip the search returns — open it to read \
+                             the conversation around it",
+                        ));
+                    });
+            }
+        }
+    }
+
+    /// Open a result where it lives. Three destinations, all of which already
+    /// existed as jump targets before this panel did.
+    fn open_search_hit(&mut self, sel: &SearchSel) {
+        match sel {
+            SearchSel::Turn(seq) => {
+                let Some(id) = self.selected.clone() else {
+                    return;
+                };
+                let ts = self
+                    .events
+                    .get(&id)
+                    .and_then(|evs| evs.iter().find(|e| e.seq == *seq))
+                    .map(|e| e.ts);
+                // A jump to a moment must be able to reach skipped history.
+                if let Some(evs) = self.events.get(&id) {
+                    self.transcript_limit = self.transcript_limit.max(evs.len());
+                }
+                self.focus_event_ts = ts;
+                self.set_tab(Tab::Transcript);
+            }
+            SearchSel::File { path, line } => self.open_in_explorer(path, Some(*line)),
+            SearchSel::Hit { session, ts, .. } => {
+                if self.sessions.contains_key(session) {
+                    // `select`, not a bare assignment: a session reached from
+                    // the cross-session corpus is usually one this window has
+                    // never hydrated, and landing on an empty Transcript is
+                    // the failure this jump exists to avoid. Setting the
+                    // moment *after* is what survives the switch.
+                    self.select(session.clone());
+                    self.focus_event_ts = *ts;
+                    self.set_tab(Tab::Transcript);
+                }
+            }
+        }
+    }
+
     /// Open the label editor pre-filled with what the session is called now,
     /// so editing is the same gesture as naming.
     fn open_label_editor(&mut self, id: SessionId) {
@@ -3986,6 +4950,50 @@ fn keymap_filter_id() -> egui::Id {
     egui::Id::new("keymap-filter")
 }
 
+/// Where an arrow lands in the search results. `R-F13`.
+///
+/// Returns the new `(in_list, index)`. `in_list == false` means the arrows
+/// belong to the query box again, which is the state that lets Enter go back
+/// to meaning "run this search".
+///
+/// Deliberately **not** a wrapping cursor. Wrapping is right for a modal
+/// palette, where the list is the only thing there; here the list sits under a
+/// box you are still editing, and a cursor that jumped from the last hit to the
+/// first would leave no keyboard way back to the query.
+fn search_move(
+    in_list: bool,
+    at: Option<usize>,
+    len: usize,
+    down: bool,
+) -> (bool, Option<usize>) {
+    if len == 0 {
+        return (false, None);
+    }
+    if down {
+        return match (in_list, at) {
+            (true, Some(i)) => (true, Some((i + 1).min(len - 1))),
+            // Down from the box enters at the top, wherever the mouse last
+            // left the selection — arriving mid-list because of an earlier
+            // click would read as the cursor jumping.
+            _ => (true, Some(0)),
+        };
+    }
+    match (in_list, at) {
+        (false, _) => (false, at),
+        (true, Some(0)) | (true, None) => (false, at),
+        (true, Some(i)) => (true, Some(i - 1)),
+    }
+}
+
+/// The search panel's query box. `R-F13`.
+///
+/// Fixed rather than generated, for the reason [`keymap_filter_id`] is: the
+/// keyboard handler runs before the panel is drawn and has to ask whether this
+/// particular box holds focus.
+fn search_field_id() -> egui::Id {
+    egui::Id::new("rail-search-query")
+}
+
 /// The chord a rebind should capture from this frame's events, if any.
 ///
 /// egui 0.35 reports modifier presses as keys of their own (`AltLeft` …), so
@@ -4143,7 +5151,14 @@ fn queue_card(
             hit.filter_repo = Some(s.repo_name());
         }
         if let Some(b) = &s.git_branch {
-            ui.label(dim(format!("{} {b}", icon::BRANCH)));
+            // Blue, not dim — repo and branch sat side by side in one grey and
+            // read as a single phrase. Blue is what the status bar already
+            // tints git identity, so the two places agree.
+            ui.label(
+                RichText::new(format!("{} {b}", icon::BRANCH))
+                    .size(12.0)
+                    .color(pal().blue),
+            );
         }
         // R-I1: sessions from another CLI say so; Claude Code stays unmarked
         // as the default it has always been.
@@ -6610,22 +7625,51 @@ impl App {
             });
     }
 
-    /// The session's worktree: tree on the left, tabs and a read-only viewer
-    /// on the right. `R-B24`, workbench behaviour by `R-B25`.
+    /// The session's worktree: tabs and a read-only viewer.
+    /// `R-B24`, workbench behaviour by `R-B25`.
+    ///
+    /// **No tree.** It moved to the rail on 2026-08-03 (`R-B41`,
+    /// [ADR-0017](../../../docs/decisions/0017-the-rail-is-chrome.md)) so it
+    /// could be read with any tab forward. What is left here is the half that
+    /// is genuinely about the file you are reading.
     ///
     /// Everything shown here came over the wire — the UI never touches the
     /// worktree itself ([ADR-0001]), and nothing in this pane can write.
     fn explorer_tab(&mut self, ui: &mut egui::Ui, s: &Session) {
-        let z = self.pane_zoom(ui, "editor");
-        scale_text(ui, z);
+        // No pane-wide `scale_text` here: `editor_group` takes the "editor"
+        // zoom for both sides of the split. `R-B39`.
         self.explorer.ensure_session(&s.id);
+        self.explorer_fetch(s);
 
-        // Ask the daemon for whatever the state wants and lacks: the root,
-        // every expanded directory without a listing, the active tab without
-        // a body. One door for all fetching, which is what makes restore from
-        // disk, reveal, refresh and a plain click all re-fetch the same way —
-        // and it lives in the paint rather than `set_tab`, so a pane that is
-        // *docked* visible works without ever having been switched to.
+        // Side by side when any tab lives on the right; the split is created
+        // by sending a tab over ("open on the other side") and collapses
+        // when the last right-hand tab leaves.
+        if self.explorer.current().split() {
+            let half = ui.available_width() * 0.5;
+            egui::Panel::right("editor-split")
+                .default_size(half)
+                .resizable(true)
+                .show(ui, |ui| {
+                    self.editor_group(ui, 1);
+                });
+        }
+        self.editor_group(ui, 0);
+    }
+
+    /// Ask the daemon for whatever the explorer state wants and lacks: the
+    /// root, every expanded directory without a listing, the active tab
+    /// without a body.
+    ///
+    /// One door for all fetching, which is what makes restore from disk,
+    /// reveal, refresh and a plain click all re-fetch the same way — and it
+    /// lives in the paint rather than `set_tab`, so a pane that is *docked*
+    /// visible works without ever having been switched to.
+    ///
+    /// Called by both the Editor tab and the rail's Files tool since `R-B41`
+    /// split them apart, which is why every branch guards on `pending` rather
+    /// than on who is asking: with both on screen this runs twice in a frame
+    /// and must still send once.
+    fn explorer_fetch(&mut self, s: &Session) {
         {
             // The ignore list rides git status; ask for it here too, so the
             // tree dims gitignored subtrees before the Git pane ever opens.
@@ -6689,72 +7733,20 @@ impl App {
             }
         }
 
-        let root_label = s.repo_root.clone().unwrap_or_else(|| s.cwd.clone());
-        // `R-B37`. Draggable, because how much room a tree wants depends on
-        // how deep the project nests and that is not something a default can
-        // know — asked for 2026-08-02 by someone actually reading in it.
-        egui::Panel::left("explorer-tree")
-            .default_size(280.0)
-            .resizable(true)
-            .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("WORKTREE").size(11.0).color(pal().dim).strong())
-                    .on_hover_text(&root_label);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("↻")
-                        .on_hover_text("re-list the directories that are open")
-                        .clicked()
-                    {
-                        // Dropping the listings is enough: the fetch block
-                        // above re-requests the root and everything expanded.
-                        let st = self.explorer.current_mut();
-                        st.dirs.clear();
-                        st.pending.clear();
-                    }
-                });
-            });
-            // Both axes, *and* wrap forced off. The scroll area alone was
-            // not enough: egui deliberately hands content the visible width
-            // even with horizontal scrolling on ("better to wrap text …
-            // than showing a horizontal scrollbar", scroll_area.rs), so
-            // rows kept folding at the pane edge and the horizontal bar
-            // never had anything to do. Extend makes each row lay out at
-            // its natural width; only then does a narrow pane scroll —
-            // a tree whose rows fold onto two lines stops reading as a
-            // tree.
-            egui::ScrollArea::both()
-                .id_salt("explorer-tree-scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    if !self.explorer.current().dirs.contains_key("") {
-                        ui.add_space(8.0);
-                        ui.label(dim("listing…"));
-                        return;
-                    }
-                    self.explorer_dir(ui, "", 0);
-                });
-        });
-
-        // Side by side when any tab lives on the right; the split is created
-        // by sending a tab over ("open on the other side") and collapses
-        // when the last right-hand tab leaves.
-        if self.explorer.current().split() {
-            let half = ui.available_width() * 0.5;
-            egui::Panel::right("editor-split")
-                .default_size(half)
-                .resizable(true)
-                .show(ui, |ui| {
-                    self.editor_group(ui, 1);
-                });
-        }
-        self.editor_group(ui, 0);
     }
 
     /// One side of the editor: its tab strip and its viewer.
+    ///
+    /// Both sides share the `"editor"` zoom: a split is one document read two
+    /// ways, and two halves of the same file at different sizes is a bug, not
+    /// a feature. The tree — now in the rail — is the thing that zooms apart
+    /// from them.
     fn editor_group(&mut self, ui: &mut egui::Ui, group: u8) {
+        // `available_rect_before_wrap`, not `max_rect` — see [`Self::zoom_over`].
+        // Group 0 is drawn into the pane ui *after* the split panel has taken
+        // its slice, and that ui's `max_rect` is still the whole pane.
+        let z = self.zoom_over(ui, "editor", ui.available_rect_before_wrap());
+        scale_text(ui, z);
         self.explorer_tab_strip(ui, group);
         self.explorer_viewer(ui, group);
     }
@@ -6859,9 +7851,16 @@ impl App {
         let focused = self.explorer.current().focus == group;
         let st = self.explorer.current();
         let Some(tab) = st.active_of(group).and_then(|i| st.open.get(i)) else {
+            // Says where the tree went. It was in this pane until `R-B41`
+            // moved it to the rail, and "pick a file" is unhelpful advice when
+            // the thing you pick from is no longer on screen.
+            let files = self.keymap.describe(crate::keymap::Action::RailFiles);
+            let goto = self.keymap.describe(crate::keymap::Action::GoToFile);
             ui.add_space(12.0);
             ui.vertical_centered(|ui| {
-                ui.label(dim("pick a file to read it — read-only, always"));
+                ui.label(dim("nothing open — read-only, always"));
+                ui.add_space(4.0);
+                ui.label(dim(format!("{files} for the worktree · {goto} to open by name")));
             });
             return;
         };
@@ -7730,12 +8729,17 @@ impl App {
                 row.scroll_to_me(Some(egui::Align::Center));
                 self.explorer.current_mut().reveal = None;
             }
+            // Opening raises the Editor. The tree lives in the rail now
+            // (`R-B41`), so the tab holding the viewer may not be the one in
+            // front of you — and a click that filled a pane you cannot see
+            // would look like a click that did nothing.
             if row.double_clicked() && !e.is_dir {
                 self.explorer.open_file(&path, true, None);
+                self.set_tab(Tab::Explorer);
             } else if row.clicked() {
                 if e.is_dir {
-                    // Toggling is all a click does; the fetch block in
-                    // `explorer_tab` notices an expanded dir with no listing.
+                    // Toggling is all a click does; `explorer_fetch` notices
+                    // an expanded dir with no listing.
                     let st = self.explorer.current_mut();
                     if open {
                         st.expanded.remove(&path);
@@ -7745,6 +8749,7 @@ impl App {
                     self.explorer.dirty = true;
                 } else {
                     self.explorer.open_file(&path, false, None);
+                    self.set_tab(Tab::Explorer);
                 }
             }
             if e.is_dir && open {
@@ -9943,6 +10948,66 @@ fn word_at_char_index(content: &str, idx: usize) -> Option<String> {
     (word.chars().count() >= 2).then_some(word)
 }
 
+/// One line of it, whitespace collapsed. `R-F13`.
+///
+/// A search result is a row, and a matched transcript turn is prose with
+/// newlines in it — pasted straight into a row it would be six rows, and the
+/// list would stop being scannable at the first paragraph.
+fn one_line(s: &str, n: usize) -> String {
+    truncate(&s.split_whitespace().collect::<Vec<_>>().join(" "), n)
+}
+
+/// One result group of the search panel. `R-F13`.
+fn search_group(ui: &mut egui::Ui, salt: &str, head: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::CollapsingHeader::new(RichText::new(head).size(11.5).strong())
+        .id_salt(("search-group", salt))
+        .default_open(true)
+        .show(ui, |ui| {
+            // Truncate rather than wrap: a rail is narrow, and a result that
+            // folded onto three lines would cost more room than the hit is
+            // worth. The preview pane is where the whole of it lives.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            ui.spacing_mut().item_spacing.y = 1.0;
+            body(ui);
+        });
+}
+
+/// One result row: where it is, then what matched.
+fn search_row(
+    ui: &mut egui::Ui,
+    picked: bool,
+    scroll: bool,
+    tag: &str,
+    text: &str,
+) -> egui::Response {
+    let r = ui.selectable_label(
+        picked,
+        mono(format!("{tag}  {}", one_line(text, 240))).size(11.0),
+    );
+    if scroll {
+        r.scroll_to_me(Some(egui::Align::Center));
+    }
+    r
+}
+
+/// A group's header: what it searched, and what state its answer is in.
+///
+/// The three states are kept apart deliberately (`R-J5`): still running,
+/// answered with nothing, and never asked are three different things, and
+/// flattening them is how a search comes to look broken.
+fn group_head<T>(name: &str, g: &Group<T>, off: Option<&str>) -> String {
+    if let Some(why) = off {
+        return format!("{name} · {why}");
+    }
+    if g.running {
+        return format!("{name} · searching…");
+    }
+    match g.count() {
+        Some(n) => format!("{name} · {n} hit(s)"),
+        None => format!("{name} · press Enter"),
+    }
+}
+
 fn short_path(path: &str) -> (String, &str) {
     let (dir, base) = match path.rfind('/') {
         Some(i) => (&path[..i], &path[i + 1..]),
@@ -11494,7 +12559,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{keymap_row, may_toggle_hidden, short_path};
+    use super::{group_head, keymap_row, may_toggle_hidden, one_line, short_path, Group};
 
     use super::{find_target, pty_chord, FindTarget, PtyChord, ScrollRequest, Tab};
 
@@ -11525,6 +12590,86 @@ mod tests {
                 "{a:?} would be stolen from the shell"
             );
         }
+    }
+
+    /// `R-F13`. Four states, four different sentences.
+    ///
+    /// The one this exists to protect is the middle pair: *asked, and there
+    /// is nothing* and *never asked* are not the same, and a group that
+    /// flattened them into an empty list would answer "no hits" to a question
+    /// nobody has pressed Enter on yet. That is how a search comes to look
+    /// broken while working perfectly. `R-J5`, in a panel with three of them
+    /// side by side and no room to explain itself.
+    #[test]
+    fn a_group_never_asked_does_not_claim_to_have_found_nothing() {
+        let mut g: Group<u8> = Group::default();
+        assert!(
+            group_head("files", &g, None).contains("Enter"),
+            "never asked must invite the question, not answer it"
+        );
+
+        g.asked();
+        assert!(group_head("files", &g, None).contains("searching"));
+
+        g.running = false;
+        g.hits = Some(Vec::new());
+        assert!(
+            group_head("files", &g, None).contains("0 hit"),
+            "answered-with-nothing is a finding, and reads as one"
+        );
+
+        g.hits = Some(vec![1, 2, 3]);
+        assert!(group_head("files", &g, None).contains("3 hit"));
+
+        // Switched off wins over everything: a group nobody asked for should
+        // not report on a query it never ran.
+        assert!(group_head("files", &g, Some("off")).contains("off"));
+
+        // ...and being asked again forgets the old answer, rather than
+        // showing yesterday's hits under today's query.
+        g.asked();
+        assert_eq!(g.count(), None);
+    }
+
+    /// `R-F13`. The rule that makes one Enter key mean two things safely:
+    /// while the arrows are in the query box, Enter runs the search; once they
+    /// have walked into the results, Enter opens the row. So "am I in the
+    /// list" has to be exactly right at both boundaries.
+    ///
+    /// The boundary that matters most is the top. Off the top must **leave**
+    /// the list rather than wrap, or there is no keyboard way back to the
+    /// query you are in the middle of refining — you would have to reach for
+    /// the mouse to edit the thing you are typing.
+    #[test]
+    fn the_search_arrows_can_always_get_back_to_the_query() {
+        use super::search_move;
+        // Down from the box enters at the top.
+        assert_eq!(search_move(false, None, 5, true), (true, Some(0)));
+        // ...and from a stale mouse selection, still at the top.
+        assert_eq!(search_move(false, Some(3), 5, true), (true, Some(0)));
+        assert_eq!(search_move(true, Some(0), 5, true), (true, Some(1)));
+        // The bottom stops rather than wrapping to the top.
+        assert_eq!(search_move(true, Some(4), 5, true), (true, Some(4)));
+        assert_eq!(search_move(true, Some(2), 5, false), (true, Some(1)));
+        // The top hands the arrows back, keeping what was selected.
+        assert_eq!(search_move(true, Some(0), 5, false), (false, Some(0)));
+        // Up while already in the box is not a way *into* the list.
+        assert_eq!(search_move(false, Some(2), 5, false), (false, Some(2)));
+        // Nothing to walk: never claim to be in a list that is not there, or
+        // Enter would silently stop running searches.
+        assert_eq!(search_move(true, Some(0), 0, true), (false, None));
+        assert_eq!(search_move(false, None, 0, false), (false, None));
+    }
+
+    /// A result is a row. Transcript turns are prose with newlines in them,
+    /// and pasted in raw one hit would take six lines of a narrow rail.
+    #[test]
+    fn a_search_row_is_one_line() {
+        let messy = "first line\n\n   second   line\twith\ttabs\n";
+        let out = one_line(messy, 200);
+        assert!(!out.contains('\n'), "newlines survived into a row: {out:?}");
+        assert_eq!(out, "first line second line with tabs");
+        assert!(one_line(&"x".repeat(500), 40).chars().count() <= 41);
     }
 
     /// The point of the rule: you cannot dismiss an agent that is still

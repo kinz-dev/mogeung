@@ -101,7 +101,9 @@ broken=$(python3 - <<'PY'
 import pathlib, re
 bad = []
 for p in pathlib.Path('.').rglob('*.md'):
-    if 'target' in p.parts or '.git' in p.parts:
+    # Vendored trees are somebody else's documentation. `node_modules` came
+    # with the TypeScript client (feature 0029) and holds thousands of them.
+    if {'target', '.git', 'node_modules', 'dist'} & set(p.parts):
         continue
     for m in re.finditer(r'\]\(([^)#]+\.md)[^)]*\)', p.read_text()):
         link = m.group(1)
@@ -140,6 +142,7 @@ while IFS= read -r ref; do
     esac
 done < <(grep -roE --include='*.md' --include='*.sh' \
              --exclude-dir=archive --exclude-dir=.git --exclude-dir=target \
+             --exclude-dir=node_modules --exclude-dir=dist \
              'R-[A-Z][0-9]+' . 2>/dev/null \
          | sort -u)
 [ "$dangling" -eq 0 ] && ok "every R-… reference resolves ($(printf '%s' "$known" | wc -w | tr -d ' ') items)"
@@ -150,7 +153,9 @@ say "Cross-references"
 for adr in docs/decisions/*.md; do
     [ -e "$adr" ] || continue
     base=$(basename "$adr")
-    if ! grep -rq --include='*.md' --exclude="$base" "$base" . ; then
+    if ! grep -rq --include='*.md' --exclude="$base" \
+            --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=target \
+            "$base" . ; then
         note "$base — not referenced anywhere"
     fi
 done

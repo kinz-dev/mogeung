@@ -172,12 +172,26 @@ pub fn scan_transcripts(home: &Path, max_age_days: i64) -> Vec<TranscriptFile> {
 }
 
 /// Tracks how far we have read into each transcript.
+///
+/// The offsets are process state, but they must not be *only* process state:
+/// see `R-A6` and `Store::load_tail_offsets`. A tailer that starts empty over
+/// a database that remembers the sessions re-reads every transcript whole.
 #[derive(Default)]
 pub struct Tailer {
     offsets: HashMap<PathBuf, u64>,
 }
 
 impl Tailer {
+    /// Restore a previously recorded read position.
+    pub fn seed(&mut self, path: &Path, offset: u64) {
+        self.offsets.insert(path.to_path_buf(), offset);
+    }
+
+    /// Where reading would resume, if this file is being followed at all.
+    pub fn offset(&self, path: &Path) -> Option<u64> {
+        self.offsets.get(path).copied()
+    }
+
     /// Read whatever has been appended since last time.
     ///
     /// If the file shrank it was rewritten or rotated, so we start over rather

@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 595 passing |
-| Rust | 50615 lines |
-| Docs | 65 files, 15 ADRs |
+| Tests | 604 passing |
+| Rust | 52325 lines |
+| Docs | 72 files, 19 ADRs |
 
 ## Assumptions
 
-Untested: **12** · At risk: **3** · Supported: 11 · Refuted: 1
+Untested: **12** · At risk: **3** · Supported: 13 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -47,4 +47,7 @@ Untested: **12** · At risk: **3** · Supported: 11 · Refuted: 1
 | [In-app terminal](docs/features/0024-in-app-terminal.md) | `shipped` | [] |
 | [Local git writes — stage, commit, branch, stash](docs/features/0025-git-write-local.md) | `active` | [A18, A19, A24, A26] |
 | [Notes, documents and tasks](docs/features/0026-notes-and-tasks.md) | `draft` | [A1, A6, A27] |
+| [The right tool-window rail](docs/features/0027-right-rail.md) | `shipped` | [A13, A14, A15, A16, A28] |
+| [Global search](docs/features/0028-global-search.md) | `shipped` | [A13, A22, A29] |
+| [The React desktop client](docs/features/0029-desktop-client.md) | `in-progress` | [A1, A6, A13, A14, A15, A16] |
 

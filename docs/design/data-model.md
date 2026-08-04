@@ -42,6 +42,7 @@ SQLite at `~/.mogeung/mogeung.db`:
 - `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
 - `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
   writing (`R-B35`)
+- `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
 
 **`notes` is the odd one, and deliberately.** Everything else here is derived:
 lose it and a rescan of `~/.claude` and git rebuilds it. A note cannot be
@@ -63,6 +64,34 @@ refusing to start.
 
 **`alive`, `live_status` and `pid` are never trusted from storage.** They are
 re-derived from the OS on the first scan after startup.
+
+### Read positions are part of the record (`R-A6`)
+
+`tail_offsets` is the one table that is neither a fold nor the user's writing:
+it says how much of each transcript has already *been* folded. It has to be
+persisted for the same reason the sessions are, and by the same process — a
+tailer that starts empty over a database that remembers the sessions re-reads
+every transcript whole, appends the history again under fresh `seq`s, and folds
+every counter a second time. That was the shape of the 2026-08-02 bug; a
+restart replayed the entire conversation into the transcript pane and added a
+copy of it to the database, once per restart.
+
+Written **after** the lines it covers are folded in, so an interrupted pass
+re-reads a batch rather than skipping it, and deleted with the session it
+belongs to. The offset for a file that shrank is discarded on sight: a
+transcript rewritten shorter is a different file and is read again from the
+start.
+
+### Repair
+
+`PRAGMA user_version` tracks whether stored *values* need fixing — not the
+schema, which is all `CREATE TABLE IF NOT EXISTS`. Version 1 is the repair for
+the above: it drops each session's events, zeroes the counters the fold
+produces, and re-reads the transcript from scratch under the same size cap a
+first sighting gets. Derived state is rebuilt, never patched, and nothing
+original is touched —
+[ADR-0016](../decisions/0016-rebuild-derived-state.md) has the reasoning and the
+alternatives, including why the counters cannot simply be divided down.
 
 ## Ephemeral state
 

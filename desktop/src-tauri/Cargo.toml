@@ -1,0 +1,43 @@
+# Deliberately its own workspace root, not a member of the one at the repo
+# root. Two reasons, and the second is the important one:
+#
+#  1. Tauri needs `libwebkit2gtk-4.1-dev` on Linux, which is not installed
+#     everywhere the daemon is developed.
+#  2. If this were a workspace member, a missing system dependency would break
+#     `cargo build --workspace` and `cargo test --workspace` for the daemon —
+#     the two commands CLAUDE.md requires to pass before handing work back.
+#     The desktop shell must not be able to take those down.
+[workspace]
+
+[package]
+name = "mogeung-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[lib]
+name = "mogeung_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = "0.9"
+anyhow = "1"
+
+# The daemon, as a library. This is what lets one executable be enough
+# (ADR-0009): with nothing on the port the window hosts a daemon on a thread,
+# exactly as the egui client does. A path dependency out of this workspace is
+# fine — `mogeungd` is a normal crate and does not drag webkit in with it.
+mogeungd = { path = "../../crates/mogeungd" }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

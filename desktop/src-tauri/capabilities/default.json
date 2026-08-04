@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the window is allowed to ask the shell for. Deliberately small: this client's authority comes from the daemon over a socket, not from the OS.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-start-dragging",
+    "global-shortcut:default",
+    "notification:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-resize-dragging"
+  ]
+}

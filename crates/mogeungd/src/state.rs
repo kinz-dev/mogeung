@@ -121,6 +121,12 @@ impl AppState {
         let loaded = store.load_sessions()?;
         let mut sessions = HashMap::new();
         let mut seqs = HashMap::new();
+        // Resume every transcript where the last run left off. Without this the
+        // first scan after a restart re-reads and re-folds whole files. `R-A6`.
+        let mut tailer = Tailer::default();
+        for (path, offset) in store.load_tail_offsets().unwrap_or_default() {
+            tailer.seed(Path::new(&path), offset);
+        }
         for mut s in loaded {
             // Liveness is re-derived from the OS on the first scan; never trust
             // a persisted "alive".
@@ -137,7 +143,7 @@ impl AppState {
             sessions: RwLock::new(sessions),
             changes: RwLock::new(HashMap::new()),
             tx,
-            tailer: Mutex::new(Tailer::default()),
+            tailer: Mutex::new(tailer),
             seqs: Mutex::new(seqs),
             identity,
             ssh_target: std::sync::OnceLock::new(),
@@ -518,14 +524,22 @@ impl AppState {
                 // complete, but only if it is not enormous.
                 self.ensure_session(f).await;
             }
-            let lines = {
+            let (lines, offset) = {
                 let mut t = self.tailer.lock().await;
-                t.read_new(&f.path).unwrap_or_default()
+                let lines = t.read_new(&f.path).unwrap_or_default();
+                (lines, t.offset(&f.path))
             };
             if lines.is_empty() && known {
                 continue;
             }
             self.apply_lines(&f.session_id, &f.path, lines).await;
+            // Recorded only once the lines it covers are folded in, so an
+            // interrupted pass re-reads a batch rather than skipping it. `R-A6`.
+            if let Some(offset) = offset {
+                let _ = self
+                    .store
+                    .save_tail_offset(&f.path.to_string_lossy(), offset);
+            }
             touched_ids.push(f.session_id.clone());
         }
 
@@ -617,6 +631,107 @@ impl AppState {
         }
         self.publish_queue().await;
         self.publish_health().await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Repairing what the missing offsets did (R-A6)
+    // -----------------------------------------------------------------------
+
+    /// Undo the duplication caused by restarts that re-read every transcript
+    /// from byte 0. Runs once, gated on the schema version.
+    ///
+    /// Every re-read appended the whole history again under fresh `seq`s — so
+    /// nothing collided on the primary key — and folded every counter a second
+    /// time on top of itself. The event log and `turns`/`tool_calls`/
+    /// `tokens_out` therefore all carry one extra copy per restart.
+    ///
+    /// A session whose transcript is still on disk is rebuilt rather than
+    /// patched: its events are dropped and the file folded in again from
+    /// nothing, which is the only honest way to recover a counter. A session
+    /// whose transcript is gone can only have its event log deduplicated —
+    /// its counters stay as they are, because nothing remains to recount them
+    /// from, and inventing a divisor would be worse than leaving the record
+    /// visibly odd.
+    pub async fn repair_reingested_history(&self) -> Result<()> {
+        if self.store.schema_version() >= crate::store::SCHEMA_VERSION {
+            return Ok(());
+        }
+        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        let (mut rebuilt, mut deduped, mut dropped) = (0usize, 0usize, 0usize);
+
+        for s in sessions {
+            // Codex threads are re-read whole every scan and never went
+            // through this path; folding a rollout through the Claude Code
+            // adapter would invent history rather than repair it.
+            if s.source == mogeung_core::session::SessionSource::Codex {
+                continue;
+            }
+            let path = PathBuf::from(&s.transcript_path);
+            let size = std::fs::metadata(&path).ok().map(|m| m.len());
+            let Some(size) = size.filter(|_| path.is_file()) else {
+                let n = self.store.dedupe_events(&s.id).unwrap_or(0);
+                if n > 0 {
+                    dropped += n;
+                    deduped += 1;
+                }
+                continue;
+            };
+
+            dropped += self.store.delete_events(&s.id).unwrap_or(0);
+            self.seqs.lock().await.insert(s.id.clone(), 0);
+
+            let mut s = s;
+            s.turns = 0;
+            s.tool_calls = 0;
+            s.tokens_in = 0;
+            s.tokens_out = 0;
+            s.touched_files.clear();
+            s.recent_touches.clear();
+            s.recent_tools.clear();
+            s.open_tools.clear();
+            s.verify_runs.clear();
+            s.claims.clear();
+            s.loop_signal = None;
+            s.error = None;
+            s.limit_hit_at = None;
+            s.limit_resets = None;
+            let id = s.id.clone();
+            self.put(s).await;
+
+            // Same cap a first sighting gets: a pathological transcript is
+            // followed from its tail here too, rather than read whole.
+            let (lines, offset) = {
+                let mut t = self.tailer.lock().await;
+                t.forget(&path);
+                if size > MAX_TRANSCRIPT_BYTES {
+                    t.start_near_end(&path, TAIL_BYTES);
+                }
+                let lines = t.read_new(&path).unwrap_or_default();
+                (lines, t.offset(&path))
+            };
+            self.apply_lines(&id, &path, lines).await;
+            if let Some(offset) = offset {
+                let _ = self
+                    .store
+                    .save_tail_offset(&path.to_string_lossy(), offset);
+            }
+            rebuilt += 1;
+        }
+
+        if dropped > 0 {
+            tracing::warn!(
+                "repaired re-ingested history: {dropped} duplicate event(s) removed, \
+                 {rebuilt} session(s) rebuilt from their transcript, {deduped} \
+                 deduplicated in place (transcript gone — their counters cannot \
+                 be recovered)"
+            );
+            // The rows are gone but the pages are not; a database bloated by
+            // this bug stays bloated until it is rewritten.
+            if let Err(e) = self.store.vacuum() {
+                tracing::warn!("vacuum after repair failed: {e}");
+            }
+        }
+        self.store.set_schema_version(crate::store::SCHEMA_VERSION)
     }
 
     /// Recompute cross-session collisions and publish any that changed.
@@ -1873,6 +1988,10 @@ impl AppState {
         if let Some(s) = self.get(id).await {
             let mut t = self.tailer.lock().await;
             t.forget(Path::new(&s.transcript_path));
+            // Forgetting in memory only would leave the old offset on disk to
+            // be seeded back on the next start, so a re-discovered session
+            // would resume mid-file instead of being read afresh.
+            let _ = self.store.delete_tail_offset(&s.transcript_path);
         }
         self.store.delete_session(id)?;
         self.sessions.write().await.remove(id);

@@ -39,6 +39,17 @@ pub enum Action {
     /// *closed* — but a wide diff sometimes wants the room, and giving it back
     /// should not mean dragging a splitter twice.
     ToggleQueuePanel,
+    /// Collapse the right rail down to its strip, and back. `R-B40`.
+    ///
+    /// The mirror of [`Action::ToggleQueuePanel`], down to the bracket: the
+    /// two edges of the window should not need two different reflexes.
+    ToggleRailPanel,
+    /// Show the worktree in the rail, or collapse it if it is already there.
+    /// `R-B41`.
+    RailFiles,
+    /// Show global search in the rail, or collapse it if it is already there.
+    /// `R-F13`.
+    RailSearch,
     FocusQueue,
     FocusFiles,
     FocusDiff,
@@ -169,6 +180,9 @@ pub enum Action {
 impl Action {
     pub const ALL: &'static [Action] = &[
         Action::ToggleQueuePanel,
+        Action::ToggleRailPanel,
+        Action::RailFiles,
+        Action::RailSearch,
         Action::FocusQueue,
         Action::FocusFiles,
         Action::FocusDiff,
@@ -228,6 +242,9 @@ impl Action {
     pub fn group(self) -> &'static str {
         match self {
             Action::ToggleQueuePanel
+            | Action::ToggleRailPanel
+            | Action::RailFiles
+            | Action::RailSearch
             | Action::FocusQueue
             | Action::FocusFiles
             | Action::FocusDiff => "Panes",
@@ -283,6 +300,9 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::ToggleQueuePanel => "Collapse or expand the queue",
+            Action::ToggleRailPanel => "Collapse or expand the right rail",
+            Action::RailFiles => "Show the worktree in the rail",
+            Action::RailSearch => "Show global search in the rail",
             Action::FocusQueue => "Focus the session queue",
             Action::FocusFiles => "Focus the file list",
             Action::FocusDiff => "Focus the diff",
@@ -463,6 +483,14 @@ impl Default for Keymap {
         };
 
         set(Action::ToggleQueuePanel, &["OpenBracket"]);
+        // `]` for the right edge, `[` for the left. The brackets point the way
+        // the panels move, which is the whole reason to spend two of them.
+        set(Action::ToggleRailPanel, &["CloseBracket"]);
+        // Alt+4 and Alt+5 continue Alt+1–3 below. Not the editor chords they
+        // resemble: Ctrl+Shift+F is already the palette's content search and
+        // keeps it — the panel is the second search, not its replacement.
+        set(Action::RailFiles, &["Alt+4"]);
+        set(Action::RailSearch, &["Alt+5"]);
         set(Action::FocusQueue, &["Alt+1"]);
         set(Action::FocusFiles, &["Alt+2"]);
         set(Action::FocusDiff, &["Alt+3"]);
