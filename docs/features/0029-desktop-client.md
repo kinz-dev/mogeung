@@ -763,3 +763,30 @@ Off until asked for, which is the rule the daemon states and the reason
 `--notify` is a flag rather than a default. The OS permission is requested when
 you turn it on, not at startup: prompting for a feature nobody has asked for is
 the same overstep in a different costume. Six tests over the pure half.
+
+**The diff grew its three reading aids, and they are one port.**
+
+`wordDiff`, `sideBySide` and `syntax` had been sitting in `prefs.ts` since the
+port began with nothing reading them — settings for features that did not exist.
+All three live in `diff.rs` in the egui client as pure functions, so this is that
+file translated: `highlight`, `wordDiff`, `sideBySide`, and the same eleven
+properties asserted against the port. Two clients drawing one diff differently
+would be worse than either drawing it badly, and the tests are what say so.
+
+Not Shiki, which is already in the tree for Monaco. The highlighter is a
+tokenizer with one flat keyword set and no language detection; it will
+mis-colour things, and that is the trade a reading aid earns. Shiki would mean
+an async highlighter and a theme pipeline for the sake of colour on a five-line
+hunk.
+
+One thing the port had to decide that the original did not spell out: a changed
+line can carry a word diff *or* syntax colour, not both. They answer different
+questions — what moved, versus what this is — and drawing both on one line puts
+two colour systems on the same characters, where the emphasis that matters
+loses. So a paired change wears the word diff and everything else takes syntax.
+
+**Blast radius** (`R-D9`) needed no daemon work either: the command was in the
+wire types and the store already handled the reply. What was missing was a
+button. It sits on the file header, and its first version folded the file it was
+asking about — `IconButton` swallowed the event, so a button inside a clickable
+row had no way to stop it. The signature now hands the event on.

@@ -7,7 +7,7 @@
  */
 
 import { useEffect } from "react";
-import { CheckCheck, EyeOff, RefreshCw } from "lucide-react";
+import { CheckCheck, Columns2, EyeOff, Palette, RefreshCw, TextCursorInput } from "lucide-react";
 import { useStore } from "@/store";
 import { Checkbox, Dim, Empty, IconButton, PaneHeader } from "@/ui/primitives";
 import { DiffList } from "@/ui/DiffView";
@@ -48,6 +48,27 @@ export function ChangesPane() {
           label="hide noise"
           title="lockfiles, generated output — scored below zero and already read"
         />
+        <IconButton
+          title="side by side — the removed file left, the added right  (R-D6)"
+          active={prefs.sideBySide}
+          onClick={() => setPrefs({ sideBySide: !prefs.sideBySide })}
+        >
+          <Columns2 size={13} />
+        </IconButton>
+        <IconButton
+          title="word diff — mark only the part of a changed line that moved  (R-D5)"
+          active={prefs.wordDiff}
+          onClick={() => setPrefs({ wordDiff: !prefs.wordDiff })}
+        >
+          <TextCursorInput size={13} />
+        </IconButton>
+        <IconButton
+          title="syntax colour  (R-D4). A tokenizer, not a parser — it will mis-colour things"
+          active={prefs.syntax}
+          onClick={() => setPrefs({ syntax: !prefs.syntax })}
+        >
+          <Palette size={13} />
+        </IconButton>
         <IconButton title="mark every hunk read" onClick={() => send({ cmd: "review_all", session_id: id })}>
           <CheckCheck size={13} />
         </IconButton>

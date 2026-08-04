@@ -113,7 +113,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip, group by repo (`R-B6`), label (`R-B26`), forget | done |
 | Transcript — virtualised, markdown, find (`R-B36`), mark a turn | done |
 | Code — Monaco, read-only, tabs, split, preview/pinned tabs, per-file wrap | done |
-| Changes — hunks, risk flags, read marks, hide-read, hide-noise | done |
+| Changes — hunks, risk flags, read marks, hide-read, hide-noise, word diff (`R-D5`), side-by-side (`R-D6`), syntax colour (`R-D4`), blast radius (`R-D9`) | done |
 | Git — log, filters, commit diff, local changes, refs, stashes, fetch | done |
 | Insight — **redesigned**: charts for analytics and burn, plus all eight views | done |
 | Rail — Files, Search, Notes, Bookmarks (`R-B40`, `R-B41`, `R-F13`) | done |
@@ -124,7 +124,6 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
 | Connections window (`R-I7`) — switching daemons | not built; `setUrl` exists and nothing calls it, so the URL comes only from `?url=` or localStorage |
 | Launch a session, prompt builder, ambient window | not built |
-| Blast radius (`R-D9`), side-by-side, word diff | not built — `wordDiff`/`sideBySide` are ported prefs nothing reads yet |
 | Verification pillar — set a signal command, run it, coverage (`R-E2`, `R-E5`) | not built; `InfoPane` *does* show observed `verify_runs` and claims |
 | Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
 | Blame gutter, symbol outline, markdown preview, bookmarks-in-file | not built |

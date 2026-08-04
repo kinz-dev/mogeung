@@ -178,7 +178,13 @@ export function IconButton({
   className,
 }: {
   children: React.ReactNode;
-  onClick?: () => void;
+  /**
+   * The event is handed on, because a button inside a clickable row has to be
+   * able to `stopPropagation` — otherwise pressing it also does whatever the
+   * row does, and the diff's blast-radius button folded the file it was asking
+   * about.
+   */
+  onClick?: (e: React.MouseEvent) => void;
   title?: string;
   active?: boolean;
   disabled?: boolean;

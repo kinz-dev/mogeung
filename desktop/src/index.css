@@ -136,6 +136,14 @@
   --add-fg: #8fe0a6;
   --del-fg: #f09ca0;
   --ctx-fg: #a8a8b0;
+  /* The diff's tokenizer colours (`R-D4`), the same five the egui palette
+     hand-tested — two clients drawing one diff must not disagree on hue. */
+  --syn-keyword: #c592e8;
+  --syn-string: #b6d78b;
+  --syn-comment: #777c88;
+  --syn-number: #e8b075;
+  --syn-type: #7ec0e0;
+
   --add-emph: #256b3c;
   --del-emph: #742b30;
   --conflict-bg: #6b253c;
@@ -179,6 +187,12 @@
   --selection-stroke: #1b64b0;
   --on-accent: #ffffff;
   --on-accent-dark: #12141a;
+
+  --syn-keyword: #7b28a8;
+  --syn-string: #25621b;
+  --syn-comment: #6b707b;
+  --syn-number: #994e00;
+  --syn-type: #0e5e7e;
 
   --add-bg: #ddf4e3;
   --del-bg: #fbdfe1;
