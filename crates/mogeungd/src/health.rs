@@ -51,8 +51,10 @@ pub struct HealthTracker {
 
     max_transcript_bytes: u64,
 
-    /// Codex watch state, replaced wholesale each scan — rollouts are
-    /// re-read per scan, so accumulation would inflate like the
+    /// Codex watch state, replaced wholesale each scan. The per-thread
+    /// counts feeding it are cumulative in `codex::ScanCache` (rollouts are
+    /// tailed incrementally since 2026-08-05), so the replacement equals
+    /// what a full re-read would count without accumulating here — the
     /// skipped-history trap this file already documents. `R-I1`.
     codex: Option<(bool, u32, Option<String>, Vec<(String, u64)>)>,
 }

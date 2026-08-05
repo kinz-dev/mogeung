@@ -102,7 +102,25 @@ pub struct AppState {
     usage: Mutex<UsageScanner>,
     /// Repos with a signal run in flight — one at a time per repo. `R-E2`.
     signal_running: Mutex<std::collections::HashSet<String>>,
+    /// The queue exactly as last broadcast. The scan loop publishes every
+    /// tick; without this, every tick is a message every client re-applies,
+    /// changed or not.
+    last_queue: Mutex<Vec<AttentionItem>>,
+    /// Held for the length of one scan pass, so concurrent requests to scan
+    /// collapse into the pass already running rather than stacking.
+    scan_running: Mutex<()>,
+    /// Incremental Codex rollout state. `Arc` + std mutex because the scan
+    /// closure that advances it runs on the blocking pool.
+    codex_cache: Arc<std::sync::Mutex<crate::codex::ScanCache>>,
+    /// Cwds that turned out not to be git repos, with a countdown until the
+    /// next probe. Probing forks `git rev-parse`; without this a session
+    /// whose cwd is not a repo pays that fork every tick, forever.
+    non_repo_cwds: Mutex<HashMap<String, u32>>,
 }
+
+/// How many negative repo probes to skip before asking again — `git init`
+/// mid-session is possible, just not worth a fork per tick to notice sooner.
+const REPO_RECHECK_TICKS: u32 = 40;
 
 impl AppState {
     pub fn new(store: Store) -> Result<Arc<Self>> {
@@ -161,6 +179,10 @@ impl AppState {
             notifier: Mutex::new(Notifier::default()),
             usage: Mutex::new(UsageScanner::default()),
             signal_running: Mutex::new(std::collections::HashSet::new()),
+            last_queue: Mutex::new(Vec::new()),
+            scan_running: Mutex::new(()),
+            codex_cache: Arc::new(std::sync::Mutex::new(crate::codex::ScanCache::default())),
+            non_repo_cwds: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -447,6 +469,25 @@ impl AppState {
         let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
         let queue = rank(&sessions, Utc::now(), &self.attention);
         self.notify_for(&queue, &sessions).await;
+        // Notifications diff on their own state above; the broadcast is gated
+        // separately, so an unchanged queue costs the clients nothing. New
+        // clients are unaffected — they get the queue with their snapshot.
+        let mut last = self.last_queue.lock().await;
+        if *last == queue {
+            return;
+        }
+        last.clone_from(&queue);
+        drop(last);
+        self.broadcast(ServerMsg::Queue { queue });
+    }
+
+    /// Announce the queue as it stands, gate bypassed. For the request paths:
+    /// a client that explicitly asked to rescan is owed the answer even when
+    /// it is the same answer, and only the periodic loop may stay silent.
+    pub async fn republish_queue(&self) {
+        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        let queue = rank(&sessions, Utc::now(), &self.attention);
+        self.last_queue.lock().await.clone_from(&queue);
         self.broadcast(ServerMsg::Queue { queue });
     }
 
@@ -514,6 +555,12 @@ impl AppState {
     /// One pass: refresh liveness from the registry, then tail every transcript
     /// that has grown.
     pub async fn scan(&self) {
+        // One pass at a time. The interval, a websocket `rescan` and the HTTP
+        // rescan can all ask at once; overlapping passes double every
+        // subprocess and re-read below, and order the results arbitrarily.
+        let Ok(_running) = self.scan_running.try_lock() else {
+            return;
+        };
         let live = watcher::scan_live(&self.claude_home);
         let live_by_id: HashMap<String, watcher::LiveEntry> = live
             .into_iter()
@@ -555,13 +602,20 @@ impl AppState {
         let ids: Vec<SessionId> = self.sessions.read().await.keys().cloned().collect();
         // Resolved once for the whole pass rather than per session. Both are
         // empty when tmux is absent, which makes the lookup below a no-op
-        // instead of a special case.
-        let panes = tmux_panes();
-        let parents = if panes.is_empty() {
-            HashMap::new()
-        } else {
-            process_parents()
-        };
+        // instead of a special case. On the blocking pool because each is a
+        // forked process whose whole lifetime would otherwise sit on a
+        // runtime thread the API server needs.
+        let (panes, parents) = tokio::task::spawn_blocking(|| {
+            let panes = tmux_panes();
+            let parents = if panes.is_empty() {
+                HashMap::new()
+            } else {
+                process_parents()
+            };
+            (panes, parents)
+        })
+        .await
+        .unwrap_or_default();
         for id in ids {
             let Some(mut s) = self.get(&id).await else {
                 continue;
@@ -614,14 +668,14 @@ impl AppState {
                 let just_exited = before.0 && !s.alive;
                 self.put(s).await;
                 if just_exited {
-                    self.recompute_change(&id).await;
+                    self.recompute_change_scan(&id).await;
                 }
             }
         }
 
         for id in touched_ids {
             // Keep diffs current for sessions that are actively changing files.
-            self.recompute_change(&id).await;
+            self.recompute_change_scan(&id).await;
         }
 
         self.scan_codex().await;
@@ -1060,13 +1114,12 @@ impl AppState {
         // Resolve the repo once the cwd is known, and pin a diff base the first
         // time we see the session.
         if s.repo_root.is_none() && !s.cwd.is_empty() {
-            let cwd = PathBuf::from(&s.cwd);
-            if git::is_repo(&cwd) {
-                s.repo_root = git::repo_root(&cwd).ok().map(|p| p.to_string_lossy().to_string());
+            if let Some((root, base)) = self.probe_repo(&s.cwd, s.started_at).await {
+                s.repo_root = Some(root);
                 if s.base_sha.is_none() {
                     // Not HEAD: the last commit predating the session, so work
                     // it committed before mogeung noticed it is still visible.
-                    s.base_sha = git::base_for_session(&cwd, s.started_at).ok();
+                    s.base_sha = base;
                 }
             }
         }
@@ -1076,6 +1129,49 @@ impl AppState {
 
         self.put(s).await;
         self.emit(id, events, last_ts).await;
+    }
+
+    /// The repo root and pinned diff base for a session's cwd, or `None` when
+    /// the cwd is not inside a git repository.
+    ///
+    /// The probe forks `git rev-parse`, so a negative answer is remembered
+    /// and re-asked only every [`REPO_RECHECK_TICKS`] passes. A positive
+    /// answer needs no cache — the caller writes `repo_root` into the
+    /// session, and the `repo_root.is_none()` guard stops the asking.
+    async fn probe_repo(
+        &self,
+        cwd_str: &str,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Option<(String, Option<String>)> {
+        {
+            let mut neg = self.non_repo_cwds.lock().await;
+            if let Some(left) = neg.get_mut(cwd_str) {
+                if *left > 0 {
+                    *left -= 1;
+                    return None;
+                }
+                neg.remove(cwd_str);
+            }
+        }
+        let cwd = PathBuf::from(cwd_str);
+        let found = tokio::task::spawn_blocking(move || {
+            if !git::is_repo(&cwd) {
+                return None;
+            }
+            let root = git::repo_root(&cwd).ok()?.to_string_lossy().to_string();
+            let base = git::base_for_session(&cwd, started_at).ok();
+            Some((root, base))
+        })
+        .await
+        .ok()
+        .flatten();
+        if found.is_none() {
+            self.non_repo_cwds
+                .lock()
+                .await
+                .insert(cwd_str.to_string(), REPO_RECHECK_TICKS);
+        }
+        found
     }
 
     // -----------------------------------------------------------------------
@@ -1092,17 +1188,25 @@ impl AppState {
         let Some(install) = CodexInstall::discover(&self.codex_home) else {
             return;
         };
+        let cache = self.codex_cache.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let mut cache = cache.lock().expect("codex scan cache poisoned");
             let index = install.list_threads();
             let details: Vec<_> = index
                 .threads
                 .iter()
                 .filter(|t| !t.archived)
                 .map(|t| {
-                    let roll = install.read_thread_rollout(t);
+                    // Incremental: only bytes appended since the last pass
+                    // are read and parsed. The whole-file re-read this
+                    // replaced was a full-corpus parse at the poll rate.
+                    let roll = cache.update(&install, t);
                     (t.clone(), roll)
                 })
                 .collect();
+            let keep: std::collections::HashSet<String> =
+                details.iter().map(|(t, _)| t.id.clone()).collect();
+            cache.retain(&keep);
             (index.error, details)
         })
         .await;
@@ -1111,8 +1215,9 @@ impl AppState {
         };
 
         // The Codex canary: unknown rollout kinds, merged across threads and
-        // replaced wholesale (rollouts are re-read each scan; accumulating
-        // would inflate, the skipped-history trap again).
+        // replaced wholesale. The per-thread counts are cumulative (the cache
+        // folds lines in as they arrive), so the merge stays equal to what a
+        // full re-read would have counted.
         let mut unknown: std::collections::BTreeMap<String, u64> = Default::default();
         for (_, roll) in &details {
             if let Some(r) = roll {
@@ -1245,12 +1350,10 @@ impl AppState {
             // Pin the diff base exactly like a Claude session — the git
             // observer generalises for free, which is half of A23's answer.
             if s.repo_root.is_none() && !s.cwd.is_empty() {
-                let cwd = PathBuf::from(&s.cwd);
-                if git::is_repo(&cwd) {
-                    s.repo_root =
-                        git::repo_root(&cwd).ok().map(|p| p.to_string_lossy().to_string());
+                if let Some((root, base)) = self.probe_repo(&s.cwd, s.started_at).await {
+                    s.repo_root = Some(root);
                     if s.base_sha.is_none() {
-                        s.base_sha = git::base_for_session(&cwd, s.started_at).ok();
+                        s.base_sha = base;
                     }
                 }
             }
@@ -1265,17 +1368,40 @@ impl AppState {
     // Diffs and review
     // -----------------------------------------------------------------------
 
+    /// Recompute and always announce, even when the diff is identical. The
+    /// request paths use this: a client that just asked for a refresh needs
+    /// the answer whether or not the diff moved since last time.
     pub async fn recompute_change(&self, id: &str) -> Option<Change> {
+        self.recompute_change_inner(id, true).await
+    }
+
+    /// The scan loop's variant: recompute, but stay silent when nothing
+    /// changed. A busy agent grows its transcript every tick, and before this
+    /// gate every tick re-sent the full diff — all hunks, all lines — to every
+    /// client, whether or not the worktree moved.
+    pub async fn recompute_change_scan(&self, id: &str) -> Option<Change> {
+        self.recompute_change_inner(id, false).await
+    }
+
+    async fn recompute_change_inner(&self, id: &str, always_announce: bool) -> Option<Change> {
         let session = self.get(id).await?;
         if session.cwd.is_empty() {
             return None;
         }
         let reviewed = self.store.reviewed_anchors(id).unwrap_or_default();
-        let mut change = git::compute_change(
-            Path::new(&session.cwd),
-            session.base_sha.as_deref(),
-            &reviewed,
-        );
+        // On the blocking pool: this is one `git diff` plus a read per
+        // untracked file, and on a large repo it is the most expensive thing
+        // the scan loop does.
+        let cwd = session.cwd.clone();
+        let base_sha = session.base_sha.clone();
+        let mut change = match tokio::task::spawn_blocking(move || {
+            git::compute_change(Path::new(&cwd), base_sha.as_deref(), &reviewed)
+        })
+        .await
+        {
+            Ok(change) => change,
+            Err(_) => return None,
+        };
 
         // Several sessions can share a working tree, so attribute the diff to
         // the files this session actually touched when we know them.
@@ -1319,11 +1445,16 @@ impl AppState {
             }
         }
 
-        self.changes.write().await.insert(id.to_string(), change.clone());
-        self.broadcast(ServerMsg::ChangeUpdated {
-            session_id: id.to_string(),
-            change: change.clone(),
-        });
+        let mut changes = self.changes.write().await;
+        let unchanged = changes.get(id) == Some(&change);
+        changes.insert(id.to_string(), change.clone());
+        drop(changes);
+        if always_announce || !unchanged {
+            self.broadcast(ServerMsg::ChangeUpdated {
+                session_id: id.to_string(),
+                change: change.clone(),
+            });
+        }
         Some(change)
     }
 
@@ -1431,7 +1562,15 @@ impl AppState {
         let (references, truncated) = if symbols.is_empty() {
             (Vec::new(), false)
         } else {
-            git::find_references(Path::new(&repo), &symbols, path)
+            // Up to a dozen `git grep`s — blocking-pool work, in the request
+            // path of a click.
+            let syms = symbols.clone();
+            let excl = path.to_string();
+            tokio::task::spawn_blocking(move || {
+                git::find_references(Path::new(&repo), &syms, &excl)
+            })
+            .await
+            .unwrap_or((Vec::new(), false))
         };
 
         Some(BlastRadius {

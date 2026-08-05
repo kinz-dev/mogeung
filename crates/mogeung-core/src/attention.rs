@@ -80,7 +80,7 @@ impl AttentionReason {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttentionItem {
     pub session_id: SessionId,
     pub reason: AttentionReason,

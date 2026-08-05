@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-07-30
+updated: 2026-08-05
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -128,8 +128,11 @@ the alert has been dismissed a few times — not yet built.
 The canary now watches two corpora. Codex rollout lines classify through
 the same outcome shape (`codex.rs` mirrors `LineOutcome`); unknown kinds
 surface as `codex/<kind>` alerts and in `Health.codex_unknown`, replaced
-wholesale each scan because rollouts are re-read per pass — accumulation
-would be the skipped-history trap again. `codex_present` with zero
+wholesale each scan. Rollouts are read **incrementally** (2026-08-05:
+`codex::ScanCache` tails appended bytes rather than re-reading every file
+per pass), so the per-thread counts the replacement is built from are
+cumulative in the cache — the merged totals equal what a full re-read
+would have counted, without the full re-read. `codex_present` with zero
 threads is reported as exactly that: present, watched, empty.
 
 **Nothing unobserved sits in `HANDLED`.** A guessed structured

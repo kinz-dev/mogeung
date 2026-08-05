@@ -150,7 +150,10 @@ export function matchesFilter(
 export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
   const queue = useStore((s) => s.queue);
   const sessions = useStore((s) => s.sessions);
-  const prefs = useStore((s) => s.prefs);
+  // `scope` alone, not the whole prefs object — this hook is mounted by the
+  // queue, the strip and the ambient board at once, and a whole-prefs
+  // subscription meant every zoom or font tweak recomputed all three.
+  const scope = useStore((s) => s.prefs.scope);
   const filter = useStore((s) => s.filter);
   const scoped = useStore((s) => s.scoped());
 
@@ -160,8 +163,8 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
       const session = sessions[item.session_id];
       if (!session) continue;
       if (scoped.hidden.includes(session.id)) continue;
-      if (prefs.scope === "needs_you" && !needsHuman(item.reason)) continue;
-      if (prefs.scope === "live" && !session.alive) continue;
+      if (scope === "needs_you" && !needsHuman(item.reason)) continue;
+      if (scope === "live" && !session.alive) continue;
       if (!matchesFilter(session, scoped.labels[session.id], filter, scoped.tags[session.id]))
         continue;
       rows.push({ item, session });
@@ -173,7 +176,7 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
       return pb - pa;
     });
     return rows;
-  }, [queue, sessions, prefs.scope, filter, scoped]);
+  }, [queue, sessions, scope, filter, scoped]);
 }
 
 function Strip() {

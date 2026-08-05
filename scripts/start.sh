@@ -208,8 +208,11 @@ case "$MODE" in
 
         # Exit when *either* dies. A daemon that crashed leaves a window that
         # cannot reconnect, and a window you closed usually means you are done.
+        # `sleep` is a fork, not a builtin — at 0.5s this loop was itself a
+        # steady drip of short-lived processes in htop for the whole session.
+        # Noticing a death two seconds late costs nothing.
         while kill -0 "$DAEMON_PID" 2>/dev/null && kill -0 "$UI_PID" 2>/dev/null; do
-            sleep 0.5
+            sleep 2
         done
         kill -0 "$DAEMON_PID" 2>/dev/null || echo "▸ daemon exited" >&2
         ;;

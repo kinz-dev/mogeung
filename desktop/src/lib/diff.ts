@@ -64,11 +64,11 @@ export function highlight(line: string): Piece[] {
 
   while (i < chars.length) {
     const c = chars[i];
-    const rest = chars.slice(i).join("");
 
-    // Comments run to end of line.
-    if (rest.startsWith("//") || rest.startsWith("#") || rest.startsWith("--")) {
-      push("comment", rest);
+    // Comments run to end of line. Checked on the char array directly — the
+    // rest-of-line string is only built once, on a match, not per character.
+    if ((c === "/" && chars[i + 1] === "/") || c === "#" || (c === "-" && chars[i + 1] === "-")) {
+      push("comment", chars.slice(i).join(""));
       break;
     }
 

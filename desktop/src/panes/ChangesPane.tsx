@@ -16,7 +16,14 @@ export function ChangesPane() {
   const id = useStore((s) => s.selected);
   const change = useStore((s) => (s.selected ? s.changes[s.selected] : undefined));
   const send = useStore((s) => s.send);
-  const prefs = useStore((s) => s.prefs);
+  // Field-by-field, never the whole prefs object: this pane sits above every
+  // line of the diff, and an unrelated pref write (terminal font, pane zoom)
+  // re-rendering it re-renders all of them.
+  const hideReviewed = useStore((s) => s.prefs.hideReviewed);
+  const hideNoise = useStore((s) => s.prefs.hideNoise);
+  const sideBySide = useStore((s) => s.prefs.sideBySide);
+  const wordDiff = useStore((s) => s.prefs.wordDiff);
+  const syntax = useStore((s) => s.prefs.syntax);
   const setPrefs = useStore((s) => s.setPrefs);
 
   useEffect(() => {
@@ -41,31 +48,31 @@ export function ChangesPane() {
         <Dim className="text-2xs">
           {read}/{total} hunks read
         </Dim>
-        <Checkbox checked={prefs.hideReviewed} onChange={(v) => setPrefs({ hideReviewed: v })} label="hide read" />
+        <Checkbox checked={hideReviewed} onChange={(v) => setPrefs({ hideReviewed: v })} label="hide read" />
         <Checkbox
-          checked={prefs.hideNoise}
+          checked={hideNoise}
           onChange={(v) => setPrefs({ hideNoise: v })}
           label="hide noise"
           title="lockfiles, generated output — scored below zero and already read"
         />
         <IconButton
           title="side by side — the removed file left, the added right  (R-D6)"
-          active={prefs.sideBySide}
-          onClick={() => setPrefs({ sideBySide: !prefs.sideBySide })}
+          active={sideBySide}
+          onClick={() => setPrefs({ sideBySide: !sideBySide })}
         >
           <Columns2 size={13} />
         </IconButton>
         <IconButton
           title="word diff — mark only the part of a changed line that moved  (R-D5)"
-          active={prefs.wordDiff}
-          onClick={() => setPrefs({ wordDiff: !prefs.wordDiff })}
+          active={wordDiff}
+          onClick={() => setPrefs({ wordDiff: !wordDiff })}
         >
           <TextCursorInput size={13} />
         </IconButton>
         <IconButton
           title="syntax colour  (R-D4). A tokenizer, not a parser — it will mis-colour things"
-          active={prefs.syntax}
-          onClick={() => setPrefs({ syntax: !prefs.syntax })}
+          active={syntax}
+          onClick={() => setPrefs({ syntax: !syntax })}
         >
           <Palette size={13} />
         </IconButton>
@@ -91,7 +98,7 @@ export function ChangesPane() {
         <span className="text-2xs text-[var(--add-fg)]">+{change.insertions}</span>
         <span className="text-2xs text-[var(--del-fg)]">−{change.deletions}</span>
         <Dim className="text-2xs">{change.files.length} file(s)</Dim>
-        {prefs.hideReviewed && read > 0 && (
+        {hideReviewed && read > 0 && (
           <Dim className="ml-auto flex items-center gap-1 text-2xs">
             <EyeOff size={9} /> {read} read hunk(s) hidden
           </Dim>

@@ -177,6 +177,10 @@ where
         let period = Duration::from_millis(opts.poll_ms.max(250));
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(period);
+            // A pass that overruns its period must not be "made up" with
+            // back-to-back scans — the default Burst behaviour is exactly the
+            // storm the in-flight guard exists to prevent.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
                 s.scan().await;

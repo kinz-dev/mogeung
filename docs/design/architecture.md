@@ -150,9 +150,21 @@ Then every `--poll-ms` (default 1500):
    session going busy→idle produces no transcript line, and that transition is
    the most important signal we have. The same pass resolves each live session's
    tmux pane (`R-B18`), using one `tmux list-panes` and one `ps` for the whole
-   scan rather than a subprocess per session.
+   scan rather than a subprocess per session — both on the blocking pool, like
+   every subprocess and git call the scan makes, so the API stays answerable
+   mid-pass.
 5. Recompute diffs for sessions that changed, and for any that just exited.
-6. Rank and broadcast the queue, then broadcast health.
+   Untracked files are rendered in-process rather than via `git diff
+   --no-index` per file, which used to fork up to 200 short-lived processes
+   per tick while an agent worked.
+6. Rank the queue and broadcast it — **only if it differs** from the last
+   announcement, and the same gate applies to each recomputed diff
+   (`ChangeUpdated`). Health is broadcast every pass, deliberately ungated:
+   it is small and doubles as the daemon's heartbeat.
+
+One scan runs at a time: the interval, a websocket `rescan` and the HTTP
+rescan collapse into whichever pass is already underway rather than stacking
+subprocess storms.
 
 Polling rather than filesystem events: a few dozen files every 1.5 s costs
 nothing, and it avoids every rename and atomic-write edge case that makes

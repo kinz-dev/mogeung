@@ -771,6 +771,50 @@ pub fn base_for_session(cwd: &Path, started_at: chrono::DateTime<chrono::Utc>) -
 // Unified diff parsing
 // ---------------------------------------------------------------------------
 
+/// The unified diff `git diff --no-index -- /dev/null <path>` would print,
+/// built in memory instead of forked.
+///
+/// It feeds [`parse_unified`] so an untracked file takes exactly the code path
+/// a tracked one does — same flags, same scores, and the same anchors, which
+/// is what keeps existing review marks on untracked files intact. Fidelity
+/// notes: lines are split on `\n` only, so CRLF content keeps its `\r` the way
+/// git's `+` lines do; a NUL in the first 8 KiB means binary, which is git's
+/// own heuristic; an empty file gets a header and no hunk, as git prints.
+fn synthesize_added_diff(rel: &str, bytes: &[u8]) -> String {
+    let mut d = format!(
+        "diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n"
+    );
+    let head = &bytes[..bytes.len().min(8000)];
+    if head.contains(&0) {
+        d.push_str(&format!("Binary files /dev/null and b/{rel} differ\n"));
+        return d;
+    }
+    if bytes.is_empty() {
+        return d;
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    // A trailing newline leaves one empty tail piece that is not a line.
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let n = lines.len();
+    if n == 1 {
+        d.push_str("@@ -0,0 +1 @@\n");
+    } else {
+        d.push_str(&format!("@@ -0,0 +1,{n} @@\n"));
+    }
+    for l in &lines {
+        d.push('+');
+        d.push_str(l);
+        d.push('\n');
+    }
+    if !text.ends_with('\n') {
+        d.push_str("\\ No newline at end of file\n");
+    }
+    d
+}
+
 fn parse_unified(diff: &str, reviewed: &HashSet<String>) -> Vec<FileChange> {
     let mut files: Vec<FileChange> = Vec::new();
     let mut cur: Option<FileChange> = None;
@@ -912,7 +956,10 @@ fn compute_change_inner(
     )?;
     let mut files = parse_unified(&tracked, reviewed);
 
-    // Untracked: diff each against /dev/null so new files are reviewable too.
+    // Untracked: rendered as added files so they are reviewable too. Read
+    // directly rather than shelling out — this used to be one `git diff
+    // --no-index` per file, which made a busy session's scan tick fork up to
+    // `MAX_UNTRACKED` short-lived processes every pass.
     let untracked = run_git(cwd, &["ls-files", "--others", "--exclude-standard"])?;
     let paths: Vec<&str> = untracked.lines().filter(|l| !l.trim().is_empty()).collect();
     let shown = paths.len().min(MAX_UNTRACKED);
@@ -934,11 +981,12 @@ fn compute_change_inner(
             });
             continue;
         }
-        let d = run_git_diff(
-            cwd,
-            &["diff", "--no-color", "--no-index", "--", "/dev/null", rel],
-        )
-        .unwrap_or_default();
+        // A file that vanished between `ls-files` and here degrades to
+        // absence, exactly as the failed `git diff` did before.
+        let Ok(bytes) = std::fs::read(&abs) else {
+            continue;
+        };
+        let d = synthesize_added_diff(rel, &bytes);
         for mut f in parse_unified(&d, reviewed) {
             f.path = rel.to_string();
             f.status = FileStatus::Added;
@@ -1954,6 +2002,65 @@ index 333..444 100644
         assert_eq!(auth.hunks.len(), 1);
         assert_eq!(auth.hunks[0].insertions, 1);
         assert_eq!(auth.hunks[0].deletions, 0);
+    }
+
+    /// The synthesized diff must parse exactly as git's own `--no-index`
+    /// output did, because the hunk anchor hashes the parsed `+` lines — a
+    /// divergence here silently un-reviews every untracked file.
+    #[test]
+    fn a_synthesized_untracked_diff_parses_like_gits_own() {
+        let d = synthesize_added_diff("src/new.rs", b"fn a() {}\nfn b() {}\n");
+        let files = parse_unified(&d, &HashSet::new());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, FileStatus::Added);
+        assert_eq!(files[0].insertions, 2);
+        assert_eq!(files[0].hunks.len(), 1);
+        assert_eq!(files[0].hunks[0].header, "@@ -0,0 +1,2 @@");
+        assert_eq!(files[0].hunks[0].lines, vec!["+fn a() {}", "+fn b() {}"]);
+    }
+
+    #[test]
+    fn a_missing_trailing_newline_is_metadata_not_a_line() {
+        let d = synthesize_added_diff("a.txt", b"one\ntwo");
+        let files = parse_unified(&d, &HashSet::new());
+        assert_eq!(files[0].hunks[0].lines, vec!["+one", "+two"]);
+        assert!(d.contains("\\ No newline at end of file"));
+    }
+
+    #[test]
+    fn crlf_content_parses_the_same_as_gits_output_did() {
+        // `parse_unified` walks `str::lines()`, which strips the `\r` of a
+        // CRLF — and it stripped it from git's real `--no-index` output the
+        // same way. What matters for the anchors is that the synthesized
+        // path lands on identical lines, not what those lines are.
+        let d = synthesize_added_diff("a.txt", b"one\r\ntwo\r\n");
+        let files = parse_unified(&d, &HashSet::new());
+        assert_eq!(files[0].hunks[0].lines, vec!["+one", "+two"]);
+    }
+
+    #[test]
+    fn a_binary_untracked_file_is_truncated_not_diffed() {
+        let d = synthesize_added_diff("blob.bin", b"\x00\x01\x02");
+        let files = parse_unified(&d, &HashSet::new());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].truncated);
+        assert!(files[0].hunks.is_empty());
+    }
+
+    #[test]
+    fn an_empty_untracked_file_is_present_with_no_hunks() {
+        let d = synthesize_added_diff("empty.txt", b"");
+        let files = parse_unified(&d, &HashSet::new());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, FileStatus::Added);
+        assert!(files[0].hunks.is_empty());
+        assert!(!files[0].truncated);
+    }
+
+    #[test]
+    fn a_single_line_file_gets_gits_short_hunk_header() {
+        let d = synthesize_added_diff("one.txt", b"only\n");
+        assert!(d.contains("@@ -0,0 +1 @@"), "got: {d}");
     }
 
     #[test]

@@ -845,7 +845,12 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 err(e);
             }
         }
-        ClientMsg::Rescan => state.scan().await,
+        ClientMsg::Rescan => {
+            state.scan().await;
+            // The scan's own queue publish is gated on change; the client
+            // that asked still gets the queue back, changed or not.
+            state.republish_queue().await;
+        }
         ClientMsg::FetchUsage => {
             let report = state.usage_report().await;
             state.broadcast(ServerMsg::UsageStats {

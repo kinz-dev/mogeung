@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-02
+updated: 2026-08-05
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -65,6 +65,16 @@ client builds the text and puts it on your clipboard, and you paste it
 `GitRefsInfo` · `GitStashList` · `GitStashDiff` · `GitSubmoduleList` ·
 `GitRangeDiff` · `GitFileAtRevContent` · `GitReflogList` ·
 `GitWorktreeList` · `GitConflictStages` · `Error`
+
+**The periodic scan is change-gated; a request never is.** `Queue` and
+`ChangeUpdated` from the scan loop are sent only when their content differs
+from what was last broadcast — before the gate, every 1.5 s tick re-sent the
+full diff of every actively-writing session to every client, unchanged or
+not. A client that *asks* (`Rescan`, `RefreshChange`, the review verbs) is
+always answered, even with an identical payload: the echo is its
+confirmation. `Health` alone stays per-tick, as the heartbeat. New clients
+lose nothing to the gate — the snapshot carries the queue, and a session's
+diff is fetched on selection.
 
 `GitCommitDiff` hunks carry R-D8's read marks (`R-D17`): the daemon feeds
 `parse_unified` the union of the repo's reviewed anchors, so a hunk a

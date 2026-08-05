@@ -59,9 +59,17 @@ const TOK_COLOR: Record<Tok, string | undefined> = {
  * matters loses. So a paired change wears the word diff, and everything else
  * takes syntax colour.
  */
-function LineText({ line, other }: { line: string; other?: string }) {
-  const syntax = useStore((s) => s.prefs.syntax);
-  const wordDiffOn = useStore((s) => s.prefs.wordDiff);
+function LineText({
+  line,
+  other,
+  syntax,
+  wordDiffOn,
+}: {
+  line: string;
+  other?: string;
+  syntax: boolean;
+  wordDiffOn: boolean;
+}) {
   const kind = line[0];
   const changedLine = kind === "+" || kind === "-";
 
@@ -105,8 +113,25 @@ function LineText({ line, other }: { line: string; other?: string }) {
   );
 }
 
-/** One line of a unified hunk. The prefix is the whole of the classification. */
-function DiffLine({ line, other }: { line: string; other?: string }) {
+/**
+ * One line of a unified hunk. The prefix is the whole of the classification.
+ *
+ * Memoized on primitives — line text and the two colouring prefs — so a store
+ * write that touches neither skips every line of every mounted hunk. The prefs
+ * arrive as props rather than subscriptions: a diff holds thousands of lines,
+ * and one selector per pref per line meant every store write ran them all.
+ */
+const DiffLine = React.memo(function DiffLine({
+  line,
+  other,
+  syntax,
+  wordDiffOn,
+}: {
+  line: string;
+  other?: string;
+  syntax: boolean;
+  wordDiffOn: boolean;
+}) {
   const kind = line[0];
   const bg =
     kind === "+" ? "var(--add-bg)" : kind === "-" ? "var(--del-bg)" : undefined;
@@ -114,14 +139,22 @@ function DiffLine({ line, other }: { line: string; other?: string }) {
     kind === "+" ? "var(--add-fg)" : kind === "-" ? "var(--del-fg)" : "var(--ctx-fg)";
   return (
     <div className="whitespace-pre px-2 font-mono text-sm leading-[1.45]" style={{ background: bg, color: fg }}>
-      {line ? <LineText line={line} other={other} /> : " "}
+      {line ? <LineText line={line} other={other} syntax={syntax} wordDiffOn={wordDiffOn} /> : " "}
     </div>
   );
-}
+});
 
 /** Side by side: the removed file on the left, the added one on the right. */
-function SplitLines({ lines }: { lines: string[] }) {
-  const rows = sideBySide(lines);
+const SplitLines = React.memo(function SplitLines({
+  lines,
+  syntax,
+  wordDiffOn,
+}: {
+  lines: string[];
+  syntax: boolean;
+  wordDiffOn: boolean;
+}) {
+  const rows = useMemo(() => sideBySide(lines), [lines]);
   return (
     <div className="grid grid-cols-2">
       {rows.map((r, i) => (
@@ -132,23 +165,23 @@ function SplitLines({ lines }: { lines: string[] }) {
             {r.left === null ? (
               <div className="px-2 font-mono text-sm leading-[1.45]">{" "}</div>
             ) : (
-              <DiffLine line={r.left} other={r.right ?? undefined} />
+              <DiffLine line={r.left} other={r.right ?? undefined} syntax={syntax} wordDiffOn={wordDiffOn} />
             )}
           </div>
           <div>
             {r.right === null ? (
               <div className="px-2 font-mono text-sm leading-[1.45]">{" "}</div>
             ) : (
-              <DiffLine line={r.right} other={r.left ?? undefined} />
+              <DiffLine line={r.right} other={r.left ?? undefined} syntax={syntax} wordDiffOn={wordDiffOn} />
             )}
           </div>
         </React.Fragment>
       ))}
     </div>
   );
-}
+});
 
-function HunkBlock({
+const HunkBlock = React.memo(function HunkBlock({
   hunk,
   sessionId,
   path,
@@ -160,6 +193,8 @@ function HunkBlock({
   const send = useStore((s) => s.send);
   const hideNoise = useStore((s) => s.prefs.hideNoise);
   const split = useStore((s) => s.prefs.sideBySide);
+  const syntax = useStore((s) => s.prefs.syntax);
+  const wordDiffOn = useStore((s) => s.prefs.wordDiff);
   const [open, setOpen] = useState(true);
   const risk = riskFromScore(hunk.score);
   const paired = useMemo(() => pairs(hunk.lines), [hunk.lines]);
@@ -239,20 +274,28 @@ function HunkBlock({
       {open && (
         <div className="overflow-x-auto">
           {split ? (
-            <SplitLines lines={hunk.lines} />
+            <SplitLines lines={hunk.lines} syntax={syntax} wordDiffOn={wordDiffOn} />
           ) : (
             hunk.lines.map((l, i) => {
               // The line this one replaces, when the hunk pairs them — that is
               // what a word diff needs and what a lone `+` cannot have.
               const twin = paired.get(i);
-              return <DiffLine key={i} line={l} other={twin === undefined ? undefined : hunk.lines[twin]} />;
+              return (
+                <DiffLine
+                  key={i}
+                  line={l}
+                  other={twin === undefined ? undefined : hunk.lines[twin]}
+                  syntax={syntax}
+                  wordDiffOn={wordDiffOn}
+                />
+              );
             })
           )}
         </div>
       )}
     </div>
   );
-}
+});
 
 /**
  * Who else touches what this file changed. `R-D9`.
@@ -313,7 +356,7 @@ function BlastRadiusPanel({ path, sessionId }: { path: string; sessionId: string
   );
 }
 
-export function FileDiff({ file, sessionId }: { file: FileChange; sessionId: string }) {
+export const FileDiff = React.memo(function FileDiff({ file, sessionId }: { file: FileChange; sessionId: string }) {
   const [open, setOpen] = useState(true);
   const send = useStore((s) => s.send);
   const asked = useStore((s) => s.radius?.path === file.path && s.radius?.session_id === sessionId);
@@ -363,7 +406,7 @@ export function FileDiff({ file, sessionId }: { file: FileChange; sessionId: str
       )}
     </div>
   );
-}
+});
 
 export function DiffList({ files, sessionId }: { files: FileChange[]; sessionId: string }) {
   const hideReviewed = useStore((s) => s.prefs.hideReviewed);

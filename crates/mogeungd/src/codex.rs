@@ -740,7 +740,7 @@ impl RolloutCounts {
 
 /// Everything a rollout file (or a tail of one) told us, with the counts that
 /// say how much of it we actually understood.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CodexRollout {
     pub counts: RolloutCounts,
     /// Tail-relevant events in file order; feed to [`derive_status`].
@@ -916,6 +916,79 @@ impl RolloutTailer {
 
     pub fn forget(&mut self, path: &Path) {
         self.offsets.remove(path);
+    }
+}
+
+/// How much of a rollout's tail to keep between scans. [`derive_status`]
+/// walks backwards and returns at the first decisive event, so only the
+/// recent end of the tail ever matters; the cap only has to be comfortably
+/// larger than the longest run of `AgentActivity` chatter between turn
+/// boundaries.
+const MAX_TAIL_EVENTS: usize = 64;
+
+/// Incremental scan state: one folded [`CodexRollout`] per thread, advanced by
+/// a [`RolloutTailer`].
+///
+/// This exists because the scan loop used to call [`read_rollout`] on every
+/// non-archived thread every tick — the whole file, re-read and re-parsed at
+/// the poll rate, forever. Folding lines into a kept rollout costs only the
+/// appended bytes. The trade is memory: one rollout summary per live thread,
+/// with its tail capped at [`MAX_TAIL_EVENTS`].
+#[derive(Default)]
+pub struct ScanCache {
+    tailer: RolloutTailer,
+    threads: HashMap<String, (PathBuf, CodexRollout)>,
+}
+
+impl ScanCache {
+    /// The thread's rollout, brought up to date by reading only what was
+    /// appended since last time. `None` when no rollout file can be found —
+    /// the same answer [`CodexInstall::read_thread_rollout`] gave.
+    ///
+    /// The resolved path is cached per thread, so the recursive
+    /// search-by-id that a stale index entry triggers happens once, not once
+    /// per tick.
+    pub fn update(&mut self, install: &CodexInstall, thread: &CodexThread) -> Option<CodexRollout> {
+        let need_resolve = match self.threads.get(&thread.id) {
+            Some((p, _)) => !p.exists(),
+            None => true,
+        };
+        if need_resolve {
+            let path = install.resolve_rollout(thread)?;
+            self.tailer.forget(&path);
+            self.threads.insert(thread.id.clone(), (path, CodexRollout::default()));
+        }
+        let (path, roll) = self.threads.get_mut(&thread.id).expect("inserted above");
+        match self.tailer.read_new(path) {
+            Ok(lines) => {
+                for line in &lines {
+                    roll.absorb_line(line);
+                }
+                if roll.tail.len() > MAX_TAIL_EVENTS {
+                    let excess = roll.tail.len() - MAX_TAIL_EVENTS;
+                    roll.tail.drain(..excess);
+                }
+                roll.error = None;
+            }
+            // Flagged, never panicked — and the state already folded is kept.
+            Err(e) => roll.error = Some(format!("{}: {e}", path.display())),
+        }
+        Some(roll.clone())
+    }
+
+    /// Drop threads no longer worth following (archived or deleted), and
+    /// their byte offsets with them.
+    pub fn retain(&mut self, keep: &std::collections::HashSet<String>) {
+        let dropped: Vec<PathBuf> = self
+            .threads
+            .iter()
+            .filter(|(id, _)| !keep.contains(*id))
+            .map(|(_, (p, _))| p.clone())
+            .collect();
+        for p in dropped {
+            self.tailer.forget(&p);
+        }
+        self.threads.retain(|id, _| keep.contains(id));
     }
 }
 

@@ -139,8 +139,12 @@ struct Chunk {
 /// shell for the terminal panel, or `ssh -t <target> tmux …` when the daemon is
 /// describing another machine (`R-I6`). The caller decides; this only spawns
 /// what it is handed, which is the same division the egui client had.
+///
+/// `async`, like every command here: a non-async Tauri command runs on the
+/// main thread, and the main thread is the window. Spawning a process there
+/// is a stutter; blocking there on a full pty is a hang.
 #[tauri::command]
-fn pty_open(
+async fn pty_open(
     app: tauri::AppHandle,
     state: tauri::State<'_, Ptys>,
     id: String,
@@ -182,8 +186,19 @@ fn pty_open(
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
+    // Two threads, not one: the reader feeds a channel, and the emitter
+    // drains it. Emitting is the expensive half — every `pty:data` is JSON
+    // through Tauri IPC into the webview's main thread — and a busy TUI
+    // redrawing itself produces a stream of 8 KiB reads. With one thread per
+    // read per emit, the webview choked on the message rate. The emitter
+    // instead batches whatever accumulated while the previous emit was in
+    // flight: zero added latency when output is light (a keystroke echo is
+    // sent the moment it arrives), automatic coalescing exactly when output
+    // is heavy.
     let emit_id = id.clone();
-    let thread_stop = Arc::clone(&stop);
+    let reader_stop = Arc::clone(&stop);
+    let emitter_stop = Arc::clone(&stop);
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -193,24 +208,46 @@ fn pty_open(
                     // Checked *after* the read, because the read is where this
                     // thread spends its life: by the time bytes arrive the pane
                     // may be long gone and its id given to another session.
-                    if thread_stop.load(Ordering::SeqCst) {
+                    if reader_stop.load(Ordering::SeqCst) {
                         break;
                     }
-                    // Lossy on purpose: a pty carries bytes, and a partial
-                    // multi-byte sequence at a chunk boundary must not take
-                    // the stream down. Degrade, never panic — the rule the
-                    // transcript parsers already follow.
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    if app.emit("pty:data", Chunk { id: emit_id.clone(), data }).is_err() {
+                    if tx.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
             }
         }
+        // Reaped before `tx` drops, so the emitter's "channel closed" below
+        // means the child is truly gone, not merely quiet.
         let _ = child.wait();
+    });
+    std::thread::spawn(move || {
+        while let Ok(first) = rx.recv() {
+            let mut bytes = first;
+            // Take whatever else is already waiting, without blocking — the
+            // batch grows only while the pty outpaces the webview. Capped so
+            // a firehose becomes several large messages, not one enormous one.
+            while bytes.len() < 512 * 1024 {
+                match rx.try_recv() {
+                    Ok(more) => bytes.extend_from_slice(&more),
+                    Err(_) => break,
+                }
+            }
+            if emitter_stop.load(Ordering::SeqCst) {
+                return;
+            }
+            // Lossy on purpose: a pty carries bytes, and a partial multi-byte
+            // sequence at a chunk boundary must not take the stream down.
+            // Degrade, never panic — the rule the transcript parsers already
+            // follow.
+            let data = String::from_utf8_lossy(&bytes).to_string();
+            if app.emit("pty:data", Chunk { id: emit_id.clone(), data }).is_err() {
+                return;
+            }
+        }
         // A pane that was replaced does not want an "it closed" for an id that
         // now belongs to something else.
-        if !thread_stop.load(Ordering::SeqCst) {
+        if !emitter_stop.load(Ordering::SeqCst) {
             let _ = app.emit("pty:closed", emit_id);
         }
     });
@@ -234,8 +271,11 @@ fn pty_open(
     Ok(())
 }
 
+/// Called once per keystroke. `async` is what keeps that keystroke off the
+/// main thread — a wedged pty whose buffer is full blocks this write, and
+/// before the change it blocked the whole window with it.
 #[tauri::command]
-fn pty_write(state: tauri::State<'_, Ptys>, id: String, data: String) -> Result<(), String> {
+async fn pty_write(state: tauri::State<'_, Ptys>, id: String, data: String) -> Result<(), String> {
     let mut ptys = state.0.lock().unwrap();
     let pty = ptys.get_mut(&id).ok_or("no such terminal")?;
     pty.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
@@ -243,7 +283,7 @@ fn pty_write(state: tauri::State<'_, Ptys>, id: String, data: String) -> Result<
 }
 
 #[tauri::command]
-fn pty_resize(state: tauri::State<'_, Ptys>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+async fn pty_resize(state: tauri::State<'_, Ptys>, id: String, cols: u16, rows: u16) -> Result<(), String> {
     let ptys = state.0.lock().unwrap();
     let pty = ptys.get(&id).ok_or("no such terminal")?;
     pty.master
@@ -254,8 +294,9 @@ fn pty_resize(state: tauri::State<'_, Ptys>, id: String, cols: u16, rows: u16) -
 /// Drop the pty. For a tmux-backed session this **detaches**; the session keeps
 /// running and is reachable from any terminal. That is the whole of ADR-0010.
 #[tauri::command]
-fn pty_close(state: tauri::State<'_, Ptys>, id: String) {
+async fn pty_close(state: tauri::State<'_, Ptys>, id: String) -> Result<(), String> {
     state.0.lock().unwrap().remove(&id);
+    Ok(())
 }
 
 /// This machine's id, so the client can tell a local daemon from a remote one
@@ -263,7 +304,7 @@ fn pty_close(state: tauri::State<'_, Ptys>, id: String) {
 /// the daemon; read here, never invented — an id we made up would answer the
 /// question wrongly and confidently.
 #[tauri::command]
-fn machine_id() -> Option<String> {
+async fn machine_id() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     std::fs::read_to_string(format!("{home}/.mogeung/machine-id"))
         .ok()
@@ -276,16 +317,19 @@ fn machine_id() -> Option<String> {
 /// Called by the window before it connects, and **idempotent**: the answer is
 /// computed once and replayed, because a reconnect must not try to bind a port
 /// this process is already serving on.
+/// `async` matters most here: the attached path holds a TCP connect and a
+/// read with 1.5 s timeouts each — up to ~3 s of frozen window at startup
+/// when it ran on the main thread.
 #[tauri::command]
-fn daemon_acquire(state: tauri::State<'_, DaemonOnce>, addr: String) -> daemon::Status {
+async fn daemon_acquire(state: tauri::State<'_, DaemonOnce>, addr: String) -> Result<daemon::Status, ()> {
     let mut held = state.0.lock().unwrap();
     if let Some(status) = held.as_ref() {
-        return status.clone();
+        return Ok(status.clone());
     }
     let status = daemon::acquire(&addr);
     eprintln!("{}", status.detail(&addr));
     *held = Some(status.clone());
-    status
+    Ok(status)
 }
 
 #[derive(Default)]

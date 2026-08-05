@@ -13,7 +13,7 @@
  * the whole conversation is here.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -44,7 +44,13 @@ function kindColor(t: TranscriptEvent["kind"]["t"]): string {
   }
 }
 
-function Turn({
+/**
+ * Memoized, with the mark/remark callbacks taking the turn's `seq` rather than
+ * closing over it — fresh closures per render would defeat the memo, and the
+ * memo is what keeps an events tick from re-parsing the markdown of every
+ * visible turn.
+ */
+const Turn = memo(function Turn({
   ev,
   markdown,
   noteBody,
@@ -55,8 +61,8 @@ function Turn({
   ev: TranscriptEvent;
   markdown: boolean;
   noteBody: string | null;
-  onMark: () => void;
-  onRemark: (text: string) => void;
+  onMark: (seq: number) => void;
+  onRemark: (seq: number, text: string) => void;
   highlighted: boolean;
 }) {
   const [open, setOpen] = useState(true);
@@ -87,7 +93,7 @@ function Turn({
         <IconButton
           title={noteBody === null ? "mark this turn" : "unmark — the remark goes with it"}
           active={noteBody !== null}
-          onClick={onMark}
+          onClick={() => onMark(ev.seq)}
           className={noteBody === null ? "opacity-0 group-hover:opacity-100" : undefined}
         >
           <Bookmark size={11} />
@@ -113,12 +119,12 @@ function Turn({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
-              onRemark(draft);
+              onRemark(ev.seq, draft);
               setEditing(false);
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                onRemark(draft);
+                onRemark(ev.seq, draft);
                 setEditing(false);
               }
               if (e.key === "Escape") setEditing(false);
@@ -168,12 +174,13 @@ function Turn({
       </div>
     </div>
   );
-}
+});
 
 export function TranscriptPane() {
   const id = useStore((s) => s.selected);
   const events = useStore((s) => (s.selected ? s.events[s.selected] : undefined));
-  const prefs = useStore((s) => s.prefs);
+  const markdown = useStore((s) => s.prefs.markdown);
+  const showThinking = useStore((s) => s.prefs.showThinking);
   const setPrefs = useStore((s) => s.setPrefs);
   const notes = useStore((s) => s.notes);
   const send = useStore((s) => s.send);
@@ -186,8 +193,8 @@ export function TranscriptPane() {
 
   const shown = useMemo(() => {
     if (!events) return [];
-    return prefs.showThinking ? events : events.filter((e) => e.kind.t !== "thinking");
-  }, [events, prefs.showThinking]);
+    return showThinking ? events : events.filter((e) => e.kind.t !== "thinking");
+  }, [events, showThinking]);
 
   const noteFor = useMemo(() => {
     const map = new Map<number, string>();
@@ -196,6 +203,36 @@ export function TranscriptPane() {
     }
     return map;
   }, [notes, id]);
+
+  const onRemark = useCallback(
+    (seq: number, text: string) => {
+      if (!id) return;
+      const existing = notes.find((n) => n.session_id === id && n.seq === seq);
+      send({
+        cmd: "note_save",
+        // An id keeps it the same note; empty would mint a second one against
+        // the same turn.
+        id: existing?.id ?? "",
+        body: text,
+        session_id: id,
+        seq,
+        repo: null,
+      });
+    },
+    [id, notes, send],
+  );
+
+  const onMark = useCallback(
+    (seq: number) => {
+      if (!id) return;
+      // An empty body is a plain bookmark: marking a turn and writing about it
+      // are one gesture with two depths.
+      const existing = notes.find((n) => n.session_id === id && n.seq === seq);
+      if (existing) send({ cmd: "note_delete", id: existing.id });
+      else send({ cmd: "note_save", id: "", body: "", session_id: id, seq, repo: null });
+    },
+    [id, notes, send],
+  );
 
   const virt = useVirtualizer({
     count: shown.length,
@@ -250,13 +287,13 @@ export function TranscriptPane() {
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
       <div className="flex h-7 shrink-0 items-center gap-3 border-b border-[var(--border)] px-2">
         <Checkbox
-          checked={prefs.markdown}
+          checked={markdown}
           onChange={(v) => setPrefs({ markdown: v })}
           label="markdown"
           title="render agent replies as Markdown rather than raw text"
         />
         <Checkbox
-          checked={prefs.showThinking}
+          checked={showThinking}
           onChange={(v) => setPrefs({ showThinking: v })}
           label="thinking"
           title="show the agent's reasoning blocks"
@@ -308,37 +345,11 @@ export function TranscriptPane() {
                 >
                   <Turn
                     ev={ev}
-                    markdown={prefs.markdown}
+                    markdown={markdown}
                     highlighted={highlightSeq === ev.seq}
                     noteBody={noteFor.get(ev.seq) ?? null}
-                    onRemark={(text) => {
-                      const existing = notes.find((n) => n.session_id === id && n.seq === ev.seq);
-                      send({
-                        cmd: "note_save",
-                        // An id keeps it the same note; empty would mint a
-                        // second one against the same turn.
-                        id: existing?.id ?? "",
-                        body: text,
-                        session_id: id,
-                        seq: ev.seq,
-                        repo: null,
-                      });
-                    }}
-                    onMark={() => {
-                      // An empty body is a plain bookmark: marking a turn and
-                      // writing about it are one gesture with two depths.
-                      const existing = notes.find((n) => n.session_id === id && n.seq === ev.seq);
-                      if (existing) send({ cmd: "note_delete", id: existing.id });
-                      else
-                        send({
-                          cmd: "note_save",
-                          id: "",
-                          body: "",
-                          session_id: id,
-                          seq: ev.seq,
-                          repo: null,
-                        });
-                    }}
+                    onRemark={onRemark}
+                    onMark={onMark}
                   />
                 </div>
               );

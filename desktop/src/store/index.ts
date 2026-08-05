@@ -385,6 +385,18 @@ function succeed(get: () => AppState): void {
   if (patch) setScoped(patch);
 }
 
+/** First index in `list` (sorted by seq) whose seq is >= `seq`. */
+function lowerBound(list: TranscriptEvent[], seq: number): number {
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (list[mid].seq < seq) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   conn: "connecting",
   connDetail: null,
@@ -592,16 +604,29 @@ export const useStore = create<AppState>((set, get) => ({
         if (msg.events.length === 0) break;
         set((s) => {
           const next = { ...s.events };
+          // Sessions untouched by this message keep their array identity, so
+          // their subscribers see no change. Each touched session's list is
+          // cloned once per message, not once per event.
+          const touched = new Set<SessionId>();
           for (const ev of msg.events) {
-            const list = next[ev.session_id] ?? [];
+            if (!touched.has(ev.session_id)) {
+              next[ev.session_id] = [...(next[ev.session_id] ?? [])];
+              touched.add(ev.session_id);
+            }
+            const list = next[ev.session_id];
             // Replayed history and live tail both land here; `seq` is the
             // identity, so a re-send is an update rather than a duplicate.
-            const at = list.findIndex((e) => e.seq === ev.seq);
-            if (at >= 0) list[at] = ev;
-            else list.push(ev);
-            next[ev.session_id] = list;
+            // Live tail arrives in order, so the common case is a plain push;
+            // out-of-order replay falls back to a binary-searched insert,
+            // which keeps the list sorted without ever re-sorting it.
+            if (list.length === 0 || ev.seq > list[list.length - 1].seq) {
+              list.push(ev);
+            } else {
+              const at = lowerBound(list, ev.seq);
+              if (at < list.length && list[at].seq === ev.seq) list[at] = ev;
+              else list.splice(at, 0, ev);
+            }
           }
-          for (const id of Object.keys(next)) next[id] = [...next[id]].sort((a, b) => a.seq - b.seq);
           return { events: next };
         });
         break;

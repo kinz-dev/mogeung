@@ -17,10 +17,17 @@ import { X } from "lucide-react";
 import { IconButton } from "@/ui/primitives";
 
 export function AmbientWindow() {
+  // The board's data subscriptions live in `Board`, mounted only while open —
+  // otherwise a closed board still recomputes the visible queue on every
+  // session update, forever.
   const open = useStore((s) => s.ambient);
+  if (!open) return null;
+  return <Board />;
+}
+
+function Board() {
   const sessions = useStore((s) => s.sessions);
   const rows = useVisibleQueue();
-  if (!open) return null;
 
   const needing = rows.filter((r) => needsHuman(r.item.reason));
   const live = Object.values(sessions).filter((s) => s.alive).length;

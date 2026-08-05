@@ -102,7 +102,7 @@ impl RiskLevel {
 /// rewrites the file, unchanged hunks keep their anchor and stay reviewed;
 /// only genuinely new or rewritten content comes back to you. This is the
 /// "never read the same code twice" property (CONCEPT.md B3).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hunk {
     pub anchor: String,
     /// The `@@ ... @@` line, kept for display.
@@ -131,7 +131,7 @@ pub enum FileStatus {
     Renamed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileChange {
     pub path: String,
     pub old_path: Option<String>,
@@ -160,7 +160,7 @@ impl FileChange {
 }
 
 /// The net change produced by a run, ordered for reading rather than alphabetically.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Change {
     pub files: Vec<FileChange>,
     pub insertions: u32,
