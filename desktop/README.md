@@ -116,7 +116,7 @@ Note that `cargo build --release` at the repo root does **not** build this.
 
 | | state |
 |---|---|
-| Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip, group by repo (`R-B6`), label (`R-B26`), forget | done |
+| Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip, group by repo (`R-B6`), label (`R-B26`), colour tags, forget | done |
 | Transcript — virtualised, markdown, find (`R-B36`), mark a turn | done |
 | Code — Monaco, read-only, tabs, split, per-file wrap, symbol outline (`R-B28`), markdown preview (`R-B29`), blame gutter (`R-D10`), in-file bookmarks | done |
 | Changes — hunks, risk flags, read marks, hide-read, hide-noise, word diff (`R-D5`), side-by-side (`R-D6`), syntax colour (`R-D4`), blast radius (`R-D9`) | done |

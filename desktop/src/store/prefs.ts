@@ -42,6 +42,12 @@ export interface ScopedPrefs {
   labels: Record<SessionId, string>;
   editorWrap: string[];
   bookmarks: [SessionId, string, number][];
+  /**
+   * A colour you put on a session yourself, by id — see `lib/tags.ts`.
+   * Machine-scoped like the labels, because a session id from the dev box means
+   * nothing on the laptop.
+   */
+  tags: Record<SessionId, string>;
   /** The panel's shells: `[tmux session name, worktree root]`. `R-B33`. */
   shells: [string, string][];
 }
@@ -116,6 +122,7 @@ export const emptyScoped = (): ScopedPrefs => ({
   labels: {},
   editorWrap: [],
   bookmarks: [],
+  tags: {},
   shells: [],
 });
 

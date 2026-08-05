@@ -926,3 +926,30 @@ That closes the gap list. Everything still typed on the wire and never sent is
 now the deliberate set: `git_stage`, `git_commit`, `git_discard`, `git_switch`,
 `git_branch_create`, the three stash verbs and `git_resolve` — the write family
 ADR-0012 anticipated, which is a decision rather than a port.
+
+**A colour you choose, in a list full of colour that means something.**
+
+Asked for as Finder's tags, and the reason given was cognitive load: knowing
+which session is which without reading a word. That is the whole design
+constraint, and it is also why the tag could not tint anything the row already
+has. The badge is *why this row is where it is*, the live text is what the CLI
+says it is doing, the label chip is a hash of your own name for it — three
+colours that are all computed. A tag means whatever you decided this morning and
+nothing computes it, so it takes the one strip of a dense row carrying no other
+signal: a bar down the leading edge, absolutely positioned so it cannot push the
+text along.
+
+Seven, like Finder, and named after the colour rather than after a meaning. A
+palette with meanings attached ("review", "mine") would be a guess about a
+workflow you would then have to work around.
+
+In the **collapsed strip** the tag beats the hashed label colour, which is the
+one place the two compete. The hash exists so a chip means *something* before
+you have decided anything; once you have decided, that is the better signal —
+and the strip is the view with no text at all, so it is where a colour is worth
+most.
+
+`tag:` joins the field filters, and `tag:none` asks the opposite question. That
+last one is the case worth a test: an untagged session has to *match* `none`
+rather than match nothing, or there is no way to find what you have not sorted
+yet.

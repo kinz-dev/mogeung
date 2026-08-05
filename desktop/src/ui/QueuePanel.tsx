@@ -14,6 +14,7 @@ import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } f
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
+import { TAGS, tagColor, tagLabel } from "@/lib/tags";
 import { InfoDock } from "@/ui/InfoDock";
 import { QUEUE_LIST_ID } from "@/lib/keymap";
 import { fmtDur, secsSince } from "@/lib/format";
@@ -106,7 +107,12 @@ export function labelColor(name: string): string {
  * Field filters — `repo:`, `branch:`, `file:`, `label:` — with bare words
  * falling through to a substring match over the label. A port of `filter.rs`.
  */
-function matchesFilter(s: Session, label: string | undefined, filter: string): boolean {
+export function matchesFilter(
+  s: Session,
+  label: string | undefined,
+  filter: string,
+  tag?: string,
+): boolean {
   const q = filter.trim().toLowerCase();
   if (!q) return true;
   for (const term of q.split(/\s+/)) {
@@ -127,6 +133,11 @@ function matchesFilter(s: Session, label: string | undefined, filter: string): b
         break;
       case "label":
         hay = (label ?? "").toLowerCase();
+        break;
+      // The colour by its own name, so "which were the red ones" is a query
+      // rather than a scroll. `tag:none` asks the opposite question.
+      case "tag":
+        hay = (tag ?? "none").toLowerCase();
         break;
       default:
         hay = `${sessionLabel(s)} ${repoName(s)} ${label ?? ""}`.toLowerCase();
@@ -151,7 +162,8 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
       if (scoped.hidden.includes(session.id)) continue;
       if (prefs.scope === "needs_you" && !needsHuman(item.reason)) continue;
       if (prefs.scope === "live" && !session.alive) continue;
-      if (!matchesFilter(session, scoped.labels[session.id], filter)) continue;
+      if (!matchesFilter(session, scoped.labels[session.id], filter, scoped.tags[session.id]))
+        continue;
       rows.push({ item, session });
     }
     // Pins float, keeping their relative rank underneath.
@@ -188,10 +200,15 @@ function Strip() {
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pt-1">
         {rows.map(({ item, session }) => {
           const name = scoped.labels[session.id] ?? repoName(session);
+          // Your colour wins over the hashed one here. The hash exists so a
+          // chip means *something* before you have decided anything; once you
+          // have, that decision is the better signal — and this strip is the
+          // view with no text at all, so it is where a colour earns most.
+          const tag = tagColor(scoped.tags[session.id]);
           return (
             <Tooltip
               key={session.id}
-              content={`${scoped.labels[session.id] ?? sessionLabel(session)}\n${repoName(session)} · ${reasonLabel(item.reason)}`}
+              content={`${scoped.labels[session.id] ?? sessionLabel(session)}\n${repoName(session)} · ${reasonLabel(item.reason)}${tag ? ` · tagged ${tagLabel(scoped.tags[session.id])}` : ""}`}
             >
               <button
                 type="button"
@@ -202,7 +219,7 @@ function Strip() {
                   selected === session.id && "ring-1 ring-[var(--selection-stroke)]",
                 )}
                 style={{
-                  background: labelColor(name),
+                  background: tag ?? labelColor(name),
                   color: "var(--on-accent)",
                   outline: needsHuman(item.reason) ? "1px solid var(--urgent)" : undefined,
                 }}
@@ -224,6 +241,7 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   const scoped = useStore((s) => s.scoped());
   const send = useStore((s) => s.send);
   const label = scoped.labels[session.id];
+  const tag = tagColor(scoped.tags[session.id]);
   const pinned = scoped.pinned.includes(session.id);
   const hidden = scoped.hidden.includes(session.id);
   const perm = awaitingPermission(session);
@@ -243,8 +261,19 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
         <Row
           selected={selected === session.id}
           onClick={() => select(session.id)}
-          className="border-b border-[var(--border)] px-2 py-1.5"
+          className="relative border-b border-[var(--border)] py-1.5 pr-2 pl-2"
         >
+          {/* The leading edge is the one strip of a dense row that carries no
+              other signal, which is what keeps a tag from arguing with the
+              badge beside it. Absolute so it cannot push the text along. */}
+          {tag && (
+            <span
+              aria-hidden
+              title={`tagged ${tagLabel(scoped.tags[session.id])}`}
+              className="absolute top-0 bottom-0 left-0 w-1"
+              style={{ background: tag }}
+            />
+          )}
           <div className="flex min-w-0 items-center gap-1.5">
             <Badge color={reasonColor(item.reason)} dark={darkInk(item.reason)} className="shrink-0">
               {reasonLabel(item.reason)}
@@ -300,6 +329,41 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
       }
     >
       <MenuLabel>{label ?? repoName(session)}</MenuLabel>
+      {/* A row of swatches rather than seven menu items, because the whole
+          point of a colour is that you recognise it faster than a word. */}
+      <div className="flex items-center gap-1 px-2 py-1">
+        {TAGS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            title={t.label}
+            aria-label={t.label}
+            onClick={() =>
+              setScoped({
+                tags: { ...scoped.tags, [session.id]: t.id },
+              })
+            }
+            className={cn(
+              "h-4 w-4 shrink-0 rounded-full outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1",
+              scoped.tags[session.id] === t.id && "ring-2 ring-[var(--selection-stroke)]",
+            )}
+            style={{ background: t.color }}
+          />
+        ))}
+        <button
+          type="button"
+          title="no colour"
+          aria-label="no colour"
+          onClick={() => {
+            const next = { ...scoped.tags };
+            delete next[session.id];
+            setScoped({ tags: next });
+          }}
+          className="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-[var(--border-hover)] text-2xs text-[var(--dim)] outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-1"
+        >
+          ×
+        </button>
+      </div>
       <MenuItem onSelect={() => useStore.setState({ labelEditing: session.id })}>
         {label ? "Edit label…" : "Label…"}
       </MenuItem>
