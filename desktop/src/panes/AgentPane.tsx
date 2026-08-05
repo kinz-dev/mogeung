@@ -35,6 +35,10 @@ export function AgentPane() {
   const host = reach ? hostLabel(reach) : null;
 
   return (
+    // Stays `--bg-panel`: `PaneHeader` paints no surface of its own, so this is
+    // the header's background too, and the darker one belongs to the terminal
+    // alone — chrome above, another machine's output below. `TerminalView`
+    // carries `--terminal-bg` itself, which also covers the shell panel.
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
       <PaneHeader title="Agent" hint="attached through tmux — closing this pane detaches, it never kills">
         {s.tmux_target && <Dim className="font-mono text-2xs">{s.tmux_target}</Dim>}

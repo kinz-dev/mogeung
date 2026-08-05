@@ -1068,3 +1068,212 @@ at the time and rewriting them to point at TypeScript would be a lie about the
 past. And `~/.mogeung/prefs.json` and `state/<machine_id>.json` are untouched on
 disk: nothing reads them now, nothing deletes them, and an importer into the
 window's storage stays possible for as long as they exist.
+
+## Two reports from use, 2026-08-05
+
+Both arrived from the same session and neither is a port defect in the sense
+`R-M4` looked for — nothing was left behind. One is a gesture the library
+deliberately does not implement, and the other is a design that was right about
+where colour goes and wrong about how much.
+
+### Copy and paste in the Agent pane
+
+**xterm.js implements neither, on purpose.** It draws its own selection rather
+than making a DOM one, so the browser has nothing to copy; and it hands
+`Ctrl+V` to the pty as `^V`, which is what a terminal is supposed to do. The
+app is expected to supply the gesture, and this one never did. It read as
+"copy and paste is broken" because every other pane in the window copies with
+`Ctrl+C` and this one did not.
+
+`Ctrl+C` is why the chords look the way they do. It has to stay `SIGINT` **with
+a selection on screen**, or the pane loses the one thing you cannot do without:
+stopping something. So copy is `Ctrl+Shift+C` — what every Linux terminal
+already settled on, for this reason — and `Cmd+C`, which collides with nothing.
+
+Paste is split in two, and the split is the load-bearing part:
+
+- `Ctrl+V`, `Cmd+V` and `Shift+Insert` are **the webview's own editing
+  bindings**. Declining to handle them hands the key to WebKit, which pastes
+  into the hidden textarea xterm keeps focused; xterm's `paste` listener then
+  forwards it with bracketed-paste applied. No clipboard API is involved, so
+  there is nothing to be gated, prompted for, or missing.
+- `Ctrl+Shift+V` is bound to nothing, so that one has to read the clipboard
+  itself, and it is the only path that can fail. It says so when it does,
+  naming the chord that does not depend on it.
+
+Preferring the native route where one exists is the whole defence against a
+webview whose clipboard *read* is gated, absent or asynchronous — three
+different behaviours across the platforms this ships to, and the paste chord
+people actually press now depends on none of them.
+
+The price is `^V`: quoted-insert can no longer be typed at a pane. It is
+reachable through tmux's own prefix, and it is much rarer to want than paste in
+a pane whose job is answering a prompt.
+
+**The half that is not a keyboard problem** is documented in the Keyboard
+window rather than fixed, because it cannot be fixed from here: Claude Code
+turns on mouse reporting, so a drag is the program's to interpret and xterm
+never sees a selection to copy. Holding `Shift` while dragging is what takes it
+back, and someone who does not know that reads a working copy as a broken one.
+
+### The selection itself: a CSS zoom on the document root
+
+The report above was the *keyboard* half. The one that mattered came next —
+**"I can't use the mouse to select the text correctly"** — and it is not a
+clipboard problem at all.
+
+`applyAppZoom` set `zoom` on `document.documentElement`. The stored factor on
+this desk was `1.4641`, four notches of `Ctrl+=`. A CSS `zoom` scales layout,
+but `MouseEvent.clientX` and `getBoundingClientRect()` are then reported in
+different spaces — so anything mapping a pointer to a cell drifts, and drifts
+further the further you drag. That is the symptom, exactly.
+
+**This is the third fix for one bug, and the first at a layer that can reach
+it.** `R-B30` gave the terminal its own font-size zoom so a pane factor would
+not scale it. The Ctrl+wheel fix earlier the same day let the terminal declare
+`data-owns-zoom` so `ZoomPane` would keep its hands off. Both are about a
+wrapper the terminal sits inside — and this factor is applied to the document,
+above every pane. A pane cannot opt out of an ancestor it does not have.
+
+The fix is to stop scaling with CSS: `getCurrentWebview().setZoom()` is applied
+by the compositor, so hit-testing scales with the pixels and the two spaces
+stay one. It needs `core:webview:allow-set-webview-zoom` in the capability
+file, and the CSS path stays for the browser dev tab — which has no webview to
+ask, and no pty either, so it renders no terminal to skew.
+
+Two things guard it. `zoom.test.ts` asserts the negative — in the desktop
+shell, the document root is never given a `zoom` — because that is the whole
+of the bug and it is invisible in a screenshot. And `Terminal.tsx` reads the
+*computed* zoom above itself and counter-scales when it finds one, so the
+fallback path degrades to a smaller terminal rather than to an unselectable
+one.
+
+The prior claim in `zoom.ts` that a Tauri webview has no zoom of its own was
+about the *keyboard*: `Ctrl+=` does nothing there, which is true and is why the
+window has to provide the binding. It does not follow that there is no zoom to
+drive, and that inference is what cost three fixes.
+
+### The colour tags were not glanceable
+
+`R-B42` shipped a bar down the leading edge, and the argument for it still
+holds: the badge, the live text and the label chip are all computed, and a tag
+means whatever you decided this morning, so it should not tint any of them.
+What was wrong was the *amount*. Four pixels answers "which colour is this row"
+only once you are already looking at the row, and the row is what you were
+trying to find.
+
+A tagged row now carries the colour across its whole width, at the weight
+`--selection-bg` already uses — the request's own words were a background that
+matches the selected highlight. Three things that decision needed:
+
+- **Hand-picked per theme, not mixed at runtime.** The same translucency over
+  `#141518` and over `#e8eaee` lands in two different places and only one of
+  them would ever have been looked at. `--tag-*-bg` is fourteen values, and a
+  test fails if `tags.ts` names one either palette does not define — a missing
+  variable renders as *no background*, which looks exactly like the complaint
+  it was meant to answer and would have said nothing while failing.
+- **Both signals, always.** The first attempt withheld the tint while a row was
+  selected, reasoning that one surface can only say one thing. The report back
+  settled it: *"I need to be able to see that it is being coloured, and also
+  that it is currently being SELECTED."* A tagged row that stops looking tagged
+  when you click it is wrong precisely when you are checking you are on the
+  right session. So the colour stays and selection is said **differently** — a
+  `--state-selected` wash over the tint, keeping the hue, plus an inset ring in
+  `--selection-stroke` and a wider leading bar. An *untagged* row keeps the
+  plain `--selection-bg` surface, which is the case where a surface is free.
+  The wash hangs off `aria-selected`, which makes that attribute load-bearing
+  rather than merely assistive — worth knowing before anyone "tidies" it.
+- **Blue is not the selection's hue.** `--selection-bg` is a navy of exactly
+  this weight, so a blue-tagged row would have been the selected row; the tint
+  sits cooler and darker, and the ring is what says selected in any case.
+
+One implementation note worth keeping: the tint arrives as a `--tag-bg`
+property on the element and the class reads it, rather than seven classes, so
+the palette stays the only place a tag's colour is written down. The hover wash
+is a `background-image`, because `--state-hover` is a translucent layer applied
+as a `background-color` everywhere else — a tint set the same way would replace
+it, and a tagged row would be the one row in the list that does not answer the
+pointer.
+
+### Files touched
+
+| Path | Why |
+|---|---|
+| `desktop/src/lib/clipboard.ts` | the chords, and which paste route each takes |
+| `desktop/src/lib/clipboard.test.ts` | that `Ctrl+C` is never copy, and one press is never two pastes |
+| `desktop/src/ui/Terminal.tsx` | the handler, and `term.paste` so bracketed paste survives |
+| `desktop/src/ui/KeymapWindow.tsx` | the terminal's chords, listed and marked not rebindable |
+| `desktop/src/index.css` | `--tag-*-bg` in both palettes, and `.mogeung-tag-row` |
+| `desktop/src/lib/tags.ts` | a surface beside each tag's colour |
+| `desktop/src/ui/QueuePanel.tsx` | the tint, withheld while selected |
+| `desktop/src/ui/QueuePanel.tag.test.tsx` | that the tint survives Radix's clone, and survives selection |
+| `desktop/src/lib/zoom.ts` | the webview's zoom, not the document's |
+| `desktop/src/lib/zoom.test.ts` | the negative: the document root is never zoomed in the shell |
+| `desktop/src/lib/tauri.ts` | `setWebviewZoom` |
+| `desktop/src-tauri/capabilities/default.json` | `core:webview:allow-set-webview-zoom` |
+| `desktop/src/panes/AgentPane.tsx` | why the header keeps the panel surface |
+
+### A darker queue, and which "background" that meant
+
+Asked for immediately after the tints landed on it, and the two belong
+together: a row's colour is read *against* what is behind it, so the darker
+that is, the more a tint is worth.
+
+**The first attempt darkened the wrong surface**, and the report — *"I don't
+see the difference"* — is worth keeping because the mistake is easy to repeat.
+The queue had no surface of its own; it showed `--bg` through. Giving it
+`--queue-bg` darkened the frame, while the thing actually being looked at, the
+box carrying a session's badge, title, branch and detail, was **transparent** —
+so it stayed the same colour as the frame and nothing appeared to change. The
+list is mostly rows; darkening everything except the rows is close to
+darkening nothing.
+
+So the queue is now two surfaces. `--queue-bg` is the frame — the header, the
+gutter, the space under a short list. `--row-bg` is the card, and it is the
+darker of the two, so a row reads as a thing sitting *in* the list rather than
+as a slice of it. The collapsed strip takes the frame colour, because a panel
+that changes colour when you collapse it looks like a different thing instead
+of the same thing narrower.
+
+**One row, three things wanting its background**, and they are not settled the
+same way. `cn` is `twMerge`, so the last Tailwind `bg-*` wins — the card
+arrives through `className` and would have silently dropped `Row`'s selection
+surface. `.mogeung-tag-row` is not a Tailwind class at all, so twMerge cannot
+see it and stylesheet order would have decided that one. Both are stated as
+conditions instead, and the test that only ever one is present is the reason
+the first version of this did not ship broken: removing the guard breaks
+*selection*, three components away from the line you edited.
+
+The other half of the report was *"or your changes actually have no effect"*,
+and that deserves an answer too: `./scripts/start.sh` runs `npm run tauri dev`,
+so CSS and TSX hot-reload and there is nothing to rebuild. A change you cannot
+see in that setup is a change that is too small, not a change that has not
+arrived — which is precisely what this one was.
+
+### A darker terminal
+
+Asked for in the same breath, and it is not only taste: the Agent pane drew on
+`--bg-panel`, the same surface as the chrome around it, so the terminal and the
+window read as one thing. A terminal is the one region here that is *not* this
+app talking — it is another machine's output arriving — and the depth is what
+says so. `--terminal-bg` is a shade under the panel in both themes, on
+`TerminalView` itself so the shell panel gets it too. The pane header stays on
+`--bg-panel`, because `PaneHeader` paints no surface of its own and the
+boundary between the two is the point.
+
+### A test that was proving less than it said
+
+Writing the render test above turned one up. **The queue draws no rows in
+jsdom at all.** It is virtualised, every element there is zero by zero, and a
+list that draws only what fits draws nothing — so `App.smoke.test.tsx`, whose
+comment reads *"a row on screen is the whole point: the throw is in
+`QueueRow`, so a window with an empty queue proves nothing"*, has an empty
+queue. Its own note says the first version of it passed against the bug it was
+written for; it is in that state again, for a different reason.
+
+Three stubs fix it and all three are needed — a `ResizeObserver` that actually
+fires, and `offsetHeight`/`offsetWidth`, because `@tanstack/react-virtual`
+takes its first rect from those before any observer runs. They are in the new
+test rather than in `test-setup.ts` on purpose for now: giving every suite a
+non-zero layout changes what several other tests are measuring, and that is a
+sweep to make deliberately rather than as a side effect of a colour fix.

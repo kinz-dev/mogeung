@@ -18,6 +18,20 @@ export function isTauri(): boolean {
 
 type Unlisten = () => void;
 
+/**
+ * Zoom the webview itself, the way a browser's `Ctrl+=` does.
+ *
+ * Native rather than CSS, and the difference is not cosmetic: a CSS `zoom` on
+ * the document leaves mouse coordinates and element rectangles in two
+ * different spaces, which anything measuring itself in device pixels — xterm
+ * sizing a character cell — then maps wrongly. The webview's own zoom scales
+ * the whole page including hit-testing, so the two spaces stay one.
+ */
+export async function setWebviewZoom(factor: number): Promise<void> {
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  await getCurrentWebview().setZoom(factor);
+}
+
 async function api() {
   const core = await import("@tauri-apps/api/core");
   const event = await import("@tauri-apps/api/event");

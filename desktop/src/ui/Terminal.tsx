@@ -8,11 +8,12 @@
  * unmounting detaches, and whatever was running is still running.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
+import { clipboardIntent, readClipboard, writeClipboard } from "@/lib/clipboard";
 import { useStore } from "@/store";
 
 /**
@@ -26,11 +27,31 @@ import { useStore } from "@/store";
  */
 const SHIFT_ENTER = "\n";
 
+/**
+ * The CSS zoom in force above this pane, or 1.
+ *
+ * A terminal maps a pointer to a cell by measuring in device pixels, and a CSS
+ * `zoom` on an ancestor leaves that measurement in a different space from the
+ * mouse coordinates — the selection then lands further off the further you
+ * drag. `applyAppZoom` uses the *webview's* zoom now precisely so this returns
+ * 1, but it falls back to CSS when the capability is missing, and this is what
+ * makes that fallback survivable rather than silently broken.
+ */
+function ambientCssZoom(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("zoom").trim();
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 /** mogeung's palette, as xterm wants it. */
 function themeFor(dark: boolean) {
   const v = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return {
-    background: v("--bg-panel") || (dark ? "#1a1c20" : "#f7f8fa"),
+    // Darker than the pane it sits in, on purpose and by request: a terminal
+    // is a window onto another machine's output, and giving it the same
+    // surface as the chrome around it makes the two read as one thing. The
+    // depth is what says *this part is not the app talking*.
+    background: v("--terminal-bg") || v("--bg-panel") || (dark ? "#0e0f12" : "#f7f8fa"),
     foreground: v("--text") || (dark ? "#d4d7dd" : "#25282e"),
     cursor: v("--blue"),
     selectionBackground: v("--selection-bg"),
@@ -65,8 +86,18 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
   const resyncRef = useRef<() => void>(() => {});
   const fontPx = useStore((s) => s.prefs.terminalFontPx);
   const theme = useStore((s) => s.prefs.theme);
+  const appZoom = useStore((s) => s.prefs.appZoom);
   const pushError = useStore((s) => s.pushError);
   const [exited, setExited] = useState(false);
+  // Read from the document rather than from the factor, because what matters
+  // is whether a CSS zoom is *in force* — with the webview zoom in use it is
+  // not, whatever the stored factor says. Recomputed when the factor changes,
+  // which is the only thing that can turn one on.
+  const undoCssZoom = useMemo(() => {
+    const z = ambientCssZoom();
+    return Math.abs(z - 1) < 0.001 ? undefined : ({ zoom: 1 / z } as CSSProperties);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appZoom]);
 
   useEffect(() => {
     if (!command || !hostRef.current || !isTauri()) return;
@@ -101,6 +132,33 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
         void ptyWrite(id, SHIFT_ENTER).catch(() => {});
         return false;
       }
+      // Copy and paste, which xterm implements neither of. See `clipboard.ts`
+      // for why the paste chords are split and why `Ctrl+C` is not among them.
+      const intent = clipboardIntent(e);
+      if (intent === "copy") {
+        const selection = term.getSelection();
+        // Swallowed even when there is nothing to copy: `Ctrl+Shift+C` would
+        // otherwise reach the pty as a bare `^C` and interrupt whatever is
+        // running, which is a violent answer to a copy with no selection.
+        e.preventDefault();
+        if (selection) {
+          void writeClipboard(selection).catch((err) => pushError(`could not copy: ${String(err)}`));
+        }
+        return false;
+      }
+      if (intent === "paste-read") {
+        e.preventDefault();
+        void readClipboard()
+          // `term.paste` rather than `ptyWrite`: bracketed-paste mode is what
+          // tells the TUI on the other end that this arrived at once rather
+          // than being typed, and it is xterm that knows whether it is on.
+          .then((text) => text && term.paste(text))
+          .catch((err) => pushError(`could not paste: ${String(err)} — try Ctrl+V`));
+        return false;
+      }
+      // `paste-native`: decline it *without* preventing the default, so the
+      // webview's own paste runs and xterm forwards what lands in its textarea.
+      if (intent === "paste-native") return false;
       return true;
     });
     void keys;
@@ -282,10 +340,14 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
   }
 
   return (
-    <div className="relative h-full min-h-0">
+    <div className="relative h-full min-h-0 bg-[var(--terminal-bg)]" style={undoCssZoom}>
       {/* `data-owns-zoom`: this subtree handles its own Ctrl+wheel, and the
           enclosing `ZoomPane` must keep its hands off. See the note by the
-          wheel handler above — a CSS-scaled terminal selects the wrong text. */}
+          wheel handler above — a CSS-scaled terminal selects the wrong text.
+
+          The `zoom` above undoes an *ancestor's* CSS zoom, which is a
+          different hole and the one that actually bit: a pane wrapper can be
+          told to keep its hands off, and the document root cannot. */}
       <div ref={hostRef} data-owns-zoom className="h-full w-full" />
       {exited && (
         <div className="absolute inset-x-0 bottom-0 bg-[var(--bg-raised)] px-2 py-1 text-2xs text-[var(--dim)]">

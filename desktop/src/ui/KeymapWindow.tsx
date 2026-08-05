@@ -188,6 +188,35 @@ export function KeymapWindow() {
             </div>
           ))
         )}
+        {/* Listed, not rebindable, and the distinction is the honest one: these
+            live in the terminal pane rather than in `ACTIONS`, because a
+            terminal owns every byte and the window may only take the chords it
+            can justify. Documented here anyway — an undiscoverable binding is
+            an unused one, which is this window's whole premise. */}
+        <div className="mb-3 border-t border-[var(--border)] px-2 pt-2">
+          <div className="mb-1 text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase">
+            in a terminal
+          </div>
+          <div className="space-y-0.5 text-2xs text-[var(--dim)]">
+            <div>
+              <Kbd>Ctrl+Shift+C</Kbd> <Kbd>Cmd+C</Kbd> copy the selection — <Kbd>Ctrl+C</Kbd> stays
+              the interrupt, with a selection or without one
+            </div>
+            <div>
+              <Kbd>Ctrl+V</Kbd> <Kbd>Cmd+V</Kbd> <Kbd>Shift+Insert</Kbd> <Kbd>Ctrl+Shift+V</Kbd>{" "}
+              paste
+            </div>
+            <div>
+              Hold <Kbd>Shift</Kbd> while dragging to select when the program has the mouse — Claude
+              Code takes it, and without Shift the drag is scrolling its list rather than selecting
+              your text
+            </div>
+            <div className="opacity-80">
+              These belong to the pane rather than to the keymap, so they are not rebindable here.
+            </div>
+          </div>
+        </div>
+
         <Dim className="block px-2 text-2xs">
           Stored with your preferences. An old{" "}
           <code className="font-mono">~/.mogeung/keymap.json</code> is left alone — it belongs to the

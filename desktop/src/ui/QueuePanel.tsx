@@ -6,7 +6,7 @@
  * the room back a decision rather than a search.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Pin, Tag } from "lucide-react";
 import { useStore } from "@/store";
@@ -14,7 +14,7 @@ import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } f
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
-import { TAGS, tagColor, tagLabel } from "@/lib/tags";
+import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
 import { InfoDock } from "@/ui/InfoDock";
 import { QUEUE_LIST_ID } from "@/lib/keymap";
 import { fmtDur, secsSince } from "@/lib/format";
@@ -188,7 +188,10 @@ function Strip() {
   const needing = rows.filter((r) => needsHuman(r.item.reason)).length;
 
   return (
-    <div className="flex w-[30px] shrink-0 flex-col items-center gap-1.5 border-r border-[var(--border)] py-2">
+    // The same surface collapsed as expanded: the strip *is* the queue, and a
+    // panel that changes colour when you collapse it looks like a different
+    // thing rather than the same thing narrower.
+    <div className="flex w-[30px] shrink-0 flex-col items-center gap-1.5 border-r border-[var(--border)] bg-[var(--queue-bg)] py-2">
       <IconButton title="show the queue  ([)" onClick={() => setPrefs({ queueCollapsed: false })}>
         <ChevronRight size={14} />
       </IconButton>
@@ -245,6 +248,8 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   const send = useStore((s) => s.send);
   const label = scoped.labels[session.id];
   const tag = tagColor(scoped.tags[session.id]);
+  const tint = tagBg(scoped.tags[session.id]);
+  const isSelected = selected === session.id;
   const pinned = scoped.pinned.includes(session.id);
   const hidden = scoped.hidden.includes(session.id);
   const perm = awaitingPermission(session);
@@ -262,18 +267,54 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
     <ContextMenu
       trigger={
         <Row
-          selected={selected === session.id}
+          // **Both signals, always, and they are answering different
+          // questions.** The first attempt withheld the tint while a row was
+          // selected, on the theory that one surface can only say one thing;
+          // the report back was that a tagged row then stops looking tagged
+          // the moment you click it, which is when you are most likely to be
+          // checking you are on the right one. So the colour stays and
+          // selection is said *differently* — a ring, not a surface — rather
+          // than by taking the colour away.
+          //
+          // `selected` is still passed: an untagged row keeps the plain
+          // selection surface, which is the case where a surface is free.
+          selected={isSelected && !tint}
+          aria-selected={isSelected}
           onClick={() => select(session.id)}
-          className="relative border-b border-[var(--border)] py-1.5 pr-2 pl-2"
+          style={tint ? ({ "--tag-bg": tint } as CSSProperties) : undefined}
+          className={cn(
+            "relative border-b border-[var(--border)] py-1.5 pr-2 pl-2",
+            // The card surface, and only when nothing else owns the row's
+            // background. Three things want this one property — the card, a
+            // tag tint, the plain selection — and they are not settled the
+            // same way: `cn` is `twMerge`, so the *last* Tailwind `bg-*` wins
+            // and this one, arriving through `className`, would silently drop
+            // `Row`'s selection surface; `.mogeung-tag-row` is not a Tailwind
+            // class at all, so twMerge cannot see it and stylesheet order
+            // would decide. Stating the condition is what makes it readable
+            // rather than emergent — and it has a test, because removing this
+            // guard breaks selection somewhere else entirely.
+            !tint && !isSelected && "bg-[var(--row-bg)]",
+            tint && "mogeung-tag-row",
+            // Inset, so it draws *inside* the row rather than between rows —
+            // an outset ring on a bordered list item is clipped by its
+            // neighbour and reads as a thick line on one edge only.
+            isSelected && "outline-2 -outline-offset-2 outline-[var(--selection-stroke)]",
+            isSelected && "font-medium text-[var(--text-strong)]",
+          )}
         >
           {/* The leading edge is the one strip of a dense row that carries no
               other signal, which is what keeps a tag from arguing with the
-              badge beside it. Absolute so it cannot push the text along. */}
+              badge beside it. Absolute so it cannot push the text along.
+
+              Wider while selected: the ring runs the whole way round, and the
+              bar is what tells you *which* row inside it is yours when the
+              list is scrolled to a group of them. */}
           {tag && (
             <span
               aria-hidden
               title={`tagged ${tagLabel(scoped.tags[session.id])}`}
-              className="absolute top-0 bottom-0 left-0 w-1"
+              className={cn("absolute top-0 bottom-0 left-0", isSelected ? "w-1.5" : "w-1")}
               style={{ background: tag }}
             />
           )}
@@ -512,7 +553,11 @@ export function QueuePanel() {
   };
 
   return (
-    <div className="flex shrink-0 border-r border-[var(--border)]" style={{ width }}>
+    // `--queue-bg` on the outermost element, so the header, the rows and the
+    // gap under a short list are one surface. Anything less leaves a seam
+    // where the list ends, which is the sort of thing that reads as a
+    // rendering fault rather than as a boundary.
+    <div className="flex shrink-0 border-r border-[var(--border)] bg-[var(--queue-bg)]" style={{ width }}>
       <div className="flex min-w-0 flex-1 flex-col">
       <ZoomPane name="queue">
       <div className="flex h-full min-w-0 flex-1 flex-col">

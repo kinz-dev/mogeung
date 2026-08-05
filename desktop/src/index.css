@@ -72,6 +72,11 @@
   --state-hover: color-mix(in srgb, var(--text) 8%, transparent);
   --state-focus: color-mix(in srgb, var(--text) 12%, transparent);
   --state-press: color-mix(in srgb, var(--text) 16%, transparent);
+  /* Selection, for a surface that is already carrying a colour and must keep
+     it — a colour-tagged queue row. Heavier than `press` on purpose: this is
+     not a transient state under the pointer, it is the row you are working
+     on, and it has to be findable in a scrolled list from across the desk. */
+  --state-selected: color-mix(in srgb, var(--text) 26%, transparent);
 
   /* The focus ring. Its own token because it has to clear both the page and a
      selected row, and those are different colours. */
@@ -112,6 +117,23 @@
   --bg-panel: #1a1c20;
   --bg-raised: #22252a;
   --bg-faint: #2a2d33;
+  /* A terminal sits *below* every other surface, and it is the only one that
+     is not this app talking — it is another machine's output, arriving. The
+     depth is what keeps the two from reading as one thing. Asked for
+     2026-08-05; the pane had been `--bg-panel`, the same surface as the
+     chrome around it. */
+  --terminal-bg: #0c0d10;
+  /* The queue, in two parts, because the first attempt at *"make the session
+     list darker"* darkened the wrong one.
+
+     `--queue-bg` is the **frame**: the header, the gutter, the space under a
+     short list. `--row-bg` is the **card** — the box carrying a session's
+     badge, title, branch and detail, which is what you are actually looking at
+     and what was asked for. The card is darker than the frame rather than the
+     other way round, so a row reads as a thing sitting *in* the list, and so a
+     colour tag has something to push against. */
+  --queue-bg: #16181c;
+  --row-bg: #0a0b0e;
 
   --text: #d4d7dd;
   --text-strong: #f0f2f6;
@@ -130,6 +152,24 @@
   --selection-stroke: #f0f2f6;
   --on-accent: #ffffff;
   --on-accent-dark: #12141a;
+
+  /* A tagged row's surface, at the weight of `--selection-bg` — the whole
+     request behind them is that a tag be visible without being read, and a
+     4px bar was not. Hand-picked per theme rather than mixed at runtime,
+     because a mix against `--bg` lands somewhere different in each and
+     neither would have been looked at.
+
+     **Blue is deliberately not the selection's own hue.** `--selection-bg`
+     is a navy of exactly this weight, so a blue-tagged row and the selected
+     row would have been the same surface; this one sits cooler and darker,
+     and the ring is what says *selected* in any case. */
+  --tag-red-bg: #5e2529;
+  --tag-orange-bg: #5f3823;
+  --tag-amber-bg: #5b4823;
+  --tag-green-bg: #234f33;
+  --tag-blue-bg: #1d4a5c;
+  --tag-purple-bg: #442967;
+  --tag-grey-bg: #3d3d42;
 
   --add-bg: #143a21;
   --del-bg: #451a1d;
@@ -169,6 +209,15 @@
   --bg-panel: #f7f8fa;
   --bg-raised: #ffffff;
   --bg-faint: #e4e7ec;
+  /* The light theme cannot go *down* from `--bg-panel` far without becoming a
+     grey box, so it goes the other way the palette already goes for depth: a
+     shade under the panel, still clearly paper. */
+  --terminal-bg: #eceef2;
+  /* Light keeps the same *relationship* — card under frame — with much less
+     distance, because two near-white greys a step apart is a boundary and
+     four steps apart is a smudge. */
+  --queue-bg: #eef0f4;
+  --row-bg: #e0e3e9;
 
   --text: #25282e;
   --text-strong: #0d0f14;
@@ -193,6 +242,17 @@
   --syn-comment: #6b707b;
   --syn-number: #994e00;
   --syn-type: #0e5e7e;
+
+  /* The same seven, against a light surface. See the note in the dark block:
+     these are tints of the tag rather than the tag, and blue stays clear of
+     the selection's hue on purpose. */
+  --tag-red-bg: #f6d5d7;
+  --tag-orange-bg: #f8ddcb;
+  --tag-amber-bg: #f4e6c3;
+  --tag-green-bg: #cdecd7;
+  --tag-blue-bg: #cbe8f0;
+  --tag-purple-bg: #e2d6f5;
+  --tag-grey-bg: #dcdde1;
 
   --add-bg: #ddf4e3;
   --del-bg: #fbdfe1;
@@ -266,6 +326,44 @@ body {
 input,
 textarea {
   font-family: inherit;
+}
+
+/**
+ * A tagged row's surface. `R-B26`.
+ *
+ * The tint arrives as `--tag-bg` on the element rather than as seven classes,
+ * so the palette stays the only place a tag's colour is written down.
+ *
+ * The hover wash is a `background-image` on purpose. `--state-hover` is a
+ * translucent layer over whatever is underneath, and it is applied as a
+ * `background-color` everywhere else — which a tint set the same way would
+ * simply replace, leaving a tagged row the one row in the list that does not
+ * answer the pointer. An image paints *over* the colour, so both survive.
+ */
+.mogeung-tag-row {
+  background-color: var(--tag-bg);
+}
+.mogeung-tag-row:hover {
+  background-image: linear-gradient(var(--state-hover), var(--state-hover));
+}
+
+/**
+ * Tagged **and** selected — the case the first attempt got wrong.
+ *
+ * It withheld the tint while a row was selected, so a tagged row stopped
+ * looking tagged exactly when you clicked it to check you were on the right
+ * one. Both signals are wanted, and they answer different questions: the hue
+ * says *which* session, the lift says *this is the one you are in*. So the
+ * colour stays and selection is said over the top of it — a wash of the
+ * content ink, keeping the hue, plus the ring the row draws itself.
+ *
+ * After `:hover` in the file, so clicking a row you are already hovering does
+ * not leave it looking merely hovered. Both are `background-image`, and the
+ * later rule wins at equal specificity.
+ */
+.mogeung-tag-row[aria-selected="true"],
+.mogeung-tag-row[aria-selected="true"]:hover {
+  background-image: linear-gradient(var(--state-selected), var(--state-selected));
 }
 
 /* ------------------------------------------------------------------ */
