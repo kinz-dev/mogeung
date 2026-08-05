@@ -94,3 +94,48 @@ export async function readClipboard(): Promise<string> {
   if (!navigator.clipboard?.readText) throw new Error("this webview will not read the clipboard");
   return await navigator.clipboard.readText();
 }
+
+/**
+ * What an `OSC 52` sequence is asking for — the program's own way to reach the
+ * clipboard, over the wire rather than through a keyboard.
+ *
+ * **xterm.js does not implement it.** It registers handlers for OSC 0, 1, 2, 4,
+ * 8, 10–12, 104 and 110–112, and 52 is not among them, so the request is parsed
+ * and dropped. Claude Code emits one (`ESC ] 52 ;` appears in the binary), and
+ * tmux at its default `set-clipboard external` forwards an application's
+ * request outward rather than answering it — so the whole chain works except
+ * for the last hop, which is us. That is why *copy* inside the agent reached
+ * nothing: no gesture was missing, the answer was being thrown away.
+ *
+ * The payload is `<targets>;<base64>`, and `?` in place of the base64 is a
+ * **read** — "tell me what is on the clipboard". That one is refused rather
+ * than implemented: anything that can write to this pty could then read the
+ * clipboard of the machine the window runs on, and a remote session
+ * ([R-I6](../../../docs/product/roadmap.md)) makes that a machine boundary. It
+ * is reported as handled anyway, because a terminal that stays silent invites
+ * the program to wait for an answer that will never come.
+ */
+export type Osc52 = { kind: "write"; text: string } | { kind: "read" } | null;
+
+/** How much a program may put on the clipboard in one sequence. */
+const OSC52_MAX = 4 * 1024 * 1024;
+
+export function decodeOsc52(data: string): Osc52 {
+  const semi = data.indexOf(";");
+  if (semi < 0) return null;
+  const payload = data.slice(semi + 1);
+  if (payload === "?") return { kind: "read" };
+  // Refused rather than truncated: half a paste is worse than none, and the
+  // cap exists so a runaway program cannot pin the window base64-decoding.
+  if (payload.length > OSC52_MAX) return null;
+  try {
+    const binary = atob(payload);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    // Decoded as UTF-8 rather than latin-1: the clipboard is text, and a path
+    // with a non-ASCII character in it is the ordinary case.
+    return { kind: "write", text: new TextDecoder().decode(bytes) };
+  } catch {
+    // Malformed base64. Degrade, never throw — this runs inside the parser.
+    return null;
+  }
+}

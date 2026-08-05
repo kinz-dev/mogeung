@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { clipboardIntent, type ClipboardIntent } from "@/lib/clipboard";
+import { clipboardIntent, decodeOsc52, type ClipboardIntent } from "@/lib/clipboard";
 
 function key(init: Partial<KeyboardEvent> & { key: string }): KeyboardEvent {
   return {
@@ -62,5 +62,31 @@ describe("what a chord means to a terminal", () => {
     // Alt is how tmux and readline reach half their bindings.
     expect(intentOf({ key: "v", ctrlKey: true, altKey: true })).toBeNull();
     expect(intentOf({ key: "c", ctrlKey: true, shiftKey: true, altKey: true })).toBeNull();
+  });
+});
+
+describe("OSC 52 — the program asking for the clipboard itself", () => {
+  const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+
+  it("decodes a write, whatever targets it names", () => {
+    expect(decodeOsc52(`c;${b64("hello")}`)).toEqual({ kind: "write", text: "hello" });
+    expect(decodeOsc52(`;${b64("hello")}`)).toEqual({ kind: "write", text: "hello" });
+    expect(decodeOsc52(`p;${b64("primary")}`)).toEqual({ kind: "write", text: "primary" });
+  });
+
+  it("decodes as UTF-8, not latin-1", () => {
+    // A path with an accent in it is the ordinary case, and latin-1 turns it
+    // into mojibake on the clipboard rather than failing loudly.
+    expect(decodeOsc52(`c;${b64("café — ✓")}`)).toEqual({ kind: "write", text: "café — ✓" });
+  });
+
+  it("reports a read request as a read, so it can be refused rather than answered", () => {
+    expect(decodeOsc52("c;?")).toEqual({ kind: "read" });
+  });
+
+  it("degrades on anything malformed rather than throwing inside the parser", () => {
+    expect(decodeOsc52("no-semicolon")).toBeNull();
+    expect(decodeOsc52("c;not!valid!base64")).toBeNull();
+    expect(decodeOsc52(`c;${"A".repeat(5 * 1024 * 1024)}`)).toBeNull();
   });
 });

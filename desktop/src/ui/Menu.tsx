@@ -13,9 +13,20 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { surface } from "@/ui/styles";
 
-export function ContextMenu({ trigger, children }: { trigger: ReactNode; children: ReactNode }) {
+export function ContextMenu({
+  trigger,
+  children,
+  onOpenChange,
+}: {
+  trigger: ReactNode;
+  children: ReactNode;
+  /** Fired as the menu opens. For a menu whose items depend on state nothing
+   *  else observes — a terminal's selection lives inside xterm, not in the DOM
+   *  and not in a store, so it has to be read at the moment of asking. */
+  onOpenChange?: (open: boolean) => void;
+}) {
   return (
-    <ContextMenuPrimitive.Root>
+    <ContextMenuPrimitive.Root onOpenChange={onOpenChange}>
       <ContextMenuPrimitive.Trigger asChild>{trigger}</ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Content
@@ -33,17 +44,21 @@ export function MenuItem({
   children,
   onSelect,
   danger,
+  disabled,
 }: {
   children: ReactNode;
   onSelect: () => void;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <ContextMenuPrimitive.Item
       onSelect={onSelect}
+      disabled={disabled}
       className={cn(
         "cursor-default rounded-sm px-2 py-1 text-xs outline-none select-none",
         "data-[highlighted]:bg-[var(--state-focus)] data-[highlighted]:text-[var(--text-strong)]",
+        "data-[disabled]:opacity-40 data-[disabled]:pointer-events-none",
         danger && "text-[var(--red)]",
       )}
     >

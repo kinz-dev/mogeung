@@ -13,7 +13,8 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
-import { clipboardIntent, readClipboard, writeClipboard } from "@/lib/clipboard";
+import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
+import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
 import { useStore } from "@/store";
 
 /**
@@ -89,6 +90,8 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
   const appZoom = useStore((s) => s.prefs.appZoom);
   const pushError = useStore((s) => s.pushError);
   const [exited, setExited] = useState(false);
+  /** xterm's selection, read when the menu opens — it lives in xterm, not the DOM. */
+  const [selection, setSelection] = useState("");
   // Read from the document rather than from the factor, because what matters
   // is whether a CSS zoom is *in force* — with the webview zoom in use it is
   // not, whatever the stored factor says. Recomputed when the factor changes,
@@ -126,10 +129,19 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
     // shortcuts is a terminal you cannot run a terminal program in — and the
     // one thing this pane exists for is answering a prompt Claude Code is
     // showing.
-    const typed = term.onData((data) => void ptyWrite(id, data).catch(() => {}));
+    const typed = term.onData((data) => void ptyWrite(id, data, "xterm").catch(() => {}));
     const keys = term.attachCustomKeyEventHandler((e) => {
       if (e.type === "keydown" && e.key === "Enter" && e.shiftKey) {
-        void ptyWrite(id, SHIFT_ENTER).catch(() => {});
+        // **`preventDefault` is not decoration here.** Returning `false` makes
+        // xterm return from `_keyDown` *before* it calls `preventDefault`, so
+        // the browser's own default action still runs — and the default action
+        // for Shift+Enter, with focus in the hidden `<textarea>` xterm types
+        // through, is to insert a line break into it. Every other branch below
+        // already prevents its default; this one did not, and a stray `\n` in
+        // that textarea is the leading suspect for the newline that appears in
+        // the agent's prompt without anyone typing it.
+        e.preventDefault();
+        void ptyWrite(id, SHIFT_ENTER, "shift-enter").catch(() => {});
         return false;
       }
       // Copy and paste, which xterm implements neither of. See `clipboard.ts`
@@ -162,6 +174,19 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
       return true;
     });
     void keys;
+
+    // `OSC 52` — the program's own route to the clipboard, which xterm.js
+    // leaves unimplemented. See `decodeOsc52` for why this is the hop that was
+    // missing and why a *read* is refused rather than answered.
+    term.parser.registerOscHandler(52, (data) => {
+      const req = decodeOsc52(data);
+      if (!req) return false;
+      if (req.kind === "read") return true;
+      void writeClipboard(req.text).catch((err) =>
+        pushError(`the session tried to copy and could not: ${String(err)}`),
+      );
+      return true;
+    });
 
     let unlistenData: (() => void) | null = null;
     let unlistenClosed: (() => void) | null = null;
@@ -341,14 +366,49 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
 
   return (
     <div className="relative h-full min-h-0 bg-[var(--terminal-bg)]" style={undoCssZoom}>
-      {/* `data-owns-zoom`: this subtree handles its own Ctrl+wheel, and the
-          enclosing `ZoomPane` must keep its hands off. See the note by the
-          wheel handler above — a CSS-scaled terminal selects the wrong text.
-
-          The `zoom` above undoes an *ancestor's* CSS zoom, which is a
-          different hole and the one that actually bit: a pane wrapper can be
-          told to keep its hands off, and the document root cannot. */}
-      <div ref={hostRef} data-owns-zoom className="h-full w-full" />
+      {/* **The webview's own right-click menu is useless over a terminal.**
+          xterm draws its selection itself rather than making a DOM one, so the
+          browser has nothing to copy and offers a greyed-out `Copy` — reported
+          2026-08-05 as *"after select text I can't right-click copy"*. This
+          menu reads the selection from xterm, where it actually lives. */}
+      <ContextMenu
+        onOpenChange={(open) => open && setSelection(termRef.current?.getSelection() ?? "")}
+        trigger={
+          // `data-owns-zoom`: this subtree handles its own Ctrl+wheel, and the
+          // enclosing `ZoomPane` must keep its hands off. See the note by the
+          // wheel handler above — a CSS-scaled terminal selects the wrong text.
+          //
+          // The `zoom` above undoes an *ancestor's* CSS zoom, which is a
+          // different hole and the one that actually bit: a pane wrapper can be
+          // told to keep its hands off, and the document root cannot.
+          <div ref={hostRef} data-owns-zoom className="h-full w-full" />
+        }
+      >
+        <MenuItem
+          disabled={!selection}
+          onSelect={() => {
+            if (!selection) return;
+            void writeClipboard(selection).catch((err) => pushError(`could not copy: ${String(err)}`));
+          }}
+        >
+          Copy <span className="text-[var(--dim)]">Ctrl+Shift+C</span>
+        </MenuItem>
+        <MenuItem
+          onSelect={() =>
+            void readClipboard()
+              .then((text) => text && termRef.current?.paste(text))
+              .catch((err) => pushError(`could not paste: ${String(err)} — try Ctrl+V`))
+          }
+        >
+          Paste <span className="text-[var(--dim)]">Ctrl+V</span>
+        </MenuItem>
+        {!selection && (
+          // The gesture is not obvious and the failure is silent: Claude Code
+          // turns mouse reporting on, so a plain drag belongs to *it* and never
+          // reaches xterm's selection. Shift is what takes the mouse back.
+          <MenuLabel>hold Shift while dragging — the session owns a plain drag</MenuLabel>
+        )}
+      </ContextMenu>
       {exited && (
         <div className="absolute inset-x-0 bottom-0 bg-[var(--bg-raised)] px-2 py-1 text-2xs text-[var(--dim)]">
           the terminal exited — tmux keeps the session, so reopening this pane re-attaches
