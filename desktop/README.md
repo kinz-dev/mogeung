@@ -38,6 +38,12 @@ showing a black rectangle.
 What has *not* happened yet is a pty actually being opened. It builds and
 exports its five commands; the first real `tmux attach` is still ahead.
 
+Vite is told **not** to watch `src-tauri/`. That directory holds ~17k cargo
+fingerprint files once the Rust half has been built, and watching them exhausts
+Linux's inotify handles — which surfaces as `ENOSPC` from `node:fs/watchers`,
+reads as "disk full", and is nothing of the kind. If you still hit the limit
+with other watchers running, `sysctl fs.inotify.max_user_watches` is the knob.
+
 ## Building a binary you can hand to someone
 
 ```sh
