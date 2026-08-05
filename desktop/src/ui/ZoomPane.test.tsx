@@ -30,7 +30,7 @@ function wheel(el: HTMLElement, init: WheelEventInit) {
 describe("a pane's Ctrl+wheel zoom", () => {
   beforeEach(() => {
     const { prefs, setPrefs } = useStore.getState();
-    setPrefs({ zoom: { ...prefs.zoom, code: 1 } });
+    setPrefs({ zoom: { ...prefs.zoom, code: 1, agent: 1 } });
   });
 
   it("reaches the wrapper even when the content swallows the event", () => {
@@ -60,6 +60,29 @@ describe("a pane's Ctrl+wheel zoom", () => {
     const e = wheel(child, { deltaY: -100 });
 
     expect(useStore.getState().prefs.zoom.code ?? 1).toBe(1);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
+  /**
+   * The regression the capture-phase fix caused.
+   *
+   * Making the wrapper capture meant it ran *before* content that handles its
+   * own Ctrl+wheel — so the terminal, which changes its font because xterm
+   * measures a cell in device pixels, was CSS-scaled instead and started
+   * selecting text at the wrong position. Opting out has to be declared now
+   * that stopping propagation from the inside is too late.
+   */
+  it("leaves content that owns its own zoom alone", () => {
+    const { getByTestId } = render(
+      <ZoomPane name="agent">
+        <div data-owns-zoom data-testid="terminal" />
+      </ZoomPane>,
+    );
+
+    const e = wheel(getByTestId("terminal"), { ctrlKey: true, deltaY: -100 });
+
+    expect(useStore.getState().prefs.zoom.agent ?? 1).toBe(1);
+    // Not claimed either, or the content's own handler never gets to act.
     expect(e.defaultPrevented).toBe(false);
   });
 

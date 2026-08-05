@@ -72,6 +72,18 @@ export function ZoomPane({
       // means every scroll in the pane passes through here first, and a stray
       // `preventDefault` would break scrolling everywhere at once.
       if (!e.ctrlKey && !e.metaKey) return;
+      // Some content scales *itself* and says so. A terminal is the case:
+      // xterm measures a character cell in device pixels, so CSS `zoom` leaves
+      // that measurement fighting the transform and the grid drifts — text
+      // selects at the wrong position, which is how this was reported. It owns
+      // its Ctrl+wheel and changes its font instead.
+      //
+      // This check exists because capture made the boundary *stronger*: before
+      // it, an inner handler that stopped propagation was enough to opt out;
+      // now the outer one runs first and would claim the event before the
+      // content ever saw it. Opting out has to be declared, so it is.
+      const target = e.target as Element | null;
+      if (target?.closest?.("[data-owns-zoom]")) return;
       e.preventDefault();
       // Claimed, so the content below does not also act on it. Monaco reads a
       // Ctrl+wheel as a scroll (or, with `mouseWheelZoom`, as a zoom of its own

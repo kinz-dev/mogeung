@@ -104,7 +104,9 @@ function PaneTab(props: IDockviewPanelHeaderProps) {
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
   changes: pane("changes", ChangesPane),
   transcript: pane("transcript", TranscriptPane),
-  agent: pane("agent", AgentPane),
+  // A terminal is scaled by its font, never by CSS — same reason as Monaco
+  // below, and a stored zoom from before this rule must not still apply.
+  agent: pane("agent", AgentPane, { scale: false }),
   // Monaco takes the factor as a font size instead — see `ZoomPane`'s `scale`.
   code: pane("code", CodePane, { scale: false }),
 };

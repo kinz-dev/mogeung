@@ -283,7 +283,10 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
 
   return (
     <div className="relative h-full min-h-0">
-      <div ref={hostRef} className="h-full w-full" />
+      {/* `data-owns-zoom`: this subtree handles its own Ctrl+wheel, and the
+          enclosing `ZoomPane` must keep its hands off. See the note by the
+          wheel handler above — a CSS-scaled terminal selects the wrong text. */}
+      <div ref={hostRef} data-owns-zoom className="h-full w-full" />
       {exited && (
         <div className="absolute inset-x-0 bottom-0 bg-[var(--bg-raised)] px-2 py-1 text-2xs text-[var(--dim)]">
           the terminal exited — tmux keeps the session, so reopening this pane re-attaches

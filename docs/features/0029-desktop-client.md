@@ -976,3 +976,29 @@ header — and the first regression test written for the bug **passed against th
 bug**, because a window with an empty queue never renders a row and the throw is
 in the row. Seeding one session is the whole difference. A test that cannot fail
 is worse than no test, because it is also a claim that the case is covered.
+
+**The capture-phase fix broke the terminal's selection, which is the same bug
+from the other end.**
+
+Reported as text in the Agent pane selecting at the wrong position when dragged.
+The cause is the fix two entries above: making `ZoomPane`'s wheel listener
+**capture** meant it now runs *before* content that handles its own Ctrl+wheel.
+The terminal is exactly that — xterm measures a character cell in device pixels,
+so it changes its **font** rather than letting anything CSS-scale it, and the
+comment saying so has been beside its handler since it was written. Capture took
+the event first, CSS-zoomed the pane, and the grid drifted out of alignment with
+the mouse.
+
+So the boundary needed the other half. Stopping propagation from the inside used
+to be enough to opt out; once the outer handler runs first, opting out has to be
+**declared** — the terminal's host carries `data-owns-zoom`, and `ZoomPane`
+leaves any event from that subtree entirely alone, unprevented as well as
+unclaimed. The Agent pane also takes `scale={false}`, so a zoom factor stored
+before this rule cannot still apply to it.
+
+Worth stating as a general lesson, because it is the second time in two days
+this exact trade appeared: a wrapper that captures gets to win over content that
+would otherwise swallow the gesture, and pays for it by having to know which
+content is *supposed* to win. The declaration is the price, and it is cheaper
+than the alternative — an outer handler quietly overriding an inner one is
+invisible until someone drags across a terminal.
