@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-07-29
+updated: 2026-08-05
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -90,3 +90,22 @@ label `LIMIT`. A limit-hit session is deliberately neither `Failed`
 means several sessions went dark at once, and the queue should look like
 exactly that. Cleared when a new human turn or real assistant output
 shows the session moving again.
+
+## The queue is compared, not just sent (2026-08-05)
+
+`AttentionItem` derives `PartialEq`, and that derive is load-bearing rather
+than tidiness: the scan runs at the poll rate and used to broadcast the whole
+queue every pass, so a window sat redrawing a list that had not changed while
+agents worked. The ranking is now computed every pass as before and **sent only
+when it differs from the last one sent** (`R-J8`).
+
+Two consequences worth stating, because both are easy to break:
+
+- **Every field of an item is part of the comparison**, including `detail` —
+  and `detail` carries a live duration (`busy but silent for 8m30s`). A queue
+  whose only change is a clock tick therefore still counts as changed, which is
+  correct: that string is on screen.
+- **Gating applies to the broadcast, never to a request.** A `Rescan` or an
+  explicit fetch is always answered, unchanged or not. A request that returns
+  silence because the answer happens to match the last one is indistinguishable
+  from a daemon that has stopped.
