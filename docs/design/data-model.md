@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-04
+updated: 2026-08-05
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -62,8 +62,17 @@ able to change `Session` without a migration matters more than query planning at
 this scale. Rows that fail to deserialise are skipped with a warning rather than
 refusing to start.
 
-**`alive`, `live_status` and `pid` are never trusted from storage.** They are
+**`alive` and `live_status` are never trusted from storage.** Both are
 re-derived from the OS on the first scan after startup.
+
+**`pid` is kept, and is not a liveness claim.** A dead session holding its last
+pid is the only evidence that `/clear` moved that pid to a fresh session id,
+which is how a client knows the two are one conversation and carries a
+hand-applied label across (`prefs.rs`, `store/prefs.ts`). The scan re-derives
+the pid of everything actually running, so a remembered pid only ever survives
+on a session whose `alive` is false — and every consumer that needs a *live*
+pid gates on `alive` first. Wiping it on load broke the label migration across a
+daemon restart, the same way wiping it on death broke it inside one run.
 
 ### Read positions are part of the record (`R-A6`)
 

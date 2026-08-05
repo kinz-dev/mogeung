@@ -1,13 +1,14 @@
 # mogeung-desktop
 
-The second client. React + TypeScript + Monaco, packaged with Tauri.
+The window. React + TypeScript + Monaco, packaged with Tauri.
 
-The daemon is unchanged and unaware: this speaks the same WebSocket protocol the
-egui window does, so **both can run at once against one daemon**. That is the
-whole migration plan — port a pane at a time, keep using the client that works,
-retire the old one at parity.
+The daemon is unchanged and unaware, which is the whole point: this speaks the
+WebSocket protocol that existed before it did. It was built beside the egui
+window and ran against the same daemon for a day — port a pane at a time, keep
+using the client that works — and on 2026-08-05 it became the only one
+([ADR-0020](../docs/decisions/0020-the-egui-client-is-retired.md)).
 
-## Running it tomorrow morning
+## Running it
 
 The daemon is already what you run. Start it however you normally do, then:
 
@@ -35,8 +36,9 @@ builds and links. The two terminal panes are the only thing that needs it — a
 browser tab has no pty to hold, so in the browser they say so rather than
 showing a black rectangle.
 
-What has *not* happened yet is a pty actually being opened. It builds and
-exports its five commands; the first real `tmux attach` is still ahead.
+The panes have been driven daily since 2026-08-04 — the selection bug fixed on
+2026-08-05 was found by using one, which is the kind of defect no amount of
+reading the argv-building would have surfaced.
 
 Vite is told **not** to watch `src-tauri/`. That directory holds ~17k cargo
 fingerprint files once the Rust half has been built, and watching them exhausts
@@ -98,7 +100,7 @@ that step, and only that step, needs the network.
 The first build is minutes, not seconds: this shell compiles **the daemon too**,
 because `mogeungd` is a path dependency. Later builds reuse the cache.
 
-### It is one executable, like the egui one
+### It is one executable
 
 The built app hosts a daemon on a thread when nothing is already listening, and
 attaches when something is — [ADR-0009](../docs/decisions/0009-the-window-may-host-a-daemon.md),
@@ -124,12 +126,13 @@ Note that `cargo build --release` at the repo root does **not** build this.
 | Insight — **redesigned**: charts for analytics and burn, plus all eight views | done |
 | Rail — Files, Search, Notes, Bookmarks (`R-B40`, `R-B41`, `R-F13`) | done |
 | Command palette — actions and go-to-file, Tab switches | done |
-| Keyboard — the egui bindings, kept | done |
-| **Agent pane** (tmux attach) | built — Tauri only, and the Rust needs webkit's headers to compile |
-| **Terminal panel** (your shells) | built — same |
+| Keyboard — the egui window's bindings, kept | done |
+| **Agent pane** (tmux attach) | done — Tauri only, and the Rust needs webkit's headers to compile |
+| **Terminal panel** (your shells) | done — same |
 | Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
 | Connections window (`R-I7`) — add, name, switch, forget | done — no LAN browsing, which needs multicast the webview cannot do |
 | Launch a session (`R-B2`), follow-up prompt builder, ambient board (`R-C5`) | done |
+| Global hotkey (`R-B10`) — `Ctrl+Cmd+M` raises the window | done — registered 2026-08-05; the plugin had been loaded and never used |
 | Verification — observed runs and claims, plus the signal runner and coverage (`R-E2`, `R-E5`) | done — the command runs only when you press it |
 | Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
 | Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |

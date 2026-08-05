@@ -5,11 +5,18 @@
 #   ./scripts/install.sh --prefix DIR    install somewhere else
 #   ./scripts/install.sh --uninstall     remove what a previous run installed
 #
-# Installs three things: the daemon (mogeungd), the window (mogeung), and the
-# yolomo helper that starts claude under tmux so mogeung can host it in a pane.
-# On Linux it also installs a desktop entry and icon, so the window shows up
-# properly in the dock — Wayland compositors ignore the icon a program sets on
-# itself and only honour a desktop entry matching the window's app id.
+# Installs two things: the daemon (mogeungd), and the yolomo helper that starts
+# claude under tmux so mogeung can host it in a pane.
+#
+# The window is **not** installed from here any more. It is the Tauri client in
+# desktop/ (ADR-0020 retired the egui one), and its own bundler produces a .deb,
+# .rpm and an AppImage that carry the icon and the desktop entry properly:
+#
+#   cd desktop && npm install && npm run tauri build
+#
+# --uninstall still sweeps up the old `mogeung` binary, desktop entry and icon
+# that earlier runs of this script installed, so upgrading does not leave a
+# launcher pointing at a program that no longer exists.
 #
 # The default is ~/.local/bin because it needs no sudo. Pass
 # `--prefix /usr/local/bin` (with sudo) for a system-wide install.
@@ -23,11 +30,17 @@ PREFIX="$HOME/.local/bin"
 BUILD=1
 UNINSTALL=0
 
-# The complete list of what this script owns in $PREFIX. --uninstall removes
-# exactly these and nothing else.
-INSTALLABLES="mogeungd mogeung yolomo"
+# The complete list of what this script installs into $PREFIX.
+INSTALLABLES="mogeungd yolomo"
 
-# Linux desktop integration (icon + launcher). Also owned by this script.
+# What --uninstall removes: what it installs, plus the retired window it used
+# to. Left in the sweep deliberately — a machine that ran the old script has a
+# `mogeung` binary this one will never overwrite, and forgetting it here is how
+# a stale binary outlives the code that built it.
+REMOVABLES="$INSTALLABLES mogeung"
+
+# Linux desktop integration (icon + launcher) that earlier versions installed
+# for the egui window. Nothing writes these now; --uninstall still clears them.
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 DESKTOP_FILE="$DATA_DIR/applications/mogeung.desktop"
 ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/mogeung.png"
@@ -67,7 +80,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    for name in $INSTALLABLES; do
+    for name in $REMOVABLES; do
         if [ -e "$PREFIX/$name" ]; then
             rm "$PREFIX/$name" || exit 1
             echo "▸ removed $PREFIX/$name"
@@ -88,12 +101,10 @@ if [ "$BUILD" -eq 1 ]; then
     cargo build --release || exit 1
 fi
 
-for bin in mogeungd mogeung; do
-    if [ ! -x "target/release/$bin" ]; then
-        echo "target/release/$bin is missing — build first (or drop --no-build)" >&2
-        exit 1
-    fi
-done
+if [ ! -x "target/release/mogeungd" ]; then
+    echo "target/release/mogeungd is missing — build first (or drop --no-build)" >&2
+    exit 1
+fi
 
 mkdir -p "$PREFIX" || exit 1
 
@@ -101,24 +112,20 @@ mkdir -p "$PREFIX" || exit 1
 # that an already-running daemon keeps its old image instead of crashing on a
 # half-written file.
 install -m 755 target/release/mogeungd "$PREFIX/mogeungd" || exit 1
-install -m 755 target/release/mogeung  "$PREFIX/mogeung"  || exit 1
 install -m 755 scripts/yolomo          "$PREFIX/yolomo"   || exit 1
 
 for name in $INSTALLABLES; do
     echo "▸ installed $PREFIX/$name"
 done
 
-# Desktop entry and icon, Linux only. Exec is rewritten to the absolute path
-# because a desktop launch does not necessarily share the shell's PATH.
-if [ "$(uname)" = Linux ]; then
-    mkdir -p "$DATA_DIR/applications" "$(dirname "$ICON_FILE")" || exit 1
-    sed "s|^Exec=.*|Exec=$PREFIX/mogeung|" crates/mogeung-ui/assets/mogeung.desktop \
-        > "$DESKTOP_FILE" || exit 1
-    chmod 644 "$DESKTOP_FILE"
-    install -m 644 crates/mogeung-ui/assets/mogeung.png "$ICON_FILE" || exit 1
-    refresh_desktop_caches
-    echo "▸ installed $DESKTOP_FILE"
-    echo "▸ installed $ICON_FILE"
+# A desktop entry left behind by an older install would launch a binary this
+# script no longer puts there. Say so rather than deleting it silently: an
+# --uninstall clears it, and doing that on an *install* run would be a surprise.
+if [ -e "$DESKTOP_FILE" ]; then
+    echo
+    echo "note: $DESKTOP_FILE is from the retired egui window and launches" >&2
+    echo "  a binary that is no longer installed. Clear it with --uninstall," >&2
+    echo "  then build the Tauri window: (cd desktop && npm run tauri build)" >&2
 fi
 
 # A successful install to a directory the shell will never look in is the most

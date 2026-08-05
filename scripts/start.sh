@@ -10,6 +10,12 @@
 #   ./scripts/start.sh --debug      debug build (faster to compile)
 #   mprocs                          same two processes, side by side
 #
+# The window is the Tauri client in desktop/, run through `npm run tauri dev`,
+# since the egui one was retired (ADR-0020). It builds itself, so --debug and
+# --no-build are about the daemon only. It dials 127.0.0.1:7717 by default; a
+# --port other than that has to be chosen in the client's connections window
+# (Alt+D), because a running window cannot be told from out here.
+#
 # Ctrl-C stops both. Killing the daemon alone is safe — the window reconnects
 # on its own — but leaving an orphan daemon holding port 7717 is the single
 # most annoying thing about running this by hand, so cleanup is a trap rather
@@ -85,6 +91,21 @@ ARGS=(--listen "127.0.0.1:$PORT")
 [ "$NOTIFY" -eq 1 ] && ARGS+=(--notify)
 [ -n "$PUSH_URL" ] && ARGS+=(--push-url "$PUSH_URL")
 
+# The window, in the foreground. `tauri dev` supervises its own vite server and
+# cargo build, so there is nothing to wait for and nothing to background: the
+# caller either execs this or watches the pid.
+#
+# Not backgrounded into `&` here for the same reason the daemon is not: mprocs
+# and the `both` path below both need a process they can signal.
+window() {
+    if [ ! -d desktop/node_modules ]; then
+        echo "▸ desktop/node_modules is missing — run: (cd desktop && npm install)" >&2
+        return 1
+    fi
+    echo "▸ npm run tauri dev"
+    cd desktop && exec npm run tauri dev
+}
+
 build() {
     [ "$BUILD" -eq 0 ] && return 0
     echo "▸ building ($PROFILE)…"
@@ -135,20 +156,31 @@ case "$MODE" in
         # process is doing — one dependency, not two.
         echo "▸ waiting for the daemon on $PORT…"
         wait_for_daemon || exit 1
-        # --foreground: mprocs supervises this process, so it must not detach.
-        exec "$BIN/mogeung" --foreground --url "ws://127.0.0.1:$PORT/ws"
+        window
         ;;
 
     both)
         build
         free_port || exit 1
 
+        # Job control, so each background job gets its own process group and
+        # `kill -- -PID` can take a whole tree down. The window is now
+        # `npm → cargo → tauri → the app`, and killing only the npm at the top
+        # of that leaves the window on screen with nothing supervising it.
+        set -m
+
         DAEMON_PID=""
         UI_PID=""
+        # Signal the group, falling back to the bare pid: a shell without job
+        # control puts everything in one group, and `kill -- -$$` there would
+        # be this script killing itself.
+        stop() {
+            kill -- "-$1" 2>/dev/null || kill "$1" 2>/dev/null
+        }
         cleanup() {
             trap - INT TERM EXIT
-            [ -n "$UI_PID" ] && kill "$UI_PID" 2>/dev/null
-            [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null
+            [ -n "$UI_PID" ] && stop "$UI_PID"
+            [ -n "$DAEMON_PID" ] && stop "$DAEMON_PID"
             wait 2>/dev/null
             echo
             echo "▸ stopped"
@@ -163,12 +195,15 @@ case "$MODE" in
             exit 1
         fi
         [ -n "$DB" ] && echo "▸ database: $DB"
-        echo "▸ web client: http://127.0.0.1:$PORT/"
+        # The daemon serves no page of its own — the phone client that used to
+        # live at `/` was removed on 2026-07-30. A browser client is the same
+        # React app served by vite, which `tauri dev` is already running.
+        echo "▸ browser client: http://localhost:1420/"
 
-        # --foreground: the wait loop below watches this pid, so if the window
-        # detached itself the loop would see an instant death and stop the
-        # daemon with it.
-        "$BIN/mogeung" --foreground --url "ws://127.0.0.1:$PORT/ws" &
+        # Backgrounded into a subshell, which `window`'s exec then replaces —
+        # so $! is the npm process itself and the wait loop below watches
+        # something real rather than a shell that has already returned.
+        window &
         UI_PID=$!
 
         # Exit when *either* dies. A daemon that crashed leaves a window that

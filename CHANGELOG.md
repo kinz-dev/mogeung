@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — one window (2026-08-05)
+
+Roadmap `R-M4`; see
+[docs/decisions/0020-the-egui-client-is-retired.md](docs/decisions/0020-the-egui-client-is-retired.md).
+
+**Removed — the egui client.** `crates/mogeung-ui` and the vendored
+`crates/egui-term` are deleted. The Tauri client in `desktop/` is the
+window; the daemon, `mogeung-core` and `mogeung-tray` are unchanged, which
+is what ADR-0018 promised when the port started. The workspace goes from
+five crates to three and no daemon build pulls in a GPU stack again.
+
+`cargo build --release` no longer produces a window — building one needs
+node and the system webview: `cd desktop && npm run tauri build`.
+`scripts/install.sh` installs the daemon and `yolomo` only, and its
+`--uninstall` still sweeps up the `mogeung` binary, desktop entry and icon
+that earlier versions installed.
+
+**Fixed — the global hotkey (`R-B10`) was about to disappear.** The Tauri
+shell loaded the plugin and registered no shortcut, so `Ctrl+Cmd+M` lived
+only in the client being deleted. Registered now, `Pressed` only, and
+unminimising before it focuses.
+
+**Fixed — a label survives `/clear` in this client too.** `/clear` mints a
+new session id; the window now moves a hand-applied label, colour tag and
+pin onto the successor that shares a pid and cwd, which the egui client
+had done since July and the port had not. The daemon stopped wiping a dead
+session's pid when it loads it back from the database — that pid is the
+only evidence the succession happened.
+
 ## Unreleased — git reach (2026-07-28)
 
 Roadmap `R-D13`–`R-D17`; see

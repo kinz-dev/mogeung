@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
 use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// One live pty, and everything needed to stop it.
 ///
@@ -290,10 +291,51 @@ fn daemon_acquire(state: tauri::State<'_, DaemonOnce>, addr: String) -> daemon::
 #[derive(Default)]
 struct DaemonOnce(Mutex<Option<daemon::Status>>);
 
+/// The system-wide key that brings the window to the front (`R-B10`).
+///
+/// Low collision risk, and reachable one-handed. A global shortcut is stolen
+/// from **every** application, so the default has to be something almost
+/// nothing else claims: `Cmd+Shift+M` is the obvious mnemonic and several
+/// editors use it; `Ctrl+Cmd+M` is not. Inherited unchanged from the egui
+/// client so the key that has been in this user's fingers since `R-B10` keeps
+/// working across [ADR-0020].
+///
+/// `Cmd` parses to SUPER, which is Command on macOS and the Windows key on
+/// Linux — the same mapping the old client got from the same underlying crate.
+///
+/// Registering a shortcut macOS reserves for itself (`Cmd+Space`, `Cmd+Tab`)
+/// **succeeds** and then never fires, because the system consumes the key
+/// first. There is no way to detect that from here.
+///
+/// [ADR-0020]: ../../../docs/decisions/0020-the-egui-client-is-retired.md
+const HOTKEY: &str = "Ctrl+Cmd+M";
+
+/// Bring the window forward from wherever it is — minimised, behind a full
+/// screen terminal, on another workspace. Unminimise first: `set_focus` on a
+/// minimised window is a no-op on every platform, which reads as the shortcut
+/// being broken rather than as the window being iconified.
+fn raise(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                // Only `Pressed`: every shortcut also reports `Released`, and
+                // acting on both raises the window twice per press.
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        raise(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .manage(Ptys::default())
         .manage(DaemonOnce::default())
@@ -308,6 +350,21 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("mogeung");
+            }
+            // Never fatal, and reported rather than swallowed: a shortcut
+            // another application already owns is an ordinary thing to hit,
+            // and it must not stop mogeung opening. The old client put this in
+            // its error strip; here it goes to stderr, which is where the rest
+            // of this process already talks.
+            match HOTKEY.parse::<Shortcut>() {
+                Ok(shortcut) => {
+                    if let Err(e) = app.global_shortcut().register(shortcut) {
+                        eprintln!(
+                            "could not register {HOTKEY} — another application probably owns it ({e})"
+                        );
+                    }
+                }
+                Err(e) => eprintln!("{HOTKEY:?} is not a valid shortcut: {e}"),
             }
             Ok(())
         })

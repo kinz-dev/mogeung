@@ -102,11 +102,10 @@ export interface Prefs {
    * Rebound keys, by action id. Only what you changed — an action absent here
    * uses the shipped binding, so a default that improves later reaches you.
    *
-   * **Not** `~/.mogeung/keymap.json`, deliberately. That file is keyed by the
-   * egui client's own action names, and its loader fails the whole file on a
-   * key it does not recognise — writing this client's ids into it would
-   * silently reset your Rust keymap to defaults. Two clients, two files, until
-   * there is one client.
+   * **Not** `~/.mogeung/keymap.json`. That file is keyed by the retired egui
+   * client's action names, and keeping the two apart is why retiring that
+   * client ([ADR-0020](../../../docs/decisions/0020-the-egui-client-is-retired.md))
+   * cost nobody their bindings. It is neither read nor deleted now.
    */
   keymap: Record<string, string[]>;
 
@@ -213,4 +212,81 @@ export function setZoom(zoom: Record<string, number>, pane: string, level: numbe
 
 export function zoomOf(zoom: Record<string, number>, pane: string): number {
   return zoom[pane] ?? 1;
+}
+
+/** What succession needs from a session — a subset of `Session`. */
+export interface SuccessionFact {
+  id: SessionId;
+  alive: boolean;
+  pid: number | null;
+  cwd: string;
+  started_at: string;
+}
+
+const epoch = (ts: string): number => {
+  const t = Date.parse(ts);
+  return Number.isFinite(t) ? t : 0;
+};
+
+/**
+ * `/clear` in Claude Code keeps the process but mints a fresh session id, so a
+ * hand-applied label lands on a dead id while the same work carries on under a
+ * new one. The live registry is per-*pid*, which makes succession a fact rather
+ * than a guess: a dead session and a live one sharing a pid are the same
+ * conversation. Labels, tags and pins follow it.
+ *
+ * A port of `Prefs::migrate_succession` in `crates/mogeung-ui/src/prefs.rs`,
+ * which this client shipped without — the reason a label kept disappearing on
+ * `/clear` here while the egui window kept it. Same rules, deliberately:
+ *
+ * - The cwd must match as well as the pid. Pids are reused by the OS
+ *   eventually, and a label jumping onto an unrelated session that happened to
+ *   inherit a number would be worse than the bug this fixes.
+ * - Nothing hand-applied is ever overwritten. A successor you already named
+ *   keeps its name, and the predecessor keeps its own rather than losing it to
+ *   a move that went nowhere.
+ * - Two live sessions never trade state. Succession requires a death.
+ *
+ * Nothing is invented — only moved. Returns the patch for `setScoped`, or
+ * `null` when nothing moved, so the caller writes to disk only on a change.
+ */
+export function migrateSuccession(
+  scoped: ScopedPrefs,
+  sessions: SuccessionFact[],
+): Partial<ScopedPrefs> | null {
+  const labels = { ...scoped.labels };
+  const tags = { ...scoped.tags };
+  let pinned = [...scoped.pinned];
+  let changed = false;
+
+  for (const succ of sessions) {
+    if (!succ.alive || succ.pid == null) continue;
+    // The latest dead session on the same pid *and* cwd is the immediate
+    // predecessor — `/clear` twice makes a chain, and the state walks it one
+    // hop per pass.
+    let pred: SuccessionFact | null = null;
+    for (const s of sessions) {
+      if (s.alive || s.id === succ.id || s.pid !== succ.pid || s.cwd !== succ.cwd) continue;
+      if (!pred || epoch(s.started_at) > epoch(pred.started_at)) pred = s;
+    }
+    if (!pred) continue;
+    const predId = pred.id;
+
+    if (labels[predId] && !labels[succ.id]) {
+      labels[succ.id] = labels[predId];
+      delete labels[predId];
+      changed = true;
+    }
+    if (tags[predId] && !tags[succ.id]) {
+      tags[succ.id] = tags[predId];
+      delete tags[predId];
+      changed = true;
+    }
+    if (pinned.includes(predId) && !pinned.includes(succ.id)) {
+      pinned = [...pinned.filter((id) => id !== predId), succ.id];
+      changed = true;
+    }
+  }
+
+  return changed ? { labels, tags, pinned } : null;
 }

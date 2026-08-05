@@ -1,4 +1,4 @@
-<img src="crates/mogeung-ui/assets/mogeung.png" alt="mogeung" width="200" align="right">
+<img src="assets/mogeung.png" alt="mogeung" width="200" align="right">
 
 # mogeung
 
@@ -27,8 +27,9 @@ worse. That was the fatal flaw of the first version — see
 ## Run it
 
 ```sh
-cargo build --release
-./target/release/mogeung     # that is all
+cd desktop && npm install && npm run tauri build
+# → desktop/src-tauri/target/release/mogeung-desktop
+#   desktop/src-tauri/target/release/bundle/{deb,rpm,appimage}/
 ```
 
 One executable. It starts a daemon if none is watching, attaches to one if there
@@ -38,10 +39,11 @@ For a daemon that outlives every window — so notifications keep firing while
 nothing is on screen — run it separately:
 
 ```sh
+cargo build --release
 ./target/release/mogeungd --notify   # keeps watching with no window open
-./target/release/mogeung             # attaches to it
 ```
 
+Open the window as usual and it attaches to that daemon instead of hosting one.
 See [ADR-0009](docs/decisions/0009-the-window-may-host-a-daemon.md).
 
 Nothing to configure, no repos to register. If you have run `claude` anywhere in
@@ -49,21 +51,20 @@ the last 14 days, it appears. Nothing is ever written to `~/.claude`.
 
 → [Getting started](docs/guide/getting-started.md)
 
-### The second client
+### Two builds, on purpose
 
-There is a React window packaged with Tauri, speaking the same protocol against
-the same daemon — [ADR-0018](docs/decisions/0018-a-second-client-in-typescript.md).
-It builds to a real binary, plus a `.deb`, `.rpm` and an AppImage:
+`cargo build --release` at the repo root builds the daemon and **not** the
+window: `desktop/src-tauri` is deliberately its own cargo workspace, so a
+machine without node or webkit's headers can still build, test and run the part
+that does the watching.
 
-```sh
-cd desktop && npm install && npm run tauri build
-# → desktop/src-tauri/target/release/mogeung-desktop
-#   desktop/src-tauri/target/release/bundle/{deb,rpm,appimage}/
-```
-
-`cargo build --release` at the repo root does not build it: `desktop/src-tauri`
-is deliberately its own cargo workspace, so a machine without webkit's headers
-can still build and test the daemon.
+The window was a second client for a day — React and Monaco beside the original
+egui one, both against one unchanged daemon
+([ADR-0018](docs/decisions/0018-a-second-client-in-typescript.md)) — and on
+2026-08-05 it became the only one
+([ADR-0020](docs/decisions/0020-the-egui-client-is-retired.md)). The daemon
+never knew there were two, which is the claim "every UI is a client" was making
+all along.
 
 → [Building it, and what it needs installed](desktop/README.md#building-a-binary-you-can-hand-to-someone)
 
@@ -141,7 +142,8 @@ needs no token at all.
 ./scripts/start.sh          # build + run both; --fresh for a throwaway db
 mprocs                      # both side by side, plus test/docs on a keypress
 
-cargo test --workspace      # 528 tests, all free — nothing spawns an agent
+cargo test --workspace      # 310 tests, all free — nothing spawns an agent
+cd desktop && npm test      # 149 more, the window's own
 ./scripts/check-docs.sh     # frontmatter, staleness, orphans
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```

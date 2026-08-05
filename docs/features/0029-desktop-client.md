@@ -1,8 +1,8 @@
 ---
 title: The React desktop client
-status: in-progress
-updated: 2026-08-04
-roadmap: [R-M1, R-M2, R-M3]
+status: shipped
+updated: 2026-08-05
+roadmap: [R-M1, R-M2, R-M3, R-M4]
 depends_on: [A1, A6, A13, A14, A15, A16]
 ---
 
@@ -1002,3 +1002,69 @@ would otherwise swallow the gesture, and pays for it by having to know which
 content is *supposed* to win. The declaration is the price, and it is cheaper
 than the alternative — an outer handler quietly overriding an inner one is
 invisible until someone drags across a terminal.
+
+**A port can lose a bug fix without losing a feature.**
+
+Reported on 2026-08-05: a label applied by hand disappears on `/clear`. The
+label code was ported from `prefs.rs` faithfully — the map, the editor, the
+`label:` filter, the hashed chip colour — and every one of those works. What
+did not come across was `migrate_succession`, the function that exists only
+because `/clear` mints a new session id, added to the Rust client a day after
+labels shipped and in response to exactly this report.
+
+That is the failure mode of porting by feature: you port what the feature *is*,
+and the fixes that are invisible unless you know the history stay behind. The
+detail that makes it costly is that nothing in this client looked wrong. There
+was no missing button and no failing test — the gap is a gesture that happens
+outside the window, in the CLI, and it takes a day of real use to meet it.
+
+`migrateSuccession` in `store/prefs.ts` now runs wherever sessions arrive, and
+carries the **colour tag** as well: tags are keyed by session id the same way,
+shipped the same morning, and would have been the next report. Its tests mirror
+the Rust ones case for case rather than being written fresh, because the risk
+worth designing against is the two clients disagreeing about what a successor
+is — one window moving a label the other left behind is worse than neither
+moving it.
+
+The reason it can be a pure function at all is that the evidence is on the
+wire: `Session` already carries `pid`, `alive`, `cwd` and `started_at`, so
+succession is a fact the client can read rather than something either client
+has to be told. The daemon had the matching hole one layer down and it was the
+July bug repeating — `AppState::load` wiped `pid` for every session read back
+from the database, so a `/clear` spanning a daemon restart lost its evidence
+before any client saw it. The death path had been fixed in July and says why in
+place; the load path had never been read in that light.
+
+## Retirement, 2026-08-05
+
+The egui client is deleted —
+[ADR-0020](../decisions/0020-the-egui-client-is-retired.md) has the decision and
+the alternatives. What is worth keeping here is what the removal *found*, since
+that is the part a plan cannot predict.
+
+**A global hotkey that was ✅ in the roadmap and registered nowhere.** The Tauri
+shell loads `tauri-plugin-global-shortcut` and its capability file grants
+`global-shortcut:default`, and nothing ever called `register`. Both halves of
+the evidence said the feature was there — a dependency, a permission — and the
+feature was not there. Deleting the old client would have deleted `R-B10` in
+the same commit, quietly, with the roadmap still claiming it worked.
+
+The lesson generalises past this row: **a port is checked against the code, not
+against the dependency list.** Anything ported by feature has this shape
+available to it, because the scaffolding is what gets copied first and the call
+site is what gets forgotten.
+
+**Documentation that described a CLI nobody could run.** `mogeung --url`,
+`--hotkey`, `--addr` and `--foreground` are in four guide pages, and the window
+that took them is gone; the window that replaced it takes no arguments at all,
+because where it dials is a setting. Those pages were rewritten rather than
+annotated. A command in a guide is an instruction, and an instruction that
+cannot be followed is worse than a missing page — it costs the reader the time
+to discover it is wrong, and some of that credibility does not come back.
+
+**Two things stayed put, deliberately.** The `Files touched` tables in features
+0001–0028 still name `crates/mogeung-ui/...`, because they record what was done
+at the time and rewriting them to point at TypeScript would be a lie about the
+past. And `~/.mogeung/prefs.json` and `state/<machine_id>.json` are untouched on
+disk: nothing reads them now, nothing deletes them, and an importer into the
+window's storage stays possible for as long as they exist.

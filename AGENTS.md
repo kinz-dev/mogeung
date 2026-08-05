@@ -72,7 +72,8 @@ Never edit its output.
 mprocs                      # same two, side by side, with test/docs on a key
 
 cargo build --release
-cargo test --workspa[V3_PERF_INVESTIGATION.md](../../perf-test/20260731_A/reports/V3_PERF_INVESTIGATION.md)ce      # all free — nothing spawns an agent
+cargo test --workspace      # all free — nothing spawns an agent
+cd desktop && npm test      # the window's own suite; cargo does not run it
 ./scripts/check-docs.sh     # REQUIRED after any doc change — see above
 ./scripts/gen-status.sh     # rewrite STATUS.md
 ```
@@ -84,7 +85,9 @@ database carried over from an older build can mislead you.
 **Shell scripts here must run on bash 3.2**, which is what macOS ships. No
 `mapfile`, and expanding an empty array under `set -u` is an error.
 
-Before handing work back: `cargo test --workspace` **and**
-`./scripts/check-docs.sh` must both pass.
+Before handing work back: `cargo test --workspace`, `npm test` in
+`desktop/` **and** `./scripts/check-docs.sh` must all pass. The window is
+TypeScript since [ADR-0020](docs/decisions/0020-the-egui-client-is-retired.md),
+so cargo alone no longer tests the client at all.
 
 ## Testing

@@ -43,8 +43,9 @@ Keys are ignored while a text box has focus, so typing in the filter does not
 trigger them.
 
 **`Ctrl+Cmd+M` brings mogeung back** from anywhere — the return half of the
-round trip. Change it with `mogeung --hotkey "Alt+Space"`, or turn it off with
-`--no-hotkey`. Hover the "mogeung" title to see the current one.
+round trip. It is fixed: the flags that changed it belonged to the retired egui
+window, and the setting has not been rebuilt. If another application owns the
+combination, the window says so on stderr and opens anyway.
 
 A shortcut macOS reserves (`Cmd+Space`, `Cmd+Tab`) will appear to register and
 then never fire; pick another rather than assuming it is broken.

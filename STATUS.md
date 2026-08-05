@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 604 passing |
-| Rust | 52332 lines |
-| Docs | 72 files, 19 ADRs |
+| Tests | 310 passing |
+| Rust | 23218 lines |
+| Docs | 73 files, 20 ADRs |
 
 ## Assumptions
 
@@ -49,5 +49,5 @@ Untested: **12** · At risk: **3** · Supported: 13 · Refuted: 1
 | [Notes, documents and tasks](docs/features/0026-notes-and-tasks.md) | `draft` | [A1, A6, A27] |
 | [The right tool-window rail](docs/features/0027-right-rail.md) | `shipped` | [A13, A14, A15, A16, A28] |
 | [Global search](docs/features/0028-global-search.md) | `shipped` | [A13, A22, A29] |
-| [The React desktop client](docs/features/0029-desktop-client.md) | `in-progress` | [A1, A6, A13, A14, A15, A16] |
+| [The React desktop client](docs/features/0029-desktop-client.md) | `shipped` | [A1, A6, A13, A14, A15, A16] |
 

@@ -59,7 +59,16 @@ import {
 } from "@/lib/tauri";
 import { applyAppZoom } from "@/lib/zoom";
 import type { FlaggedHunk } from "@/lib/prompt";
-import { defaultPrefs, emptyScoped, loadPrefs, savePrefs, setZoom, type Prefs, type ScopedPrefs } from "./prefs";
+import {
+  defaultPrefs,
+  emptyScoped,
+  loadPrefs,
+  migrateSuccession,
+  savePrefs,
+  setZoom,
+  type Prefs,
+  type ScopedPrefs,
+} from "./prefs";
 
 /** Which detail pane is forward. Serialised into the dockview layout. */
 export type PaneId =
@@ -362,6 +371,20 @@ export interface AppState {
 
 let client: DaemonClient | null = null;
 
+/**
+ * Move hand-applied state onto the successor of a session that `/clear` ended.
+ *
+ * Run wherever sessions arrive, because that is when the evidence — a dead
+ * session and a live one sharing a pid — first exists. The migration is
+ * idempotent and writes nothing when nothing moved, so calling it on every
+ * `session_updated` costs a scan of the session map and no disk.
+ */
+function succeed(get: () => AppState): void {
+  const { sessions, scoped, setScoped } = get();
+  const patch = migrateSuccession(scoped(), Object.values(sessions));
+  if (patch) setScoped(patch);
+}
+
 export const useStore = create<AppState>((set, get) => ({
   conn: "connecting",
   connDetail: null,
@@ -545,10 +568,12 @@ export const useStore = create<AppState>((set, get) => ({
         if (!get().selected && prev.prefs.autoSelect && msg.queue.length > 0) {
           get().select(msg.queue[0].session_id);
         }
+        succeed(get);
         break;
       }
       case "session_updated":
         set((s) => ({ sessions: { ...s.sessions, [msg.session.id]: msg.session } }));
+        succeed(get);
         break;
       case "session_removed":
         set((s) => {

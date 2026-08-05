@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-07-31
+updated: 2026-08-05
 ---
 
 # Watching a remote machine
@@ -57,8 +57,8 @@ unreachable is the one that must not be losable. Starting mogeung binds that
 port and hosts a daemon if nothing is there, exactly as it does with no
 connections saved at all.
 
-Saved daemons live in `~/.mogeung/connections.json` (written owner-only, since
-it holds tokens). Each has a name, a URL and an optional token. The row you last
+Saved daemons live in the window's own storage, alongside your other settings.
+Each has a name, a URL and an optional token. The row you last
 connected to is marked *last used*, but **no launch dials a remote for you** —
 you pick it, per session. `--url` on the command line still points that run
 wherever you say.
@@ -89,8 +89,8 @@ Finding a daemon connects to nothing. **Add** fills in the new-daemon form under
 made. A daemon can only advertise from a non-loopback bind, which already
 requires a token, so anything you find here will want one.
 
-**What you hid, pinned, labelled or bookmarked belongs to the machine**, not to
-the window, and lives in `~/.mogeung/state/<machine>.json` — so two windows
+**What you hid, pinned, labelled, tagged or bookmarked belongs to the machine**,
+not to the window: it is filed under the daemon's machine id, so two windows
 watching two daemons no longer overwrite each other's, which they did until
 2026-07-31. Your terminal tabs are in there too, and swap with the daemon: a
 tab rooted in a worktree on the dev box does not follow you to the laptop that
@@ -106,9 +106,18 @@ over there, and switching back re-attaches.
 
 ## Requirements
 
-`mogeungd` installed and Claude Code running on the remote box; `mogeung` on
-your laptop. Both should be the same build — the wire protocol tolerates a
-version skew in either direction for optional fields, but not for new messages.
+`mogeungd` installed and Claude Code running on the remote box; the mogeung
+window on your laptop. Both should be the same build — the wire protocol
+tolerates a version skew in either direction for optional fields, but not for
+new messages.
+
+**The window takes no command-line flags.** It is a Tauri application, and where
+it dials is a setting rather than an argument: `Alt+D`, then Connect. In the
+browser (`npm run dev`, or any build served over http) `?url=` on the page does
+the same thing for one visit, which is how you point a second tab at a second
+daemon. The `mogeung --url …` invocations in older notes were the egui window's,
+retired on 2026-08-05
+([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)).
 
 ---
 
@@ -124,16 +133,21 @@ default.
 mogeungd --notify &          # or under systemd, launchd, or a tmux session
 ```
 
-**On your laptop**, forward the port and attach:
+**On your laptop**, forward the port and open the window:
 
 ```sh
 ssh -N -L 7717:localhost:7717 devbox &
-mogeung --url ws://127.0.0.1:7717/ws
 ```
 
-That is the whole setup. The window attaches instead of starting its own daemon
-— that is what `--url` means, and it is the reason to prefer `--url` over
-`--addr` here.
+The tunnel puts the dev box's daemon on your `127.0.0.1:7717`, which is the
+address the window already dials, so `LOCAL` reaches it and there is nothing to
+configure. The window attaches instead of hosting: the port is taken, and taken
+is the whole test.
+
+That is also the one thing to watch — if the tunnel is down when you start, the
+window finds the port free and hosts a *local* daemon on it, then the tunnel
+cannot bind. The connection line says which one you got: read the host it names
+before trusting the board.
 
 The tunnel does not confuse the window about whose machine it is looking at.
 The daemon says which machine it is on and the window compares (`R-I5`), so the
@@ -175,11 +189,8 @@ boilerplate.
 There is no `--insecure`. If you want a listening daemon with no token, the
 answer is Route A: bind loopback and let ssh carry it.
 
-**On your laptop:**
-
-```sh
-mogeung --url ws://devbox:7717/ws --token <the-token>
-```
+**On your laptop:** `Alt+D` → **Add**, name it, URL `ws://devbox:7717/ws`, paste
+the token, Save, Connect.
 
 The token rides the WebSocket URL as `?token=…`, because a browser socket
 cannot carry a custom header. Over HTTP the window sends
@@ -188,8 +199,9 @@ hang.
 
 ### Put it in the config file instead
 
-Retyping a token is how tokens end up in shell history. Both binaries read
-`~/.mogeung/config.toml`, and a flag always beats the file:
+Retyping a token is how tokens end up in shell history. `mogeungd` reads
+`~/.mogeung/config.toml`, and a flag always beats the file. The window does not
+read it — what it needs is one saved connection, which it already remembers:
 
 ```toml
 # on the dev box
@@ -199,14 +211,10 @@ token  = "…"
 ssh_target = "dev@devbox"
 # announce on the local network so the window's scan finds it (R-I8)
 advertise = true
-
-# on your laptop
-url    = "ws://devbox:7717/ws"
-token  = "…"
 ```
 
-Then both sides are just `mogeungd` and `mogeung`. Set the file's permissions
-to `600` — it now holds a credential.
+Then the dev box is just `mogeungd`. Set the file's permissions to `600` — it
+now holds a credential, and so does the saved connection on your laptop.
 
 ---
 
@@ -230,11 +238,8 @@ mogeung.example.com {
 }
 ```
 
-Then point the window at the proxy:
-
-```sh
-mogeung --url wss://mogeung.example.com/ws --token <the-token>
-```
+Then point the window at the proxy — `Alt+D` → **Add**, with
+`wss://mogeung.example.com/ws` and the token.
 
 Keep the token. The proxy encrypts the path; it does not decide who may use it,
 and the daemon behind it will still hand every transcript to whoever asks.
@@ -367,9 +372,9 @@ cargo run -p mogeungd --example browse_probe
 Same code the Scan button runs, with nothing else in the way.
 
 **"refusing to listen on … with no token."** Working as intended: a bind beyond
-loopback needs `--token`. The message prints both ways out. Note that it also
-applies to the window — `mogeung --addr 0.0.0.0:7717` hosts a daemon, so it is
-refused on the same terms and exits rather than opening one quietly.
+loopback needs `--token`. It applies to a daemon the *window* is hosting too —
+the check runs on the address actually bound, before anything is served, so a
+window cannot become a daemon that `mogeungd` would have refused to be.
 
 **`command not found: tmux` in a terminal pane**, from a machine where tmux is
 definitely installed. Fixed on 2026-07-31 by running the remote command through

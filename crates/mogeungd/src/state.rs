@@ -132,7 +132,13 @@ impl AppState {
             // a persisted "alive".
             s.alive = false;
             s.live_status = None;
-            s.pid = None;
+            // The pid is KEPT, for the reason the death path states in place:
+            // a dead session still holding its pid is the only evidence that
+            // `/clear` moved that pid to a fresh session id, and the clients'
+            // label migration matches on exactly that. Wiping it here made the
+            // migration fail across a daemon restart — the same bug the death
+            // path already had, one layer up. `alive` is false either way, and
+            // consumers that need a *live* pid gate on it.
             seqs.insert(s.id.clone(), store.max_seq(&s.id).unwrap_or(0));
             sessions.insert(s.id.clone(), s);
         }

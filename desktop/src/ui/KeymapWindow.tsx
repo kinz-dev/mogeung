@@ -189,9 +189,9 @@ export function KeymapWindow() {
           ))
         )}
         <Dim className="block px-2 text-2xs">
-          Stored with your preferences, not in <code className="font-mono">~/.mogeung/keymap.json</code>{" "}
-          — that file belongs to the egui client and is keyed by its action names, so writing these
-          into it would reset yours to defaults.
+          Stored with your preferences. An old{" "}
+          <code className="font-mono">~/.mogeung/keymap.json</code> is left alone — it belongs to the
+          retired egui window and is keyed by its action names.
         </Dim>
       </div>
     </Dialog>

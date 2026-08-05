@@ -1,7 +1,7 @@
 ---
 title: Session labels
 status: shipped
-updated: 2026-07-28
+updated: 2026-08-05
 roadmap: [R-B26]
 depends_on: [A13, A17]
 ---
@@ -152,3 +152,24 @@ client never saw two sessions sharing one — the migration's evidence was
 destroyed one layer below it. Dead sessions now keep their last pid
 (`state.rs` says why in place); `focus_terminal` and the Info pane's pid
 stat gate on `alive`, so nothing treats the remembered pid as live.
+
+**And a third time, on 2026-08-05, in the other client.** Reported the same
+way — "when I clear a conversation the label I applied manually is gone" —
+because the React client was ported from `prefs.rs` *without*
+`migrate_succession`. The state it keys by session id was ported; the one
+function that knows session ids do not survive `/clear` was not. Nothing
+about the port made that visible: labels worked, filtering worked, and the
+missing piece only shows up on a gesture no test in that client made.
+
+It is now `migrateSuccession` in `desktop/src/store/prefs.ts`, run wherever
+sessions arrive, moving the colour tag as well — tags are keyed by id the
+same way, and would have been the next report. Its tests mirror the Rust
+ones case for case, deliberately: two clients agreeing on *what counts as a
+successor* is the only thing stopping the same label landing on different
+sessions in two windows.
+
+The daemon had a matching hole one layer down, and it is the July bug again:
+`AppState::load` wiped `pid` on every session it read back from the
+database, so a `/clear` that straddled a daemon restart lost the evidence
+either client needs. The death path had already been fixed and says why in
+place; the load path was never looked at. Both now keep it.

@@ -3,6 +3,8 @@
 # Both delegate to scripts/start.sh so the flags live in exactly one place.
 # The window waits on the daemon's health endpoint, which also means it waits
 # for whatever build the daemon process is doing — one dependency, not two.
+# It is `npm run tauri dev` in desktop/, which builds and reloads itself, so
+# `r` here is for the daemon far more often than for the window.
 #
 # Keys: `x` stop, `s` start, `r` restart, `a` show all output, `q` quit.
 
@@ -22,6 +24,12 @@ procs:
   # Not autostarted — press `s` to run them.
   test:
     shell: cargo test --workspace
+    autostart: false
+
+  # The client's own suite. Two clients became one, but the tests did not
+  # merge — the daemon's are cargo's and the window's are vitest's.
+  test-desktop:
+    shell: cd desktop && npm test
     autostart: false
 
   docs:

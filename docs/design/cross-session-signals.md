@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-04
+updated: 2026-08-05
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -179,19 +179,25 @@ Jump-to-terminal solves half a round trip. A system-wide shortcut —
 `Ctrl+Cmd+M` by default — raises the mogeung window from wherever you are, so
 the return leg is one key rather than a hunt through whatever is on screen.
 
-Registered with Carbon's `RegisterEventHotKey` via the `global-hotkey` crate,
-on the main thread, before the event loop starts. Failure is reported into the
-window and onto stderr but is **never fatal**: a shortcut another application
-already owns is an ordinary thing to hit, and it must not stop mogeung opening.
+Registered in the Tauri shell, through `tauri-plugin-global-shortcut` — the
+same `global-hotkey` crate the egui client used directly, so the accelerator
+string and its `Cmd`-means-SUPER mapping are unchanged. Failure is reported on
+stderr but is **never fatal**: a shortcut another application already owns is an
+ordinary thing to hit, and it must not stop mogeung opening.
 
-A dedicated thread blocks on the event channel and pokes egui. Polling from the
-frame loop alone is not enough — a backgrounded window repaints roughly once a
-second, and a second of lag on *get me back here now* reads as broken.
+Raising unminimises before it focuses. `set_focus` on a minimised window is a
+no-op on every platform, and the failure reads as a broken shortcut rather than
+as an iconified window.
 
-Only `Pressed` is acted on; every hotkey also reports `Released`, which would
-otherwise fire twice per press. The pending flag is a boolean rather than a
-count, so holding the key down cannot build a backlog that keeps re-raising the
-window after you let go.
+Only `Pressed` is acted on; every shortcut also reports `Released`, which would
+otherwise raise the window twice per press.
+
+**This nearly died with the egui client.** The Tauri shell had the plugin loaded
+and the capability granted, and registered nothing — so the retirement in
+[ADR-0020](../decisions/0020-the-egui-client-is-retired.md) would have deleted a
+shipped feature while the roadmap still called it `✅`. A plugin being present is
+not a feature being wired; the roadmap row is the claim, and it was checked
+against the code rather than against the dependency list.
 
 **Caveat that cannot be detected:** registering a shortcut macOS reserves for
 itself (`Cmd+Space`, `Cmd+Tab`) *succeeds* and then never fires, because the
@@ -201,20 +207,25 @@ system consumes the key first. Verified live — `Cmd+Space` registers happily.
 ### Bindings as data (`R-B11`, `R-B12`)
 
 Rebinding, pane-aware navigation and import/export all needed the same thing
-first: actions had to stop being a `match` arm per key and become data. They now
-live in `keymap.rs` as an `Action` enum plus a map to text bindings, and the
-event loop resolves a chord to an action and dispatches.
+first: actions had to stop being a `match` arm per key and become data. They are
+an action table plus a map to text bindings, and the event handler resolves a
+chord to an action and dispatches.
 
 Navigation actions are **pane-agnostic** — `Next` means "next thing in whatever
 has focus" — so one binding does the obvious thing in three panes instead of
 needing three bindings and a rule for which applies.
 
-Stored at `~/.mogeung/keymap.json`, **client-side**. Not a breach of "every UI
-is a client with no local authority" ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)):
-a keymap is not daemon state, and a second client would rightly have its own.
+Stored **client-side**. Not a breach of "every UI is a client with no local
+authority" ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)): a keymap
+is not daemon state, and a second client would rightly have its own — which is
+exactly what happened, and why the window's keymap deliberately never shared a
+file with the retired egui client's
+([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)). Two clients, two
+action vocabularies; one loader failing on the other's names would have silently
+reset a keymap rather than reporting anything.
 
-The file holds the full effective map so an export is self-contained, and
-loading merges it over the defaults so an action added later appears with its
+Only what you changed is stored, so a default that improves later reaches you;
+loading merges over the defaults so an action added later appears with its
 default binding rather than silently unbound.
 
 **Binding parsing rejects anything it does not fully understand.** The first
@@ -226,19 +237,26 @@ written to check the validator, which then failed on the validator itself.
 
 ### Icons must be proven to render
 
-egui bundles four fonts (Ubuntu-Light, Hack, NotoEmoji, emoji-icon-font). A
-glyph outside their combined coverage draws as an **empty box, silently**:
-layout is unaffected, clicks still work, and nothing but a human looking at the
-window can tell.
+Kept as a lesson, though the code it describes went with the egui client
+([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)).
 
-Four shipped that way before anyone noticed — `✎` on the flag button, `⌁` on
-blast radius, `⑂` beside the branch name, and `✓`, the read-marker in the file
-list added the same day.
+egui bundled four fonts (Ubuntu-Light, Hack, NotoEmoji, emoji-icon-font), and a
+glyph outside their combined coverage drew as an **empty box, silently**: layout
+unaffected, clicks still working, and nothing but a human looking at the window
+able to tell. Four shipped that way before anyone noticed — `✎` on the flag
+button, `⌁` on blast radius, `⑂` beside the branch name, and `✓`, the
+read-marker in the file list added the same day. The fix was to funnel every
+icon through one function and have a test parse the cmap tables of the actual
+vendored `.ttf` files, so the check survived an upgrade changing what was
+bundled.
 
-Icons therefore come from `ui::icon` and nowhere else, and a test parses the
-cmap tables of the actual vendored `.ttf` files to assert every one is covered.
-Reading the fonts rather than keeping a hand-written list means the check
-survives an egui upgrade that changes what is bundled.
+The web view has the reverse problem and it is worth stating, because "we use a
+browser now" is not the same as "solved": the system font stack renders almost
+any glyph *somewhere*, so nothing shows an empty box on this machine — and an
+icon that resolves here can still fall back to something else-shaped on a
+machine with a different font set. The invariant that transferred is the first
+half: icons come from one place, so what is used is enumerable rather than
+scattered through the components.
 
 ### Why not an in-app terminal
 
@@ -260,7 +278,8 @@ as the blocker was the mechanism.
 The trade that made v0.1 bad is avoided for a specific, checkable reason: an
 attached session is **never trapped in mogeung**. See
 [ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md), and
-`crates/mogeung-ui/src/term.rs`.
+`desktop/src/lib/tmux.ts` for the argv, which was ported from the Rust
+faithfully enough to keep its tests.
 
 And then a second correction, 2026-07-29: `R-B31` ships a terminal mogeung
 *does* own the pty of — a plain shell, in a worktree, moved out of the pane

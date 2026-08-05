@@ -1,14 +1,13 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-04
+updated: 2026-08-05
 covers:
   - crates/mogeungd/src/main.rs
-  - crates/mogeung-ui/src/prefs.rs
-  - crates/mogeung-ui/src/app.rs
   - crates/mogeungd/src/state.rs
-  - crates/mogeung-ui/src/main.rs
-  - crates/mogeung-ui/src/net.rs
+  - desktop/src/store/prefs.ts
+  - desktop/src/store/index.ts
+  - desktop/src-tauri/src/lib.rs
   - crates/mogeungd/src/usage.rs
   - crates/mogeungd/src/runner.rs
   - crates/mogeungd/src/insight.rs
@@ -22,7 +21,7 @@ covers:
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  Clients                                                  │
-│  native egui app · curl · anything you care to write      │
+│  the Tauri window · the tray · curl · anything you write  │
 └────────────────────────┬─────────────────────────────────┘
                          │ WebSocket + REST (localhost)
 ┌────────────────────────┴─────────────────────────────────┐
@@ -96,9 +95,9 @@ The workbench (`R-B25`) widened that surface, not the rule: the daemon also
 walks the whole tree (for go-to-file) and greps it (for content search), both
 under the same containment, both on the blocking pool so a monorepo cannot
 wedge the event loop. What the client keeps — open tabs, pins, expanded
-directories, per session in `~/.mogeung/explorer.json` — is view state, not
-authority, the same standing as the keymap and the layout: file *bodies* are
-never persisted, and every restore re-asks the daemon.
+directories, per session — is view state, not authority, the same standing as
+the keymap and the layout: file *bodies* are never persisted, and every restore
+re-asks the daemon.
 
 The git view (`R-D10`–`R-D12`) is the third read surface: log, diffs,
 status, refs, stashes, blame, historical file bodies — every one a
@@ -177,12 +176,11 @@ websocket either way and cannot tell which process the daemon is in.
 [ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md).
 
 **A hosted daemon obeys the same admission rule as a standalone one** (`R-I10`).
-`server::admit` refuses a bind beyond loopback with no token, so
-`mogeung --addr 0.0.0.0:7717` is refused exactly as `mogeungd` would be — and
-the window asks *before* spawning the thread, on the main thread, because a
-refusal printed from a background thread is a line the window opens over. The
-token the window would have presented to a daemon elsewhere is the token it
-requires when it is the daemon; that is why `--token` reaches `daemon::host`.
+`server::admit` refuses a bind beyond loopback with no token, and the window
+asks it *before* serving on the socket it just won, so a window cannot become a
+daemon that `mogeungd` would have refused to be. The check is on the bound
+address rather than on what was asked for, which is what makes `0.0.0.0` and a
+`:0` port answer the same question honestly.
 
 **Daemons can announce themselves** (`R-I8`), over mDNS as `_mogeung._tcp`,
 **only** when `--advertise` says so. The broadcast is a disclosure in its own
@@ -195,31 +193,43 @@ the only binds that *can* advertise are the ones `admit` already requires a
 token for.
 
 **The daemon can be changed without restarting** (`R-I7`). The window keeps a
-list at `~/.mogeung/connections.json` — client state, like the keymap, and
-`0600` because it holds tokens. Switching replaces the `Net`, which is how the
-old network thread learns to stop: it returns once nobody is listening on its
-event channel, rather than reconnecting for ever behind a window that has moved
-on. Everything the previous daemon said is then dropped, because it describes a
-different machine; what the *user* chose — layout, keymap, prefs — survives.
+saved list — client state, like the keymap — with a name, a URL and an optional
+token each. Switching tears the old connection down before the new one is
+dialled, so a window that has moved on cannot be reconnected behind by the
+socket it left. Everything the previous daemon said is then dropped, because it
+describes a different machine; what the *user* chose — layout, keymap, prefs —
+survives.
 Terminal panes detach rather than close, so tmux keeps their shells alive on the
 machine being left.
 
 **Client state is split by what it is about** (`R-I11`, after
 [ADR-0013](../decisions/0013-one-window-one-daemon.md) settled that a window
-watches one daemon and watching two machines means two windows). `prefs.json`
-is one file written whole, so two windows raced over it and the last to save
-won. Scoping the whole file per daemon would have meant choosing a theme once
-per machine, so the split is by subject instead: `~/.mogeung/prefs.json` keeps
-what describes *this window* — theme, layout, fonts, zoom, geometry, filters —
-and `~/.mogeung/state/<machine_id>.json` keeps what is keyed by a session id or
-a path on the watched machine: hidden, pinned, labels, bookmarks, editor wrap,
-and the terminal panel's tab list. The window adopts a machine's state when the
-daemon publishes its identity, which is also when it swaps the terminal tabs —
-so a tab rooted at a worktree on the dev box does not follow you to the laptop
-that happens to have the same path. Keying on `machine_id` rather than the URL
-is the same reason `R-I5` exists: an `ssh -L` tunnel makes a remote daemon
-answer on `127.0.0.1`. A pre-`R-I11` file migrates whole into the first machine
-adopted, which is always LOCAL.
+watches one daemon and watching two machines means two windows). The split is by
+subject: what describes *this window* — theme, layout, fonts, zoom, filters —
+is stored flat, and what is keyed by a session id or a path on the watched
+machine is stored under that machine's id: hidden, pinned, labels, colour tags,
+bookmarks, editor wrap, and the terminal panel's tab list. The window adopts a
+machine's state when the daemon publishes its identity, which is also when it
+swaps the terminal tabs — so a tab rooted at a worktree on the dev box does not
+follow you to the laptop that happens to have the same path. Keying on
+`machine_id` rather than the URL is the same reason `R-I5` exists: an `ssh -L`
+tunnel makes a remote daemon answer on `127.0.0.1`.
+
+Session ids are not stable across `/clear`, which mints a new one for the same
+conversation, so anything keyed by one has to be able to *move*. The window
+matches a dead session against a live one sharing a pid and a cwd and carries
+the label, colour tag and pin across (`migrateSuccession`). The evidence for
+that is on the wire — `pid`, `alive`, `cwd`, `started_at` — which is why it can
+be a client-side rule rather than something the daemon has to be taught. Note
+what it costs the daemon to make possible: a dead session **keeps** its last
+pid, which `data-model.md` states as a rule precisely because wiping it looks
+like tidying up.
+
+`R-I12` records the argument that all of this belongs to the daemon instead. It
+carried more weight when two clients each kept their own copy; with one client
+it is a smaller problem and the same argument. What it would fix now is
+portability — the state lives in the window's storage on the machine you are
+sitting at, not with the sessions it describes.
 
 **The window also asks who it is talking to** (`R-I5`). The daemon publishes a
 `DaemonIdentity` — a stable `machine_id` from `~/.mogeung/machine-id`, plus
@@ -236,23 +246,31 @@ Commands are fire-and-forget; their effect returns on the event stream. Clients
 are therefore pure projections of daemon state with no local authority and no
 request/response correlation layer.
 
-The UI runs a dedicated OS thread with a small tokio runtime holding the
-WebSocket, bridged into the egui frame loop over a plain std channel. That keeps
-the whole UI synchronous and immediate-mode with no async colouring.
+The window holds one WebSocket in the browser layer and pushes every message
+into a zustand store; nothing else in the client talks to the daemon. Panes read
+that store and render, which is the same discipline the egui client kept with a
+tokio thread and a std channel — one connection, one place state arrives.
 
-### Two clients
+### The window
 
-Since 2026-08-04 there are two, and they run at once against one daemon —
-[ADR-0018](../decisions/0018-a-second-client-in-typescript.md).
+`desktop/` — React, Monaco and dockview, packaged with Tauri, since 2026-08-04
+([ADR-0018](../decisions/0018-a-second-client-in-typescript.md)). It was built
+beside the egui window and against one unchanged daemon, and on 2026-08-05 it
+became the only window:
+[ADR-0020](../decisions/0020-the-egui-client-is-retired.md) deleted
+`crates/mogeung-ui` and the vendored `egui-term` with it.
 
-- `crates/mogeung-ui` — the egui window. What works today.
-- `desktop/` — React, Monaco and dockview, packaged with Tauri. Growing a pane
-  at a time; the egui client is retired at parity, not before.
+The daemon was not changed to make either of those happen and never knew there
+were two. That is the property "every UI is a client" was always claiming,
+demonstrated twice — `R-C3`'s phone client first, this port second — and both
+demonstrations were retired after making their point. The tray is what remains
+of it, and it is a real second client: same websocket, no authority, one number.
 
-The daemon was not changed to make this possible and does not know there are
-two. That is the property "every UI is a client" was always claiming, tested for
-the second time — `R-C3`'s phone client was the first, at the same cost of
-nothing.
+Two clients cost more than twice one, and the extra is divergence. The `/clear`
+label bug is the case worth remembering: found and fixed in the egui client in
+July, ported without the fix, and re-reported against the React client a
+fortnight later. That is the argument in ADR-0020 for deleting rather than
+keeping a client nobody develops.
 
 The Tauri process keeps a small native half, and it is native for one reason
 each: it **holds the ptys**, so ADR-0010 and ADR-0011 stay true (what a client
@@ -271,20 +289,21 @@ rather than a habit —
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
 
 **Panes** are views of a session — Changes, Transcript, Info, Debt, Agent,
-Editor, Git, Insight. They live in an `egui_tiles` tree, are draggable and
-splittable, and their arrangement is saved as `layout.json`.
+Editor, Git, Insight. They live in the dockview tree, are draggable and
+splittable, and their arrangement is serialised into the client's own storage.
 
 **Chrome** is everything that must stay reachable whichever pane is forward: the
 Attention queue on the left, the terminal across the bottom, and since
 2026-08-03 the tool-window rail on the right (`R-B40`), which holds the worktree
-tree (`R-B41`) and global search (`R-F13`). None of these are tiles; each is an
-`egui::Panel` declared before the central panel, because a `CentralPanel` claims
-whatever is left and anything declared after it has already lost.
+tree (`R-B41`) and global search (`R-F13`). None of these are dock panels; each
+is laid out around the dock, so closing every pane cannot take the queue with
+it.
 
-Chrome state rides in `prefs.rs` rather than in egui's own `PanelState`: eframe
-is built here without its `persistence` feature, so egui's copy dies with the
-process. Widths are copied back out of the panel response and written only while
-the pointer is up, so dragging a divider does not touch the disk on every frame.
+Chrome state rides in the client's preferences rather than in dockview's own
+serialisation, for the reason the egui client kept it out of egui's: the widths
+and open-or-closed of the surrounding furniture are the user's settings, and a
+layout engine's snapshot is the wrong place to keep something that has to
+survive the layout being reset.
 
 ## What is deliberately absent
 

@@ -10,13 +10,16 @@ mogeung's window is not the only way to be told a session needs you.
 
 > **Close the window and notifications stop — unless the daemon is separate.**
 >
-> `mogeung` on its own hosts the daemon inside the window, so closing it stops
-> watching. Everything on this page assumes a daemon that outlives the window:
+> The window on its own hosts the daemon inside its own process, so closing it
+> stops watching. Everything on this page assumes a daemon that outlives the
+> window:
 >
 > ```sh
 > mogeungd --notify        # keeps running with no window open
-> mogeung                  # attaches to it; closing this changes nothing
 > ```
+>
+> Then open the window as usual — it finds the port taken and attaches, and
+> closing it changes nothing.
 >
 > The window shows `hosting` next to the connection dot when it is the one
 > running the daemon.

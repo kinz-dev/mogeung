@@ -1,12 +1,12 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-08-01
+updated: 2026-08-05
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
   - crates/mogeung-core/src/review.rs
-  - crates/mogeung-ui/src/diff.rs
+  - desktop/src/lib/diff.ts
 ---
 
 # Review checkpointing and risk ordering
@@ -115,7 +115,7 @@ repo has no commit that old.
 
 ## Presentation
 
-All of it is pure text-in/spans-out in `crates/mogeung-ui/src/diff.rs`, so the
+All of it is pure text-in/spans-out in `desktop/src/lib/diff.ts`, so the
 interesting parts are testable without a window.
 
 **Syntax highlighting (`R-D4`)** is a tokenizer, not a parser: strings,
