@@ -133,6 +133,33 @@ struct Chunk {
     data: String,
 }
 
+/// A trace of everything this process does to a pty. Opt-in, and off unless
+/// `MOGEUNG_PTY_LOG` names a file to append to.
+///
+/// It exists because a report — *switching sessions inserts a newline into the
+/// agent's prompt* — survived being reasoned about. Reading says it cannot
+/// happen: the only bare `\n` this client can send is the Shift+Enter branch in
+/// `Terminal.tsx`, xterm.js emits no LF of its own (every unsolicited reply it
+/// can send is an escape sequence), tmux injects nothing into a pane on attach
+/// or resize (measured, with a byte logger), and the daemon never writes to a
+/// session at all. A newline arrives anyway. When reading and the code
+/// disagree, watch: this records the bytes with the pty they went to and the
+/// call site that sent them, so one reproduction names the culprit.
+fn trace(op: &str, id: &str, detail: &str) {
+    let Ok(path) = std::env::var("MOGEUNG_PTY_LOG") else {
+        return;
+    };
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // Best-effort throughout: a diagnostic that can take the window down with
+    // it is worse than no diagnostic.
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{ms} {op:<6} id={id} {detail}");
+    }
+}
+
 /// Open a pty and stream it to the web view under `id`.
 ///
 /// `command` is what to run — `tmux attach -t …` for the Agent pane, a login
@@ -153,6 +180,7 @@ async fn pty_open(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    trace("open", &id, &format!("{cols}x{rows} {command:?}"));
     if command.is_empty() {
         return Err("nothing to run".into());
     }
@@ -275,7 +303,21 @@ async fn pty_open(
 /// main thread — a wedged pty whose buffer is full blocks this write, and
 /// before the change it blocked the whole window with it.
 #[tauri::command]
-async fn pty_write(state: tauri::State<'_, Ptys>, id: String, data: String) -> Result<(), String> {
+async fn pty_write(
+    state: tauri::State<'_, Ptys>,
+    id: String,
+    data: String,
+    origin: Option<String>,
+) -> Result<(), String> {
+    trace(
+        "write",
+        &id,
+        &format!(
+            "from={} bytes={:?}",
+            origin.as_deref().unwrap_or("?"),
+            data
+        ),
+    );
     let mut ptys = state.0.lock().unwrap();
     let pty = ptys.get_mut(&id).ok_or("no such terminal")?;
     pty.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
@@ -284,6 +326,7 @@ async fn pty_write(state: tauri::State<'_, Ptys>, id: String, data: String) -> R
 
 #[tauri::command]
 async fn pty_resize(state: tauri::State<'_, Ptys>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    trace("resize", &id, &format!("{cols}x{rows}"));
     let ptys = state.0.lock().unwrap();
     let pty = ptys.get(&id).ok_or("no such terminal")?;
     pty.master
@@ -295,6 +338,7 @@ async fn pty_resize(state: tauri::State<'_, Ptys>, id: String, cols: u16, rows: 
 /// running and is reachable from any terminal. That is the whole of ADR-0010.
 #[tauri::command]
 async fn pty_close(state: tauri::State<'_, Ptys>, id: String) -> Result<(), String> {
+    trace("close", &id, "");
     state.0.lock().unwrap().remove(&id);
     Ok(())
 }

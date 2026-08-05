@@ -1277,3 +1277,41 @@ takes its first rect from those before any observer runs. They are in the new
 test rather than in `test-setup.ts` on purpose for now: giving every suite a
 non-zero layout changes what several other tests are measuring, and that is a
 sweep to make deliberately rather than as a side effect of a colour fix.
+
+## The newline that was never sent, 2026-08-05
+
+Reported as *"every time I change the session, the AGENT window will insert a
+new newline"*, and it took two wrong answers before the measurement. Recorded
+here because the wrong answers are the useful part.
+
+**It was not a newline.** `MOGEUNG_PTY_LOG` — an opt-in trace added to
+`pty_write` for this — recorded 1,695 writes across two sessions of real use:
+mouse reports, xterm.js's replies to tmux's capability queries, and the user's
+own keys. Not one `\n`. The only `\r` were two messages being sent. On the other
+side, `tmux pipe-pane` caught the agent's output: Claude Code's cursor parked on
+the same row in all 2,216 frames, so its input buffer was one empty line the
+whole time, while the drawn box sat three rows away from where the program
+thought it was. The blank lines are stale cells.
+
+**The test that misled us:** *press Backspace and see whether the line
+disappears*. It does — and it proves nothing, because on an empty buffer
+Backspace changes no text and forces a repaint, and the repaint is what clears
+the row. That reading cost a round trip and a wrong fix.
+
+**Ruled out by experiment, so nobody has to guess again:** tmux injects nothing
+into a pane on attach, detach or resize; it consumes xterm.js's DA and OSC
+replies rather than forwarding them; mouse motion, click, drag and wheel do not
+grow the box; and attach/resize/detach cycles against a real `claude` session
+leave it alone, with or without text in the prompt.
+
+The cause is the resize churn two tmux clients of different sizes produce, and
+what was decided about it — including the `ignore-size` attempt that was built,
+tried and rejected the same day — is
+[ADR-0021](../decisions/0021-the-pane-sizes-the-window.md).
+
+Two fixes did come out of the hunt, both real and neither the culprit:
+`OSC 52` is now answered, so a copy made *inside* the agent reaches the system
+clipboard — xterm.js implements 0, 1, 2, 4, 8, 10–12, 104 and 110–112 and not
+52, which was the one hop missing from a chain that otherwise worked. And the
+terminal has its own right-click menu, because the webview's cannot see a
+selection xterm paints itself.

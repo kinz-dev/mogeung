@@ -56,9 +56,17 @@ export async function ptyOpen(
   await core.invoke("pty_open", { id, command, cwd, cols, rows });
 }
 
-export async function ptyWrite(id: string, data: string): Promise<void> {
+/**
+ * Send bytes to a pty.
+ *
+ * `origin` names the call site and is for the trace in `lib.rs` — three places
+ * can write here and, when a byte arrives that nobody admits to sending, which
+ * one it came from is the whole question. It costs a string per keystroke on a
+ * path that already crosses an IPC boundary.
+ */
+export async function ptyWrite(id: string, data: string, origin?: string): Promise<void> {
   const { core } = await api();
-  await core.invoke("pty_write", { id, data });
+  await core.invoke("pty_write", { id, data, origin: origin ?? null });
 }
 
 export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
