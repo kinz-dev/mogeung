@@ -172,7 +172,22 @@ export function loadPrefs(): Prefs {
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
     const saved = JSON.parse(raw) as Partial<Prefs>;
-    return { ...base, ...saved, zoom: { ...base.zoom, ...saved.zoom }, scoped: { ...saved.scoped } };
+    // Every **scoped** entry is completed against the current shape, and this
+    // is load-bearing rather than tidy. `scoped()` returns the stored object
+    // itself — it has to, because a selector that mints a fresh object every
+    // call re-renders for ever — so a field added after a file was written is
+    // `undefined` at every read site, and the first `scoped.tags[id]` throws.
+    // React then unwinds the whole tree and the window is blank, which is
+    // exactly what adding `tags` did to a preferences file written yesterday.
+    //
+    // This is the TypeScript of `#[serde(default)]`, and it belongs here for
+    // the same reason the Rust puts it on the struct: at the boundary, once,
+    // rather than as a `?.` at every reader.
+    const scoped: Record<string, ScopedPrefs> = {};
+    for (const [key, value] of Object.entries(saved.scoped ?? {})) {
+      scoped[key] = { ...emptyScoped(), ...(value ?? {}) };
+    }
+    return { ...base, ...saved, zoom: { ...base.zoom, ...saved.zoom }, scoped };
   } catch {
     return base;
   }

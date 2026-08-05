@@ -953,3 +953,26 @@ most.
 last one is the case worth a test: an untagged session has to *match* `none`
 rather than match nothing, or there is no way to find what you have not sorted
 yet.
+
+**The colour tags shipped a blank window, and the smoke test did not catch it.**
+
+Adding `tags` to the scoped preferences broke the app for anyone whose
+preferences file predated it. `scoped()` returns the stored object **itself** —
+it has to, because a selector that mints a fresh object every call re-renders
+for ever, which is a bug this codebase has already had — so a field added after
+a file was written is `undefined` at every read site. The first
+`scoped.tags[id]` threw, React unwound the tree, and the window came up blank.
+
+The fix is at the boundary rather than at the readers: `loadPrefs` completes
+every stored scoped entry against the current shape. That is the TypeScript of
+`#[serde(default)]`, and it belongs in the same place for the same reason — one
+line that cannot be forgotten, instead of a `?.` at each of a dozen call sites
+that can. It repairs `bookmarks` and `editorWrap` retroactively too; both were
+added the same way and were the same accident waiting for a reader.
+
+The instructive part is the test. The smoke test exists for exactly this class —
+"a store selector that throws before the first message arrives" is in its own
+header — and the first regression test written for the bug **passed against the
+bug**, because a window with an empty queue never renders a row and the throw is
+in the row. Seeding one session is the whole difference. A test that cannot fail
+is worse than no test, because it is also a claim that the case is covered.
