@@ -17,13 +17,14 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bookmark, ChevronDown, ChevronRight, Search as SearchIcon, X } from "lucide-react";
+import { Bookmark, ChevronDown, ChevronRight, NotebookPen, Search as SearchIcon, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Checkbox, Dim, Empty, IconButton, Input, Mono } from "@/ui/primitives";
 import { best, type Engine } from "@/lib/search";
 import { clock, oneLine } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { eventLabel, eventText, type TranscriptEvent } from "@/wire/types";
+import { noteFromConversation, noteFromTurn } from "@/lib/notes";
 
 function kindColor(t: TranscriptEvent["kind"]["t"]): string {
   switch (t) {
@@ -56,6 +57,7 @@ const Turn = memo(function Turn({
   noteBody,
   onMark,
   onRemark,
+  onCopyToNote,
   highlighted,
 }: {
   ev: TranscriptEvent;
@@ -63,6 +65,7 @@ const Turn = memo(function Turn({
   noteBody: string | null;
   onMark: (seq: number) => void;
   onRemark: (seq: number, text: string) => void;
+  onCopyToNote: (seq: number) => void;
   highlighted: boolean;
 }) {
   const [open, setOpen] = useState(true);
@@ -97,6 +100,20 @@ const Turn = memo(function Turn({
           className={noteBody === null ? "opacity-0 group-hover:opacity-100" : undefined}
         >
           <Bookmark size={11} />
+        </IconButton>
+        {/*
+          Copy, not mark — and the difference is the point. A mark *points at*
+          this turn and dies with the transcript; a note **takes the words with
+          it** and outlives the session, because `session_id` on a note is a tag
+          with no foreign key behind it. This is the button for "I want this
+          after the session is gone".
+        */}
+        <IconButton
+          title="copy this turn into a note — the note keeps the words, and outlives the session"
+          onClick={() => onCopyToNote(ev.seq)}
+          className="opacity-0 group-hover:opacity-100"
+        >
+          <NotebookPen size={11} />
         </IconButton>
         {long && (
           <IconButton title={open ? "collapse" : "expand"} onClick={() => setOpen(!open)}>
@@ -183,6 +200,7 @@ export function TranscriptPane() {
   const showThinking = useStore((s) => s.prefs.showThinking);
   const setPrefs = useStore((s) => s.setPrefs);
   const notes = useStore((s) => s.notes);
+  const sessions = useStore((s) => s.sessions);
   const send = useStore((s) => s.send);
   const focusTs = useStore((s) => s.focusEventTs);
   const highlightSeq = useStore((s) => s.highlightSeq);
@@ -232,6 +250,42 @@ export function TranscriptPane() {
       else send({ cmd: "note_save", id: "", body: "", session_id: id, seq, repo: null });
     },
     [id, notes, send],
+  );
+
+  /**
+   * Copy a turn — or the whole conversation — into a note of its own.
+   *
+   * A **new** note every time, never an edit of an existing one: this is a
+   * scratchpad gesture, and silently folding a second copy into the note you
+   * made an hour ago would lose whichever one you meant to keep. `seq` is left
+   * null on purpose, so these do not collide with `onMark`'s one-note-per-turn
+   * bookmarks — a copied turn is a document, not a mark on a transcript.
+   */
+  const copyToNote = useCallback(
+    (body: string) => {
+      if (!body.trim()) return;
+      send({
+        cmd: "note_save",
+        id: "",
+        body,
+        session_id: id,
+        seq: null,
+        repo: id ? (sessions[id]?.repo_root ?? null) : null,
+      });
+      // Open the rail on Notes: a copy that lands somewhere you cannot see
+      // looks like a button that did nothing, and the next thing you want is
+      // to write the sentence explaining why you kept it.
+      setPrefs({ rail: "notes" });
+    },
+    [id, sessions, send, setPrefs],
+  );
+
+  const onCopyToNote = useCallback(
+    (seq: number) => {
+      const ev = shown.find((e) => e.seq === seq);
+      if (ev) copyToNote(noteFromTurn(id ? (sessions[id] ?? null) : null, ev));
+    },
+    [shown, id, sessions, copyToNote],
   );
 
   const virt = useVirtualizer({
@@ -299,7 +353,13 @@ export function TranscriptPane() {
           title="show the agent's reasoning blocks"
         />
         <Dim className="text-2xs">{shown.length} turns</Dim>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
+          <IconButton
+            title="copy this conversation into a note — long ones keep the tail, and the note says so"
+            onClick={() => copyToNote(noteFromConversation(id ? (sessions[id] ?? null) : null, shown))}
+          >
+            <NotebookPen size={12} />
+          </IconButton>
           <IconButton title="find in this transcript  (Ctrl+F)" active={showFind} onClick={() => setShowFind(!showFind)}>
             <SearchIcon size={12} />
           </IconButton>
@@ -350,6 +410,7 @@ export function TranscriptPane() {
                     noteBody={noteFor.get(ev.seq) ?? null}
                     onRemark={onRemark}
                     onMark={onMark}
+                    onCopyToNote={onCopyToNote}
                   />
                 </div>
               );

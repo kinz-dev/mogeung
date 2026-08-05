@@ -1,7 +1,7 @@
 ---
 title: Notes, documents and tasks
-status: draft
-updated: 2026-08-02
+status: active
+updated: 2026-08-05
 roadmap: [R-B35, R-L1, R-L2, R-L3]
 depends_on: [A1, A6, A27]
 ---
@@ -44,24 +44,58 @@ ends up in a scratch file whose name you forget.
 That is exactly why the order below starts where it does. `R-B35` — a note
 against a transcript turn — is the smallest thing that tests A27 honestly,
 because it is the one place a note has an obvious home and no competing tool
-is closer to hand. If notes are not written *there*, they will not be written
-in a dedicated pane either, and `R-L2` should not be built.
+is closer to hand.
 
-**The removal condition, agreed in advance:** if a week of use produces fewer
-than a handful of notes, this comes out rather than being decorated.
+**The gate came off on 2026-08-05, deliberately and against the count.** The
+week produced four files, two of which were probes from building the thing —
+so two real notes, 99 and 114 bytes. By the removal condition written here in
+advance that is fewer than a handful, and this feature was due to come out
+rather than grow.
+
+It grew instead, on an explicit decision, and the reasoning is worth keeping
+because it is not "the number was close enough":
+
+- **One of the two real notes is called `todo-list`.** The want turned up
+  inside the container that was not built for it. That is `R-L3` asking for
+  itself, and a removal condition that fires on volume cannot see it.
+- **The first slice may have measured the wrong thing.** A note bound to a
+  transcript turn is a *remark*; what was asked for on the day the gate came
+  off is a **scratchpad with its own lifecycle** — *"it should be like a
+  scratch pad … the notes itself has its own lifecycle and unlike bookmark, it
+  can out-live the session/transcript."* Two notes against turns is weak
+  evidence about a pane nobody had yet.
+- **The missing gesture was named at the same time**: a button that copies a
+  conversation into a note. Without it every note starts as an empty box, and
+  an empty box competes badly with the editor already open beside it — which
+  is exactly A27's stated risk, and was never actually tested against a
+  loaded box.
+
+So A27 is not settled by this, and it is not being treated as settled: it moves
+to `AT RISK`, and what is being built is the version the ask describes. The
+honest new condition is below.
+
+**The replacement condition:** the copy-to-note buttons are the test. If a
+month of use produces notes that were *only* ever created empty — the copy
+gesture unused — then the want was for a document store this window is not the
+right home for, and pillar L comes out with that evidence rather than a count
+of files.
 
 ### Acceptance
 
 - [x] A turn in the Transcript can carry a note, written and edited in place
 - [x] Notes are visible without opening each turn — the transcript shows where
       they are
-- [ ] A note survives the session ending, being forgotten, and the window
-      restarting
+- [x] A note survives the session ending, being forgotten, and the window
+      restarting — `notes` carries `session_id` as a tag with no foreign key
+      behind it, so `forget_session` leaves it standing (`store.rs`)
 - [x] Notes are one set across windows: two windows on one daemon show the same
       note the moment it is saved
 - [x] Every note also exists as a `.md` file under `~/.mogeung/notes/`, and
       deleting mogeung's database loses history but not the writing
-- [ ] A document can be written, listed, renamed and deleted from a pane
+- [x] A document can be written, listed, filtered and deleted from the rail
+- [x] A turn, or a whole conversation, can be copied into a note of its own —
+      the note keeps the words rather than pointing at them, and a copied
+      conversation states what it left behind rather than looking complete
 - [ ] A `- [ ]` line in any document appears in a task list, and ticking it in
       either place agrees in both
 - [ ] "What did I close today" is answerable, and the answer survives the
