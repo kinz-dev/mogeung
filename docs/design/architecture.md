@@ -318,9 +318,26 @@ The window docks things two ways, and which one a thing uses is a decision
 rather than a habit —
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
 
-**Panes** are views of a session — Changes, Transcript, Info, Debt, Agent,
-Editor, Git, Insight. They live in the dockview tree, are draggable and
-splittable, and their arrangement is serialised into the client's own storage.
+**Panes** are views of a session. Two are left in the centre — **Agent** and
+**Code** — since `R-B45` moved Changes and Transcript down to join Git, Insight
+and Debt in the bottom dock, and Info under the queue. They live in the dockview
+tree, are draggable and splittable, and their arrangement is serialised into the
+client's own storage.
+
+*Which* session a pane shows stopped being a property of the window on
+2026-08-06 and became a property of the pane (`R-B49`). A pane resolves its
+session through `PaneScope` rather than reading `selected`: unbound it follows
+the queue, as everything did before, and **held** it stays on one session while
+the selection moves around it. That is what lets two agents be on screen and
+live at once, and it is deliberately confined to the tile tree — chrome follows
+the selection by definition, which is half of what ADR-0017 means by the word.
+
+Two rules keep the arrangement durable across a restart. Slots are **numbered**
+(`agent`, `agent:2`, …) and never keyed by session, so the serialised layout
+names no session and cannot restore a tab pointing at one that ended days ago.
+And a hold lives in the *machine-scoped* preferences beside the queue's pins and
+labels, for the reason `R-I11` gives: a session id from the dev box means
+nothing on the laptop.
 
 **Chrome** is everything that must stay reachable whichever pane is forward: the
 Attention queue on the left, the terminal across the bottom, and since

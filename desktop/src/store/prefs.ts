@@ -57,6 +57,20 @@ export interface ScopedPrefs {
   tags: Record<SessionId, string>;
   /** The panel's shells: `[tmux session name, worktree root]`. `R-B33`. */
   shells: [string, string][];
+  /**
+   * Panes held on a session rather than following the selection, by pane id.
+   * `R-B49`.
+   *
+   * **Machine-scoped, and it belongs here for the reason above**: the value is
+   * a session id, which means nothing on another machine. A hold carried to the
+   * laptop would name a session that daemon has never heard of, and the pane
+   * would sit on the ended state for ever with no way to read why.
+   *
+   * Called `paneHold` and not `panePinned` on purpose. `pinned` above is the
+   * queue's pin — *keep this session at the top of the list* — and two
+   * different pins in one window is a worse cost than an unfamiliar verb.
+   */
+  paneHold: Record<string, SessionId>;
 }
 
 export interface Prefs {
@@ -141,6 +155,7 @@ export const emptyScoped = (): ScopedPrefs => ({
   bookmarks: [],
   tags: {},
   shells: [],
+  paneHold: {},
 });
 
 export const defaultPrefs = (): Prefs => ({

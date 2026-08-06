@@ -79,7 +79,7 @@ async function board(opts: { tag?: string; selected?: boolean }) {
   cleanup();
   const { default: App } = await import("@/App");
   const { useStore } = await import("@/store");
-  const { loadPrefs } = await import("@/store/prefs");
+  const { emptyScoped, loadPrefs } = await import("@/store/prefs");
   const prefs = loadPrefs();
   useStore.setState({
     prefs: {
@@ -87,7 +87,15 @@ async function board(opts: { tag?: string; selected?: boolean }) {
       scoped: {
         ...prefs.scoped,
         // The key `scoped()` resolves to with no daemon connected.
+        //
+        // Built from `emptyScoped()` rather than listed by hand. Listing them
+        // was a slow trap: every field added to `ScopedPrefs` afterwards is
+        // `undefined` here while being complete everywhere in the app, so the
+        // first reader of a new field crashes *only under test* and reads as a
+        // bug in the feature that added it. `paneHold` (`R-B49`) is the one
+        // that actually sprang it.
         unknown: {
+          ...emptyScoped(),
           ...(prefs.scoped.unknown ?? {}),
           hidden: [],
           pinned: [],

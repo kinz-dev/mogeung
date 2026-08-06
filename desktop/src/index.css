@@ -392,18 +392,35 @@ textarea {
   --dv-tab-divider-color: var(--border);
   --dv-active-sash-color: var(--blue);
   --dv-tabs-and-actions-container-font-size: 11px;
-  --dv-tabs-and-actions-container-height: 30px;
+  /* 30px → 26px with `R-B49`. This row used to be the *second* header above a
+     terminal; now it is the only one, and it carries the pane's controls as
+     well as its name, so the height it needed as decoration is height the
+     content wants back. */
+  --dv-tabs-and-actions-container-height: 26px;
 }
 
 .dockview-theme-mogeung .dv-tab {
   border-right: 1px solid var(--border);
   letter-spacing: 0.03em;
-  text-transform: uppercase;
+  /* **Not uppercase**, since `R-B49`. Shouting suited a fixed vocabulary the
+     app chose — CHANGES, DEBT — and the Agent tab now carries a session name
+     you chose, where `MOGEUNG/MAIN` is wider and slower to read than
+     `mogeung/main`. A tab that names data does not get to shout it. */
 }
 
 /* The active tab wears a top rule in the accent, the way the panes did. */
 .dockview-theme-mogeung .dv-tab.dv-active-tab {
   box-shadow: inset 0 2px 0 var(--blue);
+}
+
+/* Which pane the keyboard is aimed at.
+   With one pane in the centre this was a question nobody had to ask. With two
+   live terminals side by side it is the first question, and xterm gives no
+   answer of its own — a focused terminal and an unfocused one look identical
+   until you type into the wrong agent. The ring is on the *group*, because
+   that is the unit dockview actually tracks focus for. */
+.dockview-theme-mogeung .dv-groupview.dv-active-group {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 40%, transparent);
 }
 
 /* ------------------------------------------------------------------ */

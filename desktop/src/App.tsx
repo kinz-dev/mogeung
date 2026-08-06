@@ -24,7 +24,6 @@ import {
   DockviewReact,
   type DockviewApi,
   type DockviewReadyEvent,
-  type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from "dockview";
 import "dockview/dist/styles/dockview.css";
@@ -51,53 +50,37 @@ import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
-import { setDock } from "@/lib/panes";
+import { dropOrphanHolds, setDock } from "@/lib/panes";
+import { PaneScope } from "@/lib/paneScope";
+import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
 
 /**
- * The panes, by the id the saved layout stores.
+ * The panes, by the **kind** the saved layout stores as `component`.
  *
- * Every one is wrapped in [`ZoomPane`] rather than each pane wiring its own
- * Ctrl+wheel: one boundary means the behaviour cannot drift between panes, and
- * the pane itself does not have to know it can be scaled.
+ * Two wrappers, and both are boundaries rather than decoration:
+ *
+ * - [`ZoomPane`] owns Ctrl+wheel, so the behaviour cannot drift between panes
+ *   and the pane itself does not have to know it can be scaled. Its `name` is
+ *   the kind, not the panel id — two Agent panes read at one size, because the
+ *   factor describes *how you read agents*, not which tile you are in.
+ * - [`PaneScope`] names the tile, so what is inside can be bound to a session
+ *   the queue has not selected (`R-B49`). Without it every pane resolves
+ *   `selected` and two Agent panes are two views of one session.
  */
 const pane =
   (
-    id: string,
+    kind: string,
     Body: React.FunctionComponent,
     opts: { scale?: boolean } = {},
   ): React.FunctionComponent<IDockviewPanelProps> =>
-  () => (
-    <ZoomPane name={id} scale={opts.scale}>
-      <Body />
-    </ZoomPane>
+  (props) => (
+    <PaneScope id={props.api.id}>
+      <ZoomPane name={kind} scale={opts.scale}>
+        <Body />
+      </ZoomPane>
+    </PaneScope>
   );
-
-/**
- * A tab with no close button.
- *
- * These are fixed views of a session, not documents: there is no such thing as
- * "the Git tab you are finished with". Closing one only hides a view and leaves
- * you hunting for where it went — `ResetLayout` exists because a docking system
- * *can* be got into a state you cannot undo by hand, and a close button on
- * every tab is the fastest route there.
- *
- * A custom tab rather than CSS that hides the button: this also removes
- * dockview's middle-click-to-close, which the CSS would have left armed and
- * invisible.
- */
-function PaneTab(props: IDockviewPanelHeaderProps) {
-  const [title, setTitle] = React.useState(props.api.title ?? "");
-  React.useEffect(() => {
-    const sub = props.api.onDidTitleChange((e) => setTitle(e.title));
-    return () => sub.dispose();
-  }, [props.api]);
-  return (
-    <div className="dv-default-tab" title={title}>
-      <span className="dv-default-tab-content">{title}</span>
-    </div>
-  );
-}
 
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
   // A terminal is scaled by its font, never by CSS — same reason as Monaco
@@ -110,11 +93,13 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
 const LAYOUT_KEY = "mogeung.layout";
 
 /**
- * Every pane and its label, in the order the default layout lays them out.
+ * Every pane that is **always** present, and its label.
  *
  * Two left on 2026-08-06 — Changes and Transcript are dock tools now — and
  * `code` is deliberately absent from this list even though it is still a pane:
- * see `ensureCodePane`. What remains here is what is always present.
+ * see `syncCodePane`. Since `R-B49` the extra Agent slots are absent for the
+ * same kind of reason: `agent:2` exists because you asked for it, and a window
+ * that re-added it on every launch would be a split you cannot decline.
  */
 const PANES: readonly (readonly [string, string])[] = [
   ["agent", "Agent"],
@@ -244,6 +229,14 @@ export default function App() {
     // otherwise restore an empty tab and keep it.
     syncCodePane(event.api, openFileCount(useStore.getState()));
 
+    // A hold belongs to a pane, so a hold whose pane is not in the restored
+    // layout belongs to nothing. Left behind it is worse than untidy: split
+    // into that slot number again and the new pane arrives already held on a
+    // session chosen last week, which reads as the split ignoring your
+    // selection. `closeAgentPane` clears its own; this catches the layouts that
+    // lost a pane some other way.
+    dropOrphanHolds(event.api);
+
     // Written on change rather than on a timer, and never mid-drag: dockview
     // fires while a sash moves, and saving each frame would write the file
     // sixty times a second.
@@ -271,6 +264,11 @@ export default function App() {
               <DockviewReact
                 components={components}
                 defaultTabComponent={PaneTab}
+                // Per **group**, which is what makes a split correct without a
+                // line of layout-aware code: two Agent panes side by side are
+                // two groups and get one set of controls each, and tabbed
+                // together they are one group showing the active tab's.
+                rightHeaderActionsComponent={PaneActions}
                 onReady={onReady}
                 className="dockview-theme-mogeung h-full"
               />

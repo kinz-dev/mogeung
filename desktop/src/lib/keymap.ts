@@ -14,9 +14,9 @@
 import { useEffect, type RefObject } from "react";
 import { tinykeys } from "tinykeys";
 import type { DockviewApi } from "dockview";
-import { useStore } from "@/store";
+import { togglePaneHold, useStore } from "@/store";
 import type { DockTool, RailTool } from "@/store/prefs";
-import { focusPane } from "@/lib/panes";
+import { focusPane, resetLayout, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
 
 /** The id the Attention list carries, so `Alt+1` has something to focus. */
@@ -84,6 +84,44 @@ export const ACTIONS: Action[] = [
   dockTool("transcript", "Transcript", ["Alt+3"]),
   pane("agent", "Agent", ["Alt+a"]),
   pane("code", "Code", ["Alt+c"]),
+
+  // Two agents at once. `R-B49`.
+  //
+  // `Alt+Shift+…` on both, beside `Alt+A`, because these are things you do
+  // *to* the Agent pane rather than places you go. The hold has no bare-letter
+  // binding on purpose: it is the one action here you can leave switched on and
+  // forget, and a key that easy to hit by accident would produce exactly the
+  // failure this feature has to avoid — a pane that has quietly stopped
+  // following the queue.
+  {
+    id: "pane.agent.split",
+    label: "Another Agent pane, beside this one",
+    group: "Panes",
+    keys: ["Alt+Shift+a"],
+    run: () => splitAgent(),
+  },
+  {
+    id: "pane.agent.hold",
+    label: "Hold this Agent pane on its session",
+    group: "Panes",
+    keys: ["Alt+Shift+h"],
+    run: (dock) => {
+      // The pane the keyboard is aimed at, which dockview already tracks as
+      // the active panel — the same thing the focus ring draws.
+      const id = dock?.activePanel?.id;
+      if (id) togglePaneHold(id);
+    },
+  },
+  {
+    id: "layout.reset",
+    label: "Reset the pane layout",
+    group: "Panes",
+    // Deliberately not adjacent to anything pressed often: this discards an
+    // arrangement you may have spent a while on. Same binding the egui client
+    // gave it, for hands that learnt it there.
+    keys: ["Alt+0"],
+    run: () => resetLayout(),
+  },
 
   // The rest of the strip, in the order it is drawn.
   dockTool("insight", "Insight", ["Alt+4"]),

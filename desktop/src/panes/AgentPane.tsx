@@ -9,19 +9,28 @@
  *
  * Closing this pane detaches. The agent keeps working. See
  * [ADR-0010](../../docs/decisions/0010-attach-a-terminal-never-own-one.md).
+ *
+ * **It no longer draws its own header.** `R-B49` merged that row into the
+ * dockview tab, which now names the session rather than repeating the word
+ * `Agent`, and moved the controls into the group's actions — see
+ * [`PaneChrome`](../ui/PaneChrome.tsx). What is left here is the terminal and
+ * the three sentences that explain why there sometimes is not one.
  */
 
 import { useMemo } from "react";
-import { useStore, useSelectedSession } from "@/store";
-import { Chip, Dim, Empty, PaneHeader } from "@/ui/primitives";
+import { usePaneBinding, useSelectedSession } from "@/store";
+import { Empty } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
-import { attachArgs, hostLabel, reachFor, spawnAs } from "@/lib/tmux";
+import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
+import { usePaneId } from "@/lib/paneScope";
+import { useStore } from "@/store";
 
 export function AgentPane() {
   const s = useSelectedSession();
+  const { id, held } = usePaneBinding();
+  const paneId = usePaneId() ?? "agent";
   const daemon = useStore((st) => st.daemon);
   const machineId = useStore((st) => st.machineId);
-  const send = useStore((st) => st.send);
 
   const reach = useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
 
@@ -30,36 +39,35 @@ export function AgentPane() {
     return spawnAs(reach, attachArgs(s.tmux_target));
   }, [s?.tmux_target, reach]);
 
+  // A **held** pane with nothing to show is not an empty pane, and saying
+  // "select a session" here would be a lie twice over: you did select one, and
+  // clicking another will not fill this pane because it is held. The session it
+  // was watching has ended, and the way out is to let go — so it says that, and
+  // stays where it is rather than quietly adopting whatever is selected now.
+  if (!s && held) {
+    return (
+      <Empty hint={`held on ${id?.slice(0, 8) ?? "a session"} — drop the anchor in the header to follow the queue again`}>
+        that session has ended
+      </Empty>
+    );
+  }
   if (!s) return <Empty>select a session</Empty>;
 
-  const host = reach ? hostLabel(reach) : null;
-
   return (
-    // Stays `--bg-panel`: `PaneHeader` paints no surface of its own, so this is
-    // the header's background too, and the darker one belongs to the terminal
-    // alone — chrome above, another machine's output below. `TerminalView`
-    // carries `--terminal-bg` itself, which also covers the shell panel.
+    // Stays `--bg-panel`: the darker surface belongs to the terminal alone —
+    // chrome above, another machine's output below. `TerminalView` carries
+    // `--terminal-bg` itself, which also covers the shell panel.
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
-      <PaneHeader title="Agent" hint="attached through tmux — closing this pane detaches, it never kills">
-        {s.tmux_target && <Dim className="font-mono text-2xs">{s.tmux_target}</Dim>}
-        {host && (
-          <Chip color="var(--amber)" title="tmux runs on that machine, reached over ssh">
-            {host}
-          </Chip>
-        )}
-        <button
-          type="button"
-          onClick={() => send({ cmd: "focus_terminal", session_id: s.id })}
-          className="outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] rounded-sm border border-[var(--border)] px-1.5 py-px text-2xs hover:border-[var(--border-hover)]"
-          title="raise the terminal application this session runs in — it moves your window, then you type"
-        >
-          raise its window
-        </button>
-      </PaneHeader>
-
       <div className="min-h-0 flex-1">
         <TerminalView
-          id={`agent:${s.id}`}
+          // Keyed by **pane and session**, not by session alone. Two panes can
+          // legitimately show one session — hold one on it and leave the other
+          // following — and a shared pty id would mean two xterms writing to one
+          // pty, with the first unmount closing it under the second. tmux is
+          // happy to hand the same session to two clients; this is what asks it
+          // to. `agent:<sid>` is still what slot one produces, so nothing that
+          // existed before this change is renamed.
+          id={`${paneId}:${s.id}`}
           command={command}
           refusal={
             !s.tmux_target ? (

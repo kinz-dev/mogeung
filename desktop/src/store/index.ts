@@ -12,6 +12,7 @@
  */
 
 import { create } from "zustand";
+import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
   Analytics,
@@ -1008,7 +1009,57 @@ async function ensureDaemon(url: string): Promise<void> {
   }
 }
 
-/** The selected session, or `null`. The single definition of "current". */
+/**
+ * Which session the surrounding pane is looking at, and whether it was told to.
+ * `R-B49`.
+ *
+ * Outside a pane — the rail, the palette, a dialog — there is no binding and
+ * this is the selection, which is what every caller got before panes could be
+ * held at all.
+ */
+export interface PaneBinding {
+  id: SessionId | null;
+  /** Held on `id` rather than following the selection. */
+  held: boolean;
+}
+
+export function usePaneBinding(): PaneBinding {
+  const paneId = usePaneId();
+  // Reading through `scoped()` rather than a stored object: the hold map is
+  // machine-scoped, and this selects a **string** out of it, so the identity
+  // trap `scoped()` documents cannot bite here.
+  const held = useStore((s) => (paneId ? (s.scoped().paneHold[paneId] ?? null) : null));
+  const selected = useStore((s) => s.selected);
+  return held ? { id: held, held: true } : { id: selected, held: false };
+}
+
+/**
+ * The session this pane is showing, or `null`. The single definition of
+ * "current" — which since `R-B49` is a question with a per-pane answer.
+ *
+ * `null` from a **held** pane does not mean "nothing is selected", it means the
+ * session that was held has gone. A caller that needs to tell them apart asks
+ * `usePaneBinding` for the `held` flag; a caller that does not is right to
+ * treat both as empty.
+ */
 export function useSelectedSession(): Session | null {
-  return useStore((s) => (s.selected ? (s.sessions[s.selected] ?? null) : null));
+  const { id } = usePaneBinding();
+  return useStore((s) => (id ? (s.sessions[id] ?? null) : null));
+}
+
+/**
+ * Hold this pane on a session, or let it follow the selection again.
+ *
+ * Holding takes the session the pane is showing *now*, which is why this needs
+ * no argument beyond the pane: "keep showing me this" is the whole gesture, and
+ * asking which session to hold would be asking about the one already on screen.
+ */
+export function togglePaneHold(paneId: string): void {
+  const { scoped, setScoped, selected } = useStore.getState();
+  const hold = scoped().paneHold;
+  const next = { ...hold };
+  if (next[paneId]) delete next[paneId];
+  else if (selected) next[paneId] = selected;
+  else return; // Nothing on screen to hold onto.
+  setScoped({ paneHold: next });
 }

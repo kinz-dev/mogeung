@@ -7,11 +7,11 @@
 | Branch | `main` |
 | Tests | 331 passing |
 | Rust | 24191 lines |
-| Docs | 74 files, 21 ADRs |
+| Docs | 75 files, 21 ADRs |
 
 ## Assumptions
 
-Untested: **9** · At risk: **4** · Supported: 15 · Refuted: 1
+Untested: **9** · At risk: **4** · Supported: 16 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -50,4 +50,5 @@ Untested: **9** · At risk: **4** · Supported: 15 · Refuted: 1
 | [The right tool-window rail](docs/features/0027-right-rail.md) | `shipped` | [A13, A14, A15, A16, A28] |
 | [Global search](docs/features/0028-global-search.md) | `shipped` | [A13, A22, A29] |
 | [The React desktop client](docs/features/0029-desktop-client.md) | `shipped` | [A1, A6, A13, A14, A15, A16] |
+| [Two agents at once](docs/features/0030-two-agents-at-once.md) | `shipped` | [A30, A14, A11] |
 
