@@ -19,6 +19,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useStore } from "@/store";
 import { Chip, Dim, Empty, Input, Mono, Row } from "@/ui/primitives";
+import { rank, winner } from "@/lib/search";
 import { stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import type { KitEntry, KitKind } from "@/wire/types";
@@ -53,18 +54,33 @@ export function KitView({ kind }: { kind: KitKind }) {
     return () => window.clearTimeout(t);
   }, [send]);
 
-  const rows = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    return kit
-      .filter((e) => e.kind === kind)
-      .filter(
-        (e) =>
-          !q ||
-          e.name.toLowerCase().includes(q) ||
-          e.description.toLowerCase().includes(q) ||
-          (e.project ?? "").toLowerCase().includes(q),
-      );
-  }, [kit, kind, filter]);
+  /**
+   * The shared engines rather than a substring test. `R-F10`.
+   *
+   * This began as three `.includes()` calls, which is exactly the behaviour the
+   * row was written against: it cannot find `qcommit` from `q-commit`, it
+   * cannot match two words that are both present but not adjacent, and it
+   * leaves the list in whatever order it arrived — so a perfect match on a name
+   * can sit below a coincidence in a description. `rank` runs substring,
+   * all-words and subsequence together and orders by the winner.
+   *
+   * Name, description and project are concatenated, which is deliberate and
+   * has a cost worth stating: a query matching a name *and* a description
+   * scores as one long haystack rather than being credited to the better field.
+   * Fixing that means a per-field weighting, which is `scorePath`'s job for
+   * paths and is more machinery than a filter box has earned here.
+   */
+  const ranked = useMemo(
+    () =>
+      rank(
+        kit.filter((e) => e.kind === kind),
+        filter,
+        (e) => `${e.name} ${e.description} ${e.project ?? ""}`,
+      ),
+    [kit, kind, filter],
+  );
+  const rows = useMemo(() => ranked.map((r) => r.item), [ranked]);
+  const engine = winner(ranked);
 
   const open = (e: KitEntry) => {
     setOpenPath(e.path);
@@ -78,13 +94,21 @@ export function KitView({ kind }: { kind: KitKind }) {
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex w-72 shrink-0 flex-col border-r border-[var(--border)]">
-        <div className="shrink-0 px-2 py-1">
+        <div className="flex shrink-0 items-center gap-1.5 px-2 py-1">
           <Input
             value={filter}
             onChange={setFilter}
             placeholder={kind === "skill" ? "filter skills" : "filter memories"}
             ariaLabel={kind === "skill" ? "filter skills" : "filter memories"}
           />
+          {filter.trim() && engine && (
+            <Dim
+              className="shrink-0 text-2xs"
+              title="which engine won — exact substring, all-words, or subsequence"
+            >
+              {engine}
+            </Dim>
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {rows.length === 0 ? (

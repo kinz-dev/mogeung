@@ -72,6 +72,47 @@ export function best(query: string, hay: string): Hit | null {
   return candidates.reduce((a, b) => (b.score > a.score ? b : a));
 }
 
+/** An item and why it matched, or `null` when nothing was being searched. */
+export interface Ranked<T> {
+  item: T;
+  hit: Hit | null;
+}
+
+/**
+ * Filter and order a list by one query, several engines at once. `R-F10`.
+ *
+ * A blank query returns **everything, in its original order** rather than
+ * nothing — these lists are worth reading unsearched, and the daemon has
+ * already ordered them by something meaningful (a count, a recency). Ranking an
+ * unqueried list by a score of zero would silently throw that order away.
+ *
+ * `text` rather than a field name so one function serves lists of different
+ * shapes: a prompt cluster's representative, a failure's example line, a doc's
+ * path. Concatenating a couple of fields in the accessor is the intended way to
+ * search more than one of them.
+ */
+export function rank<T>(items: readonly T[], query: string, text: (t: T) => string): Ranked<T>[] {
+  if (!query.trim()) return items.map((item) => ({ item, hit: null }));
+  const out: Ranked<T>[] = [];
+  for (const item of items) {
+    const hit = best(query, text(item));
+    if (hit) out.push({ item, hit });
+  }
+  // Stable within a score: `sort` has been stable since ES2019, so items the
+  // engines cannot separate keep the order the daemon gave them.
+  return out.sort((a, b) => (b.hit?.score ?? 0) - (a.hit?.score ?? 0));
+}
+
+/**
+ * Which engine actually decided the order, or `null` when nothing was searched.
+ *
+ * The whole rule `search.ts` was built on: a box that silently prefers one
+ * strategy is worse than one that says which it used.
+ */
+export function winner<T>(ranked: readonly Ranked<T>[]): Engine | null {
+  return ranked[0]?.hit?.engine ?? null;
+}
+
 /** Path-aware ranking for go-to-file. The basename counts for more. */
 export function scorePath(query: string, path: string): number | null {
   const q = query.trim().toLowerCase();

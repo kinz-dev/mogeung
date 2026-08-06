@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-06
+updated: 2026-08-07
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -351,6 +351,14 @@ Attention queue on the left, the terminal across the bottom, and since
 tree (`R-B41`) and global search (`R-F13`). None of these are dock panels; each
 is laid out around the dock, so closing every pane cannot take the queue with
 it.
+
+**The wall is neither** (`R-B50`, 2026-08-07). It is an overlay on a chord —
+every session as a tile, positions keyed by session id so they never move —
+and it is deliberately not a third docking idea: it cannot be arranged, cannot
+be left open beside anything, and holds no state but a boolean. ADR-0017's rule
+is about where a thing *lives*; something that exists only while you hold a key
+does not live anywhere. It reads the snapshot the window already has and fetches
+nothing.
 
 Chrome state rides in the client's preferences rather than in dockview's own
 serialisation, for the reason the egui client kept it out of egui's: the widths

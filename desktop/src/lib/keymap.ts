@@ -113,6 +113,20 @@ export const ACTIONS: Action[] = [
     },
   },
   {
+    id: "wall",
+    label: "The wall — every session at once",
+    group: "Navigation",
+    // `Alt+W` for wall, and a **toggle** rather than hold-to-peek. The hold
+    // gesture was the nicer design and lost to a real constraint: the centre is
+    // usually an xterm, which handles keys aggressively, and a peek whose keyup
+    // never arrives is a wall stuck open. One key both ways, Esc as well.
+    keys: ["Alt+w"],
+    run: () => {
+      const { showWall } = useStore.getState();
+      useStore.setState({ showWall: !showWall });
+    },
+  },
+  {
     id: "layout.reset",
     label: "Reset the pane layout",
     group: "Panes",

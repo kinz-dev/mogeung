@@ -340,6 +340,8 @@ export interface AppState {
   paletteOpen: boolean;
   paletteMode: "actions" | "files";
   showHealth: boolean;
+  /** The wall — every session as a tile, on a chord. `R-B50`. */
+  showWall: boolean;
   showKeymap: boolean;
   /** The daemon switcher. `R-I7`. */
   showConnections: boolean;
@@ -448,6 +450,7 @@ export const useStore = create<AppState>((set, get) => ({
   paletteOpen: false,
   paletteMode: "actions",
   showHealth: false,
+  showWall: false,
   showKeymap: false,
   showConnections: false,
   showPrompt: false,

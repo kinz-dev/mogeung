@@ -17,7 +17,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
-import { Pin, X, WrapText, Columns2, ListTree, Eye, UserRound, Bookmark } from "lucide-react";
+import {
+  Pin,
+  X,
+  WrapText,
+  Columns2,
+  ListTree,
+  Eye,
+  UserRound,
+  Bookmark,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import { useStore } from "@/store";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
 import { closeTab, explorerFetch, languageOf } from "@/lib/explorer";
@@ -29,6 +40,151 @@ import { Input } from "@/ui/primitives";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { FileIcon } from "@/ui/FileIcon";
+import { renderedLines } from "@/lib/markdown";
+import { best } from "@/lib/search";
+
+/**
+ * The rendered preview, and a find that searches what it says. `R-B38`.
+ *
+ * `R-B29` shipped the preview and left `Ctrl+F` searching the *source* behind
+ * it — Monaco's find, on a buffer nobody is looking at. So the words on the
+ * screen were the one thing that could not be searched, and the syntax you
+ * cannot see was matchable.
+ *
+ * Hits are in **document order**, not score order. The winner is still named,
+ * which is the rule `search.ts` was built on, but a find bar's arrows have to
+ * walk down the page — a "next" that jumped to a better match further up is a
+ * next that lost you.
+ *
+ * What this does **not** do, said plainly because it is the obvious next
+ * expectation: it does not highlight the match in the rendering or scroll to
+ * it. `react-markdown` owns that DOM and marking it up means walking text
+ * nodes it may re-create at any render. The payoff here is the source line —
+ * the row asks for a hit you can go and edit, and that is what the arrow keys
+ * and the button deliver.
+ */
+function MarkdownPreview({
+  content,
+  onEditSource,
+}: {
+  content: string;
+  onEditSource: (line: number) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [at, setAt] = useState(0);
+  const [finding, setFinding] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const hits = useMemo(() => {
+    const q = query.trim();
+    if (!q) return [];
+    return renderedLines(content)
+      .map((l) => ({ ...l, hit: best(q, l.text) }))
+      .filter((l): l is typeof l & { hit: NonNullable<typeof l.hit> } => l.hit !== null);
+  }, [content, query]);
+
+  // A shorter query can leave the cursor past the end of the new results.
+  const cursor = hits.length === 0 ? 0 : Math.min(at, hits.length - 1);
+  const current = hits[cursor];
+
+  /**
+   * `Ctrl+F` opens it, and only from inside this preview.
+   *
+   * Scoped the same way Notes scopes its own find, and here it is not merely
+   * tidy: in *source* mode this pane hands `Ctrl+F` to Monaco's find widget,
+   * which is the right owner of it. A window-wide binding would have to take
+   * it back from the editor to give it to a preview that is usually off.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.key === "f" && (e.ctrlKey || e.metaKey))) return;
+      const root = rootRef.current;
+      if (!root || !root.contains(document.activeElement)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setFinding(true);
+      requestAnimationFrame(() => inputRef.current?.select());
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  const step = (down: boolean) => {
+    if (hits.length === 0) return;
+    setAt((n) => (down ? (n + 1) % hits.length : (n - 1 + hits.length) % hits.length));
+  };
+
+  return (
+    // `tabIndex` so the preview can *hold* focus: `Ctrl+F` is scoped by asking
+    // whether the active element is inside here, and a div full of prose has
+    // nothing focusable in it until something says so.
+    <div ref={rootRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
+      {finding && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--border)] px-2 py-1">
+          <Input
+            inputRef={inputRef}
+            value={query}
+            onChange={(v) => {
+              setQuery(v);
+              setAt(0);
+            }}
+            placeholder="find in the preview"
+            ariaLabel="find in the preview"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setFinding(false);
+                setQuery("");
+              }
+              if (e.key === "Enter") {
+                e.preventDefault();
+                step(!e.shiftKey);
+              }
+            }}
+          />
+          <Dim className="shrink-0 text-2xs whitespace-nowrap">
+            {query.trim() ? `${hits.length === 0 ? 0 : cursor + 1}/${hits.length}` : ""}
+          </Dim>
+          {current && (
+            <>
+              {/* The engine names itself — the rule `search.ts` exists for. */}
+              <Dim
+                className="shrink-0 text-2xs"
+                title="which of the engines matched — exact, all-words, or subsequence"
+              >
+                {current.hit.engine}
+              </Dim>
+              <button
+                type="button"
+                onClick={() => onEditSource(current.line)}
+                title="open the source at this line — the only useful thing to do with a hit"
+                className="shrink-0 rounded-sm border border-[var(--border)] px-1.5 py-px text-2xs outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:border-[var(--border-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]"
+              >
+                line {current.line}
+              </button>
+            </>
+          )}
+          <IconButton title="previous match  (Shift+Enter)" disabled={hits.length === 0} onClick={() => step(false)}>
+            <ChevronUp size={12} />
+          </IconButton>
+          <IconButton title="next match  (Enter)" disabled={hits.length === 0} onClick={() => step(true)}>
+            <ChevronDown size={12} />
+          </IconButton>
+        </div>
+      )}
+      {current && (
+        <div className="shrink-0 truncate border-b border-[var(--border)] bg-[var(--bg-faint)] px-2 py-1 text-2xs text-[var(--dim)]">
+          {current.text}
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+        <div className="prose-mogeung">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The group's one header row: its file tabs, and the controls for the file
@@ -310,11 +466,20 @@ function Viewer({ group }: { group: 0 | 1 }) {
           job is the rendered thing, and a split would spend half a narrow pane
           on syntax you did not open it for. The toggle goes back. */}
       {preview && isMarkdown ? (
-        <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
-          <div className="prose-mogeung">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{tab.content}</ReactMarkdown>
-          </div>
-        </div>
+        <MarkdownPreview
+          content={tab.content}
+          // A hit's whole point is that you can go and change it, so this both
+          // leaves the rendering and asks the editor for that line. `gotoLine`
+          // is the same channel a search hit and a diff row already use, and
+          // the effect above clears it once it has been honoured.
+          onEditSource={(line) => {
+            setPreview(false);
+            if (!id || index === null || !st) return;
+            useStore.getState().patchExplorer(id, {
+              open: st.open.map((t, i) => (i === index ? { ...t, gotoLine: line } : t)),
+            });
+          }}
+        />
       ) : (
       <div className="min-h-0 flex-1">
         <Editor

@@ -43,6 +43,7 @@ import { LaunchWindow } from "@/ui/LaunchWindow";
 import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
+import { WallOverlay } from "@/ui/WallOverlay";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { CodePane } from "@/panes/CodePane";
@@ -327,6 +328,7 @@ export default function App() {
       <AmbientWindow />
         <LabelWindow />
         <SearchOverlay />
+        <WallOverlay />
         <NoticesWindow />
         <Toasts />
         <ResizeGrip />

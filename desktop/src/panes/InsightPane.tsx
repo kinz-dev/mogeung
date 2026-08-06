@@ -14,7 +14,7 @@
  * authoritative" reading it was built to avoid.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -30,6 +30,7 @@ import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, Input, Mono, Row } from "@/ui/primitives";
 import { compact, num, oneLine, stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { rank, winner } from "@/lib/search";
 import { KitView } from "@/panes/KitView";
 
 type View =
@@ -70,6 +71,71 @@ function ChartFrame({ title, children, hint }: { title: string; children: React.
       <div className="h-40">
         <ResponsiveContainer width="100%" height="100%">
           {children as React.ReactElement}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The shape of a counted list. `R-F11`.
+ *
+ * The row's complaint was that "the prompt and analytics tables want shape, not
+ * rows". Analytics got its charts when this pane was redesigned; Prompts and
+ * Failures did not, and they are the two where the shape carries the actual
+ * finding — one prompt asked forty times and the rest asked twice is a fact
+ * about your week that a column of `×40` makes you reconstruct by reading.
+ *
+ * **Counts, never money.** [ADR-0005](../../../docs/decisions/0005-tokens-not-dollars.md),
+ * and it is worth restating at the one place an axis label would be tempting:
+ * a bar chart of *cost per prompt* is three lines of code away and would make
+ * this product something it has decided not to be.
+ *
+ * Horizontal, because the labels are sentences. A vertical bar chart of
+ * prompts would either clip every label to four words or turn them on their
+ * side, and the label *is* the data here — a bar you cannot read the name of
+ * ranks nothing.
+ */
+function CountBars({
+  title,
+  hint,
+  data,
+  color,
+}: {
+  title: string;
+  hint: string;
+  data: { label: string; count: number }[];
+  color: string;
+}) {
+  if (data.length === 0) return null;
+  return (
+    <div className="shrink-0 border-b border-[var(--border)] p-2">
+      <div className="mb-1 flex items-baseline gap-2">
+        <span className="text-xs font-semibold text-[var(--text-strong)]">{title}</span>
+        <Dim className="text-2xs">{hint}</Dim>
+      </div>
+      {/* Height rides on the row count: a fixed frame either wastes half its
+          space on three bars or crushes twelve into illegibility. */}
+      <div style={{ height: Math.max(80, data.length * 18 + 24) }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} layout="vertical" margin={{ left: 4, right: 8, top: 4, bottom: 4 }}>
+            <CartesianGrid stroke="var(--border)" horizontal={false} />
+            <XAxis type="number" {...AXIS} allowDecimals={false} />
+            <YAxis
+              type="category"
+              dataKey="label"
+              {...AXIS}
+              width={190}
+              // The tick is the prompt itself, so it is the one thing here that
+              // must not be shortened further than it already has been.
+              tickFormatter={(l: string) => (l.length > 34 ? `${l.slice(0, 33)}…` : l)}
+            />
+            <RTooltip
+              formatter={(v: number) => [num(v), "times"]}
+              contentStyle={{ background: "var(--bg-raised)", border: "1px solid var(--window-stroke)", fontSize: 11 }}
+            />
+            <Bar dataKey="count" fill={color} />
+          </BarChart>
         </ResponsiveContainer>
       </div>
     </div>
@@ -315,10 +381,23 @@ export function InsightPane() {
         )}
 
         {view === "prompts" && (
+          <>
+            <CountBars
+              title="What you keep re-asking"
+              hint="the twelve most repeated, by count — never by cost (ADR-0005)"
+              color="var(--graph-1)"
+              data={(insight.prompts ?? [])
+                .slice()
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 12)
+                .map((c) => ({ label: oneLine(c.representative, 60), count: c.count }))}
+            />
           <Listing
             empty="nothing loaded"
             onLoad={() => send({ cmd: "fetch_prompt_library" })}
             items={insight.prompts}
+            searchable={(c) => c.representative}
+            placeholder="filter the prompts you keep re-asking"
             render={(c, i) => (
               <div key={i} className="border-b border-[var(--border)] px-2 py-1">
                 <div className="flex items-center gap-2">
@@ -331,13 +410,27 @@ export function InsightPane() {
               </div>
             )}
           />
+          </>
         )}
 
         {view === "failures" && (
+          <>
+            <CountBars
+              title="The same error, again"
+              hint="the twelve most recurrent, by how many times they appear"
+              color="var(--red)"
+              data={(insight.failures ?? [])
+                .slice()
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 12)
+                .map((f) => ({ label: oneLine(f.example, 60), count: f.count }))}
+            />
           <Listing
             empty="nothing loaded"
             onLoad={() => send({ cmd: "fetch_recurring" })}
             items={insight.failures}
+            searchable={(f) => f.example}
+            placeholder="filter by the error text"
             render={(f, i) => (
               <div key={i} className="border-b border-[var(--border)] px-2 py-1">
                 <div className="flex items-center gap-2">
@@ -348,6 +441,7 @@ export function InsightPane() {
               </div>
             )}
           />
+          </>
         )}
 
         {view === "decisions" && (
@@ -356,6 +450,8 @@ export function InsightPane() {
             onLoad={() => s && send({ cmd: "fetch_decisions", session_id: s.id })}
             items={s ? (insight.decisions[s.id] ?? null) : null}
             note="candidates for a human to skim — never authority"
+            searchable={(d) => `${d.text} ${d.pattern}`}
+            placeholder="filter the candidates"
             render={(d, i) => (
               <div key={i} className="border-b border-[var(--border)] px-2 py-1">
                 <Dim className="text-2xs">
@@ -457,29 +553,95 @@ export function InsightPane() {
   );
 }
 
+/**
+ * A loaded list, with a filter over it. `R-F10`.
+ *
+ * The row asked for substring, regex, `rg` and fuzzy running together with the
+ * best answer winning. Two of those were settled while `R-B36` was built and
+ * the answers hold here: **no external binaries** — `rg` and `fzf` may not be
+ * installed, where every other outside dependency in this product is either
+ * required up front (`git`) or degrades to a named fallback (`tmux`) — and one
+ * scale across the engines that do run, with **the winner named** beside the
+ * count. Regex stays deferred; it needs a crate-sized decision, not a corner of
+ * a pane.
+ *
+ * The filter lives here rather than in each view because all seven of these are
+ * the same shape: a list the daemon ordered by something, that you want to cut
+ * down. `searchable` is what to match against — absent, the view simply has no
+ * box, which is the right answer for a list of four things.
+ */
 function Listing<T>({
   items,
   render,
   onLoad,
   empty,
   note,
+  searchable,
+  placeholder,
 }: {
   items: T[] | null;
   render: (item: T, i: number) => React.ReactNode;
   onLoad: () => void;
   empty: string;
   note?: string;
+  /** What a query is matched against. Omit for a list with no filter. */
+  searchable?: (item: T) => string;
+  placeholder?: string;
 }) {
+  const [query, setQuery] = useState("");
   useEffect(() => {
     if (items === null) onLoad();
     // Once per mount: this is a "fetch what is missing" door, not a subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const ranked = useMemo(
+    () => (searchable ? rank(items ?? [], query, searchable) : (items ?? []).map((item) => ({ item, hit: null }))),
+    [items, query, searchable],
+  );
+  const engine = winner(ranked);
+
   if (items === null) return <Empty>{empty}</Empty>;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      {note && <Dim className="block px-2 py-1 text-2xs">{note}</Dim>}
-      {items.length === 0 ? <Empty>nothing found</Empty> : items.map(render)}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {searchable && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--border)] px-2 py-1">
+          <Input
+            value={query}
+            onChange={setQuery}
+            placeholder={placeholder ?? "filter"}
+            ariaLabel="filter this view"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQuery("");
+            }}
+          />
+          {query.trim() && (
+            <>
+              <Dim className="shrink-0 text-2xs whitespace-nowrap">
+                {ranked.length}/{items.length}
+              </Dim>
+              {/* Named, not inferred. A search that will not say how it matched
+                  is one you cannot argue with when it ranks something oddly. */}
+              {engine && (
+                <Dim
+                  className="shrink-0 text-2xs"
+                  title="which engine won — exact substring, all-words, or subsequence"
+                >
+                  {engine}
+                </Dim>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {note && <Dim className="block px-2 py-1 text-2xs">{note}</Dim>}
+        {ranked.length === 0 ? (
+          <Empty>{query.trim() ? "nothing matches" : "nothing found"}</Empty>
+        ) : (
+          ranked.map((r, i) => render(r.item, i))
+        )}
+      </div>
     </div>
   );
 }

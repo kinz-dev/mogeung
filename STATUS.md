@@ -7,7 +7,7 @@
 | Branch | `main` |
 | Tests | 331 passing |
 | Rust | 24191 lines |
-| Docs | 75 files, 21 ADRs |
+| Docs | 77 files, 22 ADRs |
 
 ## Assumptions
 
@@ -51,4 +51,5 @@ Untested: **9** · At risk: **4** · Supported: 16 · Refuted: 1
 | [Global search](docs/features/0028-global-search.md) | `shipped` | [A13, A22, A29] |
 | [The React desktop client](docs/features/0029-desktop-client.md) | `shipped` | [A1, A6, A13, A14, A15, A16] |
 | [Two agents at once](docs/features/0030-two-agents-at-once.md) | `shipped` | [A30, A14, A11] |
+| [The wall](docs/features/0031-the-wall.md) | `shipped` | [A1, A6] |
 
