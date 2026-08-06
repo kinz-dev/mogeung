@@ -34,6 +34,7 @@ import { cn } from "@/lib/cn";
 import { eventLabel, eventText, type TranscriptEvent } from "@/wire/types";
 import { noteFromConversation, noteFromTurn, transcriptFilename, transcriptMarkdown } from "@/lib/notes";
 import { chooseSavePath, exportText, isTauri } from "@/lib/tauri";
+import { newestIndex, orderedTurns, visibleTurns } from "@/lib/turns";
 
 function kindColor(t: TranscriptEvent["kind"]["t"]): string {
   switch (t) {
@@ -207,6 +208,7 @@ export function TranscriptPane() {
   const events = useStore((s) => (s.selected ? s.events[s.selected] : undefined));
   const markdown = useStore((s) => s.prefs.markdown);
   const showThinking = useStore((s) => s.prefs.showThinking);
+  const newestFirst = useStore((s) => s.prefs.newestFirst);
   const setPrefs = useStore((s) => s.setPrefs);
   const notes = useStore((s) => s.notes);
   const sessions = useStore((s) => s.sessions);
@@ -221,10 +223,16 @@ export function TranscriptPane() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const shown = useMemo(() => {
-    if (!events) return [];
-    return showThinking ? events : events.filter((e) => e.kind.t !== "thinking");
-  }, [events, showThinking]);
+  /**
+   * Two arrays, and the split is the point.
+   *
+   * `visible` is always chronological; `shown` is what the screen reads, which
+   * may be reversed. Anything that *leaves* the window takes `visible` — a note
+   * or an exported file written backwards is one nobody can read, with answers
+   * before their questions and results before their calls.
+   */
+  const visible = useMemo(() => visibleTurns(events, showThinking), [events, showThinking]);
+  const shown = useMemo(() => orderedTurns(visible, newestFirst), [visible, newestFirst]);
 
   const noteFor = useMemo(() => {
     const map = new Map<number, string>();
@@ -399,6 +407,42 @@ export function TranscriptPane() {
     return () => window.clearTimeout(t);
   }, [savedAt]);
 
+  /**
+   * Opening a transcript lands on the **newest** turn. Asked for 2026-08-06.
+   *
+   * A conversation is read from where it got to, not from where it started —
+   * arriving at the top of a four-hundred-turn session and scrolling for the
+   * thing that just happened is the wrong end of the work. Whichever direction
+   * the list runs, this goes to the latest turn: the bottom normally, the top
+   * with `newestFirst` on.
+   *
+   * **Once per session, not per tick.** Following live output would yank the
+   * viewport out from under you mid-read, which is the complaint the queue's
+   * own scroll effect already carries a comment about. And a pending jump wins:
+   * a bookmark or a search hit sets `focusSeq` first, and landing on the newest
+   * turn on the way past would fight the thing that asked to be shown.
+   */
+  const landedOn = useRef<string | null>(null);
+  useEffect(() => {
+    if (!id || shown.length === 0) return;
+    if (landedOn.current === id) return;
+    landedOn.current = id;
+    if (focusSeq !== null || focusTs) return;
+    const at = newestIndex(shown.length, newestFirst);
+    if (at < 0) return;
+    // Twice, and the second one is not superstition: the rows are measured
+    // rather than fixed, so the first scroll lands against `estimateSize`'s
+    // guess and the real heights arrive after. A virtualised list has no
+    // "scrolled to the end" that survives being re-measured.
+    const go = () => virt.scrollToIndex(at, { align: newestFirst ? "start" : "end" });
+    const raf = requestAnimationFrame(go);
+    const settle = window.setTimeout(go, 160);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(settle);
+    };
+  }, [id, shown.length, newestFirst, focusSeq, focusTs, virt]);
+
   useEffect(() => {
     if (highlightSeq === null) return;
     const t = window.setTimeout(() => useStore.setState({ highlightSeq: null }), 2600);
@@ -423,6 +467,12 @@ export function TranscriptPane() {
           label="thinking"
           title="show the agent's reasoning blocks"
         />
+        <Checkbox
+          checked={newestFirst}
+          onChange={(v) => setPrefs({ newestFirst: v })}
+          label="newest first"
+          title="latest turn at the top — note that a tool call and its result swap places"
+        />
         <Dim className="text-2xs">{shown.length} turns</Dim>
         {savedAt && (
           // The path, not a checkmark. The window chose the directory, so the
@@ -440,7 +490,7 @@ export function TranscriptPane() {
           </IconButton>
           <IconButton
             title="copy this conversation into a note — long ones keep the tail, and the note says so"
-            onClick={() => copyToNote(noteFromConversation(id ? (sessions[id] ?? null) : null, shown))}
+            onClick={() => copyToNote(noteFromConversation(id ? (sessions[id] ?? null) : null, visible))}
           >
             <NotebookPen size={12} />
           </IconButton>
