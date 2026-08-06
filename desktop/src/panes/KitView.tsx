@@ -36,16 +36,21 @@ const SCOPE_COLOR: Record<string, string> = {
 
 export function KitView({ kind }: { kind: KitKind }) {
   const kit = useStore((s) => s.kit);
+  const loaded = useStore((s) => s.kitLoaded);
   const doc = useStore((s) => s.kitDoc);
   const send = useStore((s) => s.send);
   const [filter, setFilter] = useState("");
   const [openPath, setOpenPath] = useState<string | null>(null);
+  /** Long enough that a slow answer is not called a missing one. */
+  const [late, setLate] = useState(false);
 
   // Asked for once per mount rather than on a timer: these are files you edit
   // by hand every few days, and a poll would be a scan of `~/.claude` for
   // nothing. The list refreshes when you come back to the view.
   useEffect(() => {
     send({ cmd: "fetch_kit" });
+    const t = window.setTimeout(() => setLate(true), 3000);
+    return () => window.clearTimeout(t);
   }, [send]);
 
   const rows = useMemo(() => {
@@ -83,14 +88,32 @@ export function KitView({ kind }: { kind: KitKind }) {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {rows.length === 0 ? (
+            /*
+              Three states, and the third one is why this is not a one-line
+              empty. A list can be empty because the answer has not arrived,
+              because the answer *was* empty, or because nothing answered at
+              all — and the last one is what a window talking to a daemon older
+              than itself looks like, which ADR-0009 makes an ordinary thing to
+              be sitting in front of. Reported 2026-08-06 as a Memory panel that
+              said "reading ~/.claude…" for ever; the daemon it was asking had
+              been running since before `fetch_kit` existed.
+            */
             <Empty
               hint={
-                kind === "skill"
-                  ? "skills live in ~/.claude/skills and in installed plugins"
-                  : "memory lives in ~/.claude/projects/<project>/memory"
+                !loaded && late
+                  ? "a daemon older than this window does not know how to answer — restart mogeung, or the daemon you left running"
+                  : kind === "skill"
+                    ? "skills live in ~/.claude/skills and in installed plugins"
+                    : "memory lives in ~/.claude/projects/<project>/memory"
               }
             >
-              {kit.length === 0 ? "reading ~/.claude…" : "nothing matches"}
+              {!loaded
+                ? late
+                  ? "no answer from the daemon"
+                  : "reading ~/.claude…"
+                : kit.length === 0
+                  ? "nothing found under ~/.claude"
+                  : "nothing matches"}
             </Empty>
           ) : (
             rows.map((e) => (

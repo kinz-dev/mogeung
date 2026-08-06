@@ -285,6 +285,16 @@ export interface AppState {
   /** Memory and skills under `~/.claude`, and whichever one is open. `R-F14`. */
   kit: import("@/wire/types").KitEntry[];
   kitDoc: import("@/wire/types").KitDoc | null;
+  /**
+   * Whether a `kit` answer has ever arrived.
+   *
+   * Not derivable from `kit.length`: an empty list is a legitimate answer —
+   * this machine may have no skills — and an answer that never came is a
+   * different thing that must not read as one. See `KitView`'s empty state,
+   * and the case that produced it: a window talking to a daemon older than
+   * itself, which ADR-0009 makes an ordinary thing to be sitting in front of.
+   */
+  kitLoaded: boolean;
   signals: Record<string, { command: string | null; running: boolean; last: SignalRun | null }>;
   blame: Record<string, { lines: BlameLine[]; truncated: boolean }>;
   subagents: Record<SessionId, SubagentNode[]>;
@@ -417,6 +427,7 @@ export const useStore = create<AppState>((set, get) => ({
   notes: [],
   kit: [],
   kitDoc: null,
+  kitLoaded: false,
   signals: {},
   blame: {},
   subagents: {},
@@ -657,7 +668,7 @@ export const useStore = create<AppState>((set, get) => ({
         set({ notes: msg.notes });
         break;
       case "kit":
-        set({ kit: msg.entries });
+        set({ kit: msg.entries, kitLoaded: true });
         break;
       case "kit_doc":
         // Replaced wholesale: one document is open at a time, and the answer
