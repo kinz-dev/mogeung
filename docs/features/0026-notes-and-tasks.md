@@ -1,7 +1,7 @@
 ---
 title: Notes, documents and tasks
 status: active
-updated: 2026-08-05
+updated: 2026-08-06
 roadmap: [R-B35, R-L1, R-L2, R-L3]
 depends_on: [A1, A6, A27]
 ---
@@ -189,5 +189,23 @@ it to take.
   blocks must be excluded at minimum.
 
 ## Notes
+
+**`Ctrl+S` saves, and only inside Notes.** Asked for 2026-08-06 with the scope
+attached — *"only when `Ctrl+S` will trigger the save button"* — and the scope
+is the interesting half. `Ctrl+S` means *save* in every editor anyone arrives
+from, so a window-wide binding would claim it on behalf of a panel that is
+usually shut, and claim it from the Code pane, which is the surface most likely
+to want it next. It is therefore a capture-phase listener gated on
+`root.contains(document.activeElement)` — the same shape `Ctrl+F` in this panel
+already used, and deliberately **not** an entry in `ACTIONS`, because everything
+in that list fires window-wide by design.
+
+Two details worth keeping. The handler goes through the same `save` the button
+calls rather than sending its own copy of `note_save`, so the two cannot drift;
+and the not-dirty check moved *into* `save`, because the button was refusing by
+being `disabled` and a keyboard path has no disabled state to inherit. It
+`preventDefault`s even when there is nothing to save — the alternative is the
+webview offering to write the window to disk as an `.html` file, and a stray
+`Ctrl+S` that did that would be worse than one that quietly did nothing.
 
 *Filled during implementation.*

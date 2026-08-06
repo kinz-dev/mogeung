@@ -76,6 +76,7 @@ export function NotesTool() {
   const [filter, setFilter] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const findRef = useRef<HTMLInputElement>(null);
+  const saveRef = useRef<() => void>(() => {});
   const editorHeight = useStore((s) => s.prefs.notesEditorHeight);
   const asMarkdown = useStore((s) => s.prefs.notesMarkdown);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -104,6 +105,38 @@ export function NotesTool() {
       // Selected, not merely focused: `Ctrl+F` twice means "search for
       // something else", and making you clear the box first is a papercut.
       findRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  /**
+   * `Ctrl+S` saves the open note, and only while Notes has the keyboard.
+   *
+   * Scoped the same way as `Ctrl+F` above, and the reason is stronger here.
+   * `Ctrl+S` means *save* in every editor anyone arrives from, so a window-wide
+   * binding would claim it on behalf of a panel that is usually shut — and
+   * claim it from the Code pane, which is the surface most likely to be asked
+   * for it next. Asked for on 2026-08-06 with the scope stated: *"only when
+   * `Ctrl+S` will trigger the save button"*.
+   *
+   * It `preventDefault`s whether or not there was anything to save, because the
+   * alternative is the webview offering to write the window to disk as a
+   * `.html` file — a stray Ctrl+S in a panel that ignored it would be worse
+   * than one that quietly did nothing.
+   *
+   * Goes through the same `save` the button calls, rather than repeating the
+   * command: a shortcut that sends its own copy of a message is a shortcut that
+   * keeps working after the button's rules change.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.key === "s" && (e.ctrlKey || e.metaKey))) return;
+      const root = rootRef.current;
+      if (!root || !root.contains(document.activeElement)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      saveRef.current();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -155,8 +188,13 @@ export function NotesTool() {
   /** Documents, not marks — the denominator has to match what the list holds. */
   const docCount = useMemo(() => notes.filter((n) => n.seq === null || n.seq === undefined).length, [notes]);
 
+  /**
+   * Nothing to save is not a save. The button already refuses by being
+   * disabled; putting the same rule *inside* here is what stops `Ctrl+S` from
+   * sending a write the button would not have sent — two callers, one answer.
+   */
   const save = () => {
-    if (!open) return;
+    if (!open || draft === open.body) return;
     send({
       cmd: "note_save",
       id: open.id,
@@ -166,6 +204,10 @@ export function NotesTool() {
       repo: open.repo ?? null,
     });
   };
+  // Read at event time by the `Ctrl+S` listener above, which registers once —
+  // the alternative is re-binding a window listener on every keystroke, since
+  // `save` closes over `draft`.
+  saveRef.current = save;
 
   const q = filter.trim();
 
@@ -266,6 +308,7 @@ export function NotesTool() {
               <button
                 type="button"
                 onClick={save}
+                title="save this note  (Ctrl+S)"
                 disabled={draft === open.body}
                 className="outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] rounded-sm border border-[var(--border)] px-1.5 py-px text-2xs hover:border-[var(--border-hover)] disabled:opacity-40"
               >

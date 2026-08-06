@@ -113,3 +113,72 @@ describe("what belongs in the scratchpad", () => {
     expect(screen.getByText("nothing written yet")).toBeInTheDocument();
   });
 });
+
+/**
+ * `Ctrl+S` saves the open note — and only from inside Notes.
+ *
+ * The scope is the whole request: `Ctrl+S` means *save* in every editor anyone
+ * arrives from, so a window-wide binding would claim it on behalf of a panel
+ * that is usually shut. These fail without the focus check, which is the part
+ * that is easy to write and easy to write wrongly.
+ */
+describe("Ctrl+S in the Notes panel", () => {
+  const note = { id: "n1", body: "before", created: 0, updated: 0, session_id: null, seq: null };
+  let sent: unknown[] = [];
+
+  beforeEach(() => {
+    sent = [];
+    useStore.setState({ notes: [note] as never, send: ((m: unknown) => sent.push(m)) as never });
+    useStore.getState().setPrefs({ notesMarkdown: false });
+  });
+
+  const openAndEdit = async (text: string) => {
+    render(<NotesTool />);
+    fireEvent.click(screen.getByText("before"));
+    const box = await screen.findByPlaceholderText("write something");
+    fireEvent.change(box, { target: { value: text } });
+    return box;
+  };
+
+  const pressSave = (target: Element | Window) =>
+    fireEvent.keyDown(target, { key: "s", ctrlKey: true });
+
+  it("saves the note being edited", async () => {
+    const box = await openAndEdit("after");
+    box.focus();
+    pressSave(box);
+    expect(sent).toEqual([
+      { cmd: "note_save", id: "n1", body: "after", session_id: null, seq: null, repo: null },
+    ]);
+  });
+
+  /**
+   * The whole point of the scoping. Focus outside Notes and the key belongs to
+   * whatever *is* focused — the Code pane wants it next, and a global binding
+   * would have taken it before anyone asked.
+   */
+  it("does nothing when the focus is somewhere else", async () => {
+    // A real element outside the panel, and the move is asserted: focusing
+    // `document.body` would have left `activeElement` wherever it already was
+    // in jsdom, and the test would pass without exercising the check at all.
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    await openAndEdit("after");
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    pressSave(outside);
+    expect(sent).toEqual([]);
+    outside.remove();
+  });
+
+  /** Same rule the button follows by being disabled — one answer, two callers. */
+  it("does not write a note that has not changed", async () => {
+    render(<NotesTool />);
+    fireEvent.click(screen.getByText("before"));
+    const box = await screen.findByPlaceholderText("write something");
+    box.focus();
+    pressSave(box);
+    expect(sent).toEqual([]);
+  });
+});
