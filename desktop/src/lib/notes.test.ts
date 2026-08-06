@@ -29,7 +29,32 @@ describe("one turn as a note", () => {
     const note = noteFromTurn(session, ev(12, { t: "user_prompt", text: "why is this slow?" }));
     expect(note).toContain("# the auth refactor · turn 12");
     expect(note).toContain("**You**");
-    expect(note).toContain("> why is this slow?");
+    expect(note).toContain("why is this slow?");
+  });
+
+  /**
+   * The whole point of the format, reported 2026-08-06.
+   *
+   * The first version quoted every line with `> `, which is safe and useless: a
+   * table renders as a table *inside a quotation*, a fenced block as a quoted
+   * fence, and in a plain editor every line just wears a `>`. What was copied
+   * has to arrive as what it was.
+   */
+  it("copies the markdown verbatim — no quoting, or it cannot render", () => {
+    const body = ["## Short answer", "", "| Env | Shape |", "|---|---|", "| a | b |"].join("\n");
+    const note = noteFromTurn(session, ev(4, { t: "assistant_text", text: body }));
+    expect(note).toContain(body);
+    expect(note).not.toMatch(/^>/m);
+  });
+
+  it("separates the provenance from the copied text with a rule", () => {
+    const note = noteFromTurn(session, ev(4, { t: "assistant_text", text: "the answer" }));
+    const lines = note.split("\n");
+    const rule = lines.indexOf("---");
+    expect(rule).toBeGreaterThan(0);
+    // Everything above the rule is ours; everything below is theirs.
+    expect(lines.slice(0, rule).join("\n")).toContain("**Agent**");
+    expect(lines.slice(rule + 1).join("\n")).toContain("the answer");
   });
 
   it("names the session by id when the session is already gone", () => {
@@ -38,22 +63,13 @@ describe("one turn as a note", () => {
     expect(note).toContain("**Agent**");
   });
 
-  /**
-   * Quoting rather than fencing. Agent output is full of code fences already,
-   * and a fence around a fence renders as one enormous code block — the note
-   * becomes unreadable exactly when it was worth keeping.
-   */
-  it("quotes rather than fences, so an answer full of code still reads", () => {
-    const note = noteFromTurn(session, ev(1, { t: "assistant_text", text: "run:\n\n```sh\nls -l\n```" }));
-    expect(note).toContain("> run:");
-    expect(note).toContain("> ```sh");
-    expect(note).not.toMatch(/^```/m);
+  /** A fenced block has to survive intact — it is most of what gets copied. */
+  it("leaves a code fence exactly as it was", () => {
+    const body = "run:\n\n```sh\nkubectl get pods\n```";
+    const note = noteFromTurn(session, ev(1, { t: "assistant_text", text: body }));
+    expect(note).toContain("```sh\nkubectl get pods\n```");
   });
 
-  it("keeps blank lines as blank quote lines rather than breaking the quote", () => {
-    const note = noteFromTurn(session, ev(1, { t: "user_prompt", text: "one\n\ntwo" }));
-    expect(note).toContain("> one\n>\n> two");
-  });
 });
 
 describe("what a turn actually carries", () => {
@@ -78,8 +94,8 @@ describe("a whole conversation as a note", () => {
   it("keeps every turn when the conversation is short", () => {
     const note = noteFromConversation(session, many(3));
     expect(note).toContain("3 turn(s)");
-    expect(note).toContain("> line 1");
-    expect(note).toContain("> line 3");
+    expect(note).toContain("line 1");
+    expect(note).toContain("line 3");
     expect(note).not.toContain("not copied");
   });
 
@@ -93,8 +109,8 @@ describe("a whole conversation as a note", () => {
     expect(note).toContain(`Earlier 40 turn(s) not copied`);
     expect(note).toContain("tail of the conversation");
     // The tail is what is kept: the last turn is present, the first is not.
-    expect(note).toContain(`> line ${CONVERSATION_LIMIT + 40}`);
-    expect(note).not.toContain("> line 1\n");
+    expect(note).toContain(`line ${CONVERSATION_LIMIT + 40}`);
+    expect(note).not.toMatch(/^line 1$/m);
   });
 
   it("leaves out the turns that carry no text at all", () => {
@@ -119,8 +135,8 @@ describe("the whole transcript, as a file", () => {
    */
   it("carries every turn, however long the conversation", () => {
     const note = transcriptMarkdown(session, many(CONVERSATION_LIMIT + 50));
-    expect(note).toContain("> line 1\n");
-    expect(note).toContain(`> line ${CONVERSATION_LIMIT + 50}`);
+    expect(note).toMatch(/^line 1$/m);
+    expect(note).toContain(`line ${CONVERSATION_LIMIT + 50}`);
     expect(note).not.toContain("not copied");
   });
 

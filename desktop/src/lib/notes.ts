@@ -74,22 +74,44 @@ function when(ts: string | number): string {
 }
 
 /**
+ * The line between where a note's own words end and the copied ones begin.
+ *
+ * A rule rather than a wrapper, and that is the whole design here. The first
+ * pass quoted every line with `> `, to keep the copied text from colliding with
+ * the note's structure — and it bought that safety by destroying the thing the
+ * copy was for. **A blockquote does not render as what was copied**: a table
+ * becomes a table inside a quote, a fenced block becomes a quoted fence, and in
+ * a plain editor every line simply carries a `>`. Reported 2026-08-06 as
+ * *"that will not be able to render that as a markdown — I want to display that
+ * as a markdown"*, which is correct and was correct from the start.
+ */
+const RULE = "---";
+
+/**
  * One turn, as a note.
  *
- * The heading carries the session and the turn so the note still means
- * something after the transcript is gone — which is the case this exists for.
- * A blockquote rather than a fence: the text is usually prose and often
- * already contains fences of its own, and nesting those is how a note ends up
- * rendering as one enormous code block.
+ * Three lines of provenance, a rule, then the turn's own markdown untouched.
+ * The provenance is what makes the note still mean something after the
+ * transcript is gone — which is the case this whole feature exists for — and
+ * the rule is what tells you where it stops.
+ *
+ * The cost of not wrapping is real and accepted: the copied text and the note
+ * now share one structure, so a turn that opens with its own `#` heading will
+ * read as a heading of the note. That is the price of it rendering at all, and
+ * a note is yours to edit afterwards.
  */
 export function noteFromTurn(session: Session | null, ev: TranscriptEvent): string {
   const label = session ? sessionLabel(session) : ev.session_id.slice(0, 8);
-  const body = textOf(ev) ?? "";
-  const quoted = body
-    .split("\n")
-    .map((l) => (l.trim() ? `> ${l}` : ">"))
-    .join("\n");
-  return [`# ${label} · turn ${ev.seq}`, "", `**${speaker(ev)}** · ${when(ev.ts)}`, "", quoted, ""].join("\n");
+  return [
+    `# ${label} · turn ${ev.seq}`,
+    "",
+    `**${speaker(ev)}** · ${when(ev.ts)}`,
+    "",
+    RULE,
+    "",
+    textOf(ev) ?? "",
+    "",
+  ].join("\n");
 }
 
 /**
@@ -130,14 +152,12 @@ export function transcriptMarkdown(
     "---",
   );
 
-  const blocks = carried.map((ev) => {
-    const body = textOf(ev) ?? "";
-    const quoted = body
-      .split("\n")
-      .map((l) => (l.trim() ? `> ${l}` : ">"))
-      .join("\n");
-    return ["", `### ${speaker(ev)} · turn ${ev.seq} · ${when(ev.ts)}`, "", quoted].join("\n");
-  });
+  // Same rule as the note, and for the same reason: an exported transcript is
+  // a document to be read in a markdown viewer, and quoting every line of it
+  // renders the whole conversation as one long quotation of itself.
+  const blocks = carried.map((ev) =>
+    ["", RULE, "", `### ${speaker(ev)} · turn ${ev.seq} · ${when(ev.ts)}`, "", textOf(ev) ?? ""].join("\n"),
+  );
 
   return [...head, ...blocks, ""].join("\n");
 }
@@ -188,14 +208,12 @@ export function noteFromConversation(session: Session | null, events: Transcript
     head.push("", `*Earlier ${dropped} turn(s) not copied — this is the tail of the conversation.*`);
   }
 
-  const blocks = kept.map((ev) => {
-    const body = textOf(ev) ?? "";
-    const quoted = body
-      .split("\n")
-      .map((l) => (l.trim() ? `> ${l}` : ">"))
-      .join("\n");
-    return [`### ${speaker(ev)} · turn ${ev.seq}`, "", quoted].join("\n");
-  });
+  // A rule before each turn, so the boundaries survive whatever the turns
+  // themselves contain — headings, tables and fenced blocks all arrive intact
+  // now that nothing is quoted, and intact means they can run into each other.
+  const blocks = kept.map((ev) =>
+    [RULE, "", `### ${speaker(ev)} · turn ${ev.seq}`, "", textOf(ev) ?? "", ""].join("\n"),
+  );
 
-  return [...head, "", ...blocks, ""].join("\n");
+  return [...head, "", ...blocks].join("\n");
 }
