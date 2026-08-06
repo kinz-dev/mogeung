@@ -39,15 +39,17 @@ import { ChangesPane } from "@/panes/ChangesPane";
 import { TranscriptPane } from "@/panes/TranscriptPane";
 
 /**
- * Changes and Transcript lead, because they are what you open the dock *for*;
- * the three that were here first are what you consult afterwards.
+ * The order of the strip, and of the chords: `Alt+2` to `Alt+5` run left to
+ * right, and Git sits at the far right on `Alt+9`. Changes and Transcript lead
+ * because they are what you open the dock *for*; the rest is what you consult
+ * afterwards, and Git is furthest from the ones reached most.
  */
 export const DOCK_TOOLS: { id: DockTool; label: string; hint: string }[] = [
-  { id: "changes", label: "Changes", hint: "what this session changed, risk-ordered, with read marks" },
-  { id: "transcript", label: "Transcript", hint: "the conversation, turn by turn" },
-  { id: "git", label: "Git", hint: "commits, changes and diffs of this session's repo" },
-  { id: "insight", label: "Insight", hint: "across every session — search, analytics, digest, docs" },
-  { id: "debt", label: "Debt", hint: "how much of this repo's agent output nobody has read" },
+  { id: "changes", label: "Changes", hint: "what this session changed, risk-ordered, with read marks  (Alt+2)" },
+  { id: "transcript", label: "Transcript", hint: "the conversation, turn by turn  (Alt+3)" },
+  { id: "insight", label: "Insight", hint: "across every session — search, analytics, digest, docs  (Alt+4)" },
+  { id: "debt", label: "Debt", hint: "how much of this repo's agent output nobody has read  (Alt+5)" },
+  { id: "git", label: "Git", hint: "commits, changes and diffs of this session's repo  (Alt+9)" },
 ];
 
 const MIN_HEIGHT = 140;

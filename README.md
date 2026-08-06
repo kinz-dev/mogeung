@@ -84,10 +84,13 @@ live registry, so mogeung is told, not guessing. `APPROVE` splits that: an
 unanswered tool call means the agent is *blocked*, not merely finished.
 
 `j`/`k` to move, `enter` to jump to that session's terminal, `r` to mark read,
-`s` to snooze, `/` to filter. `Alt+1`/`Alt+2`/`Alt+3` move focus between the
-queue, the file list and the diff; `j`/`k` act on whichever has focus. Every
-binding is editable (`Alt+K`). **`Ctrl+Cmd+M` brings mogeung back** from
-anywhere, which is the other half of that round trip.
+`s` to snooze, `/` to filter. `Alt+1` focuses the queue itself; `Alt+2`–`Alt+5`
+and `Alt+9` open the dock along the bottom — Changes, Transcript, Insight, Debt,
+Git, left to right — and the same chord closes what it opened. Numbers rather
+than initials because `Alt+T` is Claude Code's own *toggle thinking*, and a
+window that keeps it is a window that steals a key from the agent it is showing
+you. Every binding is editable (`Alt+K`). **`Ctrl+Cmd+M` brings mogeung back**
+from anywhere, which is the other half of that round trip.
 
 → [The attention queue](docs/guide/the-queue.md) ·
 [Reviewing changes](docs/guide/reviewing.md) ·

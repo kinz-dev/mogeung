@@ -68,22 +68,27 @@ const rail = (tool: RailTool, label: string, keys: string[]): Action => ({
 });
 
 export const ACTIONS: Action[] = [
-  // The centre: what you are doing.
-  // Changes and Transcript keep the chords they trained even though they moved
-  // to the dock on 2026-08-06 — a binding belongs to the thing, not to where it
-  // happens to be docked, which is the rule the Git and Insight moves already
-  // set. The only difference you can feel is that the chord now *toggles*: the
-  // dock shows one tool at a time, so pressing it again closes what it opened.
-  dockTool("changes", "Changes", ["Alt+x"]),
-  dockTool("transcript", "Transcript", ["Alt+t"]),
+  // **Numbered, left to right along the dock strip**, since 2026-08-06.
+  //
+  // The mnemonics went because one of them was actively harmful: `Alt+T` is
+  // Claude Code's own *toggle thinking*, and a chord always fires in the window
+  // — `focusOwns` only defers bare keys to a focused terminal — so pressing it
+  // over the Agent pane opened the Transcript instead of reaching the agent.
+  // A binding that steals a key from the program the pane exists to show is a
+  // binding in the wrong place, whatever it spells.
+  //
+  // Numbers cannot collide that way and they carry an order the letters never
+  // did: the digit is the tool's position in the strip. Git keeps `Alt+9` and
+  // sits at the far right — a rightmost thing wearing the highest digit.
+  dockTool("changes", "Changes", ["Alt+2"]),
+  dockTool("transcript", "Transcript", ["Alt+3"]),
   pane("agent", "Agent", ["Alt+a"]),
   pane("code", "Code", ["Alt+c"]),
 
-  // The bottom dock: what you consult. Same chords as before the move — the
-  // binding belongs to the thing, not to where it happens to be docked.
+  // The rest of the strip, in the order it is drawn.
+  dockTool("insight", "Insight", ["Alt+4"]),
+  dockTool("debt", "Debt", ["Alt+5"]),
   dockTool("git", "Git", ["Alt+9"]),
-  dockTool("insight", "Insight", ["Alt+i"]),
-  dockTool("debt", "Debt", ["Alt+d"]),
 
   {
     id: "info.toggle",

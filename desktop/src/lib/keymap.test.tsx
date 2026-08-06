@@ -369,15 +369,38 @@ describe("the keyboard", () => {
    * their chords moved with them — a binding belongs to the thing, not to
    * where it happens to be docked.
    */
-  it("opens a dock tool on its old chord, and closes it on the same one", async () => {
+  it("opens a dock tool on its number, and closes it on the same one", async () => {
     const { default: App } = await import("@/App");
     render(<App />);
     press("9", { altKey: true });
     expect(useStore.getState().prefs.dock).toBe("git");
-    press("i", { altKey: true });
+    press("4", { altKey: true });
     expect(useStore.getState().prefs.dock).toBe("insight");
-    press("i", { altKey: true });
+    press("4", { altKey: true });
     expect(useStore.getState().prefs.dock).toBe(null);
+  });
+
+  /**
+   * `Alt+T` is Claude Code's *toggle thinking*, and a chord always fires in the
+   * window — `focusOwns` defers only bare keys to a focused terminal. So this
+   * binding was taking a key from the program the Agent pane exists to show.
+   * The numbers exist to stay out of its way, and nothing may quietly move back.
+   */
+  it("leaves the letters the agent needs alone", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    for (const key of ["t", "x", "i", "d"]) {
+      press(key, { altKey: true });
+      expect(useStore.getState().prefs.dock, `Alt+${key} must not drive the dock`).toBe(null);
+    }
+  });
+
+  /** The strip reads left to right, and so do the chords. */
+  it("numbers the dock tools in the order they are drawn", async () => {
+    const { DOCK_TOOLS } = await import("@/ui/BottomDock");
+    const { ACTIONS } = await import("@/lib/keymap");
+    const chords = DOCK_TOOLS.map((t) => ACTIONS.find((a) => a.id === `dock.${t.id}`)?.keys[0]);
+    expect(chords).toEqual(["Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+9"]);
   });
 
   /**
