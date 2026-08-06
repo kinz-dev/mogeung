@@ -67,6 +67,8 @@ first.
       names no session
 - [x] There is one header row above the terminal, not two
 - [x] The Code tab names the file it is showing, for the same reason
+- [x] The Code pane has one header row, not three
+- [x] Clicking an Agent pane makes its session the current one
 
 *"Pinned" became **held** during the build — see the first note below.*
 
@@ -136,6 +138,7 @@ ripple into the queue, the dock and the rail.
 | `desktop/src/App.tsx` | panes wrapped in `PaneScope`; `rightHeaderActionsComponent`; orphan holds dropped on load |
 | `desktop/src/panes/AgentPane.tsx` | own header removed; the ended state; pty keyed by pane and session |
 | `desktop/src/index.css` | `.dv-tab` uppercase off; 30px → 26px; a ring on the active group |
+| `desktop/src/panes/CodePane.tsx` | the path row folds into the file strip — one header row instead of three |
 | `desktop/src/ui/QueuePanel.tag.test.tsx` | its hand-built `ScopedPrefs` builds on `emptyScoped()` |
 
 ### Risks and unknowns
@@ -248,6 +251,39 @@ the file strip already carries the full path and a tab wide enough for
 now appears twice — outer tab and inner strip — and that is allowed to stand:
 the strip lists *every* open file where the tab names the active one, so they
 coincide only when a single file is open. Hover text is where the kind survived.
+
+**And then the Code tab was hidden, one commit after it was built.** The next
+ask was to take the outer tab away entirely, and it was the right call even
+though it partly undid the previous hour: the pane carried *three* rows of
+naming — dockview's tab, its own file strip, its path row — for a surface whose
+whole job is showing you a file, and the strip is the only one of the three that
+lists more than one thing. So the path row folded into the strip and the group's
+header is hidden, 78px down to 28px.
+
+The cost was stated before it was chosen and is worth repeating here, because
+nothing in the code will say it later: **dockview's tab is the drag handle**, so
+the Code pane can no longer be dragged, split off, or tabbed beside the Agent.
+`Alt+C` and `Alt+0` are what keep that a hidden tab rather than a trap. The
+tab-naming work from the commit before is *not* deleted — it is the fallback if
+a group ever shows its header, and it cost nothing to leave correct.
+
+Two traps in the hiding. A hidden header hides it for **every** panel in that
+group, so a Code pane tabbed with the Agent would take the Agent's tab down with
+it — hence `ensureCodeAlone`, which moves it out before hiding. And the place to
+position it turned out not to be `syncCodePane` at all: `openFile` raises the
+pane through `focusPane` from the tree, `Ctrl+P`, a diff row and a search hit,
+so by the time the effect ran the panel had already been added *into* the
+Agent's group. Positioning it in the effect looked right and did nothing.
+
+**The selection follows the pane you click.** Asked for with three panes open,
+and it is the gap the whole feature opened: everything *else* in the window —
+file tabs, dock, Info — describes the selection, so a held pane you are working
+in leaves all of them pointed somewhere else. Activating a held Agent pane now
+writes its session to `selected`. One-way, deliberately: `select` does not touch
+holds, so the pane you clicked stays moored. The interaction to know is that a
+*mix* of held and unheld panes will pull the unheld ones onto the clicked
+session — which is what "unheld" means, and does not arise in the arrangement
+this was asked for, where every pane is held.
 
 **Still unproven, and the honest list.** The focus ring is CSS on
 `.dv-active-group` and has no test — jsdom will assert a class but not that the

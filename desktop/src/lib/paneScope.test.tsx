@@ -186,6 +186,56 @@ describe("numbered slots", () => {
 });
 
 /**
+ * The window has one selection and several panes, so with three agents up the
+ * file tabs, the dock and Info all describe whichever session the *queue* last
+ * pointed at — not the one you are working in. Clicking the pane you are
+ * already looking at is the cheapest way to say "this one", and it is what was
+ * asked for.
+ */
+describe("clicking an Agent pane", () => {
+  it("makes its session the current one, so everything else follows", async () => {
+    class FakeSocket {
+      static OPEN = 1;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((e: MessageEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: CloseEvent) => void) | null = null;
+      constructor(public url: string) {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    localStorage.removeItem("mogeung.layout");
+
+    const { default: App } = await import("@/App");
+    const { splitAgent, getDock } = await import("@/lib/panes");
+    useStore.setState({ selected: "s1", sessions: { s1: session("s1"), s2: session("s2") } });
+    render(<App />);
+
+    await act(async () => {
+      splitAgent();
+    });
+    // The second pane, held on s2, while the queue still points at s1.
+    await act(async () => {
+      useStore.getState().setScoped({ paneHold: { "agent:2": "s2" } });
+      getDock()?.getPanel("agent")?.api.setActive();
+    });
+    expect(useStore.getState().selected).toBe("s1");
+
+    await act(async () => {
+      getDock()?.getPanel("agent:2")?.api.setActive();
+    });
+    expect(useStore.getState().selected).toBe("s2");
+
+    // One-way, and this is the half that matters. A pane that moved the
+    // selection and then followed it would let go of its own mooring the moment
+    // you clicked it — the opposite of what holding is for.
+    expect(useStore.getState().scoped().paneHold["agent:2"]).toBe("s2");
+  });
+});
+
+/**
  * The layout is persisted, so anything session-shaped in it comes back as a tab
  * pointing at something that ended days ago. Numbering the slots is what keeps
  * that impossible, and this is the assertion that keeps it numbered — a future

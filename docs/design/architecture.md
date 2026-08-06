@@ -332,6 +332,12 @@ the selection moves around it. That is what lets two agents be on screen and
 live at once, and it is deliberately confined to the tile tree — chrome follows
 the selection by definition, which is half of what ADR-0017 means by the word.
 
+The selection is written back the other way too: activating a **held** Agent
+pane makes its session the current one, because everything outside the tile
+tree — the file tabs, the dock, Info — describes `selected`, and a pane you are
+working in that leaves them all pointed elsewhere is a pane that costs you a
+trip to the queue. One-way; a hold is never disturbed by it.
+
 Two rules keep the arrangement durable across a restart. Slots are **numbered**
 (`agent`, `agent:2`, …) and never keyed by session, so the serialised layout
 names no session and cannot restore a tab pointing at one that ended days ago.

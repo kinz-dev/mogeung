@@ -30,7 +30,22 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { FileIcon } from "@/ui/FileIcon";
 
-function TabStrip({ group }: { group: 0 | 1 }) {
+/**
+ * The group's one header row: its file tabs, and the controls for the file
+ * that is forward.
+ *
+ * It was three rows until 2026-08-06 — dockview's tab, this strip, and a path
+ * row with the buttons on it — for a pane whose whole job is showing you a
+ * file. `R-B49` took the outer tab (the pane is alone in its group and the
+ * group's header is hidden) and folded the path row in here. The full path
+ * lives on each tab's tooltip, which is where it already was.
+ *
+ * `children` is the right-hand end. The controls stay in `Viewer` because they
+ * are that component's state — `preview`, `blameOn`, the outline, the editor
+ * ref the bookmark button needs — and lifting five pieces of state to move a
+ * button two elements sideways is a worse trade than a slot.
+ */
+function TabStrip({ group, children }: { group: 0 | 1; children?: React.ReactNode }) {
   const id = useStore((s) => s.selected);
   const st = useStore((s) => (s.selected ? s.explorer[s.selected] : undefined));
   const patchExplorer = useStore((s) => s.patchExplorer);
@@ -40,7 +55,8 @@ function TabStrip({ group }: { group: 0 | 1 }) {
   if (tabs.length === 0) return null;
 
   return (
-    <div className="flex h-7 shrink-0 items-center overflow-x-auto border-b border-[var(--border)]">
+    <div className="flex h-7 shrink-0 items-center border-b border-[var(--border)]">
+      <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
       {tabs.map(({ t, i }) => (
         <div
           key={`${t.path}@${t.rev ?? ""}`}
@@ -81,6 +97,8 @@ function TabStrip({ group }: { group: 0 | 1 }) {
           </button>
         </div>
       ))}
+      </div>
+      {children && <div className="flex shrink-0 items-center gap-0.5 px-1">{children}</div>}
     </div>
   );
 }
@@ -175,14 +193,33 @@ function Viewer({ group }: { group: 0 | 1 }) {
     decorations.current.set(next);
   }, [blameOn, blame, marks]);
 
+  // The strip renders on **every** path out of here, not only the loaded one.
+  // It used to be a sibling of this component, so a file still loading left its
+  // tabs on screen; folding it in here would have taken them away for exactly
+  // as long as the body was missing — which is the moment you are most likely
+  // to want to click a different one.
   if (!tab) {
     return (
-      <Empty hint="Alt+4 for the worktree · Ctrl+P to open by name">
-        nothing open — read-only, always
-      </Empty>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <TabStrip group={group} />
+        <div className="min-h-0 flex-1">
+          <Empty hint="Alt+4 for the worktree · Ctrl+P to open by name">
+            nothing open — read-only, always
+          </Empty>
+        </div>
+      </div>
     );
   }
-  if (tab.content === null) return <Empty>loading {base(tab.path)}…</Empty>;
+  if (tab.content === null) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <TabStrip group={group} />
+        <div className="min-h-0 flex-1">
+          <Empty>loading {base(tab.path)}…</Empty>
+        </div>
+      </div>
+    );
+  }
 
   const wrap = wrapPaths.includes(tab.path);
   const symbols = outline(tab.content, ext);
@@ -213,14 +250,12 @@ function Viewer({ group }: { group: 0 | 1 }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-6 shrink-0 items-center gap-2 border-b border-[var(--border)] px-2">
-        <Dim className="truncate text-2xs">{tab.path}</Dim>
+      <TabStrip group={group}>
         {tab.truncated && (
           <span className="shrink-0 text-2xs text-[var(--amber)]" title="the file went past the size cap">
             head only
           </span>
         )}
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {isMarkdown && (
             <IconButton
               title="read it as markdown rather than as source"
@@ -269,8 +304,7 @@ function Viewer({ group }: { group: 0 | 1 }) {
           >
             <WrapText size={12} />
           </IconButton>
-        </div>
-      </div>
+      </TabStrip>
       <div className="flex min-h-0 flex-1">
       {/* Markdown is *read* here, not previewed beside its source: a viewer's
           job is the rendered thing, and a split would spend half a narrow pane
@@ -374,12 +408,10 @@ export function CodePane() {
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <TabStrip group={0} />
           <Viewer group={0} />
         </div>
         {split && (
           <div className="flex min-w-0 flex-1 flex-col border-l border-[var(--border)]">
-            <TabStrip group={1} />
             <Viewer group={1} />
           </div>
         )}

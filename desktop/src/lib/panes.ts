@@ -30,7 +30,17 @@ export function focusPane(api: DockviewApi | null, id: string, title: string): v
   }
   // `component` is the *kind*, `id` is the identity, and since `R-B49` they are
   // no longer the same string: `agent:2` renders with the `agent` component.
-  api.addPanel({ id, component: paneKind(id), title });
+  //
+  // The Code pane is placed **beside** the active group rather than in it, and
+  // this is the choke point that has to know: `openFile` raises it from the
+  // tree, from `Ctrl+P`, from a diff row and from a search hit, and every one of
+  // those routes arrives here. Positioning it in `syncCodePane` alone looked
+  // right and did nothing, because by the time that effect ran the panel had
+  // already been added — as a tab inside the Agent's group, whose header is
+  // then hidden along with the Agent's.
+  const beside = id === "code" && api.activeGroup ? { referenceGroup: api.activeGroup, direction: "right" as const } : undefined;
+  api.addPanel({ id, component: paneKind(id), title, ...(beside ? { position: beside } : {}) });
+  if (id === "code") ensureCodeAlone(api);
 }
 
 /**
@@ -72,6 +82,36 @@ export function setDock(api: DockviewApi): void {
 /** The tree itself, for callers that need to read it rather than command it. */
 export function getDock(): DockviewApi | null {
   return dock;
+}
+
+/**
+ * The Code pane alone in its group, with that group's tab bar hidden.
+ *
+ * Asked for 2026-08-06, after the tab spent a day naming the file: the pane
+ * carried **three** rows of naming — dockview's tab, its own file strip, and a
+ * path row — for a surface whose entire job is showing you a file. The strip is
+ * the one that earns its place, because it is the only one that lists more than
+ * one file, so the other two go.
+ *
+ * **The cost is real and was accepted deliberately**: dockview's tab *is* the
+ * drag handle, so a Code pane with no tab bar cannot be dragged, split off or
+ * tabbed beside the Agent pane. `Alt+C` still opens it and `Alt+0` still puts
+ * the layout back, which is what keeps this a hidden tab rather than a trap.
+ *
+ * Alone in its own group is not a nicety either — a hidden header hides the
+ * header of whatever *else* is in that group, so a Code pane sharing with the
+ * Agent would take the Agent's tab down with it.
+ */
+export function ensureCodeAlone(api: DockviewApi | null): void {
+  const panel = api?.getPanel("code");
+  if (!api || !panel) return;
+  if (panel.group.panels.length > 1) {
+    // A layout saved before this change can have them tabbed together, and
+    // there is no longer a gesture that would separate them by hand.
+    const group = api.addGroup({ referenceGroup: panel.group, direction: "right" });
+    panel.api.moveTo({ group });
+  }
+  panel.group.header.hidden = true;
 }
 
 /**

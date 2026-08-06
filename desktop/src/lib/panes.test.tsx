@@ -141,4 +141,59 @@ describe("the Code pane comes and goes with its files", () => {
     });
     expect(screen.queryByText("main.rs")).toBeNull();
   });
+
+  /**
+   * Three rows of naming for a pane whose job is showing you one file — the
+   * dockview tab, the file strip, the path row. Two of them went on 2026-08-06.
+   *
+   * The header is hidden per **group**, which is why the pane has to be alone
+   * in one: hiding it in a shared group would take the Agent's tab down too.
+   * That is the assertion worth having, because the symptom would be a missing
+   * Agent tab and the cause would be a line about the Code pane.
+   */
+  it("sits alone in a group with no tab bar", async () => {
+    const { default: App } = await import("@/App");
+    const { getDock } = await import("@/lib/panes");
+    const { render, act } = await import("@testing-library/react");
+    localStorage.removeItem("mogeung.layout");
+    useStore.setState({ selected: "s1", explorer: {} });
+    render(<App />);
+
+    await act(async () => {
+      openFile("s1", "src/main.rs", { pin: true });
+    });
+
+    const code = getDock()?.getPanel("code");
+    expect(code).toBeDefined();
+    expect(code?.group.panels).toHaveLength(1);
+    expect(code?.group.header.hidden).toBe(true);
+    // ...and the Agent, which shares no group with it, keeps its own.
+    const agent = getDock()?.getPanel("agent");
+    expect(agent?.group.header.hidden).toBe(false);
+  });
+
+  /**
+   * The path row is gone, not merely shorter. Its full path was the only thing
+   * on it that was not a button, and every tab already carries that on hover.
+   *
+   * Only the path is asserted. Counting how many times `main.rs` appears would
+   * *look* like a check that the outer tab is gone and would not be one: a
+   * hidden group header is `display: none`, so the tab is still in the document
+   * and every text query still finds it. Whether it is *shown* is the sibling
+   * test's job, against the header flag rather than against the DOM.
+   */
+  it("no longer draws the file's path as a row of its own", async () => {
+    const { default: App } = await import("@/App");
+    const { render, act } = await import("@testing-library/react");
+    localStorage.removeItem("mogeung.layout");
+    useStore.setState({ selected: "s1", explorer: {} });
+    render(<App />);
+
+    await act(async () => {
+      openFile("s1", "src/main.rs", { pin: true });
+    });
+
+    expect(screen.getAllByText("main.rs").length).toBeGreaterThan(0);
+    expect(screen.queryByText("src/main.rs")).toBeNull();
+  });
 });

@@ -50,8 +50,8 @@ import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
-import { dropOrphanHolds, setDock } from "@/lib/panes";
-import { PaneScope } from "@/lib/paneScope";
+import { dropOrphanHolds, ensureCodeAlone, setDock } from "@/lib/panes";
+import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
 
@@ -139,7 +139,17 @@ function syncCodePane(api: DockviewApi | null, open: number): void {
   if (!api) return;
   const existing = api.getPanel("code");
   if (open > 0 && !existing) {
-    api.addPanel({ id: "code", component: "code", title: "Code" });
+    // Beside the active group rather than inside it. With no tab bar of its own
+    // (`ensureCodeAlone`) a Code pane added *into* the Agent's group would be
+    // an invisible tab covering the agent, reachable only by closing the file.
+    const active = api.activeGroup;
+    api.addPanel({
+      id: "code",
+      component: "code",
+      title: "Code",
+      ...(active ? { position: { referenceGroup: active, direction: "right" as const } } : {}),
+    });
+    ensureCodeAlone(api);
   } else if (open === 0 && existing) {
     existing.api.close();
   }
@@ -228,6 +238,10 @@ export default function App() {
     // was still null — so a saved layout naming `code` with no file open would
     // otherwise restore an empty tab and keep it.
     syncCodePane(event.api, openFileCount(useStore.getState()));
+    // A restored layout can have the Code pane tabbed with the Agent, or with a
+    // header from before it had none. Both are fixed here rather than left to
+    // the next `syncCodePane`, which only runs when the open-file count moves.
+    ensureCodeAlone(event.api);
 
     // A hold belongs to a pane, so a hold whose pane is not in the restored
     // layout belongs to nothing. Left behind it is worse than untidy: split
@@ -236,6 +250,31 @@ export default function App() {
     // selection. `closeAgentPane` clears its own; this catches the layouts that
     // lost a pane some other way.
     dropOrphanHolds(event.api);
+
+    // Clicking into an Agent pane makes its session the current one.
+    //
+    // Asked for 2026-08-06 with three panes open: everything *else* in the
+    // window — the file tabs, the dock, Info — describes the selection, so a
+    // held pane you are working in leaves them all describing a different
+    // session. Reaching for the queue to re-point them, when you are already
+    // looking at the session you mean, is the kind of step you stop noticing
+    // and never stop paying.
+    //
+    // Only a **held** pane has anything to say here: an unheld one is showing
+    // the selection already, so writing it back would be a no-op with a fetch
+    // attached. And the write is one-way — `select` does not touch holds, so
+    // the pane you clicked stays exactly where it was moored.
+    //
+    // The interaction worth knowing: with a *mix* of held and unheld Agent
+    // panes, clicking a held one pulls the unheld ones onto its session too.
+    // That is not a bug so much as what "unheld" means, and it does not arise
+    // in the arrangement this was asked for, where every pane is held.
+    event.api.onDidActivePanelChange((panel) => {
+      if (!panel || paneKind(panel.id) !== "agent") return;
+      const { scoped, selected, select } = useStore.getState();
+      const held = scoped().paneHold[panel.id];
+      if (held && held !== selected) select(held);
+    });
 
     // Written on change rather than on a timer, and never mid-drag: dockview
     // fires while a sash moves, and saving each frame would write the file
