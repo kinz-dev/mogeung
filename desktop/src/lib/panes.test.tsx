@@ -111,23 +111,34 @@ describe("jumping across panes", () => {
  * is not there.
  */
 describe("the Code pane comes and goes with its files", () => {
+  /**
+   * The tab is asserted by **file name** since `R-B49` gave it one. That is a
+   * stronger claim than the old `getByText("Code")`, not a looser one: it says
+   * the pane arrived *and* named what is in it, where the word `Code` would
+   * appear just as happily over the wrong file.
+   *
+   * `getAllByText` because the name is genuinely in two places, and both are
+   * right: the pane's own strip lists *every* open file, and the tab names the
+   * one you are in. They coincide only while a single file is open, which is
+   * exactly the case this test sets up.
+   */
   it("is not a tab when nothing is open, and is one the moment a file opens", async () => {
     const { default: App } = await import("@/App");
     const { render, act } = await import("@testing-library/react");
     useStore.setState({ selected: "s1", explorer: {} });
     render(<App />);
 
-    expect(screen.queryByText("Code")).toBeNull();
+    expect(screen.queryByText("main.rs")).toBeNull();
 
     await act(async () => {
       openFile("s1", "src/main.rs", { pin: true });
     });
-    expect(screen.getByText("Code")).toBeInTheDocument();
+    expect(screen.getAllByText("main.rs").length).toBeGreaterThan(0);
 
     // ...and goes again when the last file is closed.
     await act(async () => {
       useStore.getState().patchExplorer("s1", { open: [] });
     });
-    expect(screen.queryByText("Code")).toBeNull();
+    expect(screen.queryByText("main.rs")).toBeNull();
   });
 });

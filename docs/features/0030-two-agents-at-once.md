@@ -66,6 +66,7 @@ first.
 - [x] A layout saved with three Agent panes restores three, and the saved JSON
       names no session
 - [x] There is one header row above the terminal, not two
+- [x] The Code tab names the file it is showing, for the same reason
 
 *"Pinned" became **held** during the build — see the first note below.*
 
@@ -233,6 +234,20 @@ the pane that had the problem.
 Agent pane is a live `tmux attach` and a pty, and unlike a hidden tab it cannot
 be free. The number is in `MAX_AGENT_PANES` with the reason beside it, and the
 split button says so when it is disabled rather than going quiet.
+
+**The Code tab followed the same day, and the rule is the general one.** Asked
+for as soon as the Agent tab landed — *"can we do that to the Code panel as
+well?"* — and it took the same answer because it is the same argument: a tab
+names the thing in it, not the kind of thing it is. `Agent` and `Code` were only
+ever identifying while the centre held one of each. Two details the Agent case
+did not raise. The name comes from **the focused half** of the pane's internal
+split (`R-B25`), because a tab pointing at the file you are not reading is worse
+than one that says nothing; and it is the basename alone, since the row under
+the file strip already carries the full path and a tab wide enough for
+`desktop/src/ui/PaneChrome.tsx` leaves no room for the pane beside it. The name
+now appears twice — outer tab and inner strip — and that is allowed to stand:
+the strip lists *every* open file where the tab names the active one, so they
+coincide only when a single file is open. Hover text is where the kind survived.
 
 **Still unproven, and the honest list.** The focus ring is CSS on
 `.dv-active-group` and has no test — jsdom will assert a class but not that the

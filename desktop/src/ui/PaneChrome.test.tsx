@@ -12,7 +12,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { PaneScope } from "@/lib/paneScope";
 import { usePaneTitle } from "@/ui/PaneChrome";
 import { AgentPane } from "@/panes/AgentPane";
-import { useStore } from "@/store";
+import { emptyExplorer, useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
 import type { Session } from "@/wire/types";
 
@@ -89,10 +89,52 @@ describe("the Agent tab", () => {
     expect(screen.getByTestId("title")).toHaveTextContent("⚓");
   });
 
-  /** The Code pane is not bindable in a way worth naming — it says what it is. */
-  it("leaves a pane that is not the Agent alone", () => {
-    render(<Title id="code" />);
+  /** A pane with no naming rule of its own keeps whatever dockview gave it. */
+  it("leaves a pane it has no opinion about alone", () => {
+    render(<Title id="somethingelse" />);
     expect(screen.getByTestId("title")).toHaveTextContent("Agent");
+  });
+});
+
+/**
+ * Asked for straight after the Agent tab landed: *"can we do that to the Code
+ * panel as well?"* — and it is the same argument, so it gets the same answer.
+ * `Code` identifies the pane only while there is one of it.
+ */
+describe("the Code tab", () => {
+  it("names the file, not the pane", () => {
+    useStore.setState({
+      explorer: {
+        s1: { ...emptyExplorer(), open: [{ path: "src/main.rs" }] as never, active: [0, null], focus: 0 },
+      },
+    });
+    render(<Title id="code" />);
+    expect(screen.getByTestId("title")).toHaveTextContent("main.rs");
+  });
+
+  /**
+   * The pane splits internally, and a tab naming the file in the half you are
+   * *not* looking at is worse than one that says nothing.
+   */
+  it("names the file in the focused half of a split", () => {
+    useStore.setState({
+      explorer: {
+        s1: {
+          ...emptyExplorer(),
+          open: [{ path: "src/main.rs" }, { path: "src/lib.rs" }] as never,
+          active: [0, 1],
+          focus: 1,
+        },
+      },
+    });
+    render(<Title id="code" />);
+    expect(screen.getByTestId("title")).toHaveTextContent("lib.rs");
+  });
+
+  it("falls back to the pane's name with nothing open", () => {
+    useStore.setState({ explorer: {} });
+    render(<Title id="code" />);
+    expect(screen.getByTestId("title")).toHaveTextContent("Code");
   });
 });
 

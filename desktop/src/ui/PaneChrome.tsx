@@ -24,26 +24,85 @@ import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { hostLabel, reachFor } from "@/lib/tmux";
 
 /**
- * What a pane's tab should read, and whether it is held.
+ * What a pane's tab should read, whether it is held, and what to say on hover.
  *
  * A held pane names the session it is held on even when that session has gone
  * — `#dead` beats a tab that reverts to saying `Agent`, because the second one
  * looks like the pane came loose rather than like the thing it watched ended.
+ *
+ * **A tab names the thing in it, not the kind of thing it is.** `Agent` and
+ * `Code` were fine while the centre held one of each; the moment a pane can be
+ * one of several, a tab that says what *sort* of pane it is has stopped
+ * identifying it. The hover text is where the kind survives, along with the
+ * detail the tab has no width for.
  */
-export function usePaneTitle(paneId: string, fallback: string): { text: string; held: boolean } {
+export interface PaneTitle {
+  text: string;
+  held: boolean;
+  hint: string;
+}
+
+export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
   const kind = paneKind(paneId);
   const held = useStore((s) => s.scoped().paneHold[paneId] ?? null);
   const selected = useStore((s) => s.selected);
   const id = held ?? selected;
   const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
   const label = useStore((s) => (id ? (s.scoped().labels[id] ?? null) : null));
+  const code = useCodeFile(kind === "code" ? id : null);
 
-  // Only the Agent pane is bindable in a way worth naming on its tab. `Code`
-  // says what it is; a file name there would fight the editor's own tab strip.
-  if (kind !== "agent") return { text: fallback, held: false };
-  if (!id) return { text: "Agent", held: false };
-  if (!session) return { text: held ? `${id.slice(0, 8)} — ended` : "Agent", held: !!held };
-  return { text: label ?? sessionLabel(session), held: !!held };
+  if (kind === "code") {
+    return {
+      text: code ? code.name : "Code",
+      held: !!held,
+      hint: code ? `${code.path} — read-only` : "Code — read-only, always",
+    };
+  }
+  if (kind !== "agent") return { text: fallback, held: false, hint: fallback };
+
+  const attached = "the agent, attached through tmux — closing this pane detaches, it never kills";
+  if (!id) return { text: "Agent", held: false, hint: attached };
+  if (!session) {
+    return {
+      text: held ? `${id.slice(0, 8)} — ended` : "Agent",
+      held: !!held,
+      hint: held ? `held on ${id}, which has ended — drop the anchor to follow the queue again` : attached,
+    };
+  }
+  const name = label ?? sessionLabel(session);
+  return {
+    text: name,
+    held: !!held,
+    hint: held ? `held on ${name} — it will not follow the queue` : `${name} — ${attached}`,
+  };
+}
+
+/**
+ * The file the Code pane is actually showing, by basename.
+ *
+ * **The focused group's active tab**, not the first open file: the pane splits
+ * internally (`R-B25`), and with two files side by side inside it the tab has
+ * to name the one you are in or it is worse than saying `Code` — a label that
+ * points at the wrong half is a label you learn to distrust.
+ *
+ * The basename alone. The row under the inner tab strip already carries the
+ * full path, and a tab wide enough for `desktop/src/ui/PaneChrome.tsx` is a tab
+ * that leaves no room for the pane beside it.
+ */
+function useCodeFile(sessionId: string | null): { name: string; path: string } | null {
+  // Two primitive selectors rather than one returning an object: a selector
+  // that mints `{name, path}` is never equal to itself, which zustand reads as
+  // a change on every store tick — the identity trap `scoped()` documents, and
+  // this tab re-renders on every keystroke that touches explorer state.
+  const path = useStore((s) => {
+    const st = sessionId ? s.explorer[sessionId] : null;
+    if (!st) return null;
+    const index = st.active[st.focus];
+    return index === null ? null : (st.open[index]?.path ?? null);
+  });
+  if (!path) return null;
+  const cut = path.lastIndexOf("/");
+  return { name: cut === -1 ? path : path.slice(cut + 1), path };
 }
 
 /**
@@ -62,9 +121,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
     return () => sub.dispose();
   }, [props.api]);
 
-  const { text, held } = usePaneTitle(props.api.id, fallback);
+  const { text, held, hint } = usePaneTitle(props.api.id, fallback);
   return (
-    <div className="dv-default-tab" title={held ? `held on ${text} — it will not follow the queue` : text}>
+    <div className="dv-default-tab" title={hint}>
       {held && <Anchor className="mr-1 h-3 w-3 shrink-0 text-[var(--blue)]" aria-label="held" />}
       <span className="dv-default-tab-content">{text}</span>
     </div>
