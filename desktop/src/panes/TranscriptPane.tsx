@@ -133,11 +133,17 @@ const Turn = memo(function Turn({
       </div>
 
       {/*
-        The remark. A bookmark with no words still says *where*, but one with a
-        line of your own says *why* — and "why did I mark this" is the question
-        you are actually asking a week later. Written here rather than in a
-        separate pane because the moment you want to write it is the moment you
+        The mark's **name**, not a note about it. A bookmark with no words still
+        says *where*, but one with a line of your own says *why* — and "why did
+        I mark this" is the question you are actually asking a week later.
+        Written here because the moment you want to write it is the moment you
         are reading the turn.
+
+        It shares the `notes` table with the scratchpad, by ADR-0015, and that
+        is storage rather than meaning: it appears in Bookmarks beside its turn
+        and **not** in the Notes panel. Anything long enough to want its own
+        document should be copied there with the button beside this one, which
+        makes a real note with the words in it.
       */}
       {noteBody !== null &&
         (editing ? (
@@ -156,7 +162,7 @@ const Turn = memo(function Turn({
               }
               if (e.key === "Escape") setEditing(false);
             }}
-            placeholder="a short remark — why this turn matters"
+            placeholder="a short name — what this mark is for"
             className="mt-1 w-full rounded-sm border border-[var(--purple)] bg-[var(--bg)] px-2 py-1 text-xs outline-none"
           />
         ) : (
@@ -166,7 +172,7 @@ const Turn = memo(function Turn({
               setDraft(noteBody);
               setEditing(true);
             }}
-            title="click to write, or change, the remark"
+            title="click to name this mark"
             className={cn(
               "mt-1 block w-full rounded-sm border-l-2 border-[var(--purple)] bg-[var(--bg-raised)] px-2 py-1 text-left text-xs",
               "outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)]",
@@ -263,8 +269,9 @@ export function TranscriptPane() {
   const onMark = useCallback(
     (seq: number) => {
       if (!id) return;
-      // An empty body is a plain bookmark: marking a turn and writing about it
-      // are one gesture with two depths.
+      // An empty body is a plain bookmark: marking a turn and naming it are one
+      // gesture with two depths. Either way it carries a `seq`, which is what
+      // keeps it out of the scratchpad — see `NotesTool`.
       const existing = notes.find((n) => n.session_id === id && n.seq === seq);
       if (existing) send({ cmd: "note_delete", id: existing.id });
       else send({ cmd: "note_save", id: "", body: "", session_id: id, seq, repo: null });

@@ -82,7 +82,13 @@ of files.
 
 ### Acceptance
 
-- [x] A turn in the Transcript can carry a note, written and edited in place
+- [x] A turn in the Transcript can carry a **name**, written and edited in
+      place — and it stays a name for the mark rather than becoming a document:
+      it appears in Bookmarks beside the turn it points at and **not** in the
+      Notes panel. Corrected 2026-08-06 on the report that the two overlapped;
+      the storage was always right (one table, `seq` as a tag, per ADR-0015) and
+      the views were wrong — `BookmarksTool` filtered to anchored notes and the
+      scratchpad filtered to nothing, so every mark appeared twice
 - [x] Notes are visible without opening each turn — the transcript shows where
       they are
 - [x] A note survives the session ending, being forgotten, and the window

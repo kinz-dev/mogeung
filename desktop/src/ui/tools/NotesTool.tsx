@@ -13,6 +13,11 @@
  * Notes are daemon-owned, so this is a cache of theirs: `notes` is replaced
  * wholesale on every `notes` message and never edited in place. That is what
  * makes two windows on one daemon agree.
+ *
+ * **What is not here:** the remark on a marked turn. It shares this storage —
+ * one table, by ADR-0015 — but it is a name for a bookmark rather than a
+ * document, and it lives in `BookmarksTool` beside the turn it points at. See
+ * the filter on `rows`.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -120,15 +125,35 @@ export function NotesTool() {
     window.addEventListener("mouseup", up);
   };
 
+  /**
+   * **Documents only.** A note carrying a `seq` is not a document — it is the
+   * remark on a marked turn, which is a *name for the mark*: a line telling you
+   * why you stopped there. It belongs in Bookmarks beside the turn it points
+   * at, and it was appearing here as well.
+   *
+   * Reported 2026-08-06: *"the note on a bookmark should only be associated
+   * with the bookmark itself… and should not appear in the Notes panel"*. The
+   * storage is right — one table, `session_id` and `seq` as tags, which is what
+   * [ADR-0015](../../../docs/decisions/0015-markdown-is-the-truth.md) decided —
+   * and the *views* were wrong: `BookmarksTool` already filtered to anchored
+   * notes and this filtered to nothing, so every mark showed up twice and the
+   * scratchpad filled with one-line remarks about turns.
+   *
+   * The two lists are disjoint now, and the rule is `seq`: with one, it is a
+   * mark; without one, it is something you wrote.
+   */
   const rows = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return notes
+      .filter((n) => n.seq === null || n.seq === undefined)
       .filter((n) => !q || n.body.toLowerCase().includes(q))
       .slice()
       .sort((a, b) => b.updated - a.updated);
   }, [notes, filter]);
 
   const open = openId ? notes.find((n) => n.id === openId) : null;
+  /** Documents, not marks — the denominator has to match what the list holds. */
+  const docCount = useMemo(() => notes.filter((n) => n.seq === null || n.seq === undefined).length, [notes]);
 
   const save = () => {
     if (!open) return;
@@ -159,7 +184,7 @@ export function NotesTool() {
         />
         {q && (
           <Dim className="shrink-0 text-2xs whitespace-nowrap">
-            {rows.length}/{notes.length}
+            {rows.length}/{docCount}
           </Dim>
         )}
         <IconButton
@@ -181,8 +206,8 @@ export function NotesTool() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {rows.length === 0 ? (
-          <Empty hint="notes are yours — they outlive the session they are tagged with">
-            {notes.length === 0 ? "nothing written yet" : "nothing matches"}
+          <Empty hint="notes are yours — they outlive the session they are tagged with. A marked turn is not a note: those live in Bookmarks">
+            {docCount === 0 ? "nothing written yet" : "nothing matches"}
           </Empty>
         ) : (
           rows.map((n) => {
@@ -201,7 +226,7 @@ export function NotesTool() {
                   {previewOf(n.body, q) ? (
                     <Marked text={previewOf(n.body, q)} query={q} />
                   ) : (
-                    <Dim>empty — a plain bookmark</Dim>
+                    <Dim>empty</Dim>
                   )}
                 </div>
                 <div className="flex items-center gap-2 text-2xs">
