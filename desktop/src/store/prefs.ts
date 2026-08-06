@@ -94,6 +94,12 @@ export interface Prefs {
    * swap places when it is on, which is a real cost and not everyone's trade.
    */
   newestFirst: boolean;
+  /**
+   * Render a note rather than showing its source. On by default: a note is
+   * mostly *read*, and since 2026-08-06 most of what is in one was copied out
+   * of a conversation as markdown rather than typed.
+   */
+  notesMarkdown: boolean;
 
   /**
    * Post a desktop banner when a session starts needing you. `R-C1`.
@@ -160,6 +166,7 @@ export const defaultPrefs = (): Prefs => ({
   markdown: true,
   showThinking: true,
   newestFirst: false,
+  notesMarkdown: true,
   notify: false,
   zoom: {},
   appZoom: 1,

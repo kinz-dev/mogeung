@@ -16,9 +16,11 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Plus, Trash2 } from "lucide-react";
 import { useStore } from "@/store";
-import { Dim, Empty, IconButton, Input, Row } from "@/ui/primitives";
+import { Checkbox, Dim, Empty, IconButton, Input, Row } from "@/ui/primitives";
 import { stamp } from "@/lib/format";
 import { sessionLabel } from "@/wire/types";
 
@@ -70,6 +72,7 @@ export function NotesTool() {
   const rootRef = useRef<HTMLDivElement>(null);
   const findRef = useRef<HTMLInputElement>(null);
   const editorHeight = useStore((s) => s.prefs.notesEditorHeight);
+  const asMarkdown = useStore((s) => s.prefs.notesMarkdown);
   const setPrefs = useStore((s) => s.setPrefs);
   const [height, setHeight] = useState(editorHeight);
   const heightRef = useRef(height);
@@ -220,7 +223,20 @@ export function NotesTool() {
             title="drag to resize"
           />
           <div className="flex shrink-0 items-center gap-2 px-2 py-1">
-            <Dim className="text-2xs">markdown · mirrored to ~/.mogeung/notes</Dim>
+            {/*
+              Rendered or source, and the toggle rather than a guess. Most of
+              what lands in a note is now copied out of a conversation as
+              markdown — a table, a fenced block — and showing that as source is
+              showing you the thing you copied *before* it meant anything. But
+              a note is also written here, and you cannot type into a rendering.
+            */}
+            <Checkbox
+              checked={asMarkdown}
+              onChange={(v) => setPrefs({ notesMarkdown: v })}
+              label="markdown"
+              title="render the note instead of showing its source — uncheck to edit"
+            />
+            <Dim className="text-2xs">mirrored to ~/.mogeung/notes</Dim>
             <div className="ml-auto flex items-center gap-1">
               <button
                 type="button"
@@ -241,13 +257,31 @@ export function NotesTool() {
               </IconButton>
             </div>
           </div>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            spellCheck={false}
-            className="min-h-0 flex-1 resize-none bg-[var(--bg)] px-2 pb-2 font-mono text-sm outline-none"
-            placeholder="write something"
-          />
+          {/*
+            An empty note ignores the preference and shows the editor. Rendering
+            nothing renders as nothing, and a blank panel where you just pressed
+            **+** reads as a broken button rather than as an empty note.
+          */}
+          {asMarkdown && draft.trim() ? (
+            <button
+              type="button"
+              onClick={() => setPrefs({ notesMarkdown: false })}
+              title="click to edit the source"
+              className="min-h-0 flex-1 cursor-text overflow-y-auto px-2 pb-2 text-left outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
+            >
+              <div className="prose-mogeung text-sm">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft}</ReactMarkdown>
+              </div>
+            </button>
+          ) : (
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              spellCheck={false}
+              className="min-h-0 flex-1 resize-none bg-[var(--bg)] px-2 pb-2 font-mono text-sm outline-none"
+              placeholder="write something"
+            />
+          )}
         </div>
       )}
     </div>
