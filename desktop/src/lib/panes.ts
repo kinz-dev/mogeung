@@ -1,5 +1,15 @@
 import type { DockviewApi } from "dockview";
 import { useStore } from "@/store";
+import type { DockTool } from "@/store/prefs";
+
+/**
+ * The ids that are dock tools rather than panes.
+ *
+ * Kept here rather than imported from `BottomDock` on purpose: this module is
+ * reached from the keymap and from `explorer.ts`, and pulling a React component
+ * tree in behind them is how a cycle starts.
+ */
+const DOCK_TOOLS: readonly string[] = ["changes", "transcript", "git", "insight", "debt"];
 
 /**
  * Bring a pane forward, adding it back if it was closed. The port of
@@ -34,6 +44,17 @@ export function setDock(api: DockviewApi): void {
  * places to be used in two.
  */
 export function showPane(id: string, title: string): void {
+  // Some surfaces are dock tools rather than panes, and which is which has
+  // changed twice now — Git, Insight and Debt moved out of the centre, then
+  // Changes and Transcript followed on 2026-08-06. Callers say *what to show*
+  // and this decides where it lives, so a bookmark or a search hit does not
+  // have to know: before this, `showPane("transcript", …)` on a moved pane
+  // silently added a tab for a component that no longer exists.
+  if (DOCK_TOOLS.includes(id as DockTool)) {
+    const { prefs, setPrefs } = useStore.getState();
+    if (prefs.dock !== id) setPrefs({ dock: id as DockTool });
+    return;
+  }
   focusPane(dock, id, title);
 }
 

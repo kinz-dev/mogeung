@@ -14,7 +14,7 @@ import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } f
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
-import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
+import { TAGS, compareByTagThenLabel, tagBg, tagColor, tagLabel } from "@/lib/tags";
 import { InfoDock } from "@/ui/InfoDock";
 import { QUEUE_LIST_ID } from "@/lib/keymap";
 import { fmtDur, secsSince } from "@/lib/format";
@@ -169,12 +169,11 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
         continue;
       rows.push({ item, session });
     }
-    // Pins float, keeping their relative rank underneath.
-    rows.sort((a, b) => {
-      const pa = scoped.pinned.includes(a.session.id) ? 1 : 0;
-      const pb = scoped.pinned.includes(b.session.id) ? 1 : 0;
-      return pb - pa;
-    });
+    // Pin, then colour, then label — each keeping the attention rank
+    // underneath as the tiebreak. See `compareByTagThenLabel` for what that
+    // costs: the queue's own claim is that it is ranked by who needs you, and
+    // this puts two hand-made keys above the computed one.
+    rows.sort((a, b) => compareByTagThenLabel(a.session.id, b.session.id, scoped));
     return rows;
   }, [queue, sessions, scope, filter, scoped]);
 }

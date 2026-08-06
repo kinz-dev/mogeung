@@ -18,10 +18,17 @@ export type RailTool = "files" | "search" | "notes" | "bookmarks";
 /**
  * What the bottom dock can show.
  *
- * These four are *reference*: you consult one and go back. The centre is what
- * you are doing — the diff, the conversation, the file, the agent.
+ * It began as *reference* — Git, Insight and Debt, things you consult and go
+ * back from — against a centre that held what you were doing. **Changes and
+ * Transcript joined them on 2026-08-06**, at an explicit ask, which redraws
+ * that line: the centre is now the file and the agent, and the dock holds
+ * everything you read *about* a session.
+ *
+ * The cost is stated where it will be felt: the dock shows **one tool at a
+ * time**, so the diff and the conversation can no longer be split side by side
+ * the way the tile tree allowed. That was possible before and is not now.
  */
-export type DockTool = "insight" | "git" | "debt";
+export type DockTool = "insight" | "git" | "debt" | "changes" | "transcript";
 
 /**
  * The half of the preferences that is about a *machine* rather than about this

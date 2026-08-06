@@ -74,3 +74,64 @@ export function tagLabel(id: string | undefined): string | null {
   if (!id) return null;
   return TAGS.find((t) => t.id === id)?.label ?? null;
 }
+
+/**
+ * Where a tag id sits in the order. Untagged, and unknown, sort last.
+ *
+ * Unknown reads as untagged for the third time in this file and for the same
+ * reason — the value comes from a hand-editable preferences file, and one this
+ * build does not recognise must not sort a session somewhere nobody can
+ * predict.
+ */
+export function tagRank(id: string | undefined): number {
+  if (!id) return TAGS.length;
+  const at = TAGS.findIndex((t) => t.id === id);
+  return at < 0 ? TAGS.length : at;
+}
+
+/** What the queue knows about a session besides its rank. */
+export interface Scoped {
+  pinned: string[];
+  tags: Record<string, string>;
+  labels: Record<string, string>;
+}
+
+/**
+ * The order the queue is asked for: **pin, then colour, then label**, with the
+ * attention rank surviving underneath as the tiebreak.
+ *
+ * Asked for on 2026-08-06, and it is worth being clear about what it costs,
+ * because it is not a display tweak. The queue's claim is that it is *ranked by
+ * who needs you* — that is the product, not a feature of it — and this puts two
+ * things you decided by hand above what the daemon computed. An untagged
+ * `APPROVE` now sits below a tagged `running`.
+ *
+ * The mitigation is that it is a *layered* comparison rather than a
+ * replacement: within a colour, and within a label, rank decides exactly as
+ * before, and `Array.prototype.sort` has been stable since ES2019 so returning
+ * `0` genuinely preserves it. So the ranking still orders every group; what
+ * changed is which groups come first.
+ *
+ * Colours sort in palette order rather than alphabetically, so the strip down
+ * the list reads the same way every time — red, orange, amber, green, blue,
+ * purple, grey — and a red row is always above a blue one rather than depending
+ * on what the colours happen to be called.
+ */
+export function compareByTagThenLabel(a: string, b: string, scoped: Scoped): number {
+  // Pins still float above everything: they are the strongest hand-made
+  // statement in the panel, and colour must not sink one.
+  const pin = (scoped.pinned.includes(b) ? 1 : 0) - (scoped.pinned.includes(a) ? 1 : 0);
+  if (pin !== 0) return pin;
+
+  const ta = tagRank(scoped.tags[a]);
+  const tb = tagRank(scoped.tags[b]);
+  if (ta !== tb) return ta - tb;
+
+  const la = (scoped.labels[a] ?? "").trim();
+  const lb = (scoped.labels[b] ?? "").trim();
+  if (!!la !== !!lb) return la ? -1 : 1;
+  if (la && lb && la !== lb) return la.localeCompare(lb);
+
+  // Equal on every hand-made key: say so, and let the rank stand.
+  return 0;
+}

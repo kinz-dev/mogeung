@@ -46,8 +46,6 @@ import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
-import { ChangesPane } from "@/panes/ChangesPane";
-import { TranscriptPane } from "@/panes/TranscriptPane";
 import { CodePane } from "@/panes/CodePane";
 import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
@@ -102,8 +100,6 @@ function PaneTab(props: IDockviewPanelHeaderProps) {
 }
 
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
-  changes: pane("changes", ChangesPane),
-  transcript: pane("transcript", TranscriptPane),
   // A terminal is scaled by its font, never by CSS — same reason as Monaco
   // below, and a stored zoom from before this rule must not still apply.
   agent: pane("agent", AgentPane, { scale: false }),
@@ -113,11 +109,14 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
 
 const LAYOUT_KEY = "mogeung.layout";
 
-/** Every pane and its label, in the order the default layout lays them out. */
+/**
+ * Every pane and its label, in the order the default layout lays them out.
+ *
+ * Two left on 2026-08-06 — Changes and Transcript are dock tools now — and
+ * `code` is deliberately absent from this list even though it is still a pane:
+ * see `ensureCodePane`. What remains here is what is always present.
+ */
 const PANES: readonly (readonly [string, string])[] = [
-  ["changes", "Changes"],
-  ["transcript", "Transcript"],
-  ["code", "Code"],
   ["agent", "Agent"],
 ];
 
@@ -128,7 +127,38 @@ const PANES: readonly (readonly [string, string])[] = [
  * tabs whose component no longer exists — so they are stripped on load. Without
  * this the first launch after upgrading shows four dead tabs.
  */
-const MOVED_TO_DOCK = ["git", "info", "debt", "insight"];
+const MOVED_TO_DOCK = ["git", "info", "debt", "insight", "changes", "transcript"];
+
+/**
+ * How many files the selected session has open. `0` means the Code pane has
+ * nothing to show and should not be a tab.
+ */
+function openFileCount(state: ReturnType<typeof useStore.getState>): number {
+  const id = state.selected;
+  return id ? (state.explorer[id]?.open.length ?? 0) : 0;
+}
+
+/**
+ * The Code pane exists **only while a file is open**. Asked for 2026-08-06.
+ *
+ * It is the one pane with nothing to say by itself: the others always describe
+ * the selected session, where an empty Code tab is a promise of a file that
+ * is not there. So it is added when a file is opened — from the tree, from
+ * `Ctrl+P`, from a diff row, all of which go through `openFile` — and closed
+ * again when the last tab goes.
+ *
+ * `Alt+C` still opens it deliberately, and that escape hatch is intentional:
+ * this hides a pane with nothing in it, it does not forbid one.
+ */
+function syncCodePane(api: DockviewApi | null, open: number): void {
+  if (!api) return;
+  const existing = api.getPanel("code");
+  if (open > 0 && !existing) {
+    api.addPanel({ id: "code", component: "code", title: "Code" });
+  } else if (open === 0 && existing) {
+    existing.api.close();
+  }
+}
 
 /**
  * The arrangement you get before you have made one.
@@ -143,14 +173,17 @@ function defaultLayout(api: DockviewApi): void {
       id,
       component: id,
       title,
-      ...(id === "changes" ? {} : { position: { referencePanel: "changes" } }),
+      ...(id === "agent" ? {} : { position: { referencePanel: "agent" } }),
     });
   }
-  api.getPanel("changes")?.api.setActive();
+  api.getPanel("agent")?.api.setActive();
 }
 
 export default function App() {
   const theme = useStore((s) => s.prefs.theme);
+  // The count, not the array: a selector returning the tabs would re-run this
+  // on every keystroke that touches explorer state.
+  const openFiles = useStore(openFileCount);
   const dockRef = useRef<DockviewApi | null>(null);
   useKeymap(dockRef);
   useNotifications();
@@ -174,6 +207,8 @@ export default function App() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
+
+  useEffect(() => syncCodePane(dockRef.current, openFiles), [openFiles]);
 
   const onReady = (event: DockviewReadyEvent) => {
     dockRef.current = event.api;
@@ -203,6 +238,11 @@ export default function App() {
     for (const [id, title] of PANES) {
       if (!event.api.getPanel(id)) event.api.addPanel({ id, component: id, title });
     }
+
+    // The effect above has already run once by now, against a `dockRef` that
+    // was still null — so a saved layout naming `code` with no file open would
+    // otherwise restore an empty tab and keep it.
+    syncCodePane(event.api, openFileCount(useStore.getState()));
 
     // Written on change rather than on a timer, and never mid-drag: dockview
     // fires while a sash moves, and saving each frame would write the file

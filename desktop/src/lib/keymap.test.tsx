@@ -328,6 +328,10 @@ describe("the keyboard", () => {
       const { default: App } = await import("@/App");
       render(<App />);
       act(() => {
+        // The Transcript is a dock tool since 2026-08-06, and the fade lives in
+        // that pane — so it has to be *mounted* for this to mean anything. Both
+        // real callers open it the same way, through `showPane`.
+        useStore.getState().setPrefs({ dock: "transcript" });
         useStore.setState({ selected: "s1", highlightSeq: 7 });
       });
       act(() => {

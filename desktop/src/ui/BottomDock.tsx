@@ -1,10 +1,17 @@
 /**
  * The bottom dock: reference material, out of the way until wanted.
  *
- * The centre is for what you are *doing* — the diff, the conversation, the file,
- * the agent. Insight, Git and Debt are what you *consult*: you open one, read
- * it, and go back. Making them tabs in the same strip as the Transcript meant
- * every consultation cost you the thing you were reading.
+ * It started as the three you *consult* — Insight, Git and Debt — against a
+ * centre holding what you were *doing*: the diff, the conversation, the file,
+ * the agent. Making them tabs in one strip meant every consultation cost you
+ * the thing you were reading.
+ *
+ * **Changes and Transcript moved here on 2026-08-06**, at an explicit ask, and
+ * the line the dock was built on moved with them: the centre is now the file
+ * and the agent, and everything you read *about* a session is down here. The
+ * price is that the dock shows one tool at a time, so the diff and the
+ * conversation can no longer sit side by side — the tile tree allowed that and
+ * this does not.
  *
  * Info is **not** here, and the reason is worth keeping: these three answer a
  * question about the repository or about every session at once, where Info
@@ -28,8 +35,16 @@ import { cn } from "@/lib/cn";
 import { InsightPane } from "@/panes/InsightPane";
 import { GitPane } from "@/panes/GitPane";
 import { DebtPane } from "@/panes/DebtPane";
+import { ChangesPane } from "@/panes/ChangesPane";
+import { TranscriptPane } from "@/panes/TranscriptPane";
 
+/**
+ * Changes and Transcript lead, because they are what you open the dock *for*;
+ * the three that were here first are what you consult afterwards.
+ */
 export const DOCK_TOOLS: { id: DockTool; label: string; hint: string }[] = [
+  { id: "changes", label: "Changes", hint: "what this session changed, risk-ordered, with read marks" },
+  { id: "transcript", label: "Transcript", hint: "the conversation, turn by turn" },
   { id: "git", label: "Git", hint: "commits, changes and diffs of this session's repo" },
   { id: "insight", label: "Insight", hint: "across every session — search, analytics, digest, docs" },
   { id: "debt", label: "Debt", hint: "how much of this repo's agent output nobody has read" },
@@ -77,6 +92,8 @@ export function BottomDock() {
             {/* Keyed per tool so each keeps its own zoom, and so switching
                 tools does not hand one pane's scroll position to another. */}
             <ZoomPane name={`dock:${dock}`}>
+              {dock === "changes" && <ChangesPane />}
+              {dock === "transcript" && <TranscriptPane />}
               {dock === "git" && <GitPane />}
               {dock === "insight" && <InsightPane />}
               {dock === "debt" && <DebtPane />}

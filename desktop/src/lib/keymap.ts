@@ -69,8 +69,13 @@ const rail = (tool: RailTool, label: string, keys: string[]): Action => ({
 
 export const ACTIONS: Action[] = [
   // The centre: what you are doing.
-  pane("changes", "Changes", ["Alt+x"]),
-  pane("transcript", "Transcript", ["Alt+t"]),
+  // Changes and Transcript keep the chords they trained even though they moved
+  // to the dock on 2026-08-06 — a binding belongs to the thing, not to where it
+  // happens to be docked, which is the rule the Git and Insight moves already
+  // set. The only difference you can feel is that the chord now *toggles*: the
+  // dock shows one tool at a time, so pressing it again closes what it opened.
+  dockTool("changes", "Changes", ["Alt+x"]),
+  dockTool("transcript", "Transcript", ["Alt+t"]),
   pane("agent", "Agent", ["Alt+a"]),
   pane("code", "Code", ["Alt+c"]),
 
