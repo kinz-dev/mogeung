@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-05
+updated: 2026-08-06
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeungd/src/api.rs
@@ -169,6 +169,28 @@ commonest of all, `commit`'s "nothing to commit, working tree clean", arrives
 on stdout with a non-zero exit. A paraphrase would throw away
 the list of files and the hint that make git's own refusals actionable. See
 [feature 0025](../features/0025-git-write-local.md).
+
+## Memory and skills (`R-F14`, `R-F15`)
+
+`FetchKit` → `Kit`: every memory and skill under `~/.claude`, **without
+bodies**. `FetchKitDoc { path }` → `KitDoc { path, body, truncated }`, one file
+at a time and echoing its own path, so a slow read cannot render under a file
+you have since clicked away from — the rule every search answer here follows.
+
+Two properties are load-bearing rather than incidental:
+
+- **The list carries no bodies.** 113 entries on this machine and the number
+  only grows; a list that carried every body would get slower the longer you
+  used the tool that describes it.
+- **`FetchKitDoc` takes a path from the network**, and the daemon binds
+  loopback with no token. So the path is canonicalised — through `..` and
+  symlinks — and must still sit under a published root, or it is refused.
+  Without that, "show me a skill" is "read any file this user can read". The
+  same rule `FetchFile` applies to a session's worktree, for the same reason.
+
+Both are reads of `~/.claude`, which mogeung never writes
+([CLAUDE.md](../../CLAUDE.md)) — and the stakes are higher here than for a
+transcript, because these files change what an agent does next.
 
 ## Notes (`R-B35`)
 
@@ -380,6 +402,8 @@ echo their question, `#[serde(default)]` on everything new:
   echoing query/day/path so stale answers drop.
 - **Docs** — `FetchDocScan` → `DocReport`, per watched repo only — the
   daemon refuses paths no session lives in.
+- **Kit (2026-08-06)** — `FetchKit` → `Kit`, `FetchKitDoc` → `KitDoc`, the
+  path guarded against every root but the ones published.
 - **Auth (`R-I4`)** — `router_with_token` wraps everything when the
   daemon starts with `--token`: `Authorization: Bearer …` or `?token=`
   (the WS client cannot set headers), constant-time compare, clean 401.
