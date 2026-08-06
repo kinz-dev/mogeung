@@ -17,14 +17,23 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bookmark, ChevronDown, ChevronRight, NotebookPen, Search as SearchIcon, X } from "lucide-react";
+import {
+  Bookmark,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  NotebookPen,
+  Search as SearchIcon,
+  X,
+} from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Checkbox, Dim, Empty, IconButton, Input, Mono } from "@/ui/primitives";
 import { best, type Engine } from "@/lib/search";
 import { clock, oneLine } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { eventLabel, eventText, type TranscriptEvent } from "@/wire/types";
-import { noteFromConversation, noteFromTurn } from "@/lib/notes";
+import { noteFromConversation, noteFromTurn, transcriptFilename, transcriptMarkdown } from "@/lib/notes";
+import { exportText, isTauri } from "@/lib/tauri";
 
 function kindColor(t: TranscriptEvent["kind"]["t"]): string {
   switch (t) {
@@ -202,11 +211,14 @@ export function TranscriptPane() {
   const notes = useStore((s) => s.notes);
   const sessions = useStore((s) => s.sessions);
   const send = useStore((s) => s.send);
+  const pushError = useStore((s) => s.pushError);
   const focusTs = useStore((s) => s.focusEventTs);
   const highlightSeq = useStore((s) => s.highlightSeq);
   const focusSeq = useStore((s) => s.focusSeq);
   const [find, setFind] = useState("");
   const [showFind, setShowFind] = useState(false);
+  /** Where the last export landed. Shown, not flashed — see `onExport`. */
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
 
   const shown = useMemo(() => {
@@ -288,6 +300,41 @@ export function TranscriptPane() {
     [shown, id, sessions, copyToNote],
   );
 
+  /**
+   * The whole transcript, written to a file. `R-B43`.
+   *
+   * **Every turn, `showThinking` notwithstanding.** The checkbox above is a
+   * reading preference and this is an export: a file that quietly omitted the
+   * agent's reasoning because a box happened to be unticked would be wrong in
+   * the one direction an archive must not be, and you would find out much
+   * later.
+   *
+   * The path is shown rather than a "saved" flash, because the destination is
+   * ours to choose and yours to find.
+   */
+  const onExport = useCallback(() => {
+    if (!events) return;
+    const session = id ? (sessions[id] ?? null) : null;
+    const body = transcriptMarkdown(session, events);
+    const name = transcriptFilename(session);
+    if (!isTauri()) {
+      // A browser tab has no shell to write through, and the anchor trick is
+      // the only route it has. Not the shipped path — the desktop build is —
+      // but leaving `npm run dev` unable to test the button is its own cost.
+      const url = URL.createObjectURL(new Blob([body], { type: "text/markdown" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+      setSavedAt(name);
+      return;
+    }
+    void exportText(name, body)
+      .then(setSavedAt)
+      .catch((e) => pushError(`could not save the transcript: ${String(e)}`));
+  }, [events, id, sessions, pushError]);
+
   const virt = useVirtualizer({
     count: shown.length,
     getScrollElement: () => parentRef.current,
@@ -328,6 +375,14 @@ export function TranscriptPane() {
     useStore.setState({ focusSeq: null });
   }, [focusSeq, shown, virt]);
 
+  // The path fades: it is a receipt, not a status, and one that stays becomes
+  // furniture — the same reasoning as the turn highlight below.
+  useEffect(() => {
+    if (savedAt === null) return;
+    const t = window.setTimeout(() => setSavedAt(null), 12_000);
+    return () => window.clearTimeout(t);
+  }, [savedAt]);
+
   useEffect(() => {
     if (highlightSeq === null) return;
     const t = window.setTimeout(() => useStore.setState({ highlightSeq: null }), 2600);
@@ -353,7 +408,20 @@ export function TranscriptPane() {
           title="show the agent's reasoning blocks"
         />
         <Dim className="text-2xs">{shown.length} turns</Dim>
+        {savedAt && (
+          // The path, not a checkmark. The window chose the directory, so the
+          // only useful thing it can tell you is where to look.
+          <Dim className="min-w-0 truncate text-2xs text-[var(--green)]" title={savedAt}>
+            saved · {savedAt}
+          </Dim>
+        )}
         <div className="ml-auto flex items-center gap-1">
+          <IconButton
+            title="save the whole transcript as a Markdown file in your downloads"
+            onClick={onExport}
+          >
+            <Download size={12} />
+          </IconButton>
           <IconButton
             title="copy this conversation into a note — long ones keep the tail, and the note says so"
             onClick={() => copyToNote(noteFromConversation(id ? (sessions[id] ?? null) : null, shown))}

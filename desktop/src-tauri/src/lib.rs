@@ -22,6 +22,7 @@ mod daemon;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -133,6 +134,57 @@ struct Chunk {
     data: String,
 }
 
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// The name is built from a session title, which is **the agent's text**.
+    /// Anything it can write, it can write into a filename.
+    #[test]
+    fn a_title_cannot_escape_the_directory() {
+        assert_eq!(safe_name("../../etc/passwd"), "etc-passwd");
+        assert_eq!(safe_name("a/b/c.md"), "a-b-c.md");
+        assert_eq!(safe_name("with\nnewline"), "with-newline");
+        assert_eq!(safe_name("..."), "export");
+        assert_eq!(safe_name(""), "export");
+    }
+
+    /// Two different titles must not collapse onto one file, or an export
+    /// silently lands on top of a different session's.
+    #[test]
+    fn different_titles_stay_different_names() {
+        assert_ne!(safe_name("fix: the queue"), safe_name("fix: the diff"));
+    }
+
+    /// Exporting twice is the ordinary case — export, the agent works on, export
+    /// again — and the second must not destroy the first.
+    #[test]
+    fn a_second_export_does_not_overwrite_the_first() {
+        let dir = std::env::temp_dir().join(format!("mog-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = free_path(&dir, "session.md");
+        assert_eq!(first.file_name().unwrap(), "session.md");
+        std::fs::write(&first, "one").unwrap();
+
+        let second = free_path(&dir, "session.md");
+        assert_eq!(second.file_name().unwrap(), "session-2.md");
+        std::fs::write(&second, "two").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "one");
+        assert_eq!(free_path(&dir, "session.md").file_name().unwrap(), "session-3.md");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_name_with_no_extension_still_suffixes_sanely() {
+        let dir = std::env::temp_dir().join(format!("mog-export-noext-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(free_path(&dir, "plain"), "x").unwrap();
+        assert_eq!(free_path(&dir, "plain").file_name().unwrap(), "plain-2");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
 /// A trace of everything this process does to a pty. Opt-in, and off unless
 /// `MOGEUNG_PTY_LOG` names a file to append to.
 ///
@@ -158,6 +210,97 @@ fn trace(op: &str, id: &str, detail: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{ms} {op:<6} id={id} {detail}");
     }
+}
+
+/// Where an exported file goes. `R-B43`.
+///
+/// The user's downloads directory, because that is where a thing you asked a
+/// window to save for you is looked for — `$XDG_DOWNLOAD_DIR` when the desktop
+/// says so, then `~/Downloads`, and `~/.mogeung/exports` as the last resort so
+/// a machine with neither still has an answer rather than an error.
+///
+/// **No file picker, deliberately.** One would mean two new plugins on a
+/// capability list whose own description says it is deliberately small, and the
+/// window would gain the ability to write anywhere the user can. A fixed
+/// destination plus telling you the path costs one sentence of UI and no new
+/// authority.
+fn export_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("XDG_DOWNLOAD_DIR") {
+        let p = PathBuf::from(d);
+        if p.is_dir() {
+            return p;
+        }
+    }
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+    let downloads = home.join("Downloads");
+    if downloads.is_dir() {
+        return downloads;
+    }
+    home.join(".mogeung").join("exports")
+}
+
+/// A file name safe to join onto a directory.
+///
+/// The name is built from a session's title, which is **the agent's text** —
+/// it can hold slashes, `..`, newlines, anything. Everything outside a known
+/// safe set becomes a dash rather than being dropped, so two different titles
+/// cannot collapse onto one name and no title can escape the directory.
+pub fn safe_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(96)
+        .collect();
+    let trimmed = cleaned.trim_matches(['-', '.'].as_ref()).to_string();
+    if trimmed.is_empty() {
+        "export".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// The first free path for `name` in `dir`, suffixing rather than overwriting.
+///
+/// Exporting the same transcript twice is the ordinary case — you export, the
+/// agent keeps working, you export again — and the second one silently
+/// replacing the first would destroy the copy you took precisely because you
+/// wanted to keep it.
+pub fn free_path(dir: &Path, name: &str) -> PathBuf {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.to_string(), String::new()),
+    };
+    let first = dir.join(format!("{stem}{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..1000 {
+        let candidate = dir.join(format!("{stem}-{n}{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}-{ext}"))
+}
+
+/// Write text to the downloads directory and answer with the path written.
+///
+/// The path goes back to the window because a save you cannot find is a save
+/// that did not happen — the pane says where it went rather than flashing
+/// "done".
+#[tauri::command]
+async fn export_text(name: String, contents: String) -> Result<String, String> {
+    let dir = export_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let path = free_path(&dir, &safe_name(&name));
+    std::fs::write(&path, contents).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    Ok(path.display().to_string())
 }
 
 /// Open a pty and stream it to the web view under `id`.
@@ -432,6 +575,7 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_close,
+            export_text,
             machine_id,
             daemon_acquire
         ])

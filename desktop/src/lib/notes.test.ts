@@ -8,7 +8,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { CONVERSATION_LIMIT, noteFromConversation, noteFromTurn, textOf } from "@/lib/notes";
+import {
+  CONVERSATION_LIMIT,
+  noteFromConversation,
+  noteFromTurn,
+  textOf,
+  transcriptFilename,
+  transcriptMarkdown,
+} from "@/lib/notes";
 import type { Session, TranscriptEvent, EventKind } from "@/wire/types";
 
 const session = { id: "abc12345-0000", title: "the auth refactor" } as Session;
@@ -97,5 +104,49 @@ describe("a whole conversation as a note", () => {
     ]);
     expect(note).toContain("1 turn(s)");
     expect(note).not.toContain("Session start");
+  });
+});
+
+describe("the whole transcript, as a file", () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => ev(i + 1, { t: "assistant_text", text: `line ${i + 1}` }));
+
+  /**
+   * The opposite choice from a copied conversation, and deliberately so. A note
+   * is read, so it keeps the tail; an export is *kept*, and one that quietly
+   * dropped the beginning would be discovered only when you went looking for
+   * the part that is gone.
+   */
+  it("carries every turn, however long the conversation", () => {
+    const note = transcriptMarkdown(session, many(CONVERSATION_LIMIT + 50));
+    expect(note).toContain("> line 1\n");
+    expect(note).toContain(`> line ${CONVERSATION_LIMIT + 50}`);
+    expect(note).not.toContain("not copied");
+  });
+
+  it("states what the file can honestly claim to be", () => {
+    const note = transcriptMarkdown(session, many(2));
+    expect(note).toContain("2 turn(s)");
+    expect(note).toContain("turns mogeung has read");
+  });
+
+  it("carries the facts you need to know which session this was", () => {
+    const s = { ...session, repo_root: "/repo", git_branch: "main", cwd: "/repo/sub" } as Session;
+    const note = transcriptMarkdown(s, many(1));
+    expect(note).toContain("`abc12345-0000`");
+    expect(note).toContain("`/repo`");
+    expect(note).toContain("`main`");
+  });
+
+  it("names the file after the session and the moment", () => {
+    const name = transcriptFilename(session, Date.parse("2026-08-06T09:05:00"));
+    expect(name).toBe("the-auth-refactor-20260806-0905.md");
+  });
+
+  /** The label is agent-written text; the shell sanitises again, but a name
+   *  full of punctuation should not arrive there in the first place. */
+  it("keeps a hostile title readable", () => {
+    const s = { id: "x", title: "fix: ../../etc/passwd!!" } as Session;
+    expect(transcriptFilename(s, Date.parse("2026-08-06T09:05:00"))).toBe("fix-etc-passwd-20260806-0905.md");
   });
 });

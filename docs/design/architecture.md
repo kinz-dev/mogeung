@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-05
+updated: 2026-08-06
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -81,6 +81,17 @@ refusal rather than a guess, because the hostname it reports need not resolve
 from here and need not be the name ssh wants. Locally the panel falls back to a
 bare pty when tmux is missing; remotely it does not, because that fallback would
 trade the right machine for a shell on the wrong one.
+
+The export button (`R-B43`) is the one place a client writes a file the user
+can see. It stays inside the rule the same way: the window supplies text and a
+readable name, and the **shell** decides where it lands — `$XDG_DOWNLOAD_DIR`,
+then `~/Downloads`, then `~/.mogeung/exports` — sanitising the name and refusing
+to overwrite. There is deliberately no file picker: one would put a dialog and a
+filesystem plugin on a capability list whose own description says it is
+deliberately small, and would hand the webview the right to write anywhere the
+user can. A fixed destination and telling you the path costs one line of UI and
+no new authority. It is not a worktree write and does not touch pillar K — the
+file is a copy of what the daemon already published, going out rather than in.
 
 The file explorer (`R-B24`) gives the daemon a second read surface: on request
 it lists and reads files under a session's *own* root — repo when known, cwd

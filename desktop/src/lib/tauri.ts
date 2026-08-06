@@ -69,6 +69,19 @@ export async function ptyWrite(id: string, data: string, origin?: string): Promi
   await core.invoke("pty_write", { id, data, origin: origin ?? null });
 }
 
+/**
+ * Write text to the user's downloads directory, and answer with the path.
+ *
+ * The shell picks the directory and guarantees the name — see `export_dir` and
+ * `safe_name` in `lib.rs`. This side supplies a readable name and gets back
+ * where it actually landed, which is the only part worth showing you: a save
+ * you cannot find is a save that did not happen.
+ */
+export async function exportText(name: string, contents: string): Promise<string> {
+  const { core } = await api();
+  return await core.invoke<string>("export_text", { name, contents });
+}
+
 export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
   const { core } = await api();
   await core.invoke("pty_resize", { id, cols, rows });

@@ -92,6 +92,77 @@ export function noteFromTurn(session: Session | null, ev: TranscriptEvent): stri
   return [`# ${label} · turn ${ev.seq}`, "", `**${speaker(ev)}** · ${when(ev.ts)}`, "", quoted, ""].join("\n");
 }
 
+/**
+ * The whole transcript, as a file. `R-B43`.
+ *
+ * The difference from `noteFromConversation` is the cap, and it is not an
+ * oversight in either direction: a note is something you will read, so it keeps
+ * the tail and says so, while an export is something you keep, and one that
+ * silently dropped the beginning of the conversation would be worse than
+ * useless — you would find out when you went looking for the part that is gone.
+ *
+ * The header states **what mogeung has read**, not what the session said. A
+ * huge transcript is capped and tailed on the way in (`R-A5`), so the file can
+ * honestly only claim the turns that reached us.
+ */
+export function transcriptMarkdown(
+  session: Session | null,
+  events: TranscriptEvent[],
+  now: number = Date.now(),
+): string {
+  const label = session ? sessionLabel(session) : "transcript";
+  const carried = events.filter((e) => textOf(e) !== null);
+
+  const head = [`# ${label}`, ""];
+  if (session) {
+    const facts: string[] = [`- Session \`${session.id}\``];
+    if (session.repo_root) facts.push(`- Repo \`${session.repo_root}\``);
+    if (session.git_branch) facts.push(`- Branch \`${session.git_branch}\``);
+    if (session.cwd) facts.push(`- Working directory \`${session.cwd}\``);
+    head.push(...facts);
+  }
+  head.push(
+    `- Exported ${when(now)} · ${carried.length} turn(s)`,
+    "",
+    "*These are the turns mogeung has read. A very large transcript is tailed on",
+    "the way in, so this is the conversation as this window saw it.*",
+    "",
+    "---",
+  );
+
+  const blocks = carried.map((ev) => {
+    const body = textOf(ev) ?? "";
+    const quoted = body
+      .split("\n")
+      .map((l) => (l.trim() ? `> ${l}` : ">"))
+      .join("\n");
+    return ["", `### ${speaker(ev)} · turn ${ev.seq} · ${when(ev.ts)}`, "", quoted].join("\n");
+  });
+
+  return [...head, ...blocks, ""].join("\n");
+}
+
+/**
+ * What the exported file is called.
+ *
+ * Dated, because the second export of a session is a different document and
+ * finding them in a directory listing means reading the name rather than the
+ * mtime. The shell sanitises this again before it touches the filesystem — the
+ * label is agent-written text, and this side only has to make it *readable*.
+ */
+export function transcriptFilename(session: Session | null, now: number = Date.now()): string {
+  const label = session ? sessionLabel(session) : "transcript";
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const d = new Date(now);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `${slug || "transcript"}-${stamp}.md`;
+}
+
 /** How many turns a copied conversation carries before it is cut. */
 export const CONVERSATION_LIMIT = 200;
 
