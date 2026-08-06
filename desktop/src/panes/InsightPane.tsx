@@ -30,8 +30,19 @@ import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, Input, Mono, Row } from "@/ui/primitives";
 import { compact, num, oneLine, stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { KitView } from "@/panes/KitView";
 
-type View = "search" | "digest" | "analytics" | "prompts" | "failures" | "decisions" | "file" | "docs";
+type View =
+  | "search"
+  | "digest"
+  | "analytics"
+  | "prompts"
+  | "failures"
+  | "decisions"
+  | "file"
+  | "docs"
+  | "memory"
+  | "skills";
 
 const VIEWS: { id: View; label: string; blurb: string }[] = [
   { id: "search", label: "Search", blurb: "every transcript and all prompt history" },
@@ -42,6 +53,9 @@ const VIEWS: { id: View; label: string; blurb: string }[] = [
   { id: "decisions", label: "Decisions", blurb: "decision-shaped sentences — candidates only" },
   { id: "file", label: "Blame", blurb: "which session produced a file" },
   { id: "docs", label: "Docs", blurb: "markdown inventory and staleness" },
+  // The two that look at what Claude Code was *told* rather than what it did.
+  { id: "memory", label: "Memory", blurb: "what agents have saved about you and your projects" },
+  { id: "skills", label: "Skills", blurb: "every skill on this machine, and what it actually says" },
 ];
 
 const AXIS = { stroke: "var(--dim)", fontSize: 10 };
@@ -188,6 +202,9 @@ export function InsightPane() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {view === "memory" && <KitView kind="memory" />}
+        {view === "skills" && <KitView kind="skill" />}
+
         {view === "analytics" && (
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Analytics />

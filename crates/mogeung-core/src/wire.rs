@@ -341,6 +341,13 @@ pub enum ClientMsg {
     /// evidence, instruction drift. Proposals only — the daemon never
     /// writes to a watched repo. `R-H1`–`R-H5`.
     FetchDocScan { repo: String },
+    /// Every memory and skill under `~/.claude`, without bodies. `R-F14`,
+    /// `R-F15`.
+    FetchKit,
+    /// One memory or skill's text. The daemon refuses a path outside the roots
+    /// it published — see `kit::read_doc`, and note that this port has no token
+    /// on loopback.
+    FetchKitDoc { path: String },
 }
 
 /// One entry of a [`ClientMsg::ListDir`] answer.
@@ -902,6 +909,11 @@ pub enum ServerMsg {
         repo: String,
         inventory: Box<crate::docs::DocInventory>,
     },
+    /// Every memory and skill this machine carries. `R-F14`, `R-F15`.
+    Kit { entries: Vec<crate::kit::KitEntry> },
+    /// One of them, echoing the path so a late answer cannot be shown against
+    /// the wrong file — the same rule the search answers follow.
+    KitDoc { doc: crate::kit::KitDoc },
     Error { message: String },
 }
 

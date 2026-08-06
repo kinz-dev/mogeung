@@ -10,6 +10,7 @@ pub mod config;
 pub mod docs;
 pub mod health;
 pub mod insight;
+pub mod kit;
 pub mod review;
 pub mod session;
 pub mod transcript;

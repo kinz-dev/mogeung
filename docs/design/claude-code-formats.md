@@ -1,10 +1,12 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-04
+updated: 2026-08-06
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
+  - crates/mogeungd/src/kit.rs
+  - crates/mogeung-core/src/kit.rs
 ---
 
 # Claude Code's on-disk formats
@@ -115,6 +117,48 @@ mapping. See [ADR-0004](../decisions/0004-git-for-diffs-not-file-history.md).
 Every prompt ever typed, with `display`, `project`, `sessionId`, `timestamp`.
 2,084 entries on this machine. Currently unused; it is the basis for roadmap
 section F.
+
+## `~/.claude/skills/<name>/SKILL.md` and plugin skills — `R-F15`
+
+Markdown with YAML frontmatter. Two keys are read and both are optional:
+`name` and `description`. A file with neither is still a skill, named after
+its directory — which is what Claude Code calls it anyway.
+
+Two roots, and the second is where the count comes from:
+
+| Root | Scope | Depth of `SKILL.md` |
+|---|---|---|
+| `~/.claude/skills/<name>/SKILL.md` | yours | 2 |
+| `~/.claude/plugins/marketplaces/<market>/plugins/<plugin>/skills/<skill>/SKILL.md` | a plugin's | **7** |
+
+Measured on this machine 2026-08-06: 6 user skills, 44 plugin ones. The first
+walk capped at six levels, found every user skill and **no** plugin skill, and
+reported a complete-looking list — the failure mode `A4` and the health panel
+exist for. The cap is 8 now and a test pins a skill at depth 7.
+
+## `~/.claude/projects/<slug>/memory/*.md` — `R-F14`
+
+What an agent decided to remember. Same frontmatter shape, plus a nested
+`metadata:` block carrying `type` (`user`, `feedback`, `project`, `reference`).
+`MEMORY.md` is the index the rest hang off. 63 files across 18 projects here.
+
+**Only top-level frontmatter keys are read.** The `metadata:` block has its own
+`name:` in some shapes, and taking that as the file's own would label every
+memory after whatever the block happened to contain.
+
+The `<slug>` is a project path with every separator replaced by a dash, which is
+**lossy** — a directory called `perf-test` is indistinguishable from
+`perf/test`. `decode_project` is therefore presentation only: it is never
+resolved, opened, or compared against a real path, and a test pins the way it
+fails so that stays deliberate.
+
+## Reading a body over the wire
+
+`FetchKitDoc` takes a path from the network, and the daemon binds loopback
+without a token. So the path is canonicalised — resolving `..` and symlinks —
+and must still sit under a published root, or it is refused. Without that
+check, "show me a skill" is "read any file this user can read". Same rule the
+file explorer uses for a worktree, for the same reason.
 
 ## Parsing posture
 

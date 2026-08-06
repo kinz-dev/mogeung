@@ -912,6 +912,14 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             let entries = state.file_sessions(&path).await;
             state.broadcast(ServerMsg::FileSessions { path, entries });
         }
+        ClientMsg::FetchKit => {
+            let entries = crate::kit::scan(&state.claude_home);
+            state.broadcast(ServerMsg::Kit { entries });
+        }
+        ClientMsg::FetchKitDoc { path } => match crate::kit::read_doc(&state.claude_home, &path) {
+            Ok(doc) => state.broadcast(ServerMsg::KitDoc { doc }),
+            Err(e) => err(anyhow::anyhow!(e)),
+        },
         ClientMsg::FetchDocScan { repo } => match state.doc_scan(&repo).await {
             Ok(inventory) => state.broadcast(ServerMsg::DocReport {
                 repo,

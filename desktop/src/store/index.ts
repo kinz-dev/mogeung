@@ -282,6 +282,9 @@ export interface AppState {
   radius: BlastRadius | null;
   usage: UsageReport | null;
   notes: Note[];
+  /** Memory and skills under `~/.claude`, and whichever one is open. `R-F14`. */
+  kit: import("@/wire/types").KitEntry[];
+  kitDoc: import("@/wire/types").KitDoc | null;
   signals: Record<string, { command: string | null; running: boolean; last: SignalRun | null }>;
   blame: Record<string, { lines: BlameLine[]; truncated: boolean }>;
   subagents: Record<SessionId, SubagentNode[]>;
@@ -412,6 +415,8 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  kit: [],
+  kitDoc: null,
   signals: {},
   blame: {},
   subagents: {},
@@ -650,6 +655,14 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "notes":
         set({ notes: msg.notes });
+        break;
+      case "kit":
+        set({ kit: msg.entries });
+        break;
+      case "kit_doc":
+        // Replaced wholesale: one document is open at a time, and the answer
+        // carries its own path so a slow read cannot land under a later click.
+        set({ kitDoc: msg.doc });
         break;
       case "signal_status":
         set((s) => ({

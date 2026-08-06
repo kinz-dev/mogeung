@@ -643,6 +643,28 @@ export interface SubmoduleInfo {
   note: string;
 }
 
+/** What Claude Code has been *told* — memory it saved, skills it can run. */
+export type KitKind = "memory" | "skill";
+export type KitScope = "user" | "plugin" | "project";
+
+export interface KitEntry {
+  kind: KitKind;
+  scope: KitScope;
+  name: string;
+  description: string;
+  /** For a memory, the project it belongs to. Decoded, and lossy — a label. */
+  project?: string | null;
+  path: string;
+  bytes: number;
+  modified?: number | null;
+}
+
+export interface KitDoc {
+  path: string;
+  body: string;
+  truncated: boolean;
+}
+
 export interface ContentMatch {
   path: string;
   line: number;
@@ -718,6 +740,8 @@ export type ClientMsg =
   | { cmd: "git_stash_pop"; session_id: SessionId; index: number }
   | { cmd: "git_stash_drop"; session_id: SessionId; index: number }
   | { cmd: "git_fetch"; session_id: SessionId }
+  | { cmd: "fetch_kit" }
+  | { cmd: "fetch_kit_doc"; path: string }
   | { cmd: "note_list" }
   | {
       cmd: "note_save";
@@ -833,6 +857,8 @@ export type ServerMsg =
       ahead: number;
       behind: number;
     }
+  | { ev: "kit"; entries: KitEntry[] }
+  | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
   | { ev: "git_stash_list"; session_id: SessionId; stashes: StashInfo[] }
   | {
