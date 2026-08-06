@@ -84,14 +84,21 @@ trade the right machine for a shell on the wrong one.
 
 The export button (`R-B43`) is the one place a client writes a file the user
 can see. It stays inside the rule the same way: the window supplies text and a
-readable name, and the **shell** decides where it lands — `$XDG_DOWNLOAD_DIR`,
-then `~/Downloads`, then `~/.mogeung/exports` — sanitising the name and refusing
-to overwrite. There is deliberately no file picker: one would put a dialog and a
-filesystem plugin on a capability list whose own description says it is
-deliberately small, and would hand the webview the right to write anywhere the
-user can. A fixed destination and telling you the path costs one line of UI and
-no new authority. It is not a worktree write and does not touch pillar K — the
-file is a copy of what the daemon already published, going out rather than in.
+readable name, a native save dialog asks where it should go, and the **shell**
+does the writing. The split is the whole of it: `dialog:allow-save` is the only
+permission added, so the webview can ask for a path but cannot write to one —
+the write stays in a command this shell owns. Adding the filesystem plugin
+instead would have handed the window a general write verb, which is a different
+thing entirely from being able to save the file you are looking at.
+
+Where there is no picker to ask — the plugin absent, or a desktop with no
+portal — the shell falls back to `$XDG_DOWNLOAD_DIR`, then `~/Downloads`, then
+`~/.mogeung/exports`, sanitising the name and refusing to overwrite. The two
+routes differ on overwriting deliberately: a path you chose replaces what is
+there because the dialog already asked, and a path nobody chose may destroy
+nothing. Either way it is not a worktree write and does not touch pillar K —
+the file is a copy of what the daemon already published, going out rather than
+in.
 
 The file explorer (`R-B24`) gives the daemon a second read surface: on request
 it lists and reads files under a session's *own* root — repo when known, cwd

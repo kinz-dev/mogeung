@@ -33,7 +33,7 @@ import { clock, oneLine } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { eventLabel, eventText, type TranscriptEvent } from "@/wire/types";
 import { noteFromConversation, noteFromTurn, transcriptFilename, transcriptMarkdown } from "@/lib/notes";
-import { exportText, isTauri } from "@/lib/tauri";
+import { chooseSavePath, exportText, isTauri } from "@/lib/tauri";
 
 function kindColor(t: TranscriptEvent["kind"]["t"]): string {
   switch (t) {
@@ -309,15 +309,35 @@ export function TranscriptPane() {
    * the one direction an archive must not be, and you would find out much
    * later.
    *
-   * The path is shown rather than a "saved" flash, because the destination is
-   * ours to choose and yours to find.
+   * The picker is the OS's, and only the picker: `plugin-dialog` returns a
+   * path and this window's own `export_text` does the writing. Adding the fs
+   * plugin instead would have handed the webview a general write verb; this way
+   * the only file it can write is one you named in a native dialog.
+   *
+   * The path is shown afterwards rather than a "saved" flash, because a save
+   * you cannot find is a save that did not happen — and on the fallback route
+   * the destination was ours to choose, so it is ours to tell you.
    */
-  const onExport = useCallback(() => {
+  const onExport = useCallback(async () => {
     if (!events) return;
     const session = id ? (sessions[id] ?? null) : null;
     const body = transcriptMarkdown(session, events);
     const name = transcriptFilename(session);
-    if (!isTauri()) {
+    if (isTauri()) {
+      // Three answers, and only the middle one is nothing happening: a path
+      // means save there, `null` means you cancelled and nothing should be
+      // written, `undefined` means there was no picker to ask and the shell
+      // should choose rather than let the file evaporate.
+      const picked = await chooseSavePath(name);
+      if (picked === null) return;
+      try {
+        setSavedAt(await exportText(name, body, picked));
+      } catch (e) {
+        pushError(`could not save the transcript: ${String(e)}`);
+      }
+      return;
+    }
+    {
       // A browser tab has no shell to write through, and the anchor trick is
       // the only route it has. Not the shipped path — the desktop build is —
       // but leaving `npm run dev` unable to test the button is its own cost.
@@ -328,11 +348,7 @@ export function TranscriptPane() {
       a.click();
       URL.revokeObjectURL(url);
       setSavedAt(name);
-      return;
     }
-    void exportText(name, body)
-      .then(setSavedAt)
-      .catch((e) => pushError(`could not save the transcript: ${String(e)}`));
   }, [events, id, sessions, pushError]);
 
   const virt = useVirtualizer({
@@ -418,7 +434,7 @@ export function TranscriptPane() {
         <div className="ml-auto flex items-center gap-1">
           <IconButton
             title="save the whole transcript as a Markdown file in your downloads"
-            onClick={onExport}
+            onClick={() => void onExport()}
           >
             <Download size={12} />
           </IconButton>

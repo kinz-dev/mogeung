@@ -70,16 +70,44 @@ export async function ptyWrite(id: string, data: string, origin?: string): Promi
 }
 
 /**
- * Write text to the user's downloads directory, and answer with the path.
+ * Ask the OS where to save, starting from `suggested`.
  *
- * The shell picks the directory and guarantees the name — see `export_dir` and
- * `safe_name` in `lib.rs`. This side supplies a readable name and gets back
- * where it actually landed, which is the only part worth showing you: a save
- * you cannot find is a save that did not happen.
+ * `null` means the picker was declined — a cancel, and nothing should be
+ * written. `undefined` means there was no picker to ask: the plugin is absent
+ * or refused, and the caller should fall back to the shell's own destination
+ * rather than lose the file. Two different silences, so they are two different
+ * values.
+ *
+ * Imported lazily, for the same reason `api()` is: a browser tab has no Tauri
+ * at all, and a top-level import of a plugin makes `npm run dev` fail on load
+ * rather than degrade.
  */
-export async function exportText(name: string, contents: string): Promise<string> {
+export async function chooseSavePath(suggested: string): Promise<string | null | undefined> {
+  if (!isTauri()) return undefined;
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const picked = await save({
+      defaultPath: suggested,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    return picked ?? null;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write text to a file, and answer with the path it actually went to.
+ *
+ * `path` is what the picker returned. Without one the shell falls back to the
+ * downloads directory, sanitises the name and refuses to overwrite — see
+ * `export_target` in `lib.rs`, where the difference between the two routes is
+ * argued. The path comes back either way, because a save you cannot find is a
+ * save that did not happen.
+ */
+export async function exportText(name: string, contents: string, path?: string): Promise<string> {
   const { core } = await api();
-  return await core.invoke<string>("export_text", { name, contents });
+  return await core.invoke<string>("export_text", { name, contents, path: path ?? null });
 }
 
 export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {

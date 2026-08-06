@@ -38,6 +38,7 @@ anyhow = "1"
 # fine — `mogeungd` is a normal crate and does not drag webkit in with it.
 mogeungd = { path = "../../crates/mogeungd" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+tauri-plugin-dialog = "2.7.2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

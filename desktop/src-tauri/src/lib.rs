@@ -175,6 +175,30 @@ mod export_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A path you chose in a dialog is written where you said, replacing what
+    /// is there — the dialog already asked. Writing `report-2.md` after you
+    /// answered "yes, replace it" is the window overruling you.
+    #[test]
+    fn a_chosen_path_is_honoured_exactly() {
+        let dir = std::env::temp_dir().join(format!("mog-chosen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chosen = dir.join("report.md");
+        std::fs::write(&chosen, "old").unwrap();
+
+        let target = export_target(Some(chosen.to_str().unwrap()), "ignored.md").unwrap();
+        assert_eq!(target, chosen, "a chosen path must not be renamed around");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The name is only sanitised on the fallback route. On the chosen route it
+    /// is not ours to touch: the user typed it into their own file manager.
+    #[test]
+    fn a_missing_directory_is_reported_rather_than_created() {
+        let nowhere = std::env::temp_dir().join("mog-not-a-dir-xyz").join("f.md");
+        let err = export_target(Some(nowhere.to_str().unwrap()), "f.md").unwrap_err();
+        assert!(err.contains("not a directory"), "{err}");
+    }
+
     #[test]
     fn a_name_with_no_extension_still_suffixes_sanely() {
         let dir = std::env::temp_dir().join(format!("mog-export-noext-{}", std::process::id()));
@@ -219,11 +243,16 @@ fn trace(op: &str, id: &str, detail: &str) {
 /// says so, then `~/Downloads`, and `~/.mogeung/exports` as the last resort so
 /// a machine with neither still has an answer rather than an error.
 ///
-/// **No file picker, deliberately.** One would mean two new plugins on a
-/// capability list whose own description says it is deliberately small, and the
-/// window would gain the ability to write anywhere the user can. A fixed
-/// destination plus telling you the path costs one sentence of UI and no new
-/// authority.
+/// This is the **fallback**, not the usual route: `plugin-dialog` asks you
+/// where to save and `export_target` honours what you picked. It is what
+/// answers when there is no picker to ask — the plugin absent, or refusing on a
+/// desktop with no portal — so a save never evaporates for want of a dialog.
+///
+/// The picker was added on 2026-08-06, one commit after this shipped without
+/// one. The argument against it was that a dialog plus a filesystem plugin
+/// would hand the webview a general write verb; what changed is that only the
+/// **dialog** was added. The path comes back to a command this shell owns, so
+/// the one file the window can write is still one you named yourself.
 fn export_dir() -> PathBuf {
     if let Ok(d) = std::env::var("XDG_DOWNLOAD_DIR") {
         let p = PathBuf::from(d);
@@ -289,18 +318,44 @@ pub fn free_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{stem}-{ext}"))
 }
 
-/// Write text to the downloads directory and answer with the path written.
+/// Where a save goes, given what the picker said.
 ///
-/// The path goes back to the window because a save you cannot find is a save
-/// that did not happen — the pane says where it went rather than flashing
-/// "done".
-#[tauri::command]
-async fn export_text(name: String, contents: String) -> Result<String, String> {
+/// Two routes, and the difference in overwrite behaviour is deliberate:
+///
+/// - **A path you chose** is written exactly as chosen, replacing what is
+///   there. The native dialog already asked before returning a name that
+///   exists, and asking twice — or quietly writing `report-2.md` when you said
+///   `report.md` — is the window overruling an answer you already gave.
+/// - **No path** means the picker was unavailable or declined, so this falls
+///   back to the downloads directory, sanitises the name, and *never*
+///   overwrites: nothing asked you anything, so nothing may destroy anything.
+pub fn export_target(path: Option<&str>, name: &str) -> Result<PathBuf, String> {
+    if let Some(p) = path {
+        let p = PathBuf::from(p);
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() && !parent.is_dir() {
+                return Err(format!("{} is not a directory", parent.display()));
+            }
+        }
+        return Ok(p);
+    }
     let dir = export_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    let path = free_path(&dir, &safe_name(&name));
-    std::fs::write(&path, contents).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-    Ok(path.display().to_string())
+    Ok(free_path(&dir, &safe_name(name)))
+}
+
+/// Write text to a file and answer with the path written.
+///
+/// `path` is what the native save dialog returned, or `None` when there was no
+/// dialog to ask. The path goes back to the window either way, because a save
+/// you cannot find is a save that did not happen — the pane says where it went
+/// rather than flashing "done".
+#[tauri::command]
+async fn export_text(name: String, contents: String, path: Option<String>) -> Result<String, String> {
+    let target = export_target(path.as_deref(), &name)?;
+    std::fs::write(&target, contents)
+        .map_err(|e| format!("could not write {}: {e}", target.display()))?;
+    Ok(target.display().to_string())
 }
 
 /// Open a pty and stream it to the web view under `id`.
@@ -568,6 +623,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
+        // The save dialog, and **only** the dialog: the plugin picks a path and
+        // this shell's own `export_text` does the writing. Adding the fs plugin
+        // instead would have given the webview a general write verb, where this
+        // way the only file it can write is one you named in a native picker.
+        .plugin(tauri_plugin_dialog::init())
         .manage(Ptys::default())
         .manage(DaemonOnce::default())
         .invoke_handler(tauri::generate_handler![
