@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, Columns2, X } from "lucide-react";
+import { Anchor, Columns2, GitBranch, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { closeAgentPane, nextAgentSlot, parseFilePaneId, splitAgent } from "@/lib/panes";
@@ -176,6 +176,27 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         <Chip color="var(--amber)" title="tmux runs on that machine, reached over ssh">
           {host}
         </Chip>
+      )}
+      {/*
+        The branch this session is working on. Asked for 2026-08-07.
+
+        **Only when there is one.** `git_branch` is `null` for a directory that
+        is not a repository *and* for a detached HEAD, and both are states where
+        naming a branch would be a small lie — so the row simply has one fewer
+        thing on it rather than saying `(none)`.
+
+        Truncated with the whole name on hover: a branch called
+        `feature/ENG-441-the-long-one` would otherwise push the controls off a
+        narrow pane, and the controls are the reason this row exists.
+      */}
+      {session?.git_branch && (
+        <Dim
+          className="hidden min-w-0 items-center gap-1 text-2xs sm:flex"
+          title={`on branch ${session.git_branch}`}
+        >
+          <GitBranch className="h-3 w-3 shrink-0" />
+          <span className="max-w-[14rem] truncate">{session.git_branch}</span>
+        </Dim>
       )}
       <IconButton
         title={

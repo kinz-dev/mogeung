@@ -10,7 +10,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { PaneScope } from "@/lib/paneScope";
-import { usePaneTitle } from "@/ui/PaneChrome";
+import { PaneActions, usePaneTitle } from "@/ui/PaneChrome";
 import { AgentPane } from "@/panes/AgentPane";
 import { useStore } from "@/store";
 import { filePaneId } from "@/lib/panes";
@@ -129,6 +129,69 @@ describe("a file tab", () => {
   it("survives a path that contains a colon", () => {
     render(<Title id={filePaneId("s1", "weird:name.rs", null)} />);
     expect(screen.getByTestId("title")).toHaveTextContent("weird:name.rs");
+  });
+});
+
+/**
+ * The branch a session is on, in its pane header. Asked for 2026-08-07.
+ *
+ * `PaneActions` is rendered by dockview per group rather than by a pane, so it
+ * is exercised directly here — what matters is which session it reads and what
+ * it does when there is no branch to name.
+ */
+describe("the branch on the pane header", () => {
+  const actions = (extra: Partial<Session>) => {
+    useStore.setState({ selected: "s1", sessions: { s1: session("s1", extra) } });
+    return render(
+      <PaneActions
+        activePanel={{ id: "agent" } as never}
+        containerApi={{ getPanel: () => undefined } as never}
+        api={{} as never}
+        group={{} as never}
+        panels={[]}
+        isGroupActive
+      />,
+    );
+  };
+
+  it("names the branch the session is working on", () => {
+    actions({ git_branch: "feature/ENG-441" });
+    expect(screen.getByTitle("on branch feature/ENG-441")).toBeInTheDocument();
+    expect(screen.getByText("feature/ENG-441")).toBeInTheDocument();
+  });
+
+  /**
+   * `git_branch` is null for a directory that is not a repository *and* for a
+   * detached HEAD. Naming a branch in either would be a small lie, so the row
+   * carries one fewer thing instead.
+   */
+  it("says nothing at all when there is no branch", () => {
+    actions({ git_branch: null });
+    expect(screen.queryByTitle(/on branch/)).toBeNull();
+  });
+
+  /** A held pane names *its* branch, not the selected session's. */
+  it("follows the pane's own session when the pane is held", () => {
+    useStore.setState({
+      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), paneHold: { agent: "s2" } } } },
+      selected: "s1",
+      sessions: {
+        s1: session("s1", { git_branch: "main" }),
+        s2: session("s2", { git_branch: "the-held-one" }),
+      },
+    });
+    render(
+      <PaneActions
+        activePanel={{ id: "agent" } as never}
+        containerApi={{ getPanel: () => undefined } as never}
+        api={{} as never}
+        group={{} as never}
+        panels={[]}
+        isGroupActive
+      />,
+    );
+    expect(screen.getByText("the-held-one")).toBeInTheDocument();
+    expect(screen.queryByText("main")).toBeNull();
   });
 });
 
