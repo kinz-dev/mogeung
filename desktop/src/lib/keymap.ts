@@ -17,7 +17,8 @@ import type { DockviewApi } from "dockview";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
 import { exportText } from "@/lib/tauri";
-import { focusPane, movePane, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
+import { focusPane, movePane, parseFilePaneId, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
+import { closeFile } from "@/lib/explorer";
 import { nudgeAppZoom } from "@/lib/zoom";
 import { visibleQueue } from "@/lib/queue";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
@@ -105,6 +106,37 @@ export const ACTIONS: Action[] = [
       const open = selected ? explorer[selected]?.open : undefined;
       const last = open?.[open.length - 1];
       if (selected && last) showFilePane(selected, last.path, last.rev);
+    },
+  },
+
+  {
+    id: "file.close",
+    label: "Close the file you are reading",
+    group: "Panes",
+    /**
+     * `Ctrl+F4`, asked for 2026-08-07 — the chord that closes a document in
+     * every Windows application and in most Linux desktops. Spelled
+     * `Control+F4` rather than `$mod+F4` on purpose: `$mod` is Meta on macOS,
+     * and `Cmd+F4` is not that platform's close-a-document key either. Someone
+     * on a Mac is better served rebinding this to `Cmd+w` than being given a
+     * chord neither platform uses.
+     *
+     * **Only a file pane**, which is why this reads the active panel rather
+     * than closing whatever is forward. `PaneTab` has the same rule and the
+     * same reason: every other pane in the centre is permanent, because a pane
+     * you can lose is a pane you have to rediscover — and an Agent pane's close
+     * is a *detach*, which is not what anyone presses a close-the-document
+     * chord for. With an agent forward this does nothing at all.
+     *
+     * It closes the *file*, not just the pane: `closeFile` drops the tab from
+     * the session's explorer state as well, so `Alt+C` does not then raise a
+     * file you have just closed.
+     */
+    keys: ["Control+F4"],
+    run: (dock) => {
+      const id = dock?.activePanel?.id;
+      const ref = id ? parseFilePaneId(id) : null;
+      if (ref) closeFile(ref.session, ref.path, ref.rev);
     },
   },
 
