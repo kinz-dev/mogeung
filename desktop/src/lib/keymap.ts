@@ -15,7 +15,8 @@ import { useEffect, type RefObject } from "react";
 import { tinykeys } from "tinykeys";
 import type { DockviewApi } from "dockview";
 import { togglePaneHold, useStore } from "@/store";
-import type { DockTool, RailTool } from "@/store/prefs";
+import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
+import { exportText } from "@/lib/tauri";
 import { focusPane, movePane, resetLayout, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
@@ -162,6 +163,31 @@ export const ACTIONS: Action[] = [
     // haunted by a key you pressed for an unrelated reason.
     run: () => {
       if (keyboardIsHeld()) releaseKeyboard();
+    },
+  },
+  {
+    id: "prefs.export",
+    label: "Export your labels, tags and pins to a file",
+    group: "Windows",
+    /**
+     * The other half of [ADR-0023](../../../docs/decisions/0023-judgements-stay-in-the-client.md).
+     *
+     * That ADR kept your judgements in the client and named what it was
+     * accepting: they live in a webview's `localStorage`, so clearing it loses
+     * every label, tag and pin silently, with nothing to restore from.
+     *
+     * `Alt+Shift+E` rather than a prime chord, because this is run twice a year
+     * — it has a binding at all only because every action here must
+     * (`rebind.test.ts` asserts it), and the palette is how it will actually be
+     * found.
+     */
+    keys: ["Alt+Shift+e"],
+    run: () => {
+      const { prefs, pushError } = useStore.getState();
+      const now = new Date();
+      void exportText(exportFilename(now), JSON.stringify(exportPayload(prefs, now), null, 2))
+        .then((path) => useStore.getState().pushNotice(`preferences written to ${path}`))
+        .catch((e) => pushError(`could not export preferences: ${String(e)}`));
     },
   },
   {

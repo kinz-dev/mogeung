@@ -258,6 +258,17 @@ const emptySearch = (): SearchPanelState => ({
 export interface Notice {
   id: number;
   text: string;
+  /**
+   * Whether this is something that went **wrong**.
+   *
+   * There was one channel until 2026-08-07 and it was styled as an alert, so
+   * the only way to tell you a thing had *worked* was to say it in red. Both
+   * places that wanted to — the export saying where it wrote, the bell
+   * explaining which process announces — went without rather than lie about
+   * severity, which is how a window ends up with no way to answer "did that
+   * do anything?".
+   */
+  kind: "error" | "info";
   /** Epoch ms — a toast shows while it is young, the log keeps it after. */
   at: number;
   seen: boolean;
@@ -373,6 +384,8 @@ export interface AppState {
   setScoped: (patch: Partial<ScopedPrefs>) => void;
   zoomPane: (pane: string, factor: number) => void;
   pushError: (msg: string) => void;
+  /** Something happened and it was fine. See `Notice.kind`. */
+  pushNotice: (msg: string, kind?: Notice["kind"]) => void;
   markNoticesSeen: () => void;
   clearNotices: () => void;
   explorerOf: (id: SessionId) => ExplorerState;
@@ -535,12 +548,13 @@ export const useStore = create<AppState>((set, get) => ({
     set({ prefs: next });
   },
 
-  pushError: (text) =>
+  pushError: (text) => get().pushNotice(text, "error"),
+  pushNotice: (text, kind = "info") =>
     set((s) => ({
       // Capped, because a daemon that fails in a loop must not grow the log
       // without bound — and the fiftieth copy of one message tells you nothing
       // the first did not.
-      notices: [...s.notices, { id: ++noticeSeq, text, at: Date.now(), seen: false }].slice(-50),
+      notices: [...s.notices, { id: ++noticeSeq, text, kind, at: Date.now(), seen: false }].slice(-50),
     })),
   markNoticesSeen: () =>
     set((s) => ({ notices: s.notices.map((n) => (n.seen ? n : { ...n, seen: true })) })),

@@ -12,8 +12,9 @@
  */
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Trash2, X } from "lucide-react";
+import { AlertTriangle, Info, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
+import { cn } from "@/lib/cn";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, Empty } from "@/ui/primitives";
 import { stamp } from "@/lib/format";
@@ -47,9 +48,20 @@ export function Toasts() {
       {live.map((n) => (
         <div
           key={n.id}
-          className="pointer-events-auto flex items-start gap-2 rounded-md border border-[var(--red)] bg-[var(--bg-raised)] px-2 py-1.5 shadow-[var(--elev-2)]"
+          // Severity is the border and the glyph, not the words. A success
+          // reported in red teaches you to read red as "look at this" rather
+          // than as "something is wrong", and then a real failure has nothing
+          // left to say with.
+          className={cn(
+            "pointer-events-auto flex items-start gap-2 rounded-md border bg-[var(--bg-raised)] px-2 py-1.5 shadow-[var(--elev-2)]",
+            n.kind === "error" ? "border-[var(--red)]" : "border-[var(--border)]",
+          )}
         >
-          <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--red)]" />
+          {n.kind === "error" ? (
+            <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--red)]" />
+          ) : (
+            <Info size={12} className="mt-0.5 shrink-0 text-[var(--dim)]" />
+          )}
           <span className="min-w-0 flex-1 text-xs text-[var(--text)]">{n.text}</span>
           <button
             type="button"

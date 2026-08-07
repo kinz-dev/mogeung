@@ -227,6 +227,43 @@ export function loadPrefs(): Prefs {
   }
 }
 
+/**
+ * Everything you have told this window, as one file you can keep.
+ * [ADR-0023](../../../docs/decisions/0023-judgements-stay-in-the-client.md).
+ *
+ * That ADR settled *where* your judgements live — here, in the client — and
+ * named the exposure it accepts in the same breath: a label is text you wrote,
+ * living in a webview's `localStorage`, with no export and no backup. Clearing
+ * that storage loses every label, tag and pin on the machine, silently and
+ * with nothing to restore from.
+ *
+ * This is the cheap half of the answer. It does not move ownership and does not
+ * need a new capability — the shell's save path already exists for `R-B43`'s
+ * transcript export — and it turns a total silent loss into a file you chose
+ * where to put.
+ *
+ * **The whole preferences object, not just the judgements.** Picking out
+ * labels, tags and pins would produce a backup that restores some of your
+ * settings and quietly not others, which is a worse promise than either whole
+ * answer. `kind` and `version` are here so an importer — which does not exist
+ * yet, and is the other half — can refuse a file that is not this.
+ */
+export interface PrefsExport {
+  kind: "mogeung.prefs";
+  version: 1;
+  exported: string;
+  prefs: Prefs;
+}
+
+export function exportPayload(prefs: Prefs, now: Date): PrefsExport {
+  return { kind: "mogeung.prefs", version: 1, exported: now.toISOString(), prefs };
+}
+
+/** `mogeung-preferences-2026-08-07.json` — sorts by date in a downloads folder. */
+export function exportFilename(now: Date): string {
+  return `mogeung-preferences-${now.toISOString().slice(0, 10)}.json`;
+}
+
 export function savePrefs(p: Prefs): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(p));

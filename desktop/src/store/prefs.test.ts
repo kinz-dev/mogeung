@@ -14,6 +14,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   defaultPrefs,
   emptyScoped,
+  exportFilename,
+  exportPayload,
   loadPrefs,
   migrateSuccession,
   savePrefs,
@@ -148,5 +150,52 @@ describe("succession after /clear", () => {
     const scoped = scopedWith({ labels: { a: "mine" }, pinned: ["a"] });
     const sessions = [fact("a", true, 3, 100), fact("b", true, 3, 200)];
     expect(migrateSuccession(scoped, sessions)).toBeNull();
+  });
+});
+
+/**
+ * A backup for the things you wrote. `ADR-0023`.
+ *
+ * That ADR kept the judgements in the client and named what it accepted: they
+ * live in a webview's `localStorage`, so clearing it loses every label, tag and
+ * pin silently. This is the cheap half of the answer, and the property worth
+ * pinning is that the file is *complete* — a backup that restores some settings
+ * and quietly not others is a worse promise than either whole answer.
+ */
+describe("exporting your preferences", () => {
+  const when = new Date("2026-08-07T09:30:00.000Z");
+
+  it("carries the whole preferences object, judgements included", () => {
+    const prefs = defaultPrefs();
+    prefs.scoped = {
+      "machine-a": { ...emptyScoped(), labels: { s1: "the migration" }, tags: { s1: "red" }, pinned: ["s1"] },
+    };
+    const payload = exportPayload(prefs, when);
+
+    expect(payload.prefs.scoped["machine-a"].labels.s1).toBe("the migration");
+    expect(payload.prefs.scoped["machine-a"].tags.s1).toBe("red");
+    expect(payload.prefs.scoped["machine-a"].pinned).toEqual(["s1"]);
+    // ...and the rest of the object, not a hand-picked subset.
+    expect(payload.prefs.theme).toBe(prefs.theme);
+    expect(payload.prefs.keymap).toEqual(prefs.keymap);
+  });
+
+  /** So an importer — which does not exist yet — can refuse a file that is not this. */
+  it("says what it is and which shape it is in", () => {
+    const payload = exportPayload(defaultPrefs(), when);
+    expect(payload.kind).toBe("mogeung.prefs");
+    expect(payload.version).toBe(1);
+    expect(payload.exported).toBe("2026-08-07T09:30:00.000Z");
+  });
+
+  it("round-trips through JSON, which is how it will actually travel", () => {
+    const prefs = defaultPrefs();
+    prefs.scoped = { m: { ...emptyScoped(), labels: { s: "a label" } } };
+    const back = JSON.parse(JSON.stringify(exportPayload(prefs, when)));
+    expect(back.prefs.scoped.m.labels.s).toBe("a label");
+  });
+
+  it("names the file by the day, so a folder of them sorts", () => {
+    expect(exportFilename(when)).toBe("mogeung-preferences-2026-08-07.json");
   });
 });

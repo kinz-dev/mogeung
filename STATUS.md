@@ -11,7 +11,7 @@
 
 ## Assumptions
 
-Untested: **9** · At risk: **4** · Supported: 16 · Refuted: 1
+Untested: **8** · At risk: **4** · Supported: 17 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
