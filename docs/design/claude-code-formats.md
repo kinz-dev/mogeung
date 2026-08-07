@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-06
+updated: 2026-08-07
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -68,10 +68,24 @@ anything else raises an alert. Counts below are from the author's corpus on
 | `queue-operation` | 190 | Ignored — queued follow-ups, before they become turns |
 | `pr-link` | 6 | Ignored |
 | `frame-link` | 2 | Ignored |
+| `bridge-session` | 47¹ | Ignored — the web/desktop bridge's bookkeeping: `bridgeSessionId`, `lastSequenceNum` |
 
-The last three were **found by the canary**. They existed in real transcripts
-throughout v0.2 and were swallowed by a catch-all arm; nothing recorded that
-they existed, so nobody could have known whether they mattered.
+¹ From a **later** sweep and not comparable with the column above: 2026-08-07,
+across the 60 newest transcripts of a corpus that had grown to 315.
+
+`queue-operation`, `pr-link` and `frame-link` were **found by the canary**. They
+existed in real transcripts throughout v0.2 and were swallowed by a catch-all
+arm; nothing recorded that they existed, so nobody could have known whether they
+mattered.
+
+**`bridge-session` was found by re-running the sweep by hand**, on 2026-08-07,
+and that difference is the lesson worth keeping. The canary only speaks from a
+*running* daemon, and it had not been up long enough to say anything — so a type
+that appeared some time after 2026-07-25 sat unclassified while every automated
+check in the repository stayed green. The classification is only as fresh as the
+last long-running daemon, and after a CLI upgrade that is worth checking by hand
+rather than waiting to be told. See [A4](../product/assumptions.md), which this
+is evidence *for* rather than against: the drift was findable within two weeks.
 
 Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
 `version`, `isSidechain`, `uuid`, `parentUuid`. Also seen: `effort`, `slug`,
