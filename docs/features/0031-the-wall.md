@@ -150,6 +150,14 @@ and a session sitting on a permission prompt is emitting nothing, so both
 numbers agree and only one of them says *waiting*. Only non-zero facts are
 drawn — a tile reading `0 turns · 0f +0 −0` reads as broken rather than quiet.
 
+**Set larger than the rest of the window, deliberately.** The wall inherited the
+dense 10px scale every list here uses and it was wrong for this one surface: a
+thing you read from across the room in the same type as a metadata column is a
+thing you lean into. The reason chip, the session name and the tail all went up
+a step, and the grid drops to two columns until `2xl` so the larger type has
+somewhere to go. This is the one place in the window that overrides `Chip`'s
+shared size, and the override is commented where it happens.
+
 **The tag colour is the whole card.** It shipped as an 8px dot and that was the
 same mistake `R-B42` had already made and recorded about the queue's 4px bar:
 the entire point of a colour is knowing which session this is *without reading*,

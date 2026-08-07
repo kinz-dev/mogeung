@@ -15,7 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
 import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
 import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
-import { releaseKeyboard } from "@/lib/focus";
+import { isReleaseChord, releaseKeyboard } from "@/lib/focus";
 import { useStore } from "@/store";
 
 /**
@@ -157,20 +157,16 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
        * a terminal must receive `j` — and it is also why there has to be a way
        * out that is not the mouse.
        *
-       * Returning `false` keeps it off the pty. Any Escape-bearing chord
-       * reaches a TUI as `ESC ESC`, which Claude Code reads as a cancel, so a
-       * release that also sent the keystroke would interrupt the agent on its
-       * way past.
+       * Returning `false` keeps it off the pty. An Escape-bearing chord would
+       * otherwise reach a TUI as `ESC`, which Claude Code reads as a cancel, so
+       * a release that also forwarded the keystroke would interrupt the agent
+       * on its way past. Plain `Escape` is untouched and still cancels — that
+       * is the one that had to keep working.
        *
-       * **`Alt+Shift+Escape`, and the first attempt was wrong.** `Alt+Escape`
-       * shipped on 2026-08-07 and was reported the same day: GNOME binds it to
-       * *switch windows directly*, so on Ubuntu the release never reached the
-       * window at all — the desktop ate it first. A binding this window cannot
-       * see is worse than no binding, because it fails silently and looks like
-       * the feature is broken. The `Shift` takes it out of the desktop's way
-       * and into the `Alt+Shift+…` family the pane actions already use.
+       * The chord itself lives in `focus.ts`, deliberately: it is named in the
+       * keymap too, and two literals would drift silently.
        */
-      if (e.type === "keydown" && e.key === "Escape" && e.altKey && e.shiftKey) {
+      if (isReleaseChord(e)) {
         e.preventDefault();
         releaseKeyboard();
         return false;

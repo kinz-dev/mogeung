@@ -122,12 +122,12 @@ export function WallOverlay() {
       }}
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-1.5">
-        <span className="text-xs font-semibold tracking-wider text-[var(--text-strong)] uppercase">Wall</span>
-        <Dim className="text-2xs">
+        <span className="text-sm font-semibold tracking-wider text-[var(--text-strong)] uppercase">Wall</span>
+        <Dim className="text-xs">
           {tiles.length} session{tiles.length === 1 ? "" : "s"}
           {waiting > 0 ? ` · ${waiting} waiting` : ""}
         </Dim>
-        <Dim className="ml-auto text-2xs">
+        <Dim className="ml-auto text-xs">
           live sessions only · click a tile to go to it · Esc to leave · positions never move
         </Dim>
       </div>
@@ -137,7 +137,7 @@ export function WallOverlay() {
           nothing running
         </Empty>
       ) : (
-        <div className="grid min-h-0 flex-1 auto-rows-min gap-2 overflow-y-auto p-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid min-h-0 flex-1 auto-rows-min gap-2 overflow-y-auto p-3 sm:grid-cols-2 2xl:grid-cols-3">
           {tiles.map(({ q, s }) => {
             const wants = needsHuman(q.reason);
             const tint = tagBg(scoped.tags[s.id]);
@@ -186,27 +186,34 @@ export function WallOverlay() {
                 )}
               >
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate text-sm text-[var(--text-strong)]">
+                  <span className="truncate text-base text-[var(--text-strong)]">
                     {scoped.labels[s.id] ?? sessionLabel(s)}
                   </span>
-                  <Dim className="ml-auto shrink-0 text-2xs" title="since anything last happened">
+                  <Dim className="ml-auto shrink-0 text-xs" title="since anything last happened">
                     {fmtDur(secsSince(s.last_event_at))}
                   </Dim>
                 </div>
 
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <Chip color={wants ? ringFor(q.reason) : "var(--dim)"}>{reasonLabel(q.reason)}</Chip>
+                  {/* Overriding `Chip`'s shared `text-2xs`, and only here. The
+                      reason is the one thing on this surface you read from
+                      across the room — a wall whose verdict is set in the same
+                      type as its metadata is a wall you have to lean into,
+                      which is the opposite of what it is for. */}
+                  <Chip color={wants ? ringFor(q.reason) : "var(--dim)"} className="px-1.5 text-xs">
+                    {reasonLabel(q.reason)}
+                  </Chip>
                   {/* The one number that changes what you do next: a prompt
                       waited on for four minutes is a different situation from
                       the same prompt four seconds old, and nothing else on the
                       card distinguishes them. */}
                   {wants && stuckFor && (
-                    <Dim className="shrink-0 text-2xs" title="how long it has been in this state">
+                    <Dim className="shrink-0 text-xs" title="how long it has been in this state">
                       for {stuckFor}
                     </Dim>
                   )}
                   {s.git_branch && (
-                    <Dim className="ml-auto truncate text-2xs" title="branch">
+                    <Dim className="ml-auto truncate text-xs" title="branch">
                       {s.git_branch}
                     </Dim>
                   )}
@@ -215,7 +222,7 @@ export function WallOverlay() {
                 {/* What it has actually done — the half a queue row has no room
                     for. Only what is non-zero: a card of `0`s reads as broken
                     rather than as quiet. */}
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-2xs text-[var(--dim)]">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-[var(--dim)]">
                   <span title="the repository this session is working in" className="truncate">
                     {s.repo_root ? base(s.repo_root) : shortDir(s.cwd)}
                   </span>
@@ -250,7 +257,7 @@ export function WallOverlay() {
                 {/* The tail. Fixed height so a quiet tile and a busy one are the
                     same size — a grid whose cells resize with their content is
                     a grid that moves, which is the one thing this must not do. */}
-                <div className="h-12 min-w-0 overflow-hidden font-mono text-2xs leading-4 text-[var(--dim)]">
+                <div className="h-[3.75rem] min-w-0 overflow-hidden font-mono text-xs leading-5 text-[var(--dim)]">
                   {tileLines(s).map((line, i) => (
                     <div key={i} className="truncate">
                       {line}

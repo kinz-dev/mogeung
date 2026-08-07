@@ -12,7 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+import { RELEASE_CHORD, isReleaseChord, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 
 function build(html: string): void {
   document.body.innerHTML = html;
@@ -25,6 +25,48 @@ const held = (id: string) => {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+});
+
+/**
+ * The chord took three attempts, and both earlier ones failed the same way:
+ * claimed by the desktop, so the keystroke never arrived and nothing happened
+ * — the hardest failure to diagnose from inside the app, because nothing is
+ * wrong except that nothing happens.
+ *
+ * `Alt+Escape` is GNOME's *switch windows directly*; `Alt+Shift+Escape` is also
+ * claimed on Ubuntu, and three keys is a bad ask mid-flow anyway. These pin the
+ * two properties that matter now: the terminal and the keymap agree on one
+ * definition, and **plain `Escape` still reaches the agent**.
+ */
+describe("the release chord", () => {
+  const ev = (init: Partial<KeyboardEvent> & { key: string }) =>
+    ({ type: "keydown", altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...init }) as KeyboardEvent;
+
+  it("is one definition, shared by the keymap and the terminal", () => {
+    expect(RELEASE_CHORD).toBe("Shift+Escape");
+  });
+
+  it("matches Shift+Escape", () => {
+    expect(isReleaseChord(ev({ key: "Escape", shiftKey: true }))).toBe(true);
+  });
+
+  /**
+   * The one that had to keep working. `Escape` is how you cancel a turn, and a
+   * release that swallowed it would break the agent to fix the window.
+   */
+  it("leaves plain Escape alone", () => {
+    expect(isReleaseChord(ev({ key: "Escape" }))).toBe(false);
+  });
+
+  /** The two bindings the desktop took. Neither may quietly still work. */
+  it("is not the chords Ubuntu claimed", () => {
+    expect(isReleaseChord(ev({ key: "Escape", altKey: true }))).toBe(false);
+    expect(isReleaseChord(ev({ key: "Escape", altKey: true, shiftKey: true }))).toBe(false);
+  });
+
+  it("ignores keyup, so a release fires once", () => {
+    expect(isReleaseChord(ev({ key: "Escape", shiftKey: true, type: "keyup" } as never))).toBe(false);
+  });
 });
 
 describe("who is holding the keyboard", () => {

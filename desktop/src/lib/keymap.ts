@@ -18,7 +18,7 @@ import { togglePaneHold, useStore } from "@/store";
 import type { DockTool, RailTool } from "@/store/prefs";
 import { focusPane, resetLayout, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
-import { keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+import { RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 
 /** The id the Attention list carries, so `Alt+1` has something to focus. */
 export const QUEUE_LIST_ID = "queue-list";
@@ -131,15 +131,11 @@ export const ACTIONS: Action[] = [
      * discoverable in the palette and the keymap window, and what makes it work
      * from Monaco and from a filter box too.
      *
-     * **`Alt+Escape` was the first choice and it was wrong**: GNOME binds it to
-     * *switch windows directly*, so on Ubuntu the desktop ate the keystroke and
-     * the release never reached the window — a binding that fails silently and
-     * reads as a broken feature. `Alt+Shift+Escape` is unclaimed on GNOME and
-     * on macOS, and it joins the `Alt+Shift+…` family `R-B49` started for
-     * things you do *to* a pane. Rebindable like everything else (`R-B12`), so
-     * a desktop that disagrees costs a preference rather than a patch.
+     * The chord took three attempts and both earlier ones failed the same way
+     * — claimed by the desktop, so the keystroke never arrived and nothing
+     * happened. `RELEASE_CHORD` in `focus.ts` records which and why.
      */
-    keys: ["Alt+Shift+Escape"],
+    keys: [RELEASE_CHORD],
     // Guarded, so this is a release rather than a blur. Without the test it
     // would take focus off the queue list or a filter box you were happily
     // using and hand it to nothing, which is a way of making the window feel

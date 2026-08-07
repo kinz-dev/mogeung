@@ -17,6 +17,40 @@
  */
 
 /**
+ * The chord, written down **once**. `R-B51`.
+ *
+ * It has to exist in two places — the keymap, so it is discoverable and
+ * rebindable, and inside xterm's own key handler, so it works when the terminal
+ * is winning and never reaches the pty. Two literals would drift, and the way
+ * they would drift is silent: the keymap entry would keep saying one thing in
+ * the shortcuts window while the terminal answered to another.
+ *
+ * **`Shift+Escape`, at the third attempt.** The two before it were both taken
+ * by the desktop rather than by us, which is the failure that is hardest to
+ * diagnose from inside the app — the keystroke never arrives, so nothing is
+ * wrong except that nothing happens:
+ *
+ * - `Alt+Escape` — GNOME's *switch windows directly*.
+ * - `Alt+Shift+Escape` — also claimed on Ubuntu, and three keys for something
+ *   pressed mid-flow is a bad trade even where it is free.
+ *
+ * `Shift+Escape` is two keys under one hand, unbound in GNOME and on macOS, and
+ * not something a TUI asks for — plain `Escape` still reaches Claude Code
+ * untouched, which is the one that had to keep working. Chrome binds it to its
+ * task manager, and that is not a hazard here: this window is a WebKitGTK
+ * webview on Linux and WKWebView on macOS, neither of which has one.
+ *
+ * Rebindable like every other action (`R-B12`), so a desktop that disagrees
+ * costs a preference rather than a patch.
+ */
+export const RELEASE_CHORD = "Shift+Escape";
+
+/** Does this event *mean* the release chord? The predicate xterm asks. */
+export function isReleaseChord(e: KeyboardEvent): boolean {
+  return e.type === "keydown" && e.key === "Escape" && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
+}
+
+/**
  * Park the keyboard somewhere neutral inside the current pane.
  *
  * **Neutral, not somewhere useful.** Throwing focus at the Attention queue was
