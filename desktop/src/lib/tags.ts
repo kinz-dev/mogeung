@@ -50,8 +50,12 @@ export const TAGS: readonly Tag[] = [
  * The colour for a stored tag id, or `null` for none.
  *
  * An id this build does not know reads as no tag rather than as an error: these
- * live in the preferences file, which is hand-editable and machine-scoped, and
- * one unknown value must not cost the row its rendering.
+ * live in the client's machine-scoped preferences, which an older or newer
+ * build may have written, and one unknown value must not cost the row its
+ * rendering. (It said "hand-editable file" until 2026-08-07 — true of the
+ * retired egui client, never of this one, which keeps a `localStorage` blob.
+ * The conclusion outlived the premise; see
+ * [ADR-0023](../../../docs/decisions/0023-judgements-stay-in-the-client.md).)
  */
 export function tagColor(id: string | undefined): string | null {
   if (!id) return null;
@@ -62,7 +66,7 @@ export function tagColor(id: string | undefined): string | null {
  * The row surface for a stored tag id, or `null` for none.
  *
  * Unknown ids degrade exactly as `tagColor` does, and for the same reason: the
- * value comes from a hand-editable preferences file, and one it does not
+ * value comes from stored preferences this build did not write, and one it does not
  * recognise must cost the row its tint and nothing else.
  */
 export function tagBg(id: string | undefined): string | null {
@@ -79,7 +83,7 @@ export function tagLabel(id: string | undefined): string | null {
  * Where a tag id sits in the order. Untagged, and unknown, sort last.
  *
  * Unknown reads as untagged for the third time in this file and for the same
- * reason — the value comes from a hand-editable preferences file, and one this
+ * reason — the value comes from stored preferences this build did not write, and one this
  * build does not recognise must not sort a session somewhere nobody can
  * predict.
  */
