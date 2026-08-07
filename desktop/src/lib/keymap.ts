@@ -18,6 +18,7 @@ import { togglePaneHold, useStore } from "@/store";
 import type { DockTool, RailTool } from "@/store/prefs";
 import { focusPane, resetLayout, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
+import { keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 
 /** The id the Attention list carries, so `Alt+1` has something to focus. */
 export const QUEUE_LIST_ID = "queue-list";
@@ -110,6 +111,33 @@ export const ACTIONS: Action[] = [
       // the active panel — the same thing the focus ring draws.
       const id = dock?.activePanel?.id;
       if (id) togglePaneHold(id);
+    },
+  },
+  {
+    id: "focus.release",
+    label: "Give the keyboard back to the window",
+    group: "Navigation",
+    /**
+     * `Alt+Escape`, and it is the only binding here that exists because of the
+     * rule rather than in spite of it. A chord already fires from a focused
+     * pane; a **bare** key does not, correctly — `focusOwns` gives those to
+     * whatever has focus, which is what lets an agent receive `j`. This is the
+     * way back out, so that rule can stay as strict as it should be.
+     *
+     * The terminal catches this chord itself, before xterm forwards anything,
+     * because `Alt+Escape` reaches a TUI as `ESC ESC` — Claude Code reads that
+     * as a cancel, and a release that also interrupted the agent would be a
+     * worse bug than the one it fixes. This entry is what makes it discoverable
+     * in the palette and the keymap window, and what makes it work from Monaco
+     * and from a filter box too.
+     */
+    keys: ["Alt+Escape"],
+    // Guarded, so this is a release rather than a blur. Without the test it
+    // would take focus off the queue list or a filter box you were happily
+    // using and hand it to nothing, which is a way of making the window feel
+    // haunted by a key you pressed for an unrelated reason.
+    run: () => {
+      if (keyboardIsHeld()) releaseKeyboard();
     },
   },
   {

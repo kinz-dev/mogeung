@@ -51,6 +51,7 @@ assumption rather than a bet on an open one.
       using the queue's own verdict rather than a second opinion
 - [x] Clicking a tile goes to that session and leaves
 - [x] Sessions hidden from the queue are hidden here
+- [x] Only sessions that are still running get a tile
 - [x] `Esc` leaves without changing the selection
 
 ### Explicitly out of scope
@@ -128,6 +129,17 @@ thing *lives* — the tile tree for views of a session, the edge panels for tool
 that outlive the selection. The wall does not live anywhere: it cannot be
 arranged, cannot sit beside anything, and holds no state but a boolean. A third
 docking idea would have needed the rule; an overlay on a key does not.
+
+**Live only, decided on the first look at it.** The wall shipped showing
+everything the queue held, which was the wrong default and took one viewing to
+find out. The queue carries dead sessions deliberately — an ended session can
+still be `needs_review` and still want you — but a *tile* earns its square by
+being something that might change while you are watching, and a grid where most
+squares are inert is a grid you stop scanning. Reading the queue's own `live`
+scope instead was the alternative and lost on a rule this surface has to obey:
+the wall would then mean different things depending on a filter set somewhere
+else, which is exactly the kind of "why is this empty" that a glanceable thing
+must never have.
 
 **Still unproven, and this is the honest part.** Every other row this week could
 be judged by whether it works. This one can only be judged by whether it

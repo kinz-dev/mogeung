@@ -1,0 +1,97 @@
+/**
+ * Getting the keyboard back. `R-B51`.
+ *
+ * The window's rule is that a **chord** always fires and a **bare** key belongs
+ * to whatever has focus — which is why an agent can receive `j`, and why once
+ * you click into a terminal there was no keyboard way out. Reported 2026-08-07,
+ * with the observation that the capture itself is correct and what was missing
+ * is a release.
+ *
+ * The subtle half is that this must be a *release* rather than a blur: pressing
+ * it while the queue has focus should do nothing at all.
+ */
+
+import { beforeEach, describe, expect, it } from "vitest";
+import { keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+
+function build(html: string): void {
+  document.body.innerHTML = html;
+}
+
+const held = (id: string) => {
+  document.getElementById(id)?.focus();
+  return keyboardIsHeld();
+};
+
+beforeEach(() => {
+  document.body.innerHTML = "";
+});
+
+describe("who is holding the keyboard", () => {
+  it("says a terminal is", () => {
+    build(`<div class="xterm"><textarea id="t"></textarea></div>`);
+    expect(held("t")).toBe(true);
+  });
+
+  it("says an editor is", () => {
+    build(`<div class="monaco-editor"><textarea id="m"></textarea></div>`);
+    expect(held("m")).toBe(true);
+  });
+
+  it("says a text box is", () => {
+    build(`<input id="i" />`);
+    expect(held("i")).toBe(true);
+  });
+
+  /**
+   * The queue list is a focusable `div`, and it must **not** count — bare keys
+   * are how it is driven, and they already work there.
+   */
+  it("says an ordinary focusable element is not", () => {
+    build(`<div id="q" tabindex="-1"></div>`);
+    expect(held("q")).toBe(false);
+  });
+
+  it("says nothing is, when nothing has focus", () => {
+    build(`<div></div>`);
+    expect(keyboardIsHeld()).toBe(false);
+  });
+});
+
+describe("releasing it", () => {
+  /**
+   * The host is an **ancestor** of the terminal, which is the whole trick:
+   * `focusOwns` asks `closest(".xterm")`, and focus parked on an ancestor is
+   * outside the terminal by that test — so every bare binding starts working
+   * again without the window having to special-case anything.
+   */
+  it("parks focus on the pane, outside the terminal", () => {
+    build(`
+      <div id="host" tabindex="-1" data-focus-host>
+        <div class="xterm"><textarea id="t"></textarea></div>
+      </div>
+    `);
+    document.getElementById("t")?.focus();
+    expect(keyboardIsHeld()).toBe(true);
+
+    releaseKeyboard();
+
+    expect(document.activeElement?.id).toBe("host");
+    expect(keyboardIsHeld()).toBe(false);
+  });
+
+  /** No host to land on is still a release — a blur alone fixes bare keys. */
+  it("falls back to letting go entirely", () => {
+    build(`<div class="xterm"><textarea id="t"></textarea></div>`);
+    document.getElementById("t")?.focus();
+
+    releaseKeyboard();
+
+    expect(keyboardIsHeld()).toBe(false);
+  });
+
+  it("does nothing when nothing has focus", () => {
+    build(`<div></div>`);
+    expect(() => releaseKeyboard()).not.toThrow();
+  });
+});

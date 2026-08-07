@@ -76,6 +76,17 @@ export function WallOverlay() {
   const tiles = useMemo(() => {
     return queue
       .filter((q) => sessions[q.session_id])
+      // **Live only**, asked for 2026-08-07 after the first look at it. The
+      // queue's own scopes include dead sessions on purpose — an ended session
+      // can still be `needs_review` and still wants you — but a *wall* of them
+      // is the opposite of what this is for. A tile earns its square by being
+      // something that might change while you are looking at it; a finished
+      // session never will, and a grid where most squares are inert is a grid
+      // you stop scanning. Reading the queue's `live` scope instead was the
+      // alternative and lost: the wall would then mean different things
+      // depending on a filter set somewhere else, which is exactly the kind of
+      // "why is this empty" that a glanceable surface must not have.
+      .filter((q) => sessions[q.session_id].alive)
       .filter((q) => !scoped.hidden.includes(q.session_id))
       .map((q) => ({ q, s: sessions[q.session_id] }))
       .sort((a, b) => a.s.id.localeCompare(b.s.id));
@@ -117,13 +128,13 @@ export function WallOverlay() {
           {waiting > 0 ? ` · ${waiting} waiting` : ""}
         </Dim>
         <Dim className="ml-auto text-2xs">
-          click a tile to go to it · Esc to leave · positions never move
+          live sessions only · click a tile to go to it · Esc to leave · positions never move
         </Dim>
       </div>
 
       {tiles.length === 0 ? (
-        <Empty hint="the wall shows what the queue holds — nothing is hidden from one and shown on the other">
-          nothing to show
+        <Empty hint="the wall shows sessions that are still running — a finished one is in the queue, where it can be read rather than watched">
+          nothing running
         </Empty>
       ) : (
         <div className="grid min-h-0 flex-1 auto-rows-min gap-2 overflow-y-auto p-3 sm:grid-cols-2 lg:grid-cols-3">

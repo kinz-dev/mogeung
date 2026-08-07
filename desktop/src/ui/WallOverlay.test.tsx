@@ -88,7 +88,26 @@ describe("the wall", () => {
 
   it("says so rather than showing an empty grid", () => {
     board({ queue: [], sessions: [] });
-    expect(screen.getByText("nothing to show")).toBeInTheDocument();
+    expect(screen.getByText("nothing running")).toBeInTheDocument();
+  });
+
+  /**
+   * Live only, asked for after the first look at it. A tile earns its square by
+   * being something that might change while you watch; a finished session never
+   * will, and a grid of inert squares is a grid you stop scanning.
+   */
+  it("shows only sessions that are still running", () => {
+    board({
+      queue: [item("a", "idle"), item("b", "needs_review")],
+      sessions: [session("a"), session("b", { alive: false })],
+    });
+    expect(screen.getByText(/1 session\b/)).toBeInTheDocument();
+    expect(screen.queryByText("session b")).toBeNull();
+  });
+
+  it("says nothing is running rather than nothing exists", () => {
+    board({ queue: [item("a", "needs_review")], sessions: [session("a", { alive: false })] });
+    expect(screen.getByText("nothing running")).toBeInTheDocument();
   });
 
   /** One list, one opinion. A session hidden from the queue is hidden here. */

@@ -15,6 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
 import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
 import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
+import { releaseKeyboard } from "@/lib/focus";
 import { useStore } from "@/store";
 
 /**
@@ -142,6 +143,27 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
         // the agent's prompt without anyone typing it.
         e.preventDefault();
         void ptyWrite(id, SHIFT_ENTER, "shift-enter").catch(() => {});
+        return false;
+      }
+      /**
+       * `Alt+Escape` hands the keyboard back to the window. `R-B51`.
+       *
+       * Caught **here**, inside xterm's own handler, rather than left to the
+       * keymap — because this is the one binding that has to work when the
+       * terminal is winning. Everything else in `ACTIONS` is a chord, and
+       * chords already fire from a focused pane (the keymap listens in
+       * capture); what does not work, correctly, is every **bare** key, because
+       * `focusOwns` gives those to whatever has focus. That is the right rule —
+       * a terminal must receive `j` — and it is also why there has to be a way
+       * out that is not the mouse.
+       *
+       * Returning `false` keeps it off the pty. `Alt+Escape` reaches a TUI as
+       * `ESC ESC`, which Claude Code reads as a cancel, so a release that also
+       * sent the keystroke would interrupt the agent on its way past.
+       */
+      if (e.type === "keydown" && e.key === "Escape" && e.altKey) {
+        e.preventDefault();
+        releaseKeyboard();
         return false;
       }
       // Copy and paste, which xterm implements neither of. See `clipboard.ts`
@@ -364,8 +386,21 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
     );
   }
 
+  // `tabIndex` and `data-focus-host`: where the keyboard lands when you let go
+  // of the terminal (`R-B51`). Focusable without joining the tab order, and an
+  // **ancestor** of the terminal rather than a sibling — which is the part that
+  // matters, because `focusOwns` asks `closest(".xterm")`, so focus parked here
+  // reads as outside the terminal and every bare binding starts working again.
+  // Somewhere neutral, deliberately: the alternative was throwing focus at the
+  // queue, which would silently rebind `j`/`k` to moving between sessions the
+  // moment you escaped a pane.
   return (
-    <div className="relative h-full min-h-0 bg-[var(--terminal-bg)]" style={undoCssZoom}>
+    <div
+      className="relative h-full min-h-0 bg-[var(--terminal-bg)] outline-none"
+      style={undoCssZoom}
+      tabIndex={-1}
+      data-focus-host
+    >
       {/* **The webview's own right-click menu is useless over a terminal.**
           xterm draws its selection itself rather than making a DOM one, so the
           browser has nothing to copy and offers a greyed-out `Copy` — reported
