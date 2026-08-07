@@ -31,17 +31,7 @@ export function focusPane(api: DockviewApi | null, id: string, title: string): v
   }
   // `component` is the *kind*, `id` is the identity, and since `R-B49` they are
   // no longer the same string: `agent:2` renders with the `agent` component.
-  //
-  // The Code pane is placed **beside** the active group rather than in it, and
-  // this is the choke point that has to know: `openFile` raises it from the
-  // tree, from `Ctrl+P`, from a diff row and from a search hit, and every one of
-  // those routes arrives here. Positioning it in `syncCodePane` alone looked
-  // right and did nothing, because by the time that effect ran the panel had
-  // already been added — as a tab inside the Agent's group, whose header is
-  // then hidden along with the Agent's.
-  const beside = id === "code" && api.activeGroup ? { referenceGroup: api.activeGroup, direction: "right" as const } : undefined;
-  api.addPanel({ id, component: paneKind(id), title, ...(beside ? { position: beside } : {}) });
-  if (id === "code") ensureCodeAlone(api);
+  api.addPanel({ id, component: paneKind(id), title });
 }
 
 /**
@@ -86,33 +76,76 @@ export function getDock(): DockviewApi | null {
 }
 
 /**
- * The Code pane alone in its group, with that group's tab bar hidden.
+ * One open file, one pane. `R-B53`.
  *
- * Asked for 2026-08-06, after the tab spent a day naming the file: the pane
- * carried **three** rows of naming — dockview's tab, its own file strip, and a
- * path row — for a surface whose entire job is showing you a file. The strip is
- * the one that earns its place, because it is the only one that lists more than
- * one file, so the other two go.
+ * The window ran **two** tab systems until 2026-08-07: dockview's, and the Code
+ * pane's own file strip with its own two-way split. Collapsing them into one
+ * means a file can sit beside an agent, above it, or in its own group — the
+ * arrangement `R-B49` gave agents, applied to files — and it deletes the strip,
+ * the `group`/`active`/`focus` machinery, and the hidden-header workaround that
+ * existed only because the Code pane had three rows of naming.
  *
- * **The cost is real and was accepted deliberately**: dockview's tab *is* the
- * drag handle, so a Code pane with no tab bar cannot be dragged, split off or
- * tabbed beside the Agent pane. `Alt+C` still opens it and `Alt+0` still puts
- * the layout back, which is what keeps this a hidden tab rather than a trap.
+ * **A file pane is bound to the session that opened it**, chosen deliberately
+ * on 2026-08-07 over "close and reopen on every selection change". A pane that
+ * emptied itself when you clicked another session would make reading one repo
+ * while an agent works in another impossible, which is the arrangement two
+ * agents at once exists to support. The cost is that panes accumulate and you
+ * close them yourself — which is why, unlike every other pane in the centre,
+ * these have a close button.
  *
- * Alone in its own group is not a nicety either — a hidden header hides the
- * header of whatever *else* is in that group, so a Code pane sharing with the
- * Agent would take the Agent's tab down with it.
+ * The id carries session, revision and path because the pane needs all three to
+ * render and dockview gives it nothing else. That makes the id **unfit for the
+ * saved layout**, which is handled where layouts are loaded: `file:` panels are
+ * stripped on restore. Nothing is lost — `explorer` is not persisted either, so
+ * a restart has no open files to restore in the first place.
  */
-export function ensureCodeAlone(api: DockviewApi | null): void {
-  const panel = api?.getPanel("code");
-  if (!api || !panel) return;
-  if (panel.group.panels.length > 1) {
-    // A layout saved before this change can have them tabbed together, and
-    // there is no longer a gesture that would separate them by hand.
-    const group = api.addGroup({ referenceGroup: panel.group, direction: "right" });
-    panel.api.moveTo({ group });
+const FILE_PREFIX = "file:";
+
+export function filePaneId(session: string, path: string, rev: string | null): string {
+  return `${FILE_PREFIX}${session}:${rev ?? ""}:${path}`;
+}
+
+/** The three fields back out of an id, or `null` if it is not a file pane. */
+export function parseFilePaneId(id: string): { session: string; path: string; rev: string | null } | null {
+  if (!id.startsWith(FILE_PREFIX)) return null;
+  const rest = id.slice(FILE_PREFIX.length);
+  const a = rest.indexOf(":");
+  if (a < 0) return null;
+  const b = rest.indexOf(":", a + 1);
+  if (b < 0) return null;
+  // The path is whatever is left, colons and all — split from the left exactly
+  // twice, because a session id and a sha cannot contain one and a path can.
+  return { session: rest.slice(0, a), rev: rest.slice(a + 1, b) || null, path: rest.slice(b + 1) };
+}
+
+export function showFilePane(session: string, path: string, rev: string | null): void {
+  if (!dock) return;
+  const id = filePaneId(session, path, rev);
+  const existing = dock.getPanel(id);
+  if (existing) {
+    existing.api.setActive();
+    return;
   }
-  panel.group.header.hidden = true;
+  // Beside the active group rather than inside it only when the active group is
+  // an **agent**: a second file joins the files, which is the arrangement
+  // anyone opening two of them expects.
+  const active = dock.activeGroup;
+  const activeIsFile = active?.activePanel && parseFilePaneId(active.activePanel.id) !== null;
+  dock.addPanel({
+    id,
+    component: "file",
+    title: path,
+    ...(active && !activeIsFile ? { position: { referenceGroup: active, direction: "right" as const } } : {}),
+  });
+}
+
+export function closeFilePane(session: string, path: string, rev: string | null): void {
+  dock?.getPanel(filePaneId(session, path, rev))?.api.close();
+}
+
+/** Every file pane currently open, for callers reconciling with the store. */
+export function filePanes(api: DockviewApi | null): string[] {
+  return (api?.panels ?? []).map((p) => p.id).filter((id) => id.startsWith(FILE_PREFIX));
 }
 
 /**

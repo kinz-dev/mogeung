@@ -318,9 +318,12 @@ The window docks things two ways, and which one a thing uses is a decision
 rather than a habit —
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
 
-**Panes** are views of a session. Two are left in the centre — **Agent** and
-**Code** — since `R-B45` moved Changes and Transcript down to join Git, Insight
-and Debt in the bottom dock, and Info under the queue. They live in the dockview
+**Panes** are views of a session. Two *kinds* are left in the centre — **Agent**
+and **file** — since `R-B45` moved Changes and Transcript down to join Git,
+Insight and Debt in the bottom dock, and Info under the queue. A file is a pane
+per open file since `R-B53`, which collapsed the Code pane's own tab strip and
+two-way split into dockview's: the window docked things twice until then, and
+the inner system was the weaker one. They live in the dockview
 tree, are draggable and splittable, and their arrangement is serialised into the
 client's own storage.
 

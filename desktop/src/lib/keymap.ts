@@ -17,7 +17,7 @@ import type { DockviewApi } from "dockview";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
 import { exportText } from "@/lib/tauri";
-import { focusPane, movePane, resetLayout, splitAgent } from "@/lib/panes";
+import { focusPane, movePane, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 import type { Direction } from "@/lib/spatial";
@@ -86,7 +86,26 @@ export const ACTIONS: Action[] = [
   dockTool("changes", "Changes", ["Alt+2"]),
   dockTool("transcript", "Transcript", ["Alt+3"]),
   pane("agent", "Agent", ["Alt+a"]),
-  pane("code", "Code", ["Alt+c"]),
+  {
+    id: "pane.code",
+    label: "Focus the newest open file",
+    group: "Panes",
+    /**
+     * `Alt+C` outlived the Code pane. `R-B53`.
+     *
+     * There is no Code pane to show any more — a file is a pane of its own —
+     * but the binding is trained, and a key that silently stops working is
+     * worse than one that has been repointed. It now raises the most recently
+     * opened file, which is what "show me the code" meant in practice.
+     */
+    keys: ["Alt+c"],
+    run: () => {
+      const { selected, explorer } = useStore.getState();
+      const open = selected ? explorer[selected]?.open : undefined;
+      const last = open?.[open.length - 1];
+      if (selected && last) showFilePane(selected, last.path, last.rev);
+    },
+  },
 
   // Two agents at once. `R-B49`.
   //

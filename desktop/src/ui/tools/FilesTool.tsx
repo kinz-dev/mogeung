@@ -87,7 +87,11 @@ export function FilesTool() {
     return st.treePaths.filter((p) => match.test(p)).slice(0, HIT_CAP);
   }, [match, st?.treePaths]);
 
-  const activePath = st && st.active[st.focus] !== null ? st.open[st.active[st.focus]!]?.path : null;
+  // Since `R-B53` every open file is its own pane, so "the active one" is
+  // dockview's answer rather than this tool's. The tree highlights **every**
+  // open file instead, which is more useful anyway: it says what you have out,
+  // not which tab happens to be forward.
+  const openPaths = st ? st.open.map((t) => t.path) : [];
 
   if (!id || !session) {
     return (
@@ -153,7 +157,7 @@ export function FilesTool() {
                   onDoubleClick={() => openFile(id, p, { pin: true })}
                   className={cn(
                     "flex cursor-default items-center gap-1 whitespace-nowrap py-px pr-3 pl-2 text-sm hover:bg-[var(--bg-faint)]",
-                    activePath === p && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                    openPaths.includes(p) && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
                   )}
                 >
                   <FileIcon name={basename(p)} className="shrink-0" />
@@ -198,7 +202,7 @@ export function FilesTool() {
                 }}
                 className={cn(
                   "flex cursor-default items-center gap-1 whitespace-nowrap py-px pr-3 text-sm hover:bg-[var(--bg-faint)]",
-                  activePath === r.path && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                  openPaths.includes(r.path) && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
                 )}
                 style={{ paddingLeft: 6 + r.depth * 12 }}
               >

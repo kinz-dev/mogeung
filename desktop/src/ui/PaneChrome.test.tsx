@@ -12,7 +12,8 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { PaneScope } from "@/lib/paneScope";
 import { usePaneTitle } from "@/ui/PaneChrome";
 import { AgentPane } from "@/panes/AgentPane";
-import { emptyExplorer, useStore } from "@/store";
+import { useStore } from "@/store";
+import { filePaneId } from "@/lib/panes";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
 import type { Session } from "@/wire/types";
 
@@ -97,44 +98,37 @@ describe("the Agent tab", () => {
 });
 
 /**
- * Asked for straight after the Agent tab landed: *"can we do that to the Code
- * panel as well?"* — and it is the same argument, so it gets the same answer.
- * `Code` identifies the pane only while there is one of it.
+ * A file pane names its file, and needs nothing to do it. `R-B53`.
+ *
+ * The Code tab used to look this up in the store — *the focused half of the
+ * internal split's active tab* — because one pane showed many files. One pane
+ * is one file now, so the id already carries the answer and the tab cannot be
+ * wrong about which file it is over.
  */
-describe("the Code tab", () => {
-  it("names the file, not the pane", () => {
-    useStore.setState({
-      explorer: {
-        s1: { ...emptyExplorer(), open: [{ path: "src/main.rs" }] as never, active: [0, null], focus: 0 },
-      },
-    });
-    render(<Title id="code" />);
+describe("a file tab", () => {
+  it("names the file from its own id, with no store lookup at all", () => {
+    useStore.setState({ explorer: {} });
+    render(<Title id={filePaneId("s1", "src/main.rs", null)} />);
     expect(screen.getByTestId("title")).toHaveTextContent("main.rs");
   });
 
-  /**
-   * The pane splits internally, and a tab naming the file in the half you are
-   * *not* looking at is worse than one that says nothing.
-   */
-  it("names the file in the focused half of a split", () => {
-    useStore.setState({
-      explorer: {
-        s1: {
-          ...emptyExplorer(),
-          open: [{ path: "src/main.rs" }, { path: "src/lib.rs" }] as never,
-          active: [0, 1],
-          focus: 1,
-        },
-      },
+  it("keeps naming its own file while another session is selected", () => {
+    render(<Title id={filePaneId("s1", "src/main.rs", null)} />);
+    act(() => {
+      useStore.setState({ selected: "s2" });
     });
-    render(<Title id="code" />);
-    expect(screen.getByTestId("title")).toHaveTextContent("lib.rs");
+    expect(screen.getByTestId("title")).toHaveTextContent("main.rs");
   });
 
-  it("falls back to the pane's name with nothing open", () => {
-    useStore.setState({ explorer: {} });
-    render(<Title id="code" />);
-    expect(screen.getByTestId("title")).toHaveTextContent("Code");
+  it("tells a revision apart from the worktree twin of the same path", () => {
+    render(<Title id={filePaneId("s1", "src/main.rs", "abc1234")} />);
+    expect(screen.getByTestId("title")).toHaveTextContent("main.rs");
+  });
+
+  /** A path with a colon in it must not be cut short by the id's separators. */
+  it("survives a path that contains a colon", () => {
+    render(<Title id={filePaneId("s1", "weird:name.rs", null)} />);
+    expect(screen.getByTestId("title")).toHaveTextContent("weird:name.rs");
   });
 });
 

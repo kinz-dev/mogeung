@@ -46,12 +46,12 @@ import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
-import { CodePane } from "@/panes/CodePane";
+import { FilePane } from "@/panes/FilePane";
 import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
-import { dropOrphanHolds, ensureCodeAlone, setDock } from "@/lib/panes";
+import { dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
@@ -88,7 +88,10 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // below, and a stored zoom from before this rule must not still apply.
   agent: pane("agent", AgentPane, { scale: false }),
   // Monaco takes the factor as a font size instead — see `ZoomPane`'s `scale`.
-  code: pane("code", CodePane, { scale: false }),
+  // One component for every open file: which file a pane shows comes from its
+  // own panel id (`R-B53`), so the registry needs one entry rather than one
+  // per file.
+  file: pane("file", FilePane, { scale: false }),
 };
 
 const LAYOUT_KEY = "mogeung.layout";
@@ -112,48 +115,23 @@ const PANES: readonly (readonly [string, string])[] = [
  * A layout saved before the move still names them, and dockview would restore
  * tabs whose component no longer exists — so they are stripped on load. Without
  * this the first launch after upgrading shows four dead tabs.
+ *
+ * `code` joined them on 2026-08-07 for the same reason and a different cause:
+ * `R-B53` did not move it, it dissolved it into one pane per file. Any layout
+ * written before that still names it.
  */
-const MOVED_TO_DOCK = ["git", "info", "debt", "insight", "changes", "transcript"];
+const MOVED_TO_DOCK = ["git", "info", "debt", "insight", "changes", "transcript", "code"];
 
 /**
- * How many files the selected session has open. `0` means the Code pane has
- * nothing to show and should not be a tab.
- */
-function openFileCount(state: ReturnType<typeof useStore.getState>): number {
-  const id = state.selected;
-  return id ? (state.explorer[id]?.open.length ?? 0) : 0;
-}
-
-/**
- * The Code pane exists **only while a file is open**. Asked for 2026-08-06.
+ * Panels naming a file, stripped on load. `R-B53`.
  *
- * It is the one pane with nothing to say by itself: the others always describe
- * the selected session, where an empty Code tab is a promise of a file that
- * is not there. So it is added when a file is opened — from the tree, from
- * `Ctrl+P`, from a diff row, all of which go through `openFile` — and closed
- * again when the last tab goes.
- *
- * `Alt+C` still opens it deliberately, and that escape hatch is intentional:
- * this hides a pane with nothing in it, it does not forbid one.
+ * A `file:` id carries a session and a path, so restoring one would put a tab
+ * on screen for a file in a session that may not exist any more. Nothing is
+ * lost by dropping them: `explorer` is store state rather than preferences, so
+ * a fresh window has no open files to restore in the first place.
  */
-function syncCodePane(api: DockviewApi | null, open: number): void {
-  if (!api) return;
-  const existing = api.getPanel("code");
-  if (open > 0 && !existing) {
-    // Beside the active group rather than inside it. With no tab bar of its own
-    // (`ensureCodeAlone`) a Code pane added *into* the Agent's group would be
-    // an invisible tab covering the agent, reachable only by closing the file.
-    const active = api.activeGroup;
-    api.addPanel({
-      id: "code",
-      component: "code",
-      title: "Code",
-      ...(active ? { position: { referenceGroup: active, direction: "right" as const } } : {}),
-    });
-    ensureCodeAlone(api);
-  } else if (open === 0 && existing) {
-    existing.api.close();
-  }
+function stripFilePanes(api: DockviewApi): void {
+  for (const id of filePanes(api)) api.getPanel(id)?.api.close();
 }
 
 /**
@@ -179,7 +157,6 @@ export default function App() {
   const theme = useStore((s) => s.prefs.theme);
   // The count, not the array: a selector returning the tabs would re-run this
   // on every keystroke that touches explorer state.
-  const openFiles = useStore(openFileCount);
   const dockRef = useRef<DockviewApi | null>(null);
   useKeymap(dockRef);
   useNotifications();
@@ -203,8 +180,6 @@ export default function App() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
-
-  useEffect(() => syncCodePane(dockRef.current, openFiles), [openFiles]);
 
   const onReady = (event: DockviewReadyEvent) => {
     dockRef.current = event.api;
@@ -238,11 +213,7 @@ export default function App() {
     // The effect above has already run once by now, against a `dockRef` that
     // was still null — so a saved layout naming `code` with no file open would
     // otherwise restore an empty tab and keep it.
-    syncCodePane(event.api, openFileCount(useStore.getState()));
-    // A restored layout can have the Code pane tabbed with the Agent, or with a
-    // header from before it had none. Both are fixed here rather than left to
-    // the next `syncCodePane`, which only runs when the open-file count moves.
-    ensureCodeAlone(event.api);
+    stripFilePanes(event.api);
 
     // A hold belongs to a pane, so a hold whose pane is not in the restored
     // layout belongs to nothing. Left behind it is worse than untidy: split

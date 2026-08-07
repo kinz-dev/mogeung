@@ -18,10 +18,11 @@ import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "doc
 import { Anchor, Columns2, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
-import { closeAgentPane, nextAgentSlot, splitAgent } from "@/lib/panes";
+import { closeAgentPane, nextAgentSlot, parseFilePaneId, splitAgent } from "@/lib/panes";
 import { sessionLabel } from "@/wire/types";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { hostLabel, reachFor } from "@/lib/tmux";
+import { closeFile } from "@/lib/explorer";
 
 /**
  * What a pane's tab should read, whether it is held, and what to say on hover.
@@ -49,13 +50,12 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
   const id = held ?? selected;
   const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
   const label = useStore((s) => (id ? (s.scoped().labels[id] ?? null) : null));
-  const code = useCodeFile(kind === "code" ? id : null);
-
-  if (kind === "code") {
+  const file = fileOf(paneId);
+  if (file) {
     return {
-      text: code ? code.name : "Code",
-      held: !!held,
-      hint: code ? `${code.path} — read-only` : "Code — read-only, always",
+      text: file.name,
+      held: false,
+      hint: `${file.path} — read-only, and bound to the session that opened it`,
     };
   }
   if (kind !== "agent") return { text: fallback, held: false, hint: fallback };
@@ -78,31 +78,18 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
 }
 
 /**
- * The file the Code pane is actually showing, by basename.
+ * A file pane's own file, from its id. `R-B53`.
  *
- * **The focused group's active tab**, not the first open file: the pane splits
- * internally (`R-B25`), and with two files side by side inside it the tab has
- * to name the one you are in or it is worse than saying `Code` — a label that
- * points at the wrong half is a label you learn to distrust.
- *
- * The basename alone. The row under the inner tab strip already carries the
- * full path, and a tab wide enough for `desktop/src/ui/PaneChrome.tsx` is a tab
- * that leaves no room for the pane beside it.
+ * No lookup into the store at all: the pane *is* the file, so the tab can name
+ * it without asking anything. The basename alone, because the row under the tab
+ * carries the path and a tab wide enough for `desktop/src/ui/PaneChrome.tsx`
+ * leaves no room for the pane beside it.
  */
-function useCodeFile(sessionId: string | null): { name: string; path: string } | null {
-  // Two primitive selectors rather than one returning an object: a selector
-  // that mints `{name, path}` is never equal to itself, which zustand reads as
-  // a change on every store tick — the identity trap `scoped()` documents, and
-  // this tab re-renders on every keystroke that touches explorer state.
-  const path = useStore((s) => {
-    const st = sessionId ? s.explorer[sessionId] : null;
-    if (!st) return null;
-    const index = st.active[st.focus];
-    return index === null ? null : (st.open[index]?.path ?? null);
-  });
-  if (!path) return null;
-  const cut = path.lastIndexOf("/");
-  return { name: cut === -1 ? path : path.slice(cut + 1), path };
+function fileOf(paneId: string): { name: string; path: string; session: string; rev: string | null } | null {
+  const ref = parseFilePaneId(paneId);
+  if (!ref) return null;
+  const cut = ref.path.lastIndexOf("/");
+  return { name: cut === -1 ? ref.path : ref.path.slice(cut + 1), path: ref.path, session: ref.session, rev: ref.rev };
 }
 
 /**
@@ -122,10 +109,32 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
   }, [props.api]);
 
   const { text, held, hint } = usePaneTitle(props.api.id, fallback);
+  const file = fileOf(props.api.id);
   return (
     <div className="dv-default-tab" title={hint}>
       {held && <Anchor className="mr-1 h-3 w-3 shrink-0 text-[var(--blue)]" aria-label="held" />}
       <span className="dv-default-tab-content">{text}</span>
+      {/*
+        **Only a file closes.** Every other pane in the centre is permanent —
+        a view you can lose is a view you have to rediscover, which is why
+        `is_tab_closable` was argued over back in feature 0006. A file is the
+        exception and always was: it is a document you are finished with, and
+        `R-B53` made that a real tab rather than a row in a strip.
+      */}
+      {file && (
+        <button
+          type="button"
+          title={`close ${file.name}`}
+          aria-label={`close ${file.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            closeFile(file.session, file.path, file.rev);
+          }}
+          className="ml-1 shrink-0 opacity-60 outline-none transition-opacity duration-[var(--dur-fast)] hover:opacity-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
     </div>
   );
 }

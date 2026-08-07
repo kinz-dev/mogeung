@@ -14,7 +14,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import type { DockviewApi } from "dockview";
-import { jumpToTurn, setDock, showPane } from "@/lib/panes";
+import { filePaneId, jumpToTurn, setDock, showPane } from "@/lib/panes";
 import { openFile } from "@/lib/explorer";
 import { useStore } from "@/store";
 
@@ -95,63 +95,28 @@ describe("jumping across panes", () => {
     expect(addPanel).not.toHaveBeenCalled();
   });
 
-  it("raises the Code pane when a file is opened from anywhere", () => {
-    const { api, setActive } = fakeDock(["code"]);
+  it("opens a pane for a file opened from anywhere", () => {
+    const { api, addPanel } = fakeDock([]);
     setDock(api);
 
     openFile("session-a", "src/main.rs", { pin: true });
 
-    expect(setActive).toHaveBeenCalled();
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: filePaneId("session-a", "src/main.rs", null), component: "file" }),
+    );
   });
 });
 
 /**
- * The Code pane is the one pane with nothing to say by itself. Every other pane
- * describes the selected session; an empty Code tab is a promise of a file that
- * is not there.
+ * One open file, one pane. `R-B53`.
+ *
+ * These replace the Code pane's lifecycle tests rather than dropping them: the
+ * question *"does opening a file put something on screen, and does closing it
+ * take it away"* is the same one, asked of a design where the answer is a pane
+ * per file instead of one pane that comes and goes.
  */
-describe("the Code pane comes and goes with its files", () => {
-  /**
-   * The tab is asserted by **file name** since `R-B49` gave it one. That is a
-   * stronger claim than the old `getByText("Code")`, not a looser one: it says
-   * the pane arrived *and* named what is in it, where the word `Code` would
-   * appear just as happily over the wrong file.
-   *
-   * `getAllByText` because the name is genuinely in two places, and both are
-   * right: the pane's own strip lists *every* open file, and the tab names the
-   * one you are in. They coincide only while a single file is open, which is
-   * exactly the case this test sets up.
-   */
-  it("is not a tab when nothing is open, and is one the moment a file opens", async () => {
-    const { default: App } = await import("@/App");
-    const { render, act } = await import("@testing-library/react");
-    useStore.setState({ selected: "s1", explorer: {} });
-    render(<App />);
-
-    expect(screen.queryByText("main.rs")).toBeNull();
-
-    await act(async () => {
-      openFile("s1", "src/main.rs", { pin: true });
-    });
-    expect(screen.getAllByText("main.rs").length).toBeGreaterThan(0);
-
-    // ...and goes again when the last file is closed.
-    await act(async () => {
-      useStore.getState().patchExplorer("s1", { open: [] });
-    });
-    expect(screen.queryByText("main.rs")).toBeNull();
-  });
-
-  /**
-   * Three rows of naming for a pane whose job is showing you one file — the
-   * dockview tab, the file strip, the path row. Two of them went on 2026-08-06.
-   *
-   * The header is hidden per **group**, which is why the pane has to be alone
-   * in one: hiding it in a shared group would take the Agent's tab down too.
-   * That is the assertion worth having, because the symptom would be a missing
-   * Agent tab and the cause would be a line about the Code pane.
-   */
-  it("sits alone in a group with no tab bar", async () => {
+describe("a file gets a pane of its own", () => {
+  it("opens a pane named after the file", async () => {
     const { default: App } = await import("@/App");
     const { getDock } = await import("@/lib/panes");
     const { render, act } = await import("@testing-library/react");
@@ -163,27 +128,52 @@ describe("the Code pane comes and goes with its files", () => {
       openFile("s1", "src/main.rs", { pin: true });
     });
 
-    const code = getDock()?.getPanel("code");
-    expect(code).toBeDefined();
-    expect(code?.group.panels).toHaveLength(1);
-    expect(code?.group.header.hidden).toBe(true);
-    // ...and the Agent, which shares no group with it, keeps its own.
-    const agent = getDock()?.getPanel("agent");
-    expect(agent?.group.header.hidden).toBe(false);
+    expect(getDock()?.getPanel(filePaneId("s1", "src/main.rs", null))).toBeDefined();
+    expect(screen.getAllByText("main.rs").length).toBeGreaterThan(0);
+  });
+
+  it("gives two files two panes rather than two tabs in one", async () => {
+    const { default: App } = await import("@/App");
+    const { getDock, filePanes } = await import("@/lib/panes");
+    const { render, act } = await import("@testing-library/react");
+    localStorage.removeItem("mogeung.layout");
+    useStore.setState({ selected: "s1", explorer: {} });
+    render(<App />);
+
+    await act(async () => {
+      openFile("s1", "src/main.rs", { pin: true });
+      openFile("s1", "src/lib.rs", { pin: true });
+    });
+
+    expect(filePanes(getDock())).toHaveLength(2);
   });
 
   /**
-   * The path row is gone, not merely shorter. Its full path was the only thing
-   * on it that was not a button, and every tab already carries that on hover.
-   *
-   * Only the path is asserted. Counting how many times `main.rs` appears would
-   * *look* like a check that the outer tab is gone and would not be one: a
-   * hidden group header is `display: none`, so the tab is still in the document
-   * and every text query still finds it. Whether it is *shown* is the sibling
-   * test's job, against the header flag rather than against the DOM.
+   * The IntelliJ rule, kept: a file merely browsed past reuses the one unpinned
+   * preview. What is new is that the *pane* has to go with it, or the tab would
+   * outlive the file it was showing.
    */
-  it("no longer draws the file's path as a row of its own", async () => {
+  it("reuses the preview pane for an unpinned file", async () => {
     const { default: App } = await import("@/App");
+    const { getDock, filePanes } = await import("@/lib/panes");
+    const { render, act } = await import("@testing-library/react");
+    localStorage.removeItem("mogeung.layout");
+    useStore.setState({ selected: "s1", explorer: {} });
+    render(<App />);
+
+    await act(async () => {
+      openFile("s1", "a.rs");
+      openFile("s1", "b.rs");
+    });
+
+    expect(filePanes(getDock())).toHaveLength(1);
+    expect(getDock()?.getPanel(filePaneId("s1", "b.rs", null))).toBeDefined();
+  });
+
+  it("takes the pane away when the file is closed", async () => {
+    const { default: App } = await import("@/App");
+    const { getDock, filePanes } = await import("@/lib/panes");
+    const { closeFile } = await import("@/lib/explorer");
     const { render, act } = await import("@testing-library/react");
     localStorage.removeItem("mogeung.layout");
     useStore.setState({ selected: "s1", explorer: {} });
@@ -192,8 +182,32 @@ describe("the Code pane comes and goes with its files", () => {
     await act(async () => {
       openFile("s1", "src/main.rs", { pin: true });
     });
+    await act(async () => {
+      closeFile("s1", "src/main.rs", null);
+    });
 
-    expect(screen.getAllByText("main.rs").length).toBeGreaterThan(0);
-    expect(screen.queryByText("src/main.rs")).toBeNull();
+    expect(filePanes(getDock())).toHaveLength(0);
+    expect(useStore.getState().explorer.s1.open).toHaveLength(0);
+  });
+
+  /**
+   * The reason a `file:` id must never survive a restart: it names a session
+   * and a path, and `explorer` is store state rather than preferences, so there
+   * is nothing to restore it against.
+   */
+  it("is stripped from a restored layout rather than resurrected", async () => {
+    const { default: App } = await import("@/App");
+    const { getDock, filePanes } = await import("@/lib/panes");
+    const { render } = await import("@testing-library/react");
+    localStorage.setItem(
+      "mogeung.layout",
+      JSON.stringify({
+        grid: { root: { type: "branch", data: [] }, width: 100, height: 100, orientation: "HORIZONTAL" },
+        panels: {},
+      }),
+    );
+    useStore.setState({ selected: "s1", explorer: {} });
+    render(<App />);
+    expect(filePanes(getDock())).toHaveLength(0);
   });
 });

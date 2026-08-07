@@ -10,7 +10,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { CodePane } from "@/panes/CodePane";
+import { FilePane } from "@/panes/FilePane";
+import { PaneScope } from "@/lib/paneScope";
+import { filePaneId, setDock } from "@/lib/panes";
 import { useStore, emptyExplorer } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
 
@@ -40,12 +42,20 @@ function openMarkdown(body = DOC) {
     explorer: {
       s1: {
         ...emptyExplorer(),
-        open: [{ path: "notes.md", rev: null, pinned: true, group: 0, content: body, truncated: false, gotoLine: null }] as never,
-        active: [0, null],
-        focus: 0,
+        open: [{ path: "notes.md", rev: null, pinned: true, content: body, truncated: false, gotoLine: null }] as never,
       },
     },
   });
+}
+
+/** One file, in its own pane — `R-B53`'s shape. */
+function renderPane() {
+  setDock({ getPanel: () => undefined, panels: [], addPanel: () => {} } as never);
+  return render(
+    <PaneScope id={filePaneId("s1", "notes.md", null)}>
+      <FilePane />
+    </PaneScope>,
+  );
 }
 
 const openFind = () => {
@@ -62,14 +72,14 @@ beforeEach(() => {
 
 describe("finding in the rendered preview", () => {
   it("opens on Ctrl+F from inside the preview", async () => {
-    render(<CodePane />);
+    renderPane();
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
     await act(async () => openFind());
     expect(screen.getByLabelText("find in the preview")).toBeInTheDocument();
   });
 
   it("matches words the source spells with syntax around them", async () => {
-    render(<CodePane />);
+    renderPane();
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
     await act(async () => openFind());
     fireEvent.change(screen.getByLabelText("find in the preview"), { target: { value: "egress" } });
@@ -81,7 +91,7 @@ describe("finding in the rendered preview", () => {
 
   /** A phrase only exists once the cell walls are gone. */
   it("matches across a table row the source splits with pipes", async () => {
-    render(<CodePane />);
+    renderPane();
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
     await act(async () => openFind());
     fireEvent.change(screen.getByLabelText("find in the preview"), { target: { value: "prod wide" } });
@@ -89,7 +99,7 @@ describe("finding in the rendered preview", () => {
   });
 
   it("says nothing matched rather than pointing at a line", async () => {
-    render(<CodePane />);
+    renderPane();
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
     await act(async () => openFind());
     fireEvent.change(screen.getByLabelText("find in the preview"), { target: { value: "zzz" } });
@@ -103,7 +113,7 @@ describe("finding in the rendered preview", () => {
    * diff row already use.
    */
   it("leaves the preview and points the editor at the line", async () => {
-    render(<CodePane />);
+    renderPane();
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
     await act(async () => openFind());
     fireEvent.change(screen.getByLabelText("find in the preview"), { target: { value: "egress" } });
@@ -122,7 +132,7 @@ describe("finding in the rendered preview", () => {
    * preview that is usually off.
    */
   it("does not open the preview find while the source is showing", async () => {
-    render(<CodePane />);
+    renderPane();
     fireEvent.keyDown(window, { key: "f", ctrlKey: true });
     expect(screen.queryByLabelText("find in the preview")).toBeNull();
   });

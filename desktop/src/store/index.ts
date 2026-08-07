@@ -89,7 +89,6 @@ export interface FileTab {
   /** `null` is the worktree; a sha opens that revision, read-only twice over. */
   rev: string | null;
   pinned: boolean;
-  group: 0 | 1;
   content: string | null;
   truncated: boolean;
   gotoLine: number | null;
@@ -99,9 +98,14 @@ export interface ExplorerState {
   dirs: Record<string, DirEntry[]>;
   expanded: string[];
   pending: string[];
+  /**
+   * The files this session has open. `R-B53`.
+   *
+   * Which one is *forward*, and how they are arranged, is dockview's business
+   * now: every open file is a pane of its own. This list carries only what the
+   * tree cannot re-derive — the bodies, the pins, a pending `gotoLine`.
+   */
   open: FileTab[];
-  active: [number | null, number | null];
-  focus: 0 | 1;
   reveal: string | null;
   treePaths: string[] | null;
   treeTruncated: boolean;
@@ -115,8 +119,6 @@ export const emptyExplorer = (): ExplorerState => ({
   expanded: [],
   pending: [],
   open: [],
-  active: [null, null],
-  focus: 0,
   reveal: null,
   treePaths: null,
   treeTruncated: false,

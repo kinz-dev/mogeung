@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { fileFilter } from "@/lib/explorer";
+import { beforeEach, describe, expect, it } from "vitest";
+import { useStore } from "@/store";
+import { setDock } from "@/lib/panes";
+import { closeFile, fileFilter, openFile } from "@/lib/explorer";
 
 /**
  * The Files filter. Written against the two things that made the old one
@@ -57,5 +59,69 @@ describe("the files filter", () => {
 
   it("matches every file with a bare dot-star, which is the cap's job to survive", () => {
     expect(matching(".*")).toEqual(tree);
+  });
+});
+
+/**
+ * One open file, one pane. `R-B53`.
+ *
+ * The window ran two tab systems until 2026-08-07 — dockview's, and the Code
+ * pane's own strip with its own two-way split. These pin the state half of
+ * collapsing them: what `open` means now that it no longer carries a side or
+ * an active index.
+ */
+describe("opening files, one pane each", () => {
+  beforeEach(() => {
+    useStore.setState({ explorer: {} });
+    setDock({ getPanel: () => undefined, panels: [], addPanel: () => {} } as never);
+  });
+
+  it("keeps one entry per (path, revision)", () => {
+    openFile("s1", "a.rs", { pin: true });
+    openFile("s1", "a.rs", { pin: true });
+    expect(useStore.getState().explorer.s1.open).toHaveLength(1);
+
+    // The worktree twin of a path and a revision of it are different files.
+    openFile("s1", "a.rs", { pin: true, rev: "abc1234" });
+    expect(useStore.getState().explorer.s1.open).toHaveLength(2);
+  });
+
+  /** The IntelliJ rule, now one preview per session rather than per side. */
+  it("reuses the unpinned preview and keeps the pinned ones", () => {
+    openFile("s1", "pinned.rs", { pin: true });
+    openFile("s1", "browsed-a.rs");
+    openFile("s1", "browsed-b.rs");
+
+    const paths = useStore.getState().explorer.s1.open.map((t) => t.path);
+    expect(paths).toEqual(["pinned.rs", "browsed-b.rs"]);
+  });
+
+  it("promotes a preview to pinned rather than opening it twice", () => {
+    openFile("s1", "a.rs");
+    openFile("s1", "a.rs", { pin: true });
+    const open = useStore.getState().explorer.s1.open;
+    expect(open).toHaveLength(1);
+    expect(open[0].pinned).toBe(true);
+  });
+
+  it("carries a pending gotoLine onto a file already open", () => {
+    openFile("s1", "a.rs", { pin: true });
+    openFile("s1", "a.rs", { line: 42 });
+    expect(useStore.getState().explorer.s1.open[0].gotoLine).toBe(42);
+  });
+
+  it("closes by identity, not by index", () => {
+    openFile("s1", "a.rs", { pin: true });
+    openFile("s1", "b.rs", { pin: true });
+    closeFile("s1", "a.rs", null);
+    expect(useStore.getState().explorer.s1.open.map((t) => t.path)).toEqual(["b.rs"]);
+  });
+
+  /** Each session keeps its own files — that is what "bound to its session" is. */
+  it("keeps one session's files out of another's", () => {
+    openFile("s1", "a.rs", { pin: true });
+    openFile("s2", "b.rs", { pin: true });
+    expect(useStore.getState().explorer.s1.open.map((t) => t.path)).toEqual(["a.rs"]);
+    expect(useStore.getState().explorer.s2.open.map((t) => t.path)).toEqual(["b.rs"]);
   });
 });

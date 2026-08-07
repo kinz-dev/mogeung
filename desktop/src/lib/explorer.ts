@@ -8,8 +8,8 @@
  * rather than a second copy of the worktree.
  */
 
-import { useStore, emptyExplorer, type ExplorerState, type FileTab } from "@/store";
-import { showPane } from "@/lib/panes";
+import { useStore, emptyExplorer, type FileTab } from "@/store";
+import { closeFilePane, showFilePane } from "@/lib/panes";
 import type { SessionId } from "@/wire/types";
 
 /**
@@ -31,12 +31,14 @@ export function explorerFetch(id: SessionId): void {
     for (const path of wants) send({ cmd: "list_dir", session_id: id, path });
   }
 
+  // **Every open file, not just the forward one.** `R-B53` gave each its own
+  // pane, so several can be on screen at once and "the active tab" is no longer
+  // a thing this module can name. Bodies are asked for once each and cached in
+  // the tab, so fetching for all of them costs one request per file opened
+  // rather than one per render.
   const wantBodies: string[] = [];
-  for (const group of [0, 1] as const) {
-    const i = st.active[group];
-    if (i === null) continue;
-    const tab = st.open[i];
-    if (!tab || tab.content !== null) continue;
+  for (const tab of st.open) {
+    if (tab.content !== null) continue;
     // Keyed by (path, rev): the worktree twin of a path must not swallow a
     // revision tab's request, nor the other way round.
     const key = tab.rev ? `${tab.rev}:${tab.path}` : tab.path;
@@ -59,12 +61,17 @@ export function toggleDir(id: SessionId, path: string): void {
 }
 
 /**
- * Open a file in the Code pane.
+ * Open a file in a pane of its own. `R-B53`.
  *
  * `pin` decides whether it stays: a file asked for **by name** — a search hit,
  * a diff row, go-to-file — is pinned, and a file merely browsed past reuses the
- * one unpinned preview tab per side. That is IntelliJ's rule, and it is what
- * stops a morning of clicking through a tree leaving forty tabs open.
+ * one unpinned preview pane. That is IntelliJ's rule, and it is what stops a
+ * morning of clicking through a tree leaving forty panes open.
+ *
+ * The preview is now *one per session* rather than one per side, because sides
+ * were the internal split and the split is dockview's now. Arranging two files
+ * side by side is dragging one of their tabs, the same gesture as everything
+ * else in the centre.
  */
 export function openFile(id: SessionId, path: string, opts: { pin?: boolean; line?: number; rev?: string | null } = {}): void {
   // First, so the pane exists and is forward before the tab arrives — the
@@ -72,20 +79,19 @@ export function openFile(id: SessionId, path: string, opts: { pin?: boolean; lin
   // caller of this is a promise to show a file: the diff row's button even
   // says "open this file in the Code pane". Opening one behind whatever tab
   // you are on keeps that promise in the state and breaks it on the screen.
-  showPane("code", "Code");
   const { explorer, patchExplorer } = useStore.getState();
   const st = explorer[id] ?? emptyExplorer();
   const rev = opts.rev ?? null;
-  const group = st.focus;
 
-  const existing = st.open.findIndex((t) => t.path === path && t.rev === rev && t.group === group);
+  const existing = st.open.findIndex((t) => t.path === path && t.rev === rev);
   if (existing >= 0) {
-    const open = st.open.map((t, i) =>
-      i === existing ? { ...t, pinned: t.pinned || !!opts.pin, gotoLine: opts.line ?? null } : t,
-    );
-    const active: ExplorerState["active"] = [...st.active];
-    active[group] = existing;
-    patchExplorer(id, { open, active, reveal: path });
+    patchExplorer(id, {
+      open: st.open.map((t, i) =>
+        i === existing ? { ...t, pinned: t.pinned || !!opts.pin, gotoLine: opts.line ?? null } : t,
+      ),
+      reveal: path,
+    });
+    showFilePane(id, path, rev);
     return;
   }
 
@@ -93,47 +99,38 @@ export function openFile(id: SessionId, path: string, opts: { pin?: boolean; lin
     path,
     rev,
     pinned: !!opts.pin,
-    group,
     content: null,
     truncated: false,
     gotoLine: opts.line ?? null,
   };
 
-  // Reuse this side's unpinned preview tab, if it has one.
-  const previewAt = st.open.findIndex((t) => t.group === group && !t.pinned);
+  // Reuse the unpinned preview pane, if there is one — and close its pane, or
+  // the tab would outlive the file it was showing.
+  const previewAt = st.open.findIndex((t) => !t.pinned);
   let open: FileTab[];
-  let index: number;
   if (!opts.pin && previewAt >= 0) {
+    const replaced = st.open[previewAt];
     open = st.open.map((t, i) => (i === previewAt ? tab : t));
-    index = previewAt;
+    closeFilePane(id, replaced.path, replaced.rev);
   } else {
     open = [...st.open, tab];
-    index = open.length - 1;
   }
-  const active: ExplorerState["active"] = [...st.active];
-  active[group] = index;
-  patchExplorer(id, { open, active, reveal: path });
+  patchExplorer(id, { open, reveal: path });
+  showFilePane(id, path, rev);
 }
 
-export function closeTab(id: SessionId, index: number): void {
+/**
+ * Forget a file, and take its pane with it.
+ *
+ * By `(path, rev)` rather than by index since `R-B53`: a pane knows which file
+ * it is showing and nothing else, and an index into a list it cannot see would
+ * be a stale number the moment anything else closed.
+ */
+export function closeFile(id: SessionId, path: string, rev: string | null): void {
   const { explorer, patchExplorer } = useStore.getState();
   const st = explorer[id] ?? emptyExplorer();
-  const open = st.open.filter((_, i) => i !== index);
-  const remap = (a: number | null): number | null => {
-    if (a === null) return null;
-    if (a === index) return null;
-    return a > index ? a - 1 : a;
-  };
-  const active: ExplorerState["active"] = [remap(st.active[0]), remap(st.active[1])];
-  // A side that lost its active tab falls back to any tab it still has,
-  // rather than going blank while holding files.
-  for (const g of [0, 1] as const) {
-    if (active[g] === null) {
-      const any = open.findIndex((t) => t.group === g);
-      active[g] = any >= 0 ? any : null;
-    }
-  }
-  patchExplorer(id, { open, active });
+  patchExplorer(id, { open: st.open.filter((t) => !(t.path === path && t.rev === rev)) });
+  closeFilePane(id, path, rev);
 }
 
 /** Every ancestor of a path, root first — what `reveal` has to expand. */

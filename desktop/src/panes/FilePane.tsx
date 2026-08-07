@@ -1,5 +1,6 @@
 /**
- * The session's worktree, read. `R-B24`, workbench behaviour by `R-B25`.
+ * One open file, read. `R-B24`, workbench behaviour by `R-B25`, one pane each
+ * since `R-B53`.
  *
  * **A viewer, and permanently so.** Pillar K puts an editor under "explicitly
  * not", and it is a property of the protocol rather than of this pane: the
@@ -10,18 +11,16 @@
  * editing is a step away.
  *
  * **No tree.** It lives in the rail (`R-B41`) so it can be read with any pane
- * forward. What is left here is the half that is genuinely about the file you
- * are reading.
+ * forward. **And no tab strip**: every open file is a pane of its own, so
+ * dockview's tabs *are* the file tabs and the internal two-way split it used to
+ * carry is dockview's splitting instead. What is left here is one file.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import {
-  Pin,
-  X,
   WrapText,
-  Columns2,
   ListTree,
   Eye,
   UserRound,
@@ -30,16 +29,16 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useStore } from "@/store";
+import { usePaneId } from "@/lib/paneScope";
+import { parseFilePaneId } from "@/lib/panes";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
-import { closeTab, explorerFetch, languageOf } from "@/lib/explorer";
-import { cn } from "@/lib/cn";
+import { explorerFetch, languageOf } from "@/lib/explorer";
 import { base } from "@/lib/format";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
 import { outline, symbolGlyph } from "@/lib/symbols";
 import { Input } from "@/ui/primitives";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { FileIcon } from "@/ui/FileIcon";
 import { renderedLines } from "@/lib/markdown";
 import { best } from "@/lib/search";
 
@@ -187,81 +186,16 @@ function MarkdownPreview({
 }
 
 /**
- * The group's one header row: its file tabs, and the controls for the file
- * that is forward.
+ * One file, in a pane of its own. `R-B53`.
  *
- * It was three rows until 2026-08-06 — dockview's tab, this strip, and a path
- * row with the buttons on it — for a pane whose whole job is showing you a
- * file. `R-B49` took the outer tab (the pane is alone in its group and the
- * group's header is hidden) and folded the path row in here. The full path
- * lives on each tab's tooltip, which is where it already was.
- *
- * `children` is the right-hand end. The controls stay in `Viewer` because they
- * are that component's state — `preview`, `blameOn`, the outline, the editor
- * ref the bookmark button needs — and lifting five pieces of state to move a
- * button two elements sideways is a worse trade than a slot.
+ * **The session comes from the pane, not from the selection.** That one line is
+ * the whole of "a file pane stays put": clicking another session in the queue
+ * changes `selected` and this keeps rendering what it was opened with, so a
+ * file from one repo can sit beside an agent working in another.
  */
-function TabStrip({ group, children }: { group: 0 | 1; children?: React.ReactNode }) {
-  const id = useStore((s) => s.selected);
-  const st = useStore((s) => (s.selected ? s.explorer[s.selected] : undefined));
-  const patchExplorer = useStore((s) => s.patchExplorer);
-  if (!id || !st) return null;
-
-  const tabs = st.open.map((t, i) => ({ t, i })).filter(({ t }) => t.group === group);
-  if (tabs.length === 0) return null;
-
-  return (
-    <div className="flex h-7 shrink-0 items-center border-b border-[var(--border)]">
-      <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
-      {tabs.map(({ t, i }) => (
-        <div
-          key={`${t.path}@${t.rev ?? ""}`}
-          onClick={() => {
-            const active = [...st.active] as [number | null, number | null];
-            active[group] = i;
-            patchExplorer(id, { active, focus: group });
-          }}
-          onDoubleClick={() => {
-            // Double click pins — the preview tab stops being reused.
-            patchExplorer(id, { open: st.open.map((x, j) => (j === i ? { ...x, pinned: true } : x)) });
-          }}
-          onAuxClick={(e) => {
-            if (e.button === 1) closeTab(id, i);
-          }}
-          title={t.rev ? `${t.path} @ ${t.rev}` : t.path}
-          className={cn(
-            "group flex h-full shrink-0 cursor-default items-center gap-1 border-r border-[var(--border)] px-2 text-xs",
-            st.active[group] === i
-              ? "bg-[var(--bg-panel)] text-[var(--text-strong)] shadow-[inset_0_2px_0_var(--blue)]"
-              : "text-[var(--dim)] hover:bg-[var(--bg-faint)]",
-            !t.pinned && "italic",
-          )}
-        >
-          {t.pinned && <Pin size={9} className="opacity-60" />}
-          <FileIcon name={base(t.path)} size={11} className="shrink-0" />
-          <span>{base(t.path)}</span>
-          {t.rev && <span className="text-2xs text-[var(--amber)]">@{t.rev.slice(0, 7)}</span>}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              closeTab(id, i);
-            }}
-            className="outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] opacity-0 group-hover:opacity-100 hover:text-[var(--text-strong)]"
-          >
-            <X size={10} />
-          </button>
-        </div>
-      ))}
-      </div>
-      {children && <div className="flex shrink-0 items-center gap-0.5 px-1">{children}</div>}
-    </div>
-  );
-}
-
-function Viewer({ group }: { group: 0 | 1 }) {
-  const id = useStore((s) => s.selected);
-  const st = useStore((s) => (s.selected ? s.explorer[s.selected] : undefined));
+function Viewer({ session, path, rev }: { session: string; path: string; rev: string | null }) {
+  const id = session;
+  const st = useStore((s) => s.explorer[session]);
   const theme = useStore((s) => s.prefs.theme);
   const wrapPaths = useStore((s) => s.scoped().editorWrap);
   const setScoped = useStore((s) => s.setScoped);
@@ -276,13 +210,13 @@ function Viewer({ group }: { group: 0 | 1 }) {
   const [preview, setPreview] = useState(false);
   const [blameOn, setBlameOn] = useState(false);
 
-  const index = st?.active[group] ?? null;
-  const tab = index !== null && st ? st.open[index] : null;
+  const index = st ? st.open.findIndex((t) => t.path === path && t.rev === rev) : -1;
+  const tab = index >= 0 && st ? st.open[index] : null;
 
   // Go to the line a search hit or a diff row asked for, once, when the body
   // is actually there. Doing it on every render would fight the scrollbar.
   useEffect(() => {
-    if (!tab?.gotoLine || !tab.content || !editorRef.current || !id || index === null || !st) return;
+    if (!tab?.gotoLine || !tab.content || !editorRef.current || !id || index < 0 || !st) return;
     editorRef.current.revealLineInCenter(tab.gotoLine);
     editorRef.current.setPosition({ lineNumber: tab.gotoLine, column: 1 });
     useStore
@@ -349,33 +283,16 @@ function Viewer({ group }: { group: 0 | 1 }) {
     decorations.current.set(next);
   }, [blameOn, blame, marks]);
 
-  // The strip renders on **every** path out of here, not only the loaded one.
-  // It used to be a sibling of this component, so a file still loading left its
-  // tabs on screen; folding it in here would have taken them away for exactly
-  // as long as the body was missing — which is the moment you are most likely
-  // to want to click a different one.
+  // A pane whose file is gone from the store — closed from the tree while its
+  // tab lingered a frame — says so rather than rendering an empty editor.
   if (!tab) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <TabStrip group={group} />
-        <div className="min-h-0 flex-1">
-          <Empty hint="Alt+4 for the worktree · Ctrl+P to open by name">
-            nothing open — read-only, always
-          </Empty>
-        </div>
-      </div>
+      <Empty hint="it was closed from somewhere else — this pane can go too">
+        {base(path)} is no longer open
+      </Empty>
     );
   }
-  if (tab.content === null) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <TabStrip group={group} />
-        <div className="min-h-0 flex-1">
-          <Empty>loading {base(tab.path)}…</Empty>
-        </div>
-      </div>
-    );
-  }
+  if (tab.content === null) return <Empty>loading {base(tab.path)}…</Empty>;
 
   const wrap = wrapPaths.includes(tab.path);
   const symbols = outline(tab.content, ext);
@@ -406,7 +323,12 @@ function Viewer({ group }: { group: 0 | 1 }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <TabStrip group={group}>
+      {/*
+        The controls row. With one file per pane the dockview tab already names
+        the file, so this carries only what you *do* to it — and `head only`,
+        which is a fact about the body rather than about the file.
+      */}
+      <div className="flex h-6 shrink-0 items-center gap-0.5 border-b border-[var(--border)] px-1.5">
         {tab.truncated && (
           <span className="shrink-0 text-2xs text-[var(--amber)]" title="the file went past the size cap">
             head only
@@ -460,7 +382,7 @@ function Viewer({ group }: { group: 0 | 1 }) {
           >
             <WrapText size={12} />
           </IconButton>
-      </TabStrip>
+      </div>
       <div className="flex min-h-0 flex-1">
       {/* Markdown is *read* here, not previewed beside its source: a viewer's
           job is the rendered thing, and a split would spend half a narrow pane
@@ -556,47 +478,21 @@ function Viewer({ group }: { group: 0 | 1 }) {
   );
 }
 
-export function CodePane() {
-  const id = useStore((s) => s.selected);
-  const st = useStore((s) => (s.selected ? s.explorer[s.selected] : undefined));
-  const patchExplorer = useStore((s) => s.patchExplorer);
+/**
+ * The pane dockview renders for a `file:` panel. `R-B53`.
+ *
+ * It reads *which* file out of its own panel id rather than being handed props,
+ * because that is the only thing dockview persists about a panel and the only
+ * thing that survives a drag into another group.
+ */
+export function FilePane() {
+  const paneId = usePaneId();
+  const ref = paneId ? parseFilePaneId(paneId) : null;
 
   useEffect(() => {
-    if (id) explorerFetch(id);
+    if (ref) explorerFetch(ref.session);
   });
 
-  if (!id) return <Empty>select a session</Empty>;
-
-  const split = !!st?.open.some((t) => t.group === 1);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Viewer group={0} />
-        </div>
-        {split && (
-          <div className="flex min-w-0 flex-1 flex-col border-l border-[var(--border)]">
-            <Viewer group={1} />
-          </div>
-        )}
-      </div>
-      {st && st.open.length > 0 && (
-        <div className="flex h-5 shrink-0 items-center gap-2 border-t border-[var(--border)] px-2">
-          <IconButton
-            title="send the active file to the other side"
-            onClick={() => {
-              const i = st.active[st.focus];
-              if (i === null) return;
-              const open = st.open.map((t, j) => (j === i ? { ...t, group: (t.group === 0 ? 1 : 0) as 0 | 1, pinned: true } : t));
-              patchExplorer(id, { open, active: [null, null] });
-            }}
-          >
-            <Columns2 size={11} />
-          </IconButton>
-          <Dim className="text-2xs">{st.open.length} open</Dim>
-        </div>
-      )}
-    </div>
-  );
+  if (!ref) return <Empty>no file</Empty>;
+  return <Viewer session={ref.session} path={ref.path} rev={ref.rev} />;
 }
