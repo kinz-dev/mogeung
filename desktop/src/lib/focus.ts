@@ -16,6 +16,8 @@
  * So: one binding whose whole job is to stop a pane owning the keyboard.
  */
 
+import type { Direction } from "@/lib/spatial";
+
 /**
  * The chord, written down **once**. `R-B51`.
  *
@@ -49,6 +51,41 @@ export const RELEASE_CHORD = "Shift+Escape";
 export function isReleaseChord(e: KeyboardEvent): boolean {
   return e.type === "keydown" && e.key === "Escape" && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
 }
+
+/**
+ * Moving between panes: `Alt+Shift+←↑↓→`. `R-B52`.
+ *
+ * In the `Alt+Shift+…` family the pane actions already use, and free on GNOME —
+ * which claims `Super+arrow` for tiling and `Ctrl+Alt+arrow` for workspaces,
+ * neither of which this is.
+ *
+ * **The terminal has to swallow these too**, and that is not the same reason
+ * the release chord is swallowed. An arrow key reaches a TUI as a real escape
+ * sequence, so a move that also forwarded it would scroll the agent's history
+ * or walk its menu on the way out — you would arrive at the next pane having
+ * quietly typed into the one you left. Same lesson as `ESC`, different
+ * mechanism, and the one that would have been found by using it rather than by
+ * reading it.
+ */
+const ARROWS: Record<string, Direction> = {
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+};
+
+export function paneMoveDirection(e: KeyboardEvent): Direction | null {
+  if (e.type !== "keydown" || !e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return null;
+  return ARROWS[e.key] ?? null;
+}
+
+/** The binding strings, so the keymap and this file cannot disagree. */
+export const PANE_MOVE_CHORDS: Record<Direction, string> = {
+  left: "Alt+Shift+ArrowLeft",
+  right: "Alt+Shift+ArrowRight",
+  up: "Alt+Shift+ArrowUp",
+  down: "Alt+Shift+ArrowDown",
+};
 
 /**
  * Park the keyboard somewhere neutral inside the current pane.

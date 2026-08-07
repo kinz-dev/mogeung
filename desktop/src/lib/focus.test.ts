@@ -12,7 +12,14 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { RELEASE_CHORD, isReleaseChord, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+import {
+  PANE_MOVE_CHORDS,
+  RELEASE_CHORD,
+  isReleaseChord,
+  keyboardIsHeld,
+  paneMoveDirection,
+  releaseKeyboard,
+} from "@/lib/focus";
 
 function build(html: string): void {
   document.body.innerHTML = html;
@@ -66,6 +73,50 @@ describe("the release chord", () => {
 
   it("ignores keyup, so a release fires once", () => {
     expect(isReleaseChord(ev({ key: "Escape", shiftKey: true, type: "keyup" } as never))).toBe(false);
+  });
+});
+
+/**
+ * The move chords, and the reason the terminal has to swallow them too.
+ *
+ * An arrow reaches a TUI as a real escape sequence, so a move that also
+ * forwarded it would walk the agent's menu on the way out — you would arrive at
+ * the next pane having quietly typed into the one you left. Different mechanism
+ * from the release chord, same lesson.
+ */
+describe("the pane-move chords", () => {
+  const ev = (init: Partial<KeyboardEvent> & { key: string }) =>
+    ({ type: "keydown", altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...init }) as KeyboardEvent;
+  const move = (key: string, mods: Partial<KeyboardEvent> = {}) =>
+    paneMoveDirection(ev({ key, altKey: true, shiftKey: true, ...mods }));
+
+  it("reads all four arrows", () => {
+    expect(move("ArrowLeft")).toBe("left");
+    expect(move("ArrowRight")).toBe("right");
+    expect(move("ArrowUp")).toBe("up");
+    expect(move("ArrowDown")).toBe("down");
+  });
+
+  /** A bare arrow is the agent's — scrolling its history, walking its menu. */
+  it("leaves a bare arrow to the agent", () => {
+    expect(paneMoveDirection(ev({ key: "ArrowLeft" }))).toBeNull();
+    expect(paneMoveDirection(ev({ key: "ArrowLeft", altKey: true }))).toBeNull();
+    expect(paneMoveDirection(ev({ key: "ArrowLeft", shiftKey: true }))).toBeNull();
+  });
+
+  /** GNOME's `Ctrl+Alt+arrow` switches workspaces; it is not ours to take. */
+  it("is not the workspace chord", () => {
+    expect(move("ArrowLeft", { ctrlKey: true })).toBeNull();
+    expect(move("ArrowLeft", { metaKey: true })).toBeNull();
+  });
+
+  it("keeps its binding strings where the keymap reads them", () => {
+    expect(PANE_MOVE_CHORDS.left).toBe("Alt+Shift+ArrowLeft");
+    expect(PANE_MOVE_CHORDS.down).toBe("Alt+Shift+ArrowDown");
+  });
+
+  it("ignores keyup, so one press is one move", () => {
+    expect(paneMoveDirection(ev({ key: "ArrowLeft", altKey: true, shiftKey: true, type: "keyup" } as never))).toBeNull();
   });
 });
 

@@ -15,7 +15,8 @@ import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
 import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
 import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
-import { isReleaseChord, releaseKeyboard } from "@/lib/focus";
+import { isReleaseChord, paneMoveDirection, releaseKeyboard } from "@/lib/focus";
+import { movePane } from "@/lib/panes";
 import { useStore } from "@/store";
 
 /**
@@ -169,6 +170,20 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
       if (isReleaseChord(e)) {
         e.preventDefault();
         releaseKeyboard();
+        return false;
+      }
+      /**
+       * Moving to the next pane, swallowed for a different reason. `R-B52`.
+       *
+       * An arrow key reaches a TUI as a real escape sequence, so leaving this
+       * to the window's own handler alone would move the focus *and* walk the
+       * agent's menu on the way out — arriving at the next pane having quietly
+       * typed into the one you left.
+       */
+      const dir = paneMoveDirection(e);
+      if (dir) {
+        e.preventDefault();
+        movePane(dir);
         return false;
       }
       // Copy and paste, which xterm implements neither of. See `clipboard.ts`

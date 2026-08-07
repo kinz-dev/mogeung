@@ -16,9 +16,10 @@ import { tinykeys } from "tinykeys";
 import type { DockviewApi } from "dockview";
 import { togglePaneHold, useStore } from "@/store";
 import type { DockTool, RailTool } from "@/store/prefs";
-import { focusPane, resetLayout, splitAgent } from "@/lib/panes";
+import { focusPane, movePane, resetLayout, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
-import { RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+import type { Direction } from "@/lib/spatial";
 
 /** The id the Attention list carries, so `Alt+1` has something to focus. */
 export const QUEUE_LIST_ID = "queue-list";
@@ -113,6 +114,25 @@ export const ACTIONS: Action[] = [
       if (id) togglePaneHold(id);
     },
   },
+  // Moving between panes, spatially. `R-B52`.
+  //
+  // Asked for 2026-08-07 with two agents up: *"move the focus to the left
+  // claude session on screen"*. The arrows are the obvious spelling and the
+  // `Alt+Shift+…` family is where the pane actions already live. GNOME takes
+  // `Super+arrow` for tiling and `Ctrl+Alt+arrow` for workspaces; neither of
+  // those is this.
+  //
+  // **The terminal swallows these**, and for a reason the release chord did not
+  // have: an arrow reaches a TUI as a real escape sequence, so a move that also
+  // forwarded it would walk the agent's menu on the way out — you would arrive
+  // at the next pane having typed into the one you left.
+  ...(["left", "right", "up", "down"] as Direction[]).map((dir) => ({
+    id: `pane.move.${dir}`,
+    label: `Focus the pane to the ${dir}`,
+    group: "Panes",
+    keys: [PANE_MOVE_CHORDS[dir]],
+    run: () => movePane(dir),
+  })),
   {
     id: "focus.release",
     label: "Give the keyboard back to the window",

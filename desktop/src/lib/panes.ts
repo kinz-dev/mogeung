@@ -1,6 +1,7 @@
 import type { DockviewApi } from "dockview";
 import { useStore } from "@/store";
 import { paneKind } from "@/lib/paneScope";
+import { pickNeighbour, type Box, type Direction } from "@/lib/spatial";
 import type { DockTool } from "@/store/prefs";
 
 /**
@@ -175,6 +176,47 @@ export function dropOrphanHolds(api: DockviewApi | null): void {
     else changed = true;
   }
   if (changed) setScoped({ paneHold: next });
+}
+
+/**
+ * Move to the pane that way. `R-B52`.
+ *
+ * The geometry is `spatial.ts`'s and is tested there; this is the part that
+ * needs dockview — turning groups into rectangles, and then *landing* in the
+ * one that wins.
+ *
+ * **Landing means the terminal, not the tab.** Activating the group alone would
+ * leave the keyboard where it was, so the next thing you typed would go to the
+ * pane you just left — the exact failure this exists to prevent, running the
+ * other way. Focus goes to the xterm input when the pane has one and to the
+ * `[data-focus-host]` otherwise, so moving between agents leaves you able to
+ * type at the one you arrived at. Chords keep working from there, so the next
+ * move is another keystroke rather than a mouse.
+ */
+export function movePane(dir: Direction): void {
+  const api = dock;
+  const active = api?.activeGroup;
+  if (!api || !active) return;
+
+  const boxes: Box[] = api.groups.map((g) => {
+    const r = g.element.getBoundingClientRect();
+    return { id: g.id, left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+  });
+
+  const nextId = pickNeighbour(boxes, active.id, dir);
+  const next = nextId ? api.groups.find((g) => g.id === nextId) : null;
+  if (!next) return;
+
+  next.api.setActive();
+  // After activation, and after the render it may cause: a group that was not
+  // showing cannot be focused into.
+  requestAnimationFrame(() => {
+    const el = next.element;
+    // xterm types through a hidden textarea; that is the thing that takes focus.
+    const term = el.querySelector<HTMLElement>(".xterm-helper-textarea");
+    const host = el.querySelector<HTMLElement>("[data-focus-host]");
+    (term ?? host ?? el).focus();
+  });
 }
 
 /**
