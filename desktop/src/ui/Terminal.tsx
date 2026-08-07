@@ -15,8 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
 import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
 import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
-import { isReleaseChord, paneMoveDirection, releaseKeyboard } from "@/lib/focus";
-import { movePane } from "@/lib/panes";
+
 import { useStore } from "@/store";
 
 /**
@@ -167,25 +166,29 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
        * The chord itself lives in `focus.ts`, deliberately: it is named in the
        * keymap too, and two literals would drift silently.
        */
-      if (isReleaseChord(e)) {
-        e.preventDefault();
-        releaseKeyboard();
-        return false;
-      }
       /**
-       * Moving to the next pane, swallowed for a different reason. `R-B52`.
+       * **Anything the window already claimed does not also reach the pty.**
        *
-       * An arrow key reaches a TUI as a real escape sequence, so leaving this
-       * to the window's own handler alone would move the focus *and* walk the
-       * agent's menu on the way out — arriving at the next pane having quietly
-       * typed into the one you left.
+       * The keymap listens on `window` in the capture phase and calls
+       * `preventDefault` on every chord it handles, so by the time xterm's
+       * handler runs, `defaultPrevented` *is* the answer to "was this the
+       * app's?". Reading it beats re-listing the chords here, for two reasons
+       * that both cost something before this existed:
+       *
+       * **It fixed a double-fire.** `R-B52`'s move was matched here *and* in
+       * the keymap, so one press moved two panes — reported as focus flipping
+       * between the outer two panes and never landing on the middle one. The
+       * action belongs to the keymap; this side's whole job is to keep the
+       * keystroke off the pty.
+       *
+       * **It survives a rebind.** A hard-coded list would answer to the shipped
+       * chord after the user had changed it, which is the silent kind of wrong.
+       *
+       * And it closes a bug nobody had reported yet: every chord — `Alt+2`,
+       * `Alt+A` — was being handled by the window *and* forwarded to the agent
+       * as an `ESC`-prefixed sequence.
        */
-      const dir = paneMoveDirection(e);
-      if (dir) {
-        e.preventDefault();
-        movePane(dir);
-        return false;
-      }
+      if (e.type === "keydown" && e.defaultPrevented) return false;
       // Copy and paste, which xterm implements neither of. See `clipboard.ts`
       // for why the paste chords are split and why `Ctrl+C` is not among them.
       const intent = clipboardIntent(e);
