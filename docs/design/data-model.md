@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-05
+updated: 2026-08-07
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -68,11 +68,22 @@ re-derived from the OS on the first scan after startup.
 **`pid` is kept, and is not a liveness claim.** A dead session holding its last
 pid is the only evidence that `/clear` moved that pid to a fresh session id,
 which is how a client knows the two are one conversation and carries a
-hand-applied label across (`prefs.rs`, `store/prefs.ts`). The scan re-derives
-the pid of everything actually running, so a remembered pid only ever survives
-on a session whose `alive` is false — and every consumer that needs a *live*
-pid gates on `alive` first. Wiping it on load broke the label migration across a
-daemon restart, the same way wiping it on death broke it inside one run.
+hand-applied label across (`store/prefs.ts`). The scan re-derives the pid of
+everything actually running, so a remembered pid only ever survives on a session
+whose `alive` is false — and every consumer that needs a *live* pid gates on
+`alive` first. Wiping it on load broke the label migration across a daemon
+restart, the same way wiping it on death broke it inside one run.
+
+**`started_at` is when the *process* started, not the conversation.** It begins
+as the transcript file's mtime and is then overwritten every scan from the live
+registry's `startedAt`, which Claude Code sets once per process — so a session
+`/clear` minted an hour ago reports the moment its terminal was opened, and
+every id on one pid reports the same instant. Read it as "how long has this
+window been up"; `last_event_at` is the field that says when this conversation
+was last doing anything, and it is the one that can order a `/clear` chain
+(`R-J15`, and `architecture.md` on succession). Correcting it is a change to
+what the Info pane's "started" and every duration derived from it mean, so it is
+recorded here rather than quietly fixed.
 
 ### Read positions are part of the record (`R-A6`)
 

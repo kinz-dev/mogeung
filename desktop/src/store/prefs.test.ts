@@ -19,6 +19,7 @@ import {
   loadPrefs,
   migrateSuccession,
   savePrefs,
+  successions,
   type ScopedPrefs,
   type SuccessionFact,
 } from "@/store/prefs";
@@ -74,11 +75,14 @@ describe("loading preferences written by an older build", () => {
 });
 
 /**
- * The `/clear` case, reported twice — once against the egui client in July and
- * again here, because this client was ported from `prefs.rs` without the
- * function that fixed it. These mirror the Rust tests in
- * `crates/mogeung-ui/src/prefs.rs` case for case, so the two clients cannot
- * drift on what counts as a successor.
+ * The `/clear` case, reported four times — twice against the egui client in
+ * July, again here in August because this client was ported from `prefs.rs`
+ * without the function that fixed it, and a fourth time on 2026-08-07 when a
+ * terminal left open for two days accumulated a *line* of dead ids and the
+ * ordering that picks the predecessor turned out to be no ordering at all.
+ *
+ * These carry the Rust cases forward — that client is gone (ADR-0020), so this
+ * is now the only definition of what counts as a successor.
  */
 describe("succession after /clear", () => {
   const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
@@ -86,9 +90,9 @@ describe("succession after /clear", () => {
     id: string,
     alive: boolean,
     pid: number | null,
-    started: number,
+    active: number,
     cwd = "/repo",
-  ): SuccessionFact => ({ id, alive, pid, cwd, started_at: at(started) });
+  ): SuccessionFact => ({ id, alive, pid, cwd, last_event_at: at(active) });
   const scopedWith = (patch: Partial<ScopedPrefs>): ScopedPrefs => ({ ...emptyScoped(), ...patch });
 
   it("carries the label, tag and pin to the successor", () => {
@@ -150,6 +154,63 @@ describe("succession after /clear", () => {
     const scoped = scopedWith({ labels: { a: "mine" }, pinned: ["a"] });
     const sessions = [fact("a", true, 3, 100), fact("b", true, 3, 200)];
     expect(migrateSuccession(scoped, sessions)).toBeNull();
+  });
+
+  /**
+   * The 2026-08-07 report, and the reason it took four goes. A terminal open
+   * since Tuesday has a `/clear` for every topic it has been through, so the
+   * live session trails a *line* of dead ids — and the daemon fills
+   * `started_at` from the live registry, where it means when the **process**
+   * started. Every id in the line therefore claimed the same `started_at`, the
+   * comparison meant to find the newest one always tied, and the tie kept the
+   * oldest. The label moved onto a session that had ended two clears ago.
+   */
+  it("follows the line by activity, not by a process clock they all share", () => {
+    const scoped = scopedWith({ labels: { second: "api-work" } });
+    // What the daemon actually reports: one pid, one cwd, four ids, and a
+    // `started_at` that cannot tell them apart — so it is not consulted.
+    const patch = migrateSuccession(scoped, [
+      fact("first", false, 26514, 100),
+      fact("second", false, 26514, 300),
+      fact("third", false, 26514, 200),
+      fact("live", true, 26514, 400),
+    ]);
+    expect(patch?.labels).toEqual({ live: "api-work" });
+  });
+
+  it("reaches past a hop no window was open to make", () => {
+    // The label is two ids back: this window was closed for the `/clear` that
+    // ended `first`, so nothing moved it onto `second` at the time. Insisting
+    // on the immediate predecessor stranded it for good.
+    const scoped = scopedWith({ labels: { first: "api-work" }, pinned: ["first"] });
+    const patch = migrateSuccession(scoped, [
+      fact("first", false, 9, 100),
+      fact("second", false, 9, 200),
+      fact("live", true, 9, 300),
+    ]);
+    expect(patch?.labels).toEqual({ live: "api-work" });
+    expect(patch?.pinned).toEqual(["live"]);
+  });
+
+  it("leaves one pin on the line's live head, not one per /clear", () => {
+    const scoped = scopedWith({ pinned: ["first", "second", "elsewhere"] });
+    const patch = migrateSuccession(scoped, [
+      fact("first", false, 9, 100),
+      fact("second", false, 9, 200),
+      fact("live", true, 9, 300),
+    ]);
+    expect(patch?.pinned).toEqual(["elsewhere", "live"]);
+  });
+
+  it("maps the whole line to its heir, for the callers that move a view", () => {
+    const heirs = successions([
+      fact("first", false, 9, 100),
+      fact("second", false, 9, 200),
+      fact("live", true, 9, 300),
+      fact("stranger", false, 11, 400),
+      fact("elsewhere", true, 9, 500, "/other"),
+    ]);
+    expect(Object.fromEntries(heirs)).toEqual({ first: "live", second: "live" });
   });
 });
 

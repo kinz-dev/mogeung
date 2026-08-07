@@ -1,7 +1,7 @@
 ---
 title: Session labels
 status: shipped
-updated: 2026-08-05
+updated: 2026-08-07
 roadmap: [R-B26]
 depends_on: [A13, A17]
 ---
@@ -173,3 +173,39 @@ The daemon had a matching hole one layer down, and it is the July bug again:
 database, so a `/clear` that straddled a daemon restart lost the evidence
 either client needs. The death path had already been fixed and says why in
 place; the load path was never looked at. Both now keep it.
+
+**A fourth time, on 2026-08-07 — and the migration was running.** `R-J15`.
+Reported as *"the ATTENTION label disappears and the current tmux session
+goes blank, I have to click on the session list again"*, which is two
+failures wearing one gesture.
+
+*The label.* Succession picked the predecessor by `started_at`, and
+`started_at` is not what its name promises: the daemon overwrites it every
+scan from the live registry's `startedAt`, which Claude Code writes once per
+**process**. A terminal open since Tuesday has a `/clear` for every topic it
+has been through, and every one of those dead ids reports the same
+`started_at` — the moment the terminal was opened. The comparison meant to
+find the newest predecessor therefore always tied, and the tie kept whichever
+id the session map happened to hold first, which is the *oldest*. The label
+moved onto a conversation that had ended two clears ago, or did not move at
+all. This was invisible for as long as processes were short-lived, which is
+the honest reason three fixes and their tests all passed over it.
+
+It is `last_event_at` now — the last line each session actually wrote, the
+one field that does order a chain — and the rule reads the whole **line**
+rather than the immediate predecessor: each thing moves from the most recent
+id that still has one. That second part repairs a hop nothing was open to
+make, which the old rule stranded permanently by asking an id that had never
+held the label whether it held the label.
+
+*The blank pane.* Nothing ever moved `selected`, or a pane held by `R-B49`.
+The successor arrived correctly named while the Agent pane below it stayed
+attached to an id whose tmux pane died with the old conversation — so the
+label survived and the window still had to be re-clicked, which is what the
+report is describing. Both now follow, and the split in how is deliberate:
+a label, tag or pin is *identity*, so it follows every pass and settles once
+the live head holds it; the selection and a held pane are *placement*, so
+each predecessor donates its hop **once**. A view that re-points itself on
+every tick would make a finished session impossible to sit and read — a worse
+window than the one that leaves a pane blank, and one the tests in
+`store/succession.test.ts` now forbid.

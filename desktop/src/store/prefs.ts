@@ -292,7 +292,7 @@ export interface SuccessionFact {
   alive: boolean;
   pid: number | null;
   cwd: string;
-  started_at: string;
+  last_event_at: string;
 }
 
 const epoch = (ts: string): number => {
@@ -301,15 +301,52 @@ const epoch = (ts: string): number => {
 };
 
 /**
+ * The dead sessions this live one carries on from, most recently active first.
+ *
+ * Every `/clear` in a process's life adds one, so a terminal left open for two
+ * days has a *line* behind it and not a single predecessor. They are ordered by
+ * `last_event_at` and **not** by `started_at`, which is the flaw that let this
+ * bug back in: the daemon fills `started_at` from the live registry's
+ * `startedAt`, which is when the *process* started, not when the conversation
+ * did. Every session on one pid therefore reports the same `started_at` once it
+ * has been alive, the comparison that was meant to find the newest predecessor
+ * always tied, and the tie kept whichever the session map happened to hold
+ * first — the oldest. `last_event_at` is the last line that session actually
+ * wrote, which is the one thing that does order a chain.
+ */
+function lineage(heir: SuccessionFact, sessions: SuccessionFact[]): SuccessionFact[] {
+  return sessions
+    .filter((s) => !s.alive && s.id !== heir.id && s.pid === heir.pid && s.cwd === heir.cwd)
+    .sort((a, b) => epoch(b.last_event_at) - epoch(a.last_event_at));
+}
+
+/**
+ * Every dead session `/clear` replaced, mapped to the live one that carries on.
+ *
+ * The whole line maps to the same heir, not just the session immediately before
+ * it: a window that was closed — or a daemon that was restarted — across a
+ * `/clear` never made that hop, and the state it was holding is stranded two
+ * ids back. See [`migrateSuccession`] for what counts as a succession.
+ */
+export function successions(sessions: SuccessionFact[]): Map<SessionId, SessionId> {
+  const heirs = new Map<SessionId, SessionId>();
+  for (const heir of sessions) {
+    if (!heir.alive || heir.pid == null) continue;
+    for (const pred of lineage(heir, sessions)) heirs.set(pred.id, heir.id);
+  }
+  return heirs;
+}
+
+/**
  * `/clear` in Claude Code keeps the process but mints a fresh session id, so a
  * hand-applied label lands on a dead id while the same work carries on under a
  * new one. The live registry is per-*pid*, which makes succession a fact rather
  * than a guess: a dead session and a live one sharing a pid are the same
  * conversation. Labels, tags and pins follow it.
  *
- * A port of `Prefs::migrate_succession` in `crates/mogeung-ui/src/prefs.rs`,
- * which this client shipped without — the reason a label kept disappearing on
- * `/clear` here while the egui window kept it. Same rules, deliberately:
+ * A port of `Prefs::migrate_succession`, which the egui client carried and this
+ * one shipped without — the reason a label kept disappearing on `/clear` here
+ * while that window kept it. Same rules, deliberately:
  *
  * - The cwd must match as well as the pid. Pids are reused by the OS
  *   eventually, and a label jumping onto an unrelated session that happened to
@@ -318,6 +355,12 @@ const epoch = (ts: string): number => {
  *   keeps its name, and the predecessor keeps its own rather than losing it to
  *   a move that went nowhere.
  * - Two live sessions never trade state. Succession requires a death.
+ *
+ * Each thing moves from the most recent session in the line that still has one,
+ * rather than from the immediate predecessor alone. The immediate predecessor
+ * is usually that session — but when a hop was missed, insisting on it means
+ * asking an id that never held the label whether it holds the label, and the
+ * answer strands it for good.
  *
  * Nothing is invented — only moved. Returns the patch for `setScoped`, or
  * `null` when nothing moved, so the caller writes to disk only on a change.
@@ -331,31 +374,32 @@ export function migrateSuccession(
   let pinned = [...scoped.pinned];
   let changed = false;
 
-  for (const succ of sessions) {
-    if (!succ.alive || succ.pid == null) continue;
-    // The latest dead session on the same pid *and* cwd is the immediate
-    // predecessor — `/clear` twice makes a chain, and the state walks it one
-    // hop per pass.
-    let pred: SuccessionFact | null = null;
-    for (const s of sessions) {
-      if (s.alive || s.id === succ.id || s.pid !== succ.pid || s.cwd !== succ.cwd) continue;
-      if (!pred || epoch(s.started_at) > epoch(pred.started_at)) pred = s;
-    }
-    if (!pred) continue;
-    const predId = pred.id;
+  for (const heir of sessions) {
+    if (!heir.alive || heir.pid == null) continue;
+    const line = lineage(heir, sessions);
+    if (line.length === 0) continue;
 
-    if (labels[predId] && !labels[succ.id]) {
-      labels[succ.id] = labels[predId];
-      delete labels[predId];
+    const donor = (held: Record<SessionId, string>): SessionId | null =>
+      line.find((s) => held[s.id])?.id ?? null;
+
+    const namer = donor(labels);
+    if (namer && !labels[heir.id]) {
+      labels[heir.id] = labels[namer];
+      delete labels[namer];
       changed = true;
     }
-    if (tags[predId] && !tags[succ.id]) {
-      tags[succ.id] = tags[predId];
-      delete tags[predId];
+    const tagger = donor(tags);
+    if (tagger && !tags[heir.id]) {
+      tags[heir.id] = tags[tagger];
+      delete tags[tagger];
       changed = true;
     }
-    if (pinned.includes(predId) && !pinned.includes(succ.id)) {
-      pinned = [...pinned.filter((id) => id !== predId), succ.id];
+    // One pin for the line, on its live head: a chain of dead ids each pinned
+    // separately would be one queue row per `/clear`, all but one of them a
+    // conversation that ended.
+    const pins = new Set(line.filter((s) => pinned.includes(s.id)).map((s) => s.id));
+    if (pins.size > 0 && !pinned.includes(heir.id)) {
+      pinned = [...pinned.filter((id) => !pins.has(id)), heir.id];
       changed = true;
     }
   }

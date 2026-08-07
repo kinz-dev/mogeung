@@ -67,6 +67,7 @@ import {
   migrateSuccession,
   savePrefs,
   setZoom,
+  successions,
   type Prefs,
   type ScopedPrefs,
 } from "./prefs";
@@ -403,17 +404,59 @@ export interface AppState {
 let client: DaemonClient | null = null;
 
 /**
- * Move hand-applied state onto the successor of a session that `/clear` ended.
+ * Predecessors whose one-time hop has already been made. See [`succeed`].
+ *
+ * Module state rather than store state on purpose: it is not a fact about the
+ * sessions, it is a record of what this window has already done about them, and
+ * nothing renders from it. Cleared when the window points at another daemon,
+ * where these ids mean nothing.
+ */
+const hopped = new Set<SessionId>();
+
+/**
+ * Move hand-applied state — and where you are looking — onto the successor of a
+ * session that `/clear` ended.
  *
  * Run wherever sessions arrive, because that is when the evidence — a dead
  * session and a live one sharing a pid — first exists. The migration is
  * idempotent and writes nothing when nothing moved, so calling it on every
  * `session_updated` costs a scan of the session map and no disk.
+ *
+ * **The selection and held panes move once, and only once.** The label landing
+ * on the successor is no use on its own: the Agent pane below it is still
+ * attached to an id whose pane died with the old conversation, which is what
+ * "the terminal went blank and I had to click the session again" was. But a
+ * dead session you click on *afterwards* to read is a place you asked to be,
+ * and being thrown forwards out of it every time the daemon breathes would be a
+ * worse bug than the one this fixes — so each predecessor donates its hop at
+ * most once, and never again.
  */
 function succeed(get: () => AppState): void {
-  const { sessions, scoped, setScoped } = get();
-  const patch = migrateSuccession(scoped(), Object.values(sessions));
-  if (patch) setScoped(patch);
+  const st = get();
+  const list = Object.values(st.sessions);
+  const patch: Partial<ScopedPrefs> = migrateSuccession(st.scoped(), list) ?? {};
+
+  const fresh = [...successions(list)].filter(([pred]) => !hopped.has(pred));
+  let follow: SessionId | null = null;
+  if (fresh.length > 0) {
+    const holds = { ...st.scoped().paneHold };
+    let moved = false;
+    for (const [pred, heir] of fresh) {
+      hopped.add(pred);
+      if (st.selected === pred) follow = heir;
+      for (const [pane, id] of Object.entries(holds)) {
+        if (id !== pred) continue;
+        holds[pane] = heir;
+        moved = true;
+      }
+    }
+    if (moved) patch.paneHold = holds;
+  }
+
+  if (Object.keys(patch).length > 0) st.setScoped(patch);
+  // After the prefs, so the panes this wakes up read the migrated label rather
+  // than the one that is about to move out from under them.
+  if (follow) st.select(follow);
 }
 
 /** First index in `list` (sorted by seq) whose seq is >= `seq`. */
@@ -580,6 +623,7 @@ export const useStore = create<AppState>((set, get) => ({
     client?.setUrl(url);
     // Everything below is about the old machine. Session ids do not survive
     // the move, and a stale board is worse than an empty one.
+    hopped.clear();
     set({
       url,
       sessions: {},

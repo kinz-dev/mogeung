@@ -248,12 +248,30 @@ tunnel makes a remote daemon answer on `127.0.0.1`.
 Session ids are not stable across `/clear`, which mints a new one for the same
 conversation, so anything keyed by one has to be able to *move*. The window
 matches a dead session against a live one sharing a pid and a cwd and carries
-the label, colour tag and pin across (`migrateSuccession`). The evidence for
-that is on the wire — `pid`, `alive`, `cwd`, `started_at` — which is why it can
-be a client-side rule rather than something the daemon has to be taught. Note
-what it costs the daemon to make possible: a dead session **keeps** its last
-pid, which `data-model.md` states as a rule precisely because wiping it looks
-like tidying up.
+the label, colour tag and pin across (`migrateSuccession`), plus the selection
+and any held panes (`successions`, in the store). The evidence for that is on
+the wire — `pid`, `alive`, `cwd`, `last_event_at` — which is why it can be a
+client-side rule rather than something the daemon has to be taught. Note what it
+costs the daemon to make possible: a dead session **keeps** its last pid, which
+`data-model.md` states as a rule precisely because wiping it looks like tidying
+up.
+
+**A process that has been open for days has a *line* of dead ids behind it, not
+a predecessor** — one per `/clear` — and ordering them is the whole difficulty.
+It is done by `last_event_at`, the last line each of them actually wrote.
+`started_at` cannot do it: the daemon fills it from the live registry's
+`startedAt`, which is when the **process** started, so every id on one pid
+reports the same instant and the comparison ties. `R-J15` is that bug; ordering
+by a field that does not order was indistinguishable from working for as long as
+sessions were short-lived.
+
+The two halves move on different rules, and the difference is the point. Labels,
+tags and pins are *identity* — they name the conversation, so they follow it
+every pass, idempotently, and stop moving once the live head holds them. The
+selection and a held pane are *placement* — where you asked to be looking — so
+each predecessor donates its hop **once**. A rule that re-pointed the view every
+pass would make a finished session impossible to sit and read, which is a worse
+window than the one that leaves the pane blank.
 
 `R-I12` records the argument that all of this belongs to the daemon instead. It
 carried more weight when two clients each kept their own copy; with one client
