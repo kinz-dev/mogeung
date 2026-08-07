@@ -125,13 +125,21 @@ export const ACTIONS: Action[] = [
      * way back out, so that rule can stay as strict as it should be.
      *
      * The terminal catches this chord itself, before xterm forwards anything,
-     * because `Alt+Escape` reaches a TUI as `ESC ESC` — Claude Code reads that
-     * as a cancel, and a release that also interrupted the agent would be a
-     * worse bug than the one it fixes. This entry is what makes it discoverable
-     * in the palette and the keymap window, and what makes it work from Monaco
-     * and from a filter box too.
+     * because an Escape-bearing chord reaches a TUI as `ESC ESC` — Claude Code
+     * reads that as a cancel, and a release that also interrupted the agent
+     * would be a worse bug than the one it fixes. This entry is what makes it
+     * discoverable in the palette and the keymap window, and what makes it work
+     * from Monaco and from a filter box too.
+     *
+     * **`Alt+Escape` was the first choice and it was wrong**: GNOME binds it to
+     * *switch windows directly*, so on Ubuntu the desktop ate the keystroke and
+     * the release never reached the window — a binding that fails silently and
+     * reads as a broken feature. `Alt+Shift+Escape` is unclaimed on GNOME and
+     * on macOS, and it joins the `Alt+Shift+…` family `R-B49` started for
+     * things you do *to* a pane. Rebindable like everything else (`R-B12`), so
+     * a desktop that disagrees costs a preference rather than a patch.
      */
-    keys: ["Alt+Escape"],
+    keys: ["Alt+Shift+Escape"],
     // Guarded, so this is a release rather than a blur. Without the test it
     // would take focus off the queue list or a filter box you were happily
     // using and hand it to nothing, which is a way of making the window feel

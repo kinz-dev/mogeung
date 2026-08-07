@@ -154,6 +154,98 @@ describe("the wall", () => {
     expect(screen.getByText("APPROVE")).toBeInTheDocument();
   });
 
+  /**
+   * Fewer tiles once the wall went live-only, so each one can afford to say
+   * more. The rule the card follows: only what is **non-zero** — a tile of
+   * `0 turns · 0f +0 −0` reads as broken rather than as quiet.
+   */
+  it("carries the work a session has actually done", () => {
+    board({
+      queue: [item("a", "running")],
+      sessions: [
+        session("a", {
+          repo_root: "/home/me/projects/mogeung",
+          turns: 12,
+          files_changed: 3,
+          insertions: 140,
+          deletions: 22,
+          tokens_out: 48200,
+        }),
+      ],
+    });
+    expect(screen.getByText("mogeung")).toBeInTheDocument();
+    expect(screen.getByText("12 turns")).toBeInTheDocument();
+    expect(screen.getByText(/3f/)).toBeInTheDocument();
+    expect(screen.getByText(/48\.2k out|48k out/)).toBeInTheDocument();
+  });
+
+  it("says nothing about counts that are zero", () => {
+    board({ queue: [item("a", "running")], sessions: [session("a", { turns: 0, files_changed: 0 })] });
+    expect(screen.queryByText(/turns/)).toBeNull();
+    expect(screen.queryByText(/0f/)).toBeNull();
+  });
+
+  /**
+   * The number that changes what you do next. A prompt waited on for four
+   * minutes is a different situation from the same prompt four seconds old,
+   * and nothing else on the card tells them apart.
+   */
+  it("says how long a waiting session has been waiting", () => {
+    const since = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+    board({
+      queue: [item("a", "awaiting_permission")],
+      sessions: [session("a", { status_since: since })],
+    });
+    expect(screen.getByText(/^for /)).toBeInTheDocument();
+  });
+
+  it("keeps that number off a session that wants nothing", () => {
+    const since = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+    board({ queue: [item("a", "running")], sessions: [session("a", { status_since: since })] });
+    expect(screen.queryByText(/^for /)).toBeNull();
+  });
+
+  it("flags a collision, a loop and a rate limit where they exist", () => {
+    board({
+      queue: [item("a", "running")],
+      sessions: [
+        session("a", {
+          collisions: [{ other: "b", path: "src/main.rs" }] as never,
+          loop_signal: "Edit src/main.rs ×6",
+          limit_hit_at: new Date().toISOString(),
+        }),
+      ],
+    });
+    expect(screen.getByText("1 collision")).toBeInTheDocument();
+    expect(screen.getByText("thrashing")).toBeInTheDocument();
+    expect(screen.getByText("limit")).toBeInTheDocument();
+  });
+
+  /**
+   * The **whole card**, not a dot. `R-B42` already learnt this about the
+   * queue's 4px bar: the point of a colour is knowing which session this is
+   * without reading, and something you have to look for has not done that.
+   */
+  it("tints the whole card with the colour you gave the session", () => {
+    useStore.setState({
+      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), tags: { a: "red" } } } },
+      showWall: true,
+      selected: null,
+      queue: [item("a", "running")],
+      sessions: { a: session("a") },
+    });
+    render(<WallOverlay />);
+    const card = screen.getByRole("button", { name: /session a/ });
+    expect(card.className).toContain("mogeung-tag-row");
+    expect(card.style.getPropertyValue("--tag-bg")).not.toBe("");
+  });
+
+  it("leaves an untagged card on the plain surface", () => {
+    board({ queue: [item("a", "running")], sessions: [session("a")] });
+    const card = screen.getByRole("button", { name: /session a/ });
+    expect(card.className).not.toContain("mogeung-tag-row");
+  });
+
   it("skips a queue entry whose session it has never seen", () => {
     board({ queue: [item("ghost", "idle"), item("a", "idle")], sessions: [session("a")] });
     expect(screen.getByText(/1 session\b/)).toBeInTheDocument();

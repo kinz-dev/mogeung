@@ -141,6 +141,23 @@ the wall would then mean different things depending on a filter set somewhere
 else, which is exactly the kind of "why is this empty" that a glanceable thing
 must never have.
 
+**Fewer tiles bought more card.** Live-only cut the grid down, which made the
+sparse tile look thin rather than calm — so the card gained the repo, the turn
+count, the uncommitted diff, tokens out, and the flags for a collision, a
+thrash and a rate limit. The one that matters most is **how long a waiting
+session has been waiting**: `last_event_at` answers *when did anything happen*,
+and a session sitting on a permission prompt is emitting nothing, so both
+numbers agree and only one of them says *waiting*. Only non-zero facts are
+drawn — a tile reading `0 turns · 0f +0 −0` reads as broken rather than quiet.
+
+**The tag colour is the whole card.** It shipped as an 8px dot and that was the
+same mistake `R-B42` had already made and recorded about the queue's 4px bar:
+the entire point of a colour is knowing which session this is *without reading*,
+and a mark you have to look for has not done that job. It goes through the same
+`--tag-bg` custom property and `.mogeung-tag-row` rule the queue uses, so the
+palette stays written down in one place and a tinted tile answers the pointer
+the way a tinted row does.
+
 **Still unproven, and this is the honest part.** Every other row this week could
 be judged by whether it works. This one can only be judged by whether it
 *replaces* something: if the wall becomes where you live, the finding is about

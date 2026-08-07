@@ -23,13 +23,13 @@
  * columns.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { useStore } from "@/store";
 import { Chip, Dim, Empty } from "@/ui/primitives";
 import { cn } from "@/lib/cn";
 import { needsHuman, reasonLabel, sessionLabel, type AttentionItem, type Session } from "@/wire/types";
-import { fmtDur, secsSince } from "@/lib/format";
-import { tagColor } from "@/lib/tags";
+import { base, compact, fmtDur, num, secsSince, shortDir } from "@/lib/format";
+import { tagBg } from "@/lib/tags";
 
 /** The ring, and it is the only colour on a quiet tile. */
 function ringFor(reason: AttentionItem["reason"]): string {
@@ -140,7 +140,16 @@ export function WallOverlay() {
         <div className="grid min-h-0 flex-1 auto-rows-min gap-2 overflow-y-auto p-3 sm:grid-cols-2 lg:grid-cols-3">
           {tiles.map(({ q, s }) => {
             const wants = needsHuman(q.reason);
-            const tag = scoped.tags[s.id];
+            const tint = tagBg(scoped.tags[s.id]);
+            /**
+             * How long it has been *in this state*, which is the number the
+             * wall exists to surface. `last_event_at` answers "when did
+             * anything happen", and a session that has been sitting on a
+             * permission prompt for four minutes is still emitting nothing —
+             * so the two agree, and only one of them says *waiting*.
+             */
+            const stuckFor = s.status_since ? fmtDur(secsSince(s.status_since)) : null;
+            const diff = s.files_changed > 0;
             return (
               <button
                 key={s.id}
@@ -150,33 +159,92 @@ export function WallOverlay() {
                   setOpen(false);
                 }}
                 title={`${sessionLabel(s)} — ${q.detail || reasonLabel(q.reason)}`}
+                /**
+                 * The tint is the **whole card**, asked for 2026-08-07 — and it
+                 * arrives as `--tag-bg` through the same `.mogeung-tag-row`
+                 * rule the queue uses, so the palette stays written down in one
+                 * place and a tinted tile answers the pointer the same way a
+                 * tinted row does. A 8px dot was what shipped first and it lost
+                 * for the reason `R-B42` already recorded about the queue's
+                 * 4px bar: the point of a colour is knowing which session this
+                 * is *without reading*, and a dot has to be looked for.
+                 */
+                style={{
+                  ...(tint ? ({ "--tag-bg": tint } as CSSProperties) : {}),
+                  ...(wants ? { boxShadow: `inset 0 0 0 1px ${ringFor(q.reason)}` } : {}),
+                }}
                 className={cn(
                   "flex min-w-0 flex-col gap-1 rounded-sm border p-2 text-left outline-none",
                   "transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)]",
                   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]",
-                  wants
-                    ? "border-transparent bg-[var(--bg-raised)]"
-                    : "border-[var(--border)] bg-[var(--bg-panel)] hover:border-[var(--border-hover)]",
+                  wants ? "border-transparent" : "border-[var(--border)] hover:border-[var(--border-hover)]",
+                  // Only when nothing else owns the surface — the same ordering
+                  // trap `QueuePanel` documents: `cn` is `twMerge`, so a
+                  // Tailwind `bg-*` here would win over the tint class, which
+                  // twMerge cannot see.
+                  tint ? "mogeung-tag-row" : wants ? "bg-[var(--bg-raised)]" : "bg-[var(--bg-panel)]",
                 )}
-                style={wants ? { boxShadow: `inset 0 0 0 1px ${ringFor(q.reason)}` } : undefined}
               >
                 <div className="flex min-w-0 items-center gap-1.5">
-                  {tag && (
-                    <span
-                      aria-hidden
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: tagColor(tag) ?? "var(--dim)" }}
-                    />
-                  )}
                   <span className="truncate text-sm text-[var(--text-strong)]">
                     {scoped.labels[s.id] ?? sessionLabel(s)}
                   </span>
-                  <Dim className="ml-auto shrink-0 text-2xs">{fmtDur(secsSince(s.last_event_at))}</Dim>
+                  <Dim className="ml-auto shrink-0 text-2xs" title="since anything last happened">
+                    {fmtDur(secsSince(s.last_event_at))}
+                  </Dim>
                 </div>
 
                 <div className="flex min-w-0 items-center gap-1.5">
                   <Chip color={wants ? ringFor(q.reason) : "var(--dim)"}>{reasonLabel(q.reason)}</Chip>
-                  {s.git_branch && <Dim className="truncate text-2xs">{s.git_branch}</Dim>}
+                  {/* The one number that changes what you do next: a prompt
+                      waited on for four minutes is a different situation from
+                      the same prompt four seconds old, and nothing else on the
+                      card distinguishes them. */}
+                  {wants && stuckFor && (
+                    <Dim className="shrink-0 text-2xs" title="how long it has been in this state">
+                      for {stuckFor}
+                    </Dim>
+                  )}
+                  {s.git_branch && (
+                    <Dim className="ml-auto truncate text-2xs" title="branch">
+                      {s.git_branch}
+                    </Dim>
+                  )}
+                </div>
+
+                {/* What it has actually done — the half a queue row has no room
+                    for. Only what is non-zero: a card of `0`s reads as broken
+                    rather than as quiet. */}
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-2xs text-[var(--dim)]">
+                  <span title="the repository this session is working in" className="truncate">
+                    {s.repo_root ? base(s.repo_root) : shortDir(s.cwd)}
+                  </span>
+                  {s.turns > 0 && <span title="turns in the conversation">{s.turns} turns</span>}
+                  {diff && (
+                    <span title="uncommitted work, against the base this session started from">
+                      {s.files_changed}f{" "}
+                      <span className="text-[var(--add-fg)]">+{num(s.insertions)}</span>{" "}
+                      <span className="text-[var(--del-fg)]">−{num(s.deletions)}</span>
+                    </span>
+                  )}
+                  {s.tokens_out > 0 && (
+                    <span title="tokens out — never money, ADR-0005">{compact(s.tokens_out)} out</span>
+                  )}
+                  {s.collisions.length > 0 && (
+                    <span className="text-[var(--amber)]" title="another live session is editing the same file">
+                      {s.collisions.length} collision{s.collisions.length === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {s.loop_signal && (
+                    <span className="text-[var(--amber)]" title={s.loop_signal}>
+                      thrashing
+                    </span>
+                  )}
+                  {s.limit_hit_at && (
+                    <span className="text-[var(--red)]" title="this session hit a rate limit">
+                      limit
+                    </span>
+                  )}
                 </div>
 
                 {/* The tail. Fixed height so a quiet tile and a busy one are the

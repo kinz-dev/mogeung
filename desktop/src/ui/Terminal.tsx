@@ -157,11 +157,20 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
        * a terminal must receive `j` — and it is also why there has to be a way
        * out that is not the mouse.
        *
-       * Returning `false` keeps it off the pty. `Alt+Escape` reaches a TUI as
-       * `ESC ESC`, which Claude Code reads as a cancel, so a release that also
-       * sent the keystroke would interrupt the agent on its way past.
+       * Returning `false` keeps it off the pty. Any Escape-bearing chord
+       * reaches a TUI as `ESC ESC`, which Claude Code reads as a cancel, so a
+       * release that also sent the keystroke would interrupt the agent on its
+       * way past.
+       *
+       * **`Alt+Shift+Escape`, and the first attempt was wrong.** `Alt+Escape`
+       * shipped on 2026-08-07 and was reported the same day: GNOME binds it to
+       * *switch windows directly*, so on Ubuntu the release never reached the
+       * window at all — the desktop ate it first. A binding this window cannot
+       * see is worse than no binding, because it fails silently and looks like
+       * the feature is broken. The `Shift` takes it out of the desktop's way
+       * and into the `Alt+Shift+…` family the pane actions already use.
        */
-      if (e.type === "keydown" && e.key === "Escape" && e.altKey) {
+      if (e.type === "keydown" && e.key === "Escape" && e.altKey && e.shiftKey) {
         e.preventDefault();
         releaseKeyboard();
         return false;
