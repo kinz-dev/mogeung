@@ -121,6 +121,30 @@ export async function deliver(n: Announcement): Promise<void> {
 }
 
 /**
+ * What the bell is actually going to do, in three states rather than two.
+ *
+ * Asked on 2026-08-07 — *"I tried to enable it, but I didn't see any behaviour
+ * changes"* — and the honest answer was that in the usual setup the toggle
+ * **cannot** do anything: `start.sh` runs the daemon as its own process, so the
+ * window is *attached*, and an attached window deliberately stays silent
+ * (see the note at the top of this file). The tooltip said so; the icon did
+ * not, and a control that looks switched on while being unable to act is a
+ * control that teaches you not to trust it.
+ *
+ * - `off` — nothing will be posted.
+ * - `here` — this window hosts the daemon and will post, while unfocused.
+ * - `elsewhere` — banners are on, but the **daemon** is the one that announces.
+ *   Which it does when run with `--notify`, as `scripts/start.sh` does by
+ *   default. Nothing is broken; this window simply is not the speaker.
+ */
+export type BellState = "off" | "here" | "elsewhere";
+
+export function bellState(notify: boolean, hosting: boolean): BellState {
+  if (!notify) return "off";
+  return hosting ? "here" : "elsewhere";
+}
+
+/**
  * Watch the queue and announce what changes. Called once, by `App`.
  *
  * The seen-state is advanced **even while silent**, which is the difference

@@ -15,7 +15,7 @@ import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
 import { showPane } from "@/lib/panes";
 import { WindowControls } from "@/ui/WindowControls";
-import { ensurePermission } from "@/lib/notify";
+import { bellState, ensurePermission } from "@/lib/notify";
 
 const THEMES = ["dark", "light", "system"] as const;
 
@@ -33,6 +33,7 @@ export function TopBar() {
   const showTerminal = useStore((s) => s.showTerminal);
   const rescanning = useStore((s) => s.rescanning);
   const daemonStatus = useStore((s) => s.daemonStatus);
+  const bell = bellState(prefs.notify, daemonStatus?.mode === "hosting");
   const flaggedCount = useStore((s) => s.flagged.length);
 
   const live = Object.values(sessions).filter((s) => s.alive).length;
@@ -183,13 +184,24 @@ export function TopBar() {
         </IconButton>
         <IconButton
           title={
-            prefs.notify
-              ? daemonStatus?.mode === "hosting"
-                ? "banners on — you will be told when a session starts needing you"
-                : "banners on, but this window only attached to its daemon. That daemon announces its own queue — run it with --notify"
-              : "tell me when a session needs me, while this window is in the background"
+            {
+              off: "tell me when a session needs me, while this window is in the background",
+              here: "banners on — you will be told when a session starts needing you, while this window is in the background",
+              elsewhere:
+                "banners on, but this window did not start its daemon, so it is not the one that speaks. The daemon announces its own queue when run with --notify — which scripts/start.sh does by default.",
+            }[bell]
           }
           active={prefs.notify}
+          /**
+           * Amber for `elsewhere`, which is the state that was invisible.
+           *
+           * The tooltip has always explained it and a tooltip is not an answer
+           * to *"I turned it on and nothing changed"* — you have to already
+           * suspect something to go looking. Amber is what this window uses
+           * everywhere else for *on, with a caveat* (the ssh host chip, a
+           * collision, a stale doc), so it reads without being learnt.
+           */
+          className={bell === "elsewhere" ? "text-[var(--amber)] hover:text-[var(--amber)]" : undefined}
           onClick={() => {
             if (prefs.notify) {
               setPrefs({ notify: false });

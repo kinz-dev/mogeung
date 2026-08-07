@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { diffQueue } from "@/lib/notify";
+import { bellState, diffQueue } from "@/lib/notify";
 import type { AttentionItem, AttentionReason, SessionId } from "@/wire/types";
 
 const item = (id: string, reason: AttentionReason, detail = "…"): AttentionItem => ({
@@ -68,5 +68,33 @@ describe("what the queue is worth announcing", () => {
     expect(out).toEqual([]);
     // Still remembered, or it would be re-examined on every snapshot.
     expect(next.get("a")).toBe("rate_limited");
+  });
+});
+
+/**
+ * What the bell will actually do. `R-C1`.
+ *
+ * Asked on 2026-08-07 — *"I tried to enable it, but I didn't see any behaviour
+ * changes"* — and the answer was that in the usual setup it cannot: `start.sh`
+ * runs the daemon as its own process, so the window is attached, and an
+ * attached window stays silent on purpose. The state existed; only the tooltip
+ * knew about it.
+ */
+describe("what the bell says it will do", () => {
+  it("is off when banners are off, whoever is hosting", () => {
+    expect(bellState(false, true)).toBe("off");
+    expect(bellState(false, false)).toBe("off");
+  });
+
+  it("speaks itself only when this window hosts the daemon", () => {
+    expect(bellState(true, true)).toBe("here");
+  });
+
+  /**
+   * The state that was invisible, and the one the question was about. Not an
+   * error — the daemon announces instead, which is what `--notify` is for.
+   */
+  it("says the daemon is the speaker when this window merely attached", () => {
+    expect(bellState(true, false)).toBe("elsewhere");
   });
 });
