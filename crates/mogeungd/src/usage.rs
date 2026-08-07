@@ -203,8 +203,23 @@ impl UsageScanner {
                 sessions,
             })
             .collect();
+        // **Newest `DAY_RETENTION` days, oldest first.**
+        //
+        // The reverse is how the *newest* are kept: a `BTreeMap` yields days
+        // ascending, so truncating it directly would throw away this week and
+        // keep last month. Reversing back afterwards is what was missing, and
+        // it shipped a chart that ran backwards — reported 2026-08-07 as *"the
+        // other graphs with a timeline move forward on the X-axis, that one
+        // looks reversed"*.
+        //
+        // Ascending is not an arbitrary pick between two conventions. It is
+        // what `insight.rs` already emits for `sessions_per_day` and
+        // `prompts_per_day`, which sit on the same dashboard — and a wire that
+        // hands two day-series to one screen in opposite orders is a wire that
+        // will keep producing this bug, whichever end fixes it this time.
         days.reverse();
         days.truncate(DAY_RETENTION);
+        days.reverse();
 
         let mut repos: Vec<RepoBurn> = repos
             .into_iter()
@@ -445,6 +460,45 @@ mod tests {
         assert_eq!(r.days.len(), 1);
         assert_eq!(r.window_tokens_out, 50, "burn just now is inside the window");
         assert!(r.est_window_limit_out.is_none(), "no hit, no estimate — never guess");
+    }
+
+    /// **Days come back oldest first, and they are the newest days.**
+    ///
+    /// Two properties that pull against each other, which is how the bug got
+    /// in: the reverse is there to keep *this* week rather than last month
+    /// when the list is truncated, and the chart needs *ascending* to draw a
+    /// timeline that runs forwards. Reversing back was missing, and the Token
+    /// burn chart ran right-to-left while the two beside it ran left-to-right.
+    ///
+    /// Ascending is also what `insight.rs` emits for `sessions_per_day` and
+    /// `prompts_per_day`. Same dashboard, so the same direction.
+    #[test]
+    fn days_run_forwards_and_keep_the_recent_ones() {
+        let dir = Scratch::new("day-order");
+        let slug = dir.path().join("-p");
+        std::fs::create_dir_all(&slug).unwrap();
+        let now = Utc::now();
+
+        // One line per day, going back further than the retention window.
+        let mut lines: Vec<String> = Vec::new();
+        for back in 0..(DAY_RETENTION as i64 + 5) {
+            let when = now - chrono::Duration::days(back);
+            lines.push(assistant_line(&iso(when), 10, 5, "/p"));
+        }
+        write_lines(&slug.join("aaaa.jsonl"), &lines);
+
+        let mut sc = UsageScanner::default();
+        let r = sc.report(dir.path(), now);
+
+        assert!(r.days.len() <= DAY_RETENTION, "capped");
+        let ordered: Vec<&str> = r.days.iter().map(|d| d.day.as_str()).collect();
+        let mut sorted = ordered.clone();
+        sorted.sort_unstable();
+        assert_eq!(ordered, sorted, "oldest first — a timeline that runs forwards");
+
+        // ...and it is the *recent* window that survived, not the oldest one.
+        let today = now.with_timezone(&Local).format("%Y-%m-%d").to_string();
+        assert_eq!(r.days.last().map(|d| d.day.as_str()), Some(today.as_str()), "today is the last day");
     }
 
     /// Incrementality: a second report reads only appended bytes, and the
