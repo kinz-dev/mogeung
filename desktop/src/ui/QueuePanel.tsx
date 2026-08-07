@@ -14,7 +14,13 @@ import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } f
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
-import { TAGS, compareByTagThenLabel, tagBg, tagColor, tagLabel } from "@/lib/tags";
+import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
+import { matchesFilter, visibleQueue } from "@/lib/queue";
+
+// Re-exported so `QueueFilter.test.ts` and anything else that learnt this name
+// here keeps working; it lives in `lib/queue.ts` now, where the keymap can
+// reach it without importing a component module.
+export { matchesFilter };
 import { InfoDock } from "@/ui/InfoDock";
 import { QUEUE_LIST_ID } from "@/lib/keymap";
 import { fmtDur, secsSince } from "@/lib/format";
@@ -103,49 +109,6 @@ export function labelColor(name: string): string {
   return palette[h % palette.length];
 }
 
-/**
- * Field filters — `repo:`, `branch:`, `file:`, `label:` — with bare words
- * falling through to a substring match over the label. A port of `filter.rs`.
- */
-export function matchesFilter(
-  s: Session,
-  label: string | undefined,
-  filter: string,
-  tag?: string,
-): boolean {
-  const q = filter.trim().toLowerCase();
-  if (!q) return true;
-  for (const term of q.split(/\s+/)) {
-    const colon = term.indexOf(":");
-    const field = colon > 0 ? term.slice(0, colon) : null;
-    const value = colon > 0 ? term.slice(colon + 1) : term;
-    if (!value) continue;
-    let hay: string;
-    switch (field) {
-      case "repo":
-        hay = repoName(s).toLowerCase();
-        break;
-      case "branch":
-        hay = (s.git_branch ?? "").toLowerCase();
-        break;
-      case "file":
-        hay = s.touched_files.join(" ").toLowerCase();
-        break;
-      case "label":
-        hay = (label ?? "").toLowerCase();
-        break;
-      // The colour by its own name, so "which were the red ones" is a query
-      // rather than a scroll. `tag:none` asks the opposite question.
-      case "tag":
-        hay = (tag ?? "none").toLowerCase();
-        break;
-      default:
-        hay = `${sessionLabel(s)} ${repoName(s)} ${label ?? ""}`.toLowerCase();
-    }
-    if (!hay.includes(value)) return false;
-  }
-  return true;
-}
 
 export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
   const queue = useStore((s) => s.queue);
@@ -157,25 +120,10 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
   const filter = useStore((s) => s.filter);
   const scoped = useStore((s) => s.scoped());
 
-  return useMemo(() => {
-    const rows: { item: AttentionItem; session: Session }[] = [];
-    for (const item of queue) {
-      const session = sessions[item.session_id];
-      if (!session) continue;
-      if (scoped.hidden.includes(session.id)) continue;
-      if (scope === "needs_you" && !needsHuman(item.reason)) continue;
-      if (scope === "live" && !session.alive) continue;
-      if (!matchesFilter(session, scoped.labels[session.id], filter, scoped.tags[session.id]))
-        continue;
-      rows.push({ item, session });
-    }
-    // Pin, then colour, then label — each keeping the attention rank
-    // underneath as the tiebreak. See `compareByTagThenLabel` for what that
-    // costs: the queue's own claim is that it is ranked by who needs you, and
-    // this puts two hand-made keys above the computed one.
-    rows.sort((a, b) => compareByTagThenLabel(a.session.id, b.session.id, scoped));
-    return rows;
-  }, [queue, sessions, scope, filter, scoped]);
+  return useMemo(
+    () => visibleQueue({ queue, sessions, scope, filter, scoped }),
+    [queue, sessions, scope, filter, scoped],
+  );
 }
 
 function Strip() {

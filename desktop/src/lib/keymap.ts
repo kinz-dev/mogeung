@@ -19,6 +19,7 @@ import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/s
 import { exportText } from "@/lib/tauri";
 import { focusPane, movePane, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
 import { nudgeAppZoom } from "@/lib/zoom";
+import { visibleQueue } from "@/lib/queue";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 import type { Direction } from "@/lib/spatial";
 
@@ -446,11 +447,28 @@ export const ACTIONS: Action[] = [
   },
 ];
 
+/**
+ * Step to the next session **as the queue is showing it**. `R-J13`.
+ *
+ * This walked the raw `queue` — straight from the daemon, unfiltered and in
+ * rank order — while the panel rendered a filtered, re-sorted list. So with a
+ * scope on, `j`/`k` and the arrows stepped through sessions that were not on
+ * screen, in an order that was not the visible one. Reported 2026-08-07 against
+ * the `live` filter.
+ *
+ * `visibleQueue` is now the single answer to *what is on screen and in what
+ * order*, and both the panel and this ask it. The bug was not the arithmetic;
+ * it was that there were two lists.
+ */
 function moveSelection(delta: number): void {
-  const { queue, sessions, selected, select } = useStore.getState();
-  const ids = queue.map((q) => q.session_id).filter((id) => sessions[id]);
+  const { queue, sessions, selected, select, prefs, filter, scoped } = useStore.getState();
+  const ids = visibleQueue({ queue, sessions, scope: prefs.scope, filter, scoped: scoped() }).map(
+    (r) => r.session.id,
+  );
   if (ids.length === 0) return;
   const at = selected ? ids.indexOf(selected) : -1;
+  // A selection that is filtered *out* is not "before the first row" — landing
+  // on the top is the only answer that does not depend on where it used to be.
   const next = at < 0 ? 0 : Math.min(ids.length - 1, Math.max(0, at + delta));
   select(ids[next]);
 }

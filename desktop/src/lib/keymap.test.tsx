@@ -395,6 +395,52 @@ describe("the keyboard", () => {
     }
   });
 
+  /**
+   * The arrows walk what is **on screen**. `R-J13`.
+   *
+   * `moveSelection` used the raw `queue` while the panel rendered a filtered,
+   * re-sorted list, so with the `live` scope on the arrows stepped onto
+   * sessions that were not visible. This presses the real key against the real
+   * window, because the bug was in the wiring between two lists rather than in
+   * either list.
+   */
+  it("steps over a session the live filter is hiding", async () => {
+    const { default: App } = await import("@/App");
+    const mk = (id: string, alive: boolean) =>
+      ({
+        id,
+        title: `session ${id}`,
+        cwd: "/tmp/r",
+        repo_root: "/tmp/r",
+        alive,
+        touched_files: [],
+        collisions: [],
+        verify_runs: [],
+        claims: [],
+        last_event_at: new Date().toISOString(),
+      }) as never;
+    render(<App />);
+    act(() => {
+      useStore.getState().setPrefs({ scope: "live" });
+      useStore.setState({
+        sessions: { a: mk("a", true), dead: mk("dead", false), b: mk("b", true) },
+        queue: [
+          { session_id: "a", reason: "running", score: 0, detail: "" },
+          { session_id: "dead", reason: "needs_review", score: 0, detail: "" },
+          { session_id: "b", reason: "running", score: 0, detail: "" },
+        ] as never,
+        selected: "a",
+      });
+    });
+
+    press("ArrowDown");
+    // Not `dead`, which the scope is hiding.
+    expect(useStore.getState().selected).toBe("b");
+
+    press("ArrowUp");
+    expect(useStore.getState().selected).toBe("a");
+  });
+
   /** The strip reads left to right, and so do the chords. */
   it("numbers the dock tools in the order they are drawn", async () => {
     const { DOCK_TOOLS } = await import("@/ui/BottomDock");

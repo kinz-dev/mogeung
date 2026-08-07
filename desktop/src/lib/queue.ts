@@ -1,0 +1,92 @@
+import { needsHuman, repoName, sessionLabel, type AttentionItem, type Session } from "@/wire/types";
+import { compareByTagThenLabel } from "@/lib/tags";
+import type { Scope, ScopedPrefs } from "@/store/prefs";
+
+/**
+ * Which sessions the queue is actually showing, and in what order. `R-J13`.
+ *
+ * **One definition, because there were two and they disagreed.** The panel
+ * rendered a filtered, re-sorted list; the keyboard walked the raw `queue`
+ * straight from the daemon. So with a scope on, `j`/`k` and the arrows stepped
+ * through sessions that were not on screen, in an order that was not the
+ * visible one — reported 2026-08-07 against the `live` filter.
+ *
+ * Kept as a **pure function over state** rather than a hook, so the keymap can
+ * ask the same question from outside React. It lives in `lib/` rather than
+ * beside the panel for the reason `panes.ts` already records: the keymap
+ * importing a component module is how a cycle starts.
+ */
+/**
+ * Field filters — `repo:`, `branch:`, `file:`, `label:` — with bare words
+ * falling through to a substring match over the label. A port of `filter.rs`.
+ */
+export function matchesFilter(
+  s: Session,
+  label: string | undefined,
+  filter: string,
+  tag?: string,
+): boolean {
+  const q = filter.trim().toLowerCase();
+  if (!q) return true;
+  for (const term of q.split(/\s+/)) {
+    const colon = term.indexOf(":");
+    const field = colon > 0 ? term.slice(0, colon) : null;
+    const value = colon > 0 ? term.slice(colon + 1) : term;
+    if (!value) continue;
+    let hay: string;
+    switch (field) {
+      case "repo":
+        hay = repoName(s).toLowerCase();
+        break;
+      case "branch":
+        hay = (s.git_branch ?? "").toLowerCase();
+        break;
+      case "file":
+        hay = s.touched_files.join(" ").toLowerCase();
+        break;
+      case "label":
+        hay = (label ?? "").toLowerCase();
+        break;
+      // The colour by its own name, so "which were the red ones" is a query
+      // rather than a scroll. `tag:none` asks the opposite question.
+      case "tag":
+        hay = (tag ?? "none").toLowerCase();
+        break;
+      default:
+        hay = `${sessionLabel(s)} ${repoName(s)} ${label ?? ""}`.toLowerCase();
+    }
+    if (!hay.includes(value)) return false;
+  }
+  return true;
+}
+
+export interface VisibleRow {
+  item: AttentionItem;
+  session: Session;
+}
+
+/** The rows the queue shows, in the order it shows them. */
+export function visibleQueue(s: {
+  queue: AttentionItem[];
+  sessions: Record<string, Session>;
+  scope: Scope;
+  filter: string;
+  scoped: ScopedPrefs;
+}): VisibleRow[] {
+  const rows: VisibleRow[] = [];
+  for (const item of s.queue) {
+    const session = s.sessions[item.session_id];
+    if (!session) continue;
+    if (s.scoped.hidden.includes(session.id)) continue;
+    if (s.scope === "needs_you" && !needsHuman(item.reason)) continue;
+    if (s.scope === "live" && !session.alive) continue;
+    if (!matchesFilter(session, s.scoped.labels[session.id], s.filter, s.scoped.tags[session.id])) continue;
+    rows.push({ item, session });
+  }
+  // Pin, then colour, then label — each keeping the attention rank underneath
+  // as the tiebreak. See `compareByTagThenLabel` for what that costs: the
+  // queue's own claim is that it is ranked by who needs you, and this puts two
+  // hand-made keys above the computed one.
+  rows.sort((a, b) => compareByTagThenLabel(a.session.id, b.session.id, s.scoped));
+  return rows;
+}
