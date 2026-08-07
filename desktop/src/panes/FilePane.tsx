@@ -322,7 +322,14 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // `h-full`, not `flex-1`, and the difference is the whole pane. `ZoomPane`
+    // is a *block* — `flex-1` on a child of it resolves to nothing, so the root
+    // sized to its content, the editor below it took `flex-1` of a height that
+    // was never distributed, and the file arrived as a sliver under its own
+    // toolbar. It worked before `R-B53` because this markup used to be a child
+    // of the Code pane's flex column; lifting it to be the pane root took the
+    // flex context away with it. Every other pane says `h-full` here.
+    <div className="flex h-full min-h-0 flex-col">
       {/*
         The controls row. With one file per pane the dockview tab already names
         the file, so this carries only what you *do* to it — and `head only`,
