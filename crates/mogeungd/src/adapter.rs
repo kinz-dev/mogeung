@@ -43,6 +43,12 @@ pub const KNOWN_IGNORED: &[&str] = &[
     // Links the CLI records after opening a PR or a frame.
     "pr-link",
     "frame-link",
+    // The web/desktop bridge's own bookkeeping: a session id, the bridge's id
+    // for it, and a sequence number. No content, no tokens, no tool use — the
+    // same category as the two above. Found 2026-08-07 by re-running the
+    // classification over the corpus, which had grown to 315 transcripts and
+    // sprouted a fourteenth type since the last sweep.
+    "bridge-session",
 ];
 
 /// Types this parser extracts data from.
@@ -641,11 +647,14 @@ mod tests {
         }
     }
 
-    /// Regression: these three exist in the real corpus and were being
-    /// swallowed by a catch-all. They were found *by* the canary.
+    /// Regression: these exist in the real corpus and were being swallowed by
+    /// a catch-all. The first three were found *by* the canary; `bridge-session`
+    /// was found on 2026-08-07 by re-running the sweep by hand, which is the
+    /// same check the canary makes at runtime and is worth doing when no daemon
+    /// has been up long enough to make it.
     #[test]
     fn types_found_in_the_real_corpus_are_all_classified() {
-        for ty in ["queue-operation", "pr-link", "frame-link"] {
+        for ty in ["queue-operation", "pr-link", "frame-link", "bridge-session"] {
             let line = format!(r#"{{"type":"{ty}","sessionId":"s"}}"#);
             assert_eq!(
                 class(&line),
