@@ -15,11 +15,12 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, Columns2, GitBranch, X } from "lucide-react";
+import { Anchor, Columns2, Folder, GitBranch, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { closeAgentPane, nextAgentSlot, parseFilePaneId, splitAgent } from "@/lib/panes";
 import { sessionLabel } from "@/wire/types";
+import { dirTail } from "@/lib/format";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { hostLabel, reachFor } from "@/lib/tmux";
 import { closeFile } from "@/lib/explorer";
@@ -140,6 +141,51 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
 }
 
 /**
+ * The session a pane is showing: the one it is held on, else the selected one.
+ *
+ * Both header components need this and both must answer it the same way, or a
+ * held pane would name one session on the left of its header and another on the
+ * right. `R-B49` is what lets the two differ at all.
+ */
+function usePaneSession(paneId: string | null) {
+  const held = useStore((s) => (paneId ? (s.scoped().paneHold[paneId] ?? null) : null));
+  const selected = useStore((s) => s.selected);
+  const id = held ?? selected;
+  const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
+  return { held, selected, id, session };
+}
+
+/**
+ * The directory the session was started in, on the left of the pane header.
+ * Asked for 2026-08-07, left-aligned by name.
+ *
+ * `cwd`, not `repo_root`: the question is where you ran `claude`, and the two
+ * differ whenever a session was started in a subdirectory — which is exactly
+ * the case where you want to be told.
+ *
+ * Shortened from the front, because the tail of a path is the part that
+ * identifies it, with the whole thing on hover. Dockview renders this container
+ * immediately after the tabs, so it costs the pane no vertical room and sits
+ * where reading starts.
+ */
+export function PaneCwd(props: IDockviewHeaderActionsProps) {
+  const paneId = props.activePanel?.id ?? null;
+  const { session } = usePaneSession(paneId);
+  if (!paneId || paneKind(paneId) !== "agent" || !session?.cwd) return null;
+  return (
+    <div className="flex h-full min-w-0 items-center pl-1.5">
+      <Dim
+        className="flex min-w-0 items-center gap-1 font-mono text-2xs"
+        title={`started in ${session.cwd}`}
+      >
+        <Folder className="h-3 w-3 shrink-0" />
+        <span className="max-w-[20rem] truncate">{dirTail(session.cwd)}</span>
+      </Dim>
+    </div>
+  );
+}
+
+/**
  * The controls for whichever pane is forward in this group.
  *
  * Rendered per group, so a split shows one set per half and a tabbed pair shows
@@ -150,10 +196,7 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
   const paneId = props.activePanel?.id ?? null;
   const kind = paneId ? paneKind(paneId) : null;
 
-  const held = useStore((s) => (paneId ? (s.scoped().paneHold[paneId] ?? null) : null));
-  const selected = useStore((s) => s.selected);
-  const id = held ?? selected;
-  const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
+  const { held, selected, session } = usePaneSession(paneId);
   const daemon = useStore((s) => s.daemon);
   const machineId = useStore((s) => s.machineId);
   const send = useStore((s) => s.send);

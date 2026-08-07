@@ -53,7 +53,7 @@ import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
 import { dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
 import { PaneScope, paneKind } from "@/lib/paneScope";
-import { PaneActions, PaneTab } from "@/ui/PaneChrome";
+import { PaneActions, PaneCwd, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
 
 /**
@@ -280,6 +280,11 @@ export default function App() {
                 // two groups and get one set of controls each, and tabbed
                 // together they are one group showing the active tab's.
                 rightHeaderActionsComponent={PaneActions}
+                // Left actions are drawn straight after the tabs, so the
+                // directory reads as part of the tab rather than as another
+                // control — which is the whole point of putting it here and not
+                // beside the branch.
+                leftHeaderActionsComponent={PaneCwd}
                 onReady={onReady}
                 className="dockview-theme-mogeung h-full"
               />

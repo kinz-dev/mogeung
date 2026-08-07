@@ -54,6 +54,31 @@ export function shortDir(path: string): string {
 }
 
 /**
+ * A directory shortened from the *front* — `…/projects/mogeung`.
+ *
+ * The end of a path is the part that identifies it; `/Users/someone/work/cl…`
+ * identifies nothing. So whole leading segments come off until it fits, and the
+ * caller keeps the untouched path on hover.
+ *
+ * Segments come off whole, never mid-name, because a half-cut directory name
+ * reads as a directory that exists. The one exception is a leaf longer than the
+ * budget on its own: there is nothing left to drop, so it is returned in full
+ * and the caller's CSS truncation is what stops it — a rare path paying for its
+ * own length rather than every path paying for it.
+ */
+export function dirTail(path: string, max = 34): string {
+  if (path.length <= max) return path;
+  const parts = path.split("/").filter(Boolean);
+  const kept: string[] = [];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const next = [parts[i], ...kept];
+    if (kept.length > 0 && next.join("/").length + 2 > max) break;
+    kept.unshift(parts[i]);
+  }
+  return `…/${kept.join("/")}`;
+}
+
+/**
  * One line of it, whitespace collapsed.
  *
  * A search result is a row, and a matched transcript turn is prose with
