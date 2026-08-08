@@ -17,6 +17,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Mermaid } from "@/ui/Mermaid";
+import type { ThemeMode } from "@/store/prefs";
 import {
   Bookmark,
   ChevronDown,
@@ -64,6 +66,7 @@ function kindColor(t: TranscriptEvent["kind"]["t"]): string {
 const Turn = memo(function Turn({
   ev,
   markdown,
+  theme,
   noteBody,
   onMark,
   onRemark,
@@ -72,6 +75,8 @@ const Turn = memo(function Turn({
 }: {
   ev: TranscriptEvent;
   markdown: boolean;
+  /** Only for the diagrams inside — a primitive, so the memo still holds. */
+  theme: ThemeMode;
   noteBody: string | null;
   onMark: (seq: number) => void;
   onRemark: (seq: number, text: string) => void;
@@ -188,7 +193,31 @@ const Turn = memo(function Turn({
           <Mono className="text-xs text-[var(--dim)]">{k.summary}</Mono>
         ) : markdown && (k.t === "assistant_text" || k.t === "user_prompt") ? (
           <div className="prose-mogeung">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {/* Diagrams in the conversation. `R-J23`, and the reason it took a
+                second row rather than arriving with `R-J22`: this pane
+                re-renders as a live session speaks, where the file pane shows
+                something that sits still. Three things make it affordable, and
+                all three live in `Mermaid` — it is memoised so a turn
+                re-rendering for an unrelated reason does not re-parse the
+                diagram inside it, rendered SVG is cached across mounts so this
+                pane's virtualiser can unmount and remount a turn freely, and a
+                chart that is still *changing* waits for quiet rather than
+                parsing every keystroke of a streaming answer. */}
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code({ className, children, ...rest }) {
+                  if (/\blanguage-mermaid\b/.test(className ?? "")) {
+                    return <Mermaid chart={String(children).trimEnd()} theme={theme} />;
+                  }
+                  return (
+                    <code className={className} {...rest}>
+                      {children}
+                    </code>
+                  );
+                },
+              }}
+            >
               {open || !long ? text : `${text.slice(0, 600)}…`}
             </ReactMarkdown>
           </div>
@@ -213,6 +242,8 @@ export function TranscriptPane() {
   const id = useStore((s) => s.selected);
   const events = useStore((s) => (s.selected ? s.events[s.selected] : undefined));
   const markdown = useStore((s) => s.prefs.markdown);
+  // Threaded to `Turn` for the diagrams inside it. `R-J23`.
+  const theme = useStore((s) => s.prefs.theme);
   const showThinking = useStore((s) => s.prefs.showThinking);
   const newestFirst = useStore((s) => s.prefs.newestFirst);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -547,6 +578,7 @@ export function TranscriptPane() {
                   <Turn
                     ev={ev}
                     markdown={markdown}
+                    theme={theme}
                     highlighted={highlightSeq === ev.seq}
                     noteBody={noteFor.get(ev.seq) ?? null}
                     onRemark={onRemark}

@@ -38,6 +38,8 @@ import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
 import { outline, symbolGlyph } from "@/lib/symbols";
 import { Input } from "@/ui/primitives";
 import ReactMarkdown from "react-markdown";
+import { Mermaid } from "@/ui/Mermaid";
+import type { ThemeMode } from "@/store/prefs";
 import remarkGfm from "remark-gfm";
 import { renderedLines } from "@/lib/markdown";
 import { best } from "@/lib/search";
@@ -65,9 +67,11 @@ import { best } from "@/lib/search";
 function MarkdownPreview({
   content,
   onEditSource,
+  theme,
 }: {
   content: string;
   onEditSource: (line: number) => void;
+  theme: ThemeMode;
 }) {
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
@@ -178,7 +182,31 @@ function MarkdownPreview({
       )}
       <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
         <div className="prose-mogeung">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          {/* **Only the fence is intercepted.** `code` fires for inline spans
+              too, and an inline `mermaid` is a word rather than a diagram —
+              the `language-mermaid` class is what tells them apart, and
+              anything else falls through to the code block it always was.
+
+              Deliberately the file pane alone (`R-J22`): `Mermaid` carries the
+              note on what extending it to the Transcript, Notes and Kit would
+              have to answer first. */}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              code({ className, children, ...rest }) {
+                if (/\blanguage-mermaid\b/.test(className ?? "")) {
+                  return <Mermaid chart={String(children).trimEnd()} theme={theme} />;
+                }
+                return (
+                  <code className={className} {...rest}>
+                    {children}
+                  </code>
+                );
+              },
+            }}
+          >
+            {content}
+          </ReactMarkdown>
         </div>
       </div>
     </div>
@@ -397,6 +425,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
       {preview && isMarkdown ? (
         <MarkdownPreview
           content={tab.content}
+          theme={theme}
           // A hit's whole point is that you can go and change it, so this both
           // leaves the rendering and asks the editor for that line. `gotoLine`
           // is the same channel a search hit and a diff row already use, and
