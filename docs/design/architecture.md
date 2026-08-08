@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-07
+updated: 2026-08-08
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -396,7 +396,11 @@ No supervisor, no child processes, no writes to `~/.claude`. See
 
 The daemon grew five read-side modules, each behind the existing scan or
 an on-demand endpoint: `usage.rs` (incremental token-burn scanner, byte
-offsets + hour/day buckets), `runner.rs` (the signal runner — the one
+offsets + hour/day buckets — and, since `R-J21`, a fold keyed by **model
+and local day** whose token buckets are split the way they are *priced*,
+so `pricing.rs` in the core crate can put a dollar figure on them per
+[ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md)),
+`runner.rs` (the signal runner — the one
 deliberate executor, click-only), `insight.rs` (cross-session search /
 digest / analytics engines), `docscan.rs` (markdown inventory,
 staleness, GC proposals), `codex.rs` (the `~/.codex` adapter; its scan
