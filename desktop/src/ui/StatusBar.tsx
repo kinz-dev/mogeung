@@ -29,7 +29,7 @@ export function StatusBar() {
           <Dim>
             {s.turns} turns · {s.tool_calls} tools
           </Dim>
-          <Dim title="tokens in / out. Tokens, never dollars — ADR-0005.">
+          <Dim title="tokens in / out. Tokens here, never dollars — cost lives on the Analytics view (ADR-0024).">
             {compact(s.tokens_in)} in · {compact(s.tokens_out)} out
           </Dim>
           {s.files_changed > 0 && (

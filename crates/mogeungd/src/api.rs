@@ -87,7 +87,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}/review_all", post(review_all))
         .route("/api/sessions/{id}/review", post(review_hunk))
         .route("/api/queue", get(get_queue))
-        // Tokens, never dollars (ADR-0005); any threshold inside is an
+        // Tokens, never dollars here (ADR-0024 confines cost to Analytics);
+        // any threshold inside is an
         // estimate from observed limit hits, not a quota. R-G1–R-G3.
         .route("/api/usage", get(get_usage))
         // Cross-session intelligence (pillar F) and docs (pillar H) — the

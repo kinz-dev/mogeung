@@ -4,7 +4,7 @@
  * `rank.test.ts` owns the matching. What these pin is the wiring — that the box
  * is actually there on the views that need one, that it cuts the list down and
  * says which engine did it, and that the chart is counts rather than the one
- * axis label ADR-0005 forbids.
+ * axis label ADR-0024 keeps off this view.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,14 +126,16 @@ describe("the shape of a counted list", () => {
   });
 
   /**
-   * ADR-0005, asserted rather than remembered. This is the one place in the
-   * product where a money axis would be three lines away and would look
-   * perfectly reasonable in a screenshot.
+   * ADR-0024, asserted rather than remembered. Dollars now exist in this
+   * product — on the **Analytics** view, labelled and dated — which makes this
+   * test more load-bearing rather than less: the rule it pins is that they do
+   * not leak from there onto a frequency chart three lines away, where a money
+   * axis would look perfectly reasonable in a screenshot.
    */
   it("never puts money on an axis", () => {
     show("Prompts");
     // Currency and units only. An earlier version of this grepped for the word
-    // "cost" and failed on the chart's own hint — *"never by cost (ADR-0005)"* —
+    // "cost" and failed on the chart's own hint — *"never by cost (ADR-0024)"* —
     // which is the disclaimer, not a violation. A test that cannot tell a rule
     // from its statement is a test that punishes writing the rule down.
     expect(document.body.textContent ?? "").not.toMatch(/[$£€]|\bUSD\b|\bdollars?\b/i);

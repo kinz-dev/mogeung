@@ -235,7 +235,7 @@ export function WallOverlay() {
                     </span>
                   )}
                   {s.tokens_out > 0 && (
-                    <span title="tokens out — never money, ADR-0005">{compact(s.tokens_out)} out</span>
+                    <span title="tokens out — never money on the wall (ADR-0024)">{compact(s.tokens_out)} out</span>
                   )}
                   {s.collisions.length > 0 && (
                     <span className="text-[var(--amber)]" title="another live session is editing the same file">

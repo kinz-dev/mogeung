@@ -14,7 +14,10 @@
 //! keeping every message timestamp.
 
 use chrono::{DateTime, Local, Utc};
-use mogeung_core::usage::{DayBurn, LimitHit, RepoBurn, SessionBurn, UsageReport};
+use mogeung_core::pricing;
+use mogeung_core::usage::{
+    DayBurn, LimitHit, ModelBurn, RepoBurn, SessionBurn, TokenSplit, UsageReport,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom};
@@ -30,6 +33,14 @@ const MAX_HITS: usize = 20;
 /// The window the CLI enforces. Not configurable because it is not ours.
 const WINDOW_HOURS: i64 = 5;
 
+/// A model as the price table sees it: the id the transcript wrote, and
+/// whether the message ran in fast mode. Two prices, so two keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct ModelKey {
+    model: String,
+    fast: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 struct FileUsage {
     /// Bytes of the file already folded into the aggregates.
@@ -37,10 +48,23 @@ struct FileUsage {
     session_id: String,
     /// Last path segment of the last cwd seen — display attribution only.
     repo: String,
-    /// Local `YYYY-MM-DD` → (tokens_in, tokens_out).
-    days: BTreeMap<String, (u64, u64)>,
+    /// Local `YYYY-MM-DD` → per-model split. `R-J21`.
+    ///
+    /// Keyed by day **and** model because both halves of the cost question
+    /// need it: a rate can change between days, and two models on one day cost
+    /// different amounts for identical tokens.
+    days: BTreeMap<String, HashMap<ModelKey, TokenSplit>>,
     /// Unix-hour (`ts / 3600`) → (tokens_in, tokens_out).
+    ///
+    /// Deliberately **not** split by model: these buckets exist for the
+    /// five-hour window estimate, which is about the rate limit and knows
+    /// nothing about price.
     hours: BTreeMap<i64, (u64, u64)>,
+    /// All-time per model, which outlives `days` — day buckets are pruned at
+    /// `DAY_RETENTION`, and "what has Opus cost me overall" must not quietly
+    /// become "in the last 60 days".
+    by_model: HashMap<ModelKey, TokenSplit>,
+    messages_by_model: HashMap<ModelKey, u64>,
     hits: Vec<(DateTime<Utc>, Option<String>)>,
     tokens_in: u64,
     tokens_out: u64,
@@ -121,6 +145,9 @@ impl UsageScanner {
     }
 
     fn aggregate(&self, now: DateTime<Utc>) -> UsageReport {
+        // Per day and per model, then per model all-time. `R-J21`.
+        let mut day_models: BTreeMap<String, HashMap<ModelKey, TokenSplit>> = BTreeMap::new();
+        let mut all_models: HashMap<ModelKey, (TokenSplit, u64)> = HashMap::new();
         let mut days: BTreeMap<String, (u64, u64, u32)> = BTreeMap::new();
         let mut repos: HashMap<String, (u64, u64, u32)> = HashMap::new();
         let mut sessions: HashMap<String, SessionBurn> = HashMap::new();
@@ -134,11 +161,20 @@ impl UsageScanner {
             if fu.skipped {
                 skipped += 1;
             }
-            for (day, (i, o)) in &fu.days {
+            for (day, models) in &fu.days {
                 let e = days.entry(day.clone()).or_default();
-                e.0 += i;
-                e.1 += o;
+                let into = day_models.entry(day.clone()).or_default();
+                for (key, split) in models {
+                    e.0 += split.total_in();
+                    e.1 += split.out;
+                    into.entry(key.clone()).or_default().add(split);
+                }
                 e.2 += 1;
+            }
+            for (key, split) in &fu.by_model {
+                let e = all_models.entry(key.clone()).or_default();
+                e.0.add(split);
+                e.1 += fu.messages_by_model.get(key).copied().unwrap_or(0);
             }
             for (h, (i, o)) in &fu.hours {
                 let e = all_hours.entry(*h).or_default();
@@ -194,13 +230,28 @@ impl UsageScanner {
             .filter(|w| *w > 0)
             .min();
 
+        // Priced per day, because a rate belongs to the days it was in force.
         let mut days: Vec<DayBurn> = days
             .into_iter()
-            .map(|(day, (tokens_in, tokens_out, sessions))| DayBurn {
-                day,
-                tokens_in,
-                tokens_out,
-                sessions,
+            .map(|(day, (tokens_in, tokens_out, sessions))| {
+                let by_model = rank(
+                    day_models
+                        .remove(&day)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(k, tokens)| (k, tokens, 0))
+                        .collect(),
+                    &day,
+                );
+                let cost_usd = by_model.iter().filter_map(|m| m.cost_usd).sum();
+                DayBurn {
+                    day,
+                    tokens_in,
+                    tokens_out,
+                    sessions,
+                    by_model,
+                    cost_usd,
+                }
             })
             .collect();
         // **Newest `DAY_RETENTION` days, oldest first.**
@@ -240,6 +291,36 @@ impl UsageScanner {
         });
         sessions.truncate(100);
 
+        // All-time per model, priced at **today's** rate. Stated because it is
+        // a real approximation: the per-day figures above use the rate in
+        // force on each day, and only the lifetime rollup — which has no one
+        // day to belong to — flattens that. It differs from the sum of the
+        // days only for a model whose rate has changed, and the days are the
+        // series the charts draw.
+        let today = now.with_timezone(&Local).format("%Y-%m-%d").to_string();
+        let models = rank(
+            all_models
+                .into_iter()
+                .map(|(k, (tokens, messages))| (k, tokens, messages))
+                .collect(),
+            &today,
+        );
+        let cost_usd_total = models.iter().filter_map(|m| m.cost_usd).sum();
+        let cost_usd_today = days
+            .iter()
+            .find(|d| d.day == today)
+            .map(|d| d.cost_usd)
+            .unwrap_or(0.0);
+        // Named once each, in a stable order, so the client can say *which*
+        // models are missing from the total rather than only that some are.
+        let mut unpriced: Vec<String> = models
+            .iter()
+            .filter(|m| m.cost_usd.is_none())
+            .map(|m| if m.fast { format!("{} (fast)", m.model) } else { m.model.clone() })
+            .collect();
+        unpriced.sort();
+        unpriced.dedup();
+
         UsageReport {
             days,
             repos,
@@ -248,11 +329,40 @@ impl UsageScanner {
             window_tokens_out,
             limit_hits,
             est_window_limit_out,
+            models,
+            cost_usd_total,
+            cost_usd_today,
+            unpriced_models: unpriced,
+            rates_as_of: pricing::RATES_AS_OF.to_string(),
             generated_at: Some(now),
             files_scanned: scanned,
             files_skipped: skipped,
         }
     }
+}
+
+/// Price a set of models and order them the way they are read: dearest first,
+/// and — since an unpriced model has no cost to sort on — by tokens after
+/// that, so a model we cannot price still lands near the top when it is big.
+fn rank(rows: Vec<(ModelKey, TokenSplit, u64)>, day: &str) -> Vec<ModelBurn> {
+    let mut out: Vec<ModelBurn> = rows
+        .into_iter()
+        .map(|(key, tokens, messages)| ModelBurn {
+            cost_usd: pricing::cost_usd(&key.model, key.fast, day, &tokens),
+            model: key.model,
+            fast: key.fast,
+            tokens,
+            messages,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.cost_usd
+            .unwrap_or(0.0)
+            .total_cmp(&a.cost_usd.unwrap_or(0.0))
+            .then(b.tokens.out.cmp(&a.tokens.out))
+            .then(a.model.cmp(&b.model))
+    });
+    out
 }
 
 /// The session a transcript belongs to. Subagent transcripts live at
@@ -333,20 +443,76 @@ fn fold_line(entry: &mut FileUsage, line: &str) {
         return;
     };
     let n = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    let tin = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
-    let tout = n("output_tokens");
+
+    /// The two ephemeral cache tiers, when the CLI breaks them out.
+    ///
+    /// `cache_creation` is an object beside the flat
+    /// `cache_creation_input_tokens` — every message in a 2026-08-08 sweep of
+    /// this machine's corpus carried both, with the object holding
+    /// `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`. They are
+    /// priced differently (1.25× and 2× fresh input), so the split is worth
+    /// reading. **It degrades rather than assumes**: an absent or unfamiliar
+    /// object leaves everything on the 5-minute tier, which is the cheaper of
+    /// the two and the overwhelmingly common one — an under-count that is
+    /// visible as a wrong total, rather than a panic on a format nobody
+    /// documents (`A4`).
+    fn cache_tiers(usage: &Value, flat_total: u64) -> (u64, u64) {
+        let Some(o) = usage.get("cache_creation").and_then(|c| c.as_object()) else {
+            return (flat_total, 0);
+        };
+        let g = |k: &str| o.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let (five, hour) = (g("ephemeral_5m_input_tokens"), g("ephemeral_1h_input_tokens"));
+        // The object is authoritative only if it accounts for the flat number.
+        // A future third tier would otherwise vanish from the total entirely.
+        if five + hour == flat_total {
+            (five, hour)
+        } else {
+            (flat_total, 0)
+        }
+    }
+
+    let writes = n("cache_creation_input_tokens");
+    let (write_5m, write_1h) = cache_tiers(usage, writes);
+    let split = TokenSplit {
+        fresh_in: n("input_tokens"),
+        cache_read: n("cache_read_input_tokens"),
+        cache_write_5m: write_5m,
+        cache_write_1h: write_1h,
+        out: n("output_tokens"),
+    };
+    let tin = split.total_in();
+    let tout = split.out;
     if tin == 0 && tout == 0 {
         return;
     }
     entry.tokens_in += tin;
     entry.tokens_out += tout;
+
+    // The model this message ran on. Absent on a handful of lines even in a
+    // healthy corpus, and an unnamed model cannot be priced — it is counted
+    // under `?`, which the report carries as unpriced rather than as free.
+    let key = ModelKey {
+        model: msg
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        fast: usage.get("speed").and_then(|s| s.as_str()) == Some("fast"),
+    };
+    entry.by_model.entry(key.clone()).or_default().add(&split);
+    *entry.messages_by_model.entry(key.clone()).or_default() += 1;
+
     let Some(ts) = ts else {
         return;
     };
     let day = ts.with_timezone(&Local).format("%Y-%m-%d").to_string();
-    let d = entry.days.entry(day).or_default();
-    d.0 += tin;
-    d.1 += tout;
+    entry
+        .days
+        .entry(day)
+        .or_default()
+        .entry(key)
+        .or_default()
+        .add(&split);
     let h = entry.hours.entry(ts.timestamp() / 3600).or_default();
     h.0 += tin;
     h.1 += tout;
@@ -583,6 +749,128 @@ mod tests {
         std::fs::write(&file, assistant_line(&iso(now), 10, 3, "/p") + "\n").unwrap();
         let r = sc.report(dir.path(), now);
         assert_eq!(r.sessions[0].tokens_out, 3);
+    }
+
+    /// A line as the CLI actually writes one, cache buckets and all — the
+    /// shape a 2026-08-08 sweep of this machine's 54 transcripts found on
+    /// every one of 9,018 usage-bearing messages.
+    fn priced_line(ts: &str, model: &str, fresh: u64, read: u64, w5: u64, w1h: u64, out: u64) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","cwd":"/p","message":{{"model":"{model}","content":[],"usage":{{"input_tokens":{fresh},"cache_read_input_tokens":{read},"cache_creation_input_tokens":{},"cache_creation":{{"ephemeral_5m_input_tokens":{w5},"ephemeral_1h_input_tokens":{w1h}}},"output_tokens":{out},"service_tier":"standard","speed":"standard"}}}}}}"#,
+            w5 + w1h
+        )
+    }
+
+    /// The per-model split, and the cost that hangs off it. `R-J21`.
+    #[test]
+    fn burn_is_attributed_to_the_model_that_spent_it() {
+        let dir = Scratch::new("models");
+        let slug = dir.path().join("-p");
+        std::fs::create_dir_all(&slug).unwrap();
+        let now = Utc::now();
+        write_lines(
+            &slug.join("s1.jsonl"),
+            &[
+                priced_line(&iso(now), "claude-opus-5", 1_000_000, 0, 0, 0, 1_000_000),
+                priced_line(&iso(now), "claude-haiku-4-5", 1_000_000, 0, 0, 0, 0),
+            ],
+        );
+        let mut sc = UsageScanner::default();
+        let r = sc.report(dir.path(), now);
+
+        assert_eq!(r.models.len(), 2, "two models, two rows");
+        // Dearest first: Opus at $5 in + $25 out beats Haiku's $1.
+        assert_eq!(r.models[0].model, "claude-opus-5");
+        assert!((r.models[0].cost_usd.unwrap() - 30.0).abs() < 1e-9);
+        assert!((r.models[1].cost_usd.unwrap() - 1.0).abs() < 1e-9);
+        assert!((r.cost_usd_total - 31.0).abs() < 1e-9);
+        assert!((r.cost_usd_today - 31.0).abs() < 1e-9, "all of it burned today");
+        assert_eq!(r.days.len(), 1);
+        assert_eq!(r.days[0].by_model.len(), 2, "the day carries the split too");
+        assert!(r.unpriced_models.is_empty());
+        assert_eq!(r.rates_as_of, mogeung_core::pricing::RATES_AS_OF);
+    }
+
+    /// **The bug the split exists to prevent.** Before `R-J21` all three input
+    /// buckets were summed into one `tokens_in`; costing that would price a
+    /// cached read at ten times what it costs. The token totals must not
+    /// change — only their attribution.
+    #[test]
+    fn a_cached_read_costs_a_tenth_and_still_counts_whole() {
+        let dir = Scratch::new("cache");
+        let slug = dir.path().join("-p");
+        std::fs::create_dir_all(&slug).unwrap();
+        let now = Utc::now();
+        write_lines(
+            &slug.join("s1.jsonl"),
+            &[priced_line(&iso(now), "claude-opus-5", 0, 1_000_000, 0, 0, 0)],
+        );
+        let mut sc = UsageScanner::default();
+        let r = sc.report(dir.path(), now);
+
+        assert_eq!(r.days[0].tokens_in, 1_000_000, "still a million tokens in");
+        assert!(
+            (r.cost_usd_total - 0.5).abs() < 1e-9,
+            "priced as a cache read ($0.50), not as fresh input ($5): {}",
+            r.cost_usd_total
+        );
+    }
+
+    /// The two cache tiers are priced differently, and the flat total is the
+    /// arbiter: an object that does not account for it is not trusted.
+    #[test]
+    fn cache_writes_split_by_tier_and_degrade_to_the_cheaper_one() {
+        let dir = Scratch::new("tiers");
+        let slug = dir.path().join("-p");
+        std::fs::create_dir_all(&slug).unwrap();
+        let now = Utc::now();
+        // 1M on the 5-minute tier (1.25×) and 1M on the hour tier (2×).
+        write_lines(
+            &slug.join("s1.jsonl"),
+            &[priced_line(&iso(now), "claude-opus-5", 0, 0, 1_000_000, 1_000_000, 0)],
+        );
+        let mut sc = UsageScanner::default();
+        let r = sc.report(dir.path(), now);
+        assert!((r.cost_usd_total - (6.25 + 10.0)).abs() < 1e-9, "{}", r.cost_usd_total);
+
+        // No `cache_creation` object at all — an older or newer CLI. Everything
+        // lands on the cheaper tier rather than panicking or vanishing (`A4`).
+        let dir2 = Scratch::new("tiers-flat");
+        let slug2 = dir2.path().join("-p");
+        std::fs::create_dir_all(&slug2).unwrap();
+        write_lines(
+            &slug2.join("s1.jsonl"),
+            &[format!(
+                r#"{{"type":"assistant","timestamp":"{}","cwd":"/p","message":{{"model":"claude-opus-5","content":[],"usage":{{"input_tokens":0,"cache_creation_input_tokens":2000000,"output_tokens":0}}}}}}"#,
+                iso(now)
+            )],
+        );
+        let mut sc2 = UsageScanner::default();
+        let r2 = sc2.report(dir2.path(), now);
+        assert!((r2.cost_usd_total - 12.5).abs() < 1e-9, "2M at 1.25× = $12.50");
+        assert_eq!(r2.days[0].tokens_in, 2_000_000, "and none of it is lost");
+    }
+
+    /// **Unpriced is not free.** A model with no published rate is named, its
+    /// tokens are counted, and its dollars are absent from the total — the
+    /// client shows the gap rather than a suspiciously cheap month.
+    #[test]
+    fn an_unpriced_model_is_named_rather_than_costed_at_zero() {
+        let dir = Scratch::new("unpriced");
+        let slug = dir.path().join("-p");
+        std::fs::create_dir_all(&slug).unwrap();
+        let now = Utc::now();
+        write_lines(
+            &slug.join("s1.jsonl"),
+            &[priced_line(&iso(now), "claude-nonesuch-9", 1_000_000, 0, 0, 0, 500)],
+        );
+        let mut sc = UsageScanner::default();
+        let r = sc.report(dir.path(), now);
+
+        assert_eq!(r.unpriced_models, vec!["claude-nonesuch-9"]);
+        assert_eq!(r.models[0].cost_usd, None, "no rate is not a zero rate");
+        assert_eq!(r.cost_usd_total, 0.0);
+        assert_eq!(r.models[0].tokens.fresh_in, 1_000_000, "counted all the same");
     }
 
     #[test]

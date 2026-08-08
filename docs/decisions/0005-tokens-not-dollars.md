@@ -1,7 +1,8 @@
 ---
 title: Report tokens, not dollars
-status: active
-updated: 2026-07-25
+status: superseded
+superseded_by: ADR-0024
+updated: 2026-08-08
 decided: 2026-07-25
 ---
 
