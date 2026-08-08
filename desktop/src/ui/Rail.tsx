@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Bookmark, ChevronRight, Folder, NotebookPen, Search } from "lucide-react";
 import { useStore } from "@/store";
+import { useChord } from "@/lib/keymap";
 import type { RailTool } from "@/store/prefs";
 import { IconButton, Tooltip } from "@/ui/primitives";
 import { FilesTool } from "@/ui/tools/FilesTool";
@@ -22,14 +23,31 @@ import { NotesTool } from "@/ui/tools/NotesTool";
 import { BookmarksTool } from "@/ui/tools/BookmarksTool";
 import { ZoomPane } from "@/ui/ZoomPane";
 
-const TOOLS: { id: RailTool; label: string; key: string; icon: typeof Folder }[] = [
-  { id: "files", label: "Files", key: "Alt+4", icon: Folder },
-  { id: "search", label: "Search", key: "Alt+5", icon: Search },
-  { id: "notes", label: "Notes", key: "Alt+6", icon: NotebookPen },
-  { id: "bookmarks", label: "Bookmarks", key: "Alt+7", icon: Bookmark },
+/**
+ * The chord comes from the keymap rather than from a string here. `R-J19`.
+ *
+ * These four said `Alt+4`–`Alt+7`, which had not been the rail's chords since
+ * `R-B47` moved the digits to the dock strip — the tooltips had been naming
+ * the *dock's* keys for two days, and a tooltip that gives you the wrong key
+ * is worse than one that gives you none. Reading `ACTIONS` also means they
+ * follow a rebind, and say `⌘F` rather than `Alt+F` on a Mac.
+ */
+const TOOLS: { id: RailTool; label: string; icon: typeof Folder }[] = [
+  { id: "files", label: "Files", icon: Folder },
+  { id: "search", label: "Search", icon: Search },
+  { id: "notes", label: "Notes", icon: NotebookPen },
+  { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
 ];
 
 export function Rail() {
+  // One call per tool rather than a hook in the loop below — same four, in
+  // fixed order, and lint will not have to take that on trust.
+  const chords: Record<RailTool, string> = {
+    files: useChord("rail.files"),
+    search: useChord("rail.search"),
+    notes: useChord("rail.notes"),
+    bookmarks: useChord("rail.bookmarks"),
+  };
   const rail = useStore((s) => s.prefs.rail);
   const railWidth = useStore((s) => s.prefs.railWidth);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -86,9 +104,10 @@ export function Rail() {
       <div className="flex w-[30px] shrink-0 flex-col items-center gap-2 border-l border-[var(--border)] py-2">
         {TOOLS.map((t) => {
           const Icon = t.icon;
+          const hint = `${t.label}${chords[t.id] ? `  (${chords[t.id]})` : ""}`;
           return (
-            <Tooltip key={t.id} content={`${t.label}  (${t.key})`}>
-              <IconButton title={`${t.label}  (${t.key})`} active={rail === t.id} onClick={() => show(t.id)}>
+            <Tooltip key={t.id} content={hint}>
+              <IconButton title={hint} active={rail === t.id} onClick={() => show(t.id)}>
                 <Icon size={14} />
               </IconButton>
             </Tooltip>
