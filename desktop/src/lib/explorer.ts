@@ -153,6 +153,26 @@ export function reveal(id: SessionId, path: string): void {
   patchExplorer(id, { expanded: [...st.expanded, ...want], reveal: path });
 }
 
+/**
+ * Reveal a file in the Files rail, opening the rail if it is shut. `R-J24`.
+ *
+ * `reveal` alone expands the ancestors and marks the row, which is silent when
+ * the tree is not on screen — so the gesture has to bring the tree with it, or
+ * it looks like nothing happened.
+ *
+ * **It moves the selection when it has to.** The tree shows the *selected*
+ * session's worktree; a file pane is bound to the session that opened it
+ * (`R-B53`) and the two can differ. Revealing into the wrong worktree would
+ * silently expand directories that do not contain the file, so the selection
+ * follows the file rather than the reveal failing quietly.
+ */
+export function revealInFiles(id: SessionId, path: string): void {
+  const { prefs, setPrefs, selected, select } = useStore.getState();
+  if (selected !== id) select(id);
+  if (prefs.rail !== "files") setPrefs({ rail: "files" });
+  reveal(id, path);
+}
+
 export function join(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }

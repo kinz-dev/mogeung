@@ -242,6 +242,9 @@ export default function App() {
     // That is not a bug so much as what "unheld" means, and it does not arise
     // in the arrangement this was asked for, where every pane is held.
     event.api.onDidActivePanelChange((panel) => {
+      // Mirrored for the rail, which is outside dockview and cannot ask.
+      // `R-J25`. Written before the agent-specific handling below returns.
+      useStore.setState({ activePane: panel?.id ?? null });
       if (!panel || paneKind(panel.id) !== "agent") return;
       const { scoped, selected, select } = useStore.getState();
       const held = scoped().paneHold[panel.id];

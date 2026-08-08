@@ -23,7 +23,9 @@ import { sessionLabel } from "@/wire/types";
 import { dirTail } from "@/lib/format";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { hostLabel, reachFor } from "@/lib/tmux";
-import { closeFile } from "@/lib/explorer";
+import { closeFile, revealInFiles } from "@/lib/explorer";
+import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
+import { writeClipboard } from "@/lib/clipboard";
 
 /**
  * What a pane's tab should read, whether it is held, and what to say on hover.
@@ -52,11 +54,24 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
   const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
   const label = useStore((s) => (id ? (s.scoped().labels[id] ?? null) : null));
   const file = fileOf(paneId);
+  // The file's **own** session, which is not necessarily the selected one — a
+  // file pane stays put when the queue moves (`R-B53`), so asking `selected`
+  // for its root would name the wrong repository the moment you clicked away.
+  const fileRoot = useStore((s) => {
+    if (!file) return null;
+    const owner = s.sessions[file.session];
+    return owner ? (owner.repo_root || owner.cwd) : null;
+  });
   if (file) {
     return {
       text: file.name,
       held: false,
-      hint: `${file.path} — read-only, and bound to the session that opened it`,
+      // **The whole path, since `R-J24`.** It used to be the repo-relative one,
+      // which is the half you already have: the tab says the basename and the
+      // strip under it says the rest of the relative path. What neither said is
+      // *which checkout* — and with two agents in two worktrees of the same
+      // repo, `src/lib.rs` is the ambiguous half of the answer.
+      hint: `${fullPath(fileRoot, file.path)} — read-only, and bound to the session that opened it`,
     };
   }
   if (kind !== "agent") return { text: fallback, held: false, hint: fallback };
@@ -86,6 +101,12 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
  * carries the path and a tab wide enough for `desktop/src/ui/PaneChrome.tsx`
  * leaves no room for the pane beside it.
  */
+/** Absolute where the session's root is known, relative where it is not — a
+ *  path that pretends to be absolute is worse than one that admits it is not. */
+export function fullPath(root: string | null, path: string): string {
+  return root ? `${root.replace(/\/$/, "")}/${path}` : path;
+}
+
 function fileOf(paneId: string): { name: string; path: string; session: string; rev: string | null } | null {
   const ref = parseFilePaneId(paneId);
   if (!ref) return null;
@@ -111,7 +132,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
 
   const { text, held, hint } = usePaneTitle(props.api.id, fallback);
   const file = fileOf(props.api.id);
-  return (
+  const root = useStore((s) => {
+    if (!file) return null;
+    const owner = s.sessions[file.session];
+    return owner ? (owner.repo_root || owner.cwd) : null;
+  });
+
+  const tab = (
     <div className="dv-default-tab" title={hint}>
       {held && <Anchor className="mr-1 h-3 w-3 shrink-0 text-[var(--blue)]" aria-label="held" />}
       <span className="dv-default-tab-content">{text}</span>
@@ -138,6 +165,45 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
       )}
     </div>
   );
+
+  // **Only a file gets a menu.** `R-J24`. The other tabs have nothing to copy
+  // — an Agent pane's "path" is a tmux target and a dock tool has none at all
+  // — and a menu that opens with one greyed item is worse than no menu.
+  if (!file) return tab;
+
+  return (
+    <ContextMenu trigger={tab}>
+      <MenuLabel>{file.name}</MenuLabel>
+      <MenuItem onSelect={() => void copyPath(fullPath(root, file.path), "full path")}>
+        Copy full path
+      </MenuItem>
+      <MenuItem onSelect={() => void copyPath(file.path, "path")}>Copy path in the repo</MenuItem>
+      <MenuItem onSelect={() => void copyPath(file.name, "file name")}>Copy file name</MenuItem>
+      <MenuSeparator />
+      {/* The other half of `R-J25`: the tree can follow you continuously, and
+          this is the same gesture for someone who does not want it to. */}
+      <MenuItem onSelect={() => revealInFiles(file.session, file.path)}>Reveal in Files</MenuItem>
+      <MenuSeparator />
+      <MenuItem onSelect={() => closeFile(file.session, file.path, file.rev)}>Close</MenuItem>
+    </ContextMenu>
+  );
+}
+
+/**
+ * Copy, and say so. `R-J24`.
+ *
+ * The notice is not decoration: a clipboard write is the one action in this
+ * window with no visible result at all, so without it the only way to know
+ * whether the menu did anything is to go and paste somewhere.
+ */
+async function copyPath(text: string, what: string): Promise<void> {
+  const { pushNotice, pushError } = useStore.getState();
+  try {
+    await writeClipboard(text);
+    pushNotice(`${what} copied — ${text}`);
+  } catch (e) {
+    pushError(`could not copy: ${String(e)}`);
+  }
 }
 
 /**

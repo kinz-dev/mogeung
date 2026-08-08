@@ -20,6 +20,8 @@ import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/s
 import { exportText } from "@/lib/tauri";
 import { focusPane, movePane, parseFilePaneId, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
 import { closeFile } from "@/lib/explorer";
+import { fullPath } from "@/ui/PaneChrome";
+import { writeClipboard } from "@/lib/clipboard";
 import { nudgeAppZoom } from "@/lib/zoom";
 import { visibleQueue } from "@/lib/queue";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
@@ -111,6 +113,38 @@ export const ACTIONS: Action[] = [
       const open = selected ? explorer[selected]?.open : undefined;
       const last = open?.[open.length - 1];
       if (selected && last) showFilePane(selected, last.path, last.rev);
+    },
+  },
+
+  {
+    id: "file.copy_path",
+    label: "Copy the full path of the file you are reading",
+    group: "Panes",
+    /**
+     * `Ctrl+Alt+Shift+C`, and `⌘⌥C` on a Mac. `R-J24`.
+     *
+     * **Not `Ctrl+Shift+C`**, which is the obvious spelling and is already
+     * spoken for: it is the terminal's copy-the-selection chord
+     * (`clipboard.ts`), and a chord this window claims is one it
+     * `preventDefault`s — so binding it here would take copy away from every
+     * embedded terminal. That is `R-B47`'s lesson (`Alt+T` was Claude Code's
+     * own *toggle thinking*) applied before it could be re-learnt.
+     *
+     * The Mac chord is not a translation of the Linux one but the platform's
+     * own: `⌘⌥C` is what Finder binds to *copy the path of the selection*, so
+     * the hand that knows it already knows this.
+     */
+    keys: ["Control+Alt+Shift+c"],
+    run: (dock) => {
+      const id = dock?.activePanel?.id;
+      const ref = id ? parseFilePaneId(id) : null;
+      if (!ref) return;
+      const { sessions, pushNotice, pushError } = useStore.getState();
+      const owner = sessions[ref.session];
+      const path = fullPath(owner ? owner.repo_root || owner.cwd : null, ref.path);
+      void writeClipboard(path)
+        .then(() => pushNotice(`full path copied — ${path}`))
+        .catch((e) => pushError(`could not copy: ${String(e)}`));
     },
   },
 
@@ -548,6 +582,11 @@ export const MAC_KEYS: Record<string, string[]> = {
   wall: ["Alt+KeyW"], // `⌘W` closes the window
   health: ["Alt+KeyH"], // `⌘H` hides the application
   keymap: ["Alt+KeyK"], // `⌘K` is the palette
+  // Finder's own copy-the-path chord, rather than a translation of ours —
+  // spelled by physical key because `Alt` is in it, and `leave no Option chord
+  // spelled by character` caught the first attempt. Whether macOS composes a
+  // character under ⌘⌥ is exactly the kind of thing worth not betting on.
+  "file.copy_path": ["Meta+Alt+KeyC"],
   // These two stay beside the pane they act on rather than following the
   // free-`⌘` rule: splitting the Agent pane is `⌥⇧A` because reaching it is
   // `⌥A`, and a family split across two modifiers is a family you have to
