@@ -68,10 +68,22 @@ function MarkdownPreview({
   content,
   onEditSource,
   theme,
+  zoom,
 }: {
   content: string;
   onEditSource: (line: number) => void;
   theme: ThemeMode;
+  /**
+   * Ctrl+wheel, applied here rather than by `ZoomPane`. `R-J26`.
+   *
+   * The file pane is registered `scale={false}` because Monaco takes the
+   * factor as a **font size** — CSS `zoom` over an editor that measures in
+   * device pixels puts a click at the wrong character. The preview is not
+   * Monaco and has no such reader, so with the wrapper's hands off it, the
+   * factor reached nothing at all and zooming a rendered document did
+   * nothing. It applies the factor itself.
+   */
+  zoom: number;
 }) {
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
@@ -180,7 +192,15 @@ function MarkdownPreview({
           {current.text}
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+      {/* **The document scales, the chrome does not.** The find bar above is
+          a control rather than content, and a filter box that grows with the
+          prose is a control you then have to hunt for — the same reason the
+          queue is not inside anything zoomable. */}
+      <div
+        data-testid="preview-body"
+        className="min-h-0 flex-1 overflow-auto px-3 py-2"
+        style={zoom === 1 ? undefined : { zoom }}
+      >
         <div className="prose-mogeung">
           {/* **Only the fence is intercepted.** `code` fires for inline spans
               too, and an inline `mermaid` is a word rather than a diagram —
@@ -227,7 +247,20 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const theme = useStore((s) => s.prefs.theme);
   const wrapPaths = useStore((s) => s.scoped().editorWrap);
   const setScoped = useStore((s) => s.setScoped);
-  const zoom = useStore((s) => s.prefs.zoom["code"] ?? 1);
+  /**
+   * The factor Ctrl+wheel over this pane actually writes. `R-J26`.
+   *
+   * It read `zoom["code"]` and the wrapper writes `zoom["file"]` — `R-B53`
+   * dissolved the Code pane into one pane per file and renamed the registry
+   * entry, and this reader was left pointing at the old key. So Ctrl+wheel in
+   * a file pane has been inert since: the factor was written, stored, clamped
+   * and never read by anything.
+   *
+   * `zoom["code"]` is the fallback rather than being deleted, so a factor set
+   * before that rename is inherited once instead of being silently reset —
+   * the same courtesy `R-B41` paid the `editor-tree` key.
+   */
+  const zoom = useStore((s) => s.prefs.zoom["file"] ?? s.prefs.zoom["code"] ?? 1);
   const send = useStore((s) => s.send);
   const scoped = useStore((s) => s.scoped());
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -426,6 +459,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
         <MarkdownPreview
           content={tab.content}
           theme={theme}
+          zoom={zoom}
           // A hit's whole point is that you can go and change it, so this both
           // leaves the rendering and asks the editor for that line. `gotoLine`
           // is the same channel a search hit and a diff row already use, and
