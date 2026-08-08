@@ -356,6 +356,15 @@ export interface AppState {
   showHealth: boolean;
   /** The wall — every session as a tile, on a chord. `R-B50`. */
   showWall: boolean;
+  /**
+   * The dockview panel that is forward, by id. `R-J25`.
+   *
+   * The dock's own API knows this and the keymap asks it directly, but a tool
+   * in the **rail** is outside dockview entirely — it has no handle to ask
+   * with. Mirroring the id into the store is what lets the Files tree follow
+   * the file you are reading without the rail reaching into the centre.
+   */
+  activePane: string | null;
   showKeymap: boolean;
   /** The daemon switcher. `R-I7`. */
   showConnections: boolean;
@@ -509,6 +518,7 @@ export const useStore = create<AppState>((set, get) => ({
   paletteMode: "actions",
   showHealth: false,
   showWall: false,
+  activePane: null,
   showKeymap: false,
   showConnections: false,
   showPrompt: false,

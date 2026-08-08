@@ -86,6 +86,8 @@ export interface Prefs {
   dockHeight: number;
   /** Info sits under the queue, because it is about the row you just clicked. */
   infoOpen: boolean;
+  /** The Files tree follows the file you are reading. `R-J25`. */
+  filesFollow: boolean;
   infoHeight: number;
   /** The Notes editor's share of the rail. */
   notesEditorHeight: number;
@@ -167,6 +169,7 @@ export const defaultPrefs = (): Prefs => ({
   dock: null,
   dockHeight: 280,
   infoOpen: false,
+  filesFollow: false,
   infoHeight: 240,
   notesEditorHeight: 256,
   queueWidth: 380,

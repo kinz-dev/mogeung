@@ -10,11 +10,12 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Crosshair, RefreshCw } from "lucide-react";
 import { FileIcon } from "@/ui/FileIcon";
 import { useStore } from "@/store";
 import { Dim, Empty, IconButton, Input, Loading } from "@/ui/primitives";
-import { basename, explorerFetch, fileFilter, join, openFile, toggleDir } from "@/lib/explorer";
+import { basename, explorerFetch, fileFilter, join, openFile, reveal, toggleDir } from "@/lib/explorer";
+import { parseFilePaneId } from "@/lib/panes";
 import { cn } from "@/lib/cn";
 import { repoName } from "@/wire/types";
 import { useState } from "react";
@@ -39,6 +40,31 @@ export function FilesTool() {
   const send = useStore((s) => s.send);
   const [filter, setFilter] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Following the file you are reading. `R-J25`.
+  const follow = useStore((s) => s.prefs.filesFollow);
+  const setPrefs = useStore((s) => s.setPrefs);
+  const activePane = useStore((s) => s.activePane);
+  const active = activePane ? parseFilePaneId(activePane) : null;
+  // What was last revealed *by following*, so the effect below is idempotent.
+  // Without it every render would re-mark the same row, and marking it is a
+  // store write — which renders again.
+  const followed = useRef<string | null>(null);
+
+  /**
+   * **Only when the file belongs to the tree on screen.** A file pane is bound
+   * to the session that opened it (`R-B53`) and this tree shows the *selected*
+   * session's worktree, so the two can differ — and revealing into the wrong
+   * worktree would expand directories that do not contain the file and mark a
+   * row that is not there. Following silently does nothing in that case, which
+   * is the honest answer: the file is not in this tree.
+   */
+  useEffect(() => {
+    if (!follow || !id || !active || active.session !== id) return;
+    const mark = `${id}\u0000${active.path}`;
+    if (followed.current === mark) return;
+    followed.current = mark;
+    reveal(id, active.path);
+  }, [follow, id, active]);
 
   // In the render, not in a click handler — the same "one door" rule the Rust
   // side follows, so a tool that is merely *visible* works without ever having
@@ -107,7 +133,31 @@ export function FilesTool() {
         <span className="truncate text-sm font-semibold text-[var(--text-strong)]" title={root}>
           {repoName(session)}
         </span>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-0.5">
+          {/* Sticky rather than a one-shot, because the ask was to *sync* the
+              view: a button you press after every file is the thing being
+              complained about. The tab's own menu has the one-shot for anyone
+              who wants the tree to stay where they put it. `R-J25`. */}
+          <IconButton
+            title={
+              follow
+                ? "following the file you are reading — click to leave the tree where you put it"
+                : "follow the file you are reading, and reveal it here as you switch"
+            }
+            active={follow}
+            onClick={() => {
+              const next = !follow;
+              setPrefs({ filesFollow: next });
+              // Reveal on the way *on*, so switching it on does something
+              // rather than waiting for the next file you happen to open.
+              if (next && id && active && active.session === id) {
+                followed.current = `${id}\u0000${active.path}`;
+                reveal(id, active.path);
+              }
+            }}
+          >
+            <Crosshair size={12} />
+          </IconButton>
           <IconButton
             title="re-list the directories that are open"
             // The walk goes too: a refresh that re-listed the open folders and
