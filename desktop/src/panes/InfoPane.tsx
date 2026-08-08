@@ -46,7 +46,7 @@ export function InfoPane() {
         <Field label="turns">{num(s.turns)} · {num(s.tool_calls)} tool calls</Field>
         <Field label="tokens">
           {compact(s.tokens_in)} in · {compact(s.tokens_out)} out
-          <Dim> — tokens, never dollars (ADR-0005)</Dim>
+          <Dim> — tokens; cost is on Analytics (ADR-0024)</Dim>
         </Field>
         <Field label="changed">
           <span className="text-[var(--add-fg)]">+{s.insertions}</span>{" "}

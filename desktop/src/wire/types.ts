@@ -305,11 +305,32 @@ export interface BlastRadius {
 // usage.rs
 // ---------------------------------------------------------------------------
 
+/** Tokens split the way they are **priced**. `R-J21`. */
+export interface TokenSplit {
+  fresh_in: number;
+  cache_read: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
+  out: number;
+}
+
+export interface ModelBurn {
+  /** The id the transcript wrote, unprettified — it is the price-table key. */
+  model: string;
+  fast: boolean;
+  tokens: TokenSplit;
+  /** `null` means **no published rate**, which is not zero dollars. */
+  cost_usd: number | null;
+  messages: number;
+}
+
 export interface DayBurn {
   day: string;
   tokens_in: number;
   tokens_out: number;
   sessions: number;
+  by_model: ModelBurn[];
+  cost_usd: number;
 }
 
 export interface RepoBurn {
@@ -341,6 +362,12 @@ export interface UsageReport {
   window_tokens_out: number;
   limit_hits: LimitHit[];
   est_window_limit_out: number | null;
+  models: ModelBurn[];
+  cost_usd_total: number;
+  cost_usd_today: number;
+  /** Models with no rate: their tokens are counted, their dollars are not. */
+  unpriced_models: string[];
+  rates_as_of: string;
   generated_at: Timestamp | null;
   files_scanned: number;
   files_skipped: number;

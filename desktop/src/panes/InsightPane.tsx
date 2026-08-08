@@ -31,6 +31,8 @@ import { Chip, Dim, Empty, Input, Mono, Row } from "@/ui/primitives";
 import { compact, num, oneLine, stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { rank, winner } from "@/lib/search";
+import { costSeries } from "@/lib/cost";
+import type { UsageReport } from "@/wire/types";
 import { KitView } from "@/panes/KitView";
 
 type View =
@@ -61,6 +63,90 @@ const VIEWS: { id: View; label: string; blurb: string }[] = [
 
 const AXIS = { stroke: "var(--dim)", fontSize: 10 };
 
+/**
+ * Six, and the seventh model onwards is folded into `other`. `R-J21`.
+ *
+ * A stacked bar with a colour per model stops being readable long before a
+ * palette runs out, and this machine's corpus has five. Folding rather than
+ * cycling the palette: two bands the same colour is a chart that lies.
+ */
+const GRAPH_COLORS = ["var(--graph-0)", "var(--graph-1)", "var(--graph-2)", "var(--graph-3)", "var(--graph-4)", "var(--graph-5)"];
+
+const usd = (n: number): string =>
+  n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : n > 0 ? `$${n.toFixed(3)}` : "$0";
+
+/** A model row's display name. Fast mode is the same model at another price. */
+const modelLabel = (m: { model: string; fast: boolean }): string =>
+  `${m.model.replace(/^claude-/, "")}${m.fast ? " (fast)" : ""}`;
+
+/**
+ * What today and the whole history would have cost at API rates. `R-J21`.
+ *
+ * **The caveat is not decoration and does not get collapsed into a tooltip.**
+ * [ADR-0024](../../../docs/decisions/0024-equivalent-cost-in-dollars.md)
+ * permits a dollar figure on the condition that it is labelled equivalent API
+ * cost rather than spend — these sessions run on a subscription, where no
+ * money moves per token. The rates' date sits beside the number for the same
+ * reason: ADR-0005 refused a price table because it goes stale, and a stale
+ * table that *says when it was read* is a different object from one that does
+ * not.
+ */
+function CostSummary({ usage }: { usage: UsageReport }) {
+  const priced = usage.models.filter((m) => m.cost_usd !== null);
+  const top = priced.slice(0, 6);
+  const most = top[0]?.cost_usd ?? 0;
+
+  return (
+    <div className="rounded-sm border border-[var(--border)] bg-[var(--bg-raised)] p-2">
+      <div className="mb-2 flex items-baseline gap-3">
+        <div>
+          <div className="text-lg leading-tight font-semibold text-[var(--text-strong)]">
+            {usd(usage.cost_usd_today)}
+          </div>
+          <Dim className="text-2xs">today</Dim>
+        </div>
+        <div>
+          <div className="text-lg leading-tight font-semibold text-[var(--text-strong)]">
+            {usd(usage.cost_usd_total)}
+          </div>
+          <Dim className="text-2xs">all {usage.days.length} days on record</Dim>
+        </div>
+        <Dim className="ml-auto text-right text-2xs">
+          equivalent API cost, not charged
+          <br />
+          rates as of {usage.rates_as_of}
+        </Dim>
+      </div>
+
+      {top.map((m) => (
+        <div key={`${m.model}-${m.fast}`} className="flex items-center gap-2 py-0.5">
+          <Mono className="w-40 shrink-0 truncate text-2xs">{modelLabel(m)}</Mono>
+          <div className="h-2 flex-1 rounded-sm bg-[var(--state-hover)]">
+            <div
+              className="h-full rounded-sm"
+              style={{
+                width: `${most > 0 ? Math.max(1, ((m.cost_usd ?? 0) / most) * 100) : 0}%`,
+                background: GRAPH_COLORS[top.indexOf(m) % GRAPH_COLORS.length],
+              }}
+            />
+          </div>
+          <span className="w-16 shrink-0 text-right text-2xs">{usd(m.cost_usd ?? 0)}</span>
+          <Dim className="w-24 shrink-0 text-right text-2xs">{compact(m.tokens.out)} out</Dim>
+        </div>
+      ))}
+
+      {usage.unpriced_models.length > 0 && (
+        <div className="mt-2 text-2xs text-[var(--amber)]">
+          {/* Named, because a total that silently omits a model is worse than
+              no total. Their tokens are in every token figure on this page. */}
+          no published rate for {usage.unpriced_models.join(", ")} — their tokens are counted, their
+          cost is not
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChartFrame({ title, children, hint }: { title: string; children: React.ReactNode; hint?: string }) {
   return (
     <div className="rounded-sm border border-[var(--border)] bg-[var(--bg-raised)] p-2">
@@ -86,7 +172,8 @@ function ChartFrame({ title, children, hint }: { title: string; children: React.
  * finding — one prompt asked forty times and the rest asked twice is a fact
  * about your week that a column of `×40` makes you reconstruct by reading.
  *
- * **Counts, never money.** [ADR-0005](../../../docs/decisions/0005-tokens-not-dollars.md),
+ * **Counts, never money.** [ADR-0024](../../../docs/decisions/0024-equivalent-cost-in-dollars.md)
+ * puts a dollar figure on Analytics and keeps it off every other surface,
  * and it is worth restating at the one place an axis label would be tempting:
  * a bar chart of *cost per prompt* is three lines of code away and would make
  * this product something it has decided not to be.
@@ -156,6 +243,7 @@ function Analytics() {
 
   const hours = a.hour_histogram.map((count, hour) => ({ hour: `${hour}`, count }));
   const burn = (usage?.days ?? []).map((d) => ({ day: d.day.slice(5), out: d.tokens_out, in: d.tokens_in }));
+  const cost = costSeries(usage);
 
   return (
     <div className="grid gap-2 p-2 md:grid-cols-2">
@@ -189,8 +277,33 @@ function Analytics() {
         </BarChart>
       </ChartFrame>
 
+      {usage && usage.models.length > 0 && (
+        <div className="md:col-span-2">
+          <CostSummary usage={usage} />
+        </div>
+      )}
+
+      {cost.rows.length > 0 && (
+        <ChartFrame title="Cost per day, by model" hint={`equivalent API cost · rates as of ${usage?.rates_as_of}`}>
+          <BarChart data={cost.rows}>
+            <CartesianGrid stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="day" {...AXIS} />
+            <YAxis {...AXIS} width={40} tickFormatter={(v: number) => usd(v)} />
+            <RTooltip
+              formatter={(v: number, name: string) => [usd(v), name]}
+              contentStyle={{ background: "var(--bg-raised)", border: "1px solid var(--window-stroke)", fontSize: 11 }}
+            />
+            {/* Stacked, so the height is the day's cost and each band is a
+                model. One `stackId` — split stacks would draw two totals. */}
+            {cost.models.map((m, i) => (
+              <Bar key={m} dataKey={m} stackId="cost" fill={GRAPH_COLORS[i % GRAPH_COLORS.length]} />
+            ))}
+          </BarChart>
+        </ChartFrame>
+      )}
+
       {burn.length > 0 && (
-        <ChartFrame title="Token burn per day" hint="tokens, never dollars — ADR-0005">
+        <ChartFrame title="Token burn per day" hint="what the cost above is computed from">
           <AreaChart data={burn}>
             <CartesianGrid stroke="var(--border)" vertical={false} />
             <XAxis dataKey="day" {...AXIS} />
@@ -384,7 +497,7 @@ export function InsightPane() {
           <>
             <CountBars
               title="What you keep re-asking"
-              hint="the twelve most repeated, by count — never by cost (ADR-0005)"
+              hint="the twelve most repeated, by count — never by cost (ADR-0024)"
               color="var(--graph-1)"
               data={(insight.prompts ?? [])
                 .slice()

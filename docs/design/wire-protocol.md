@@ -1,9 +1,11 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-06
+updated: 2026-08-08
 covers:
   - crates/mogeung-core/src/wire.rs
+  - crates/mogeung-core/src/pricing.rs
+  - crates/mogeung-core/src/usage.rs
   - crates/mogeungd/src/api.rs
 ---
 
@@ -389,9 +391,18 @@ The one-go pass (features 0015–0022) grew the contract in five places,
 all in the established shapes — fire-and-forget commands, answers that
 echo their question, `#[serde(default)]` on everything new:
 
-- **Usage** — `FetchUsage` → `UsageStats`. Tokens only (ADR-0005); the
-  window-limit figure inside is an estimate from observed limit hits and
-  is labelled so on the type.
+- **Usage** — `FetchUsage` → `UsageStats`. The window-limit figure inside
+  is an estimate from observed limit hits and is labelled so on the type.
+  **Since `R-J21` it also carries money**, per
+  [ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md), and the
+  shape is arranged so a client cannot accidentally overstate it:
+  `TokenSplit` separates the four input buckets, which are priced 1 : 0.1
+  : 1.25 : 2 and were previously summed into one `tokens_in`; `ModelBurn`
+  carries `cost_usd` as an **option**, where `null` means no published
+  rate rather than free; `unpriced_models` names every model missing from
+  the totals; and `rates_as_of` dates the price table so a client can say
+  when it was read. `tokens_in`/`tokens_out` keep their old meaning — all
+  input buckets summed — so nothing that already read them changed.
 - **Signals** — `SetSignalCommand` / `RunSignal` / `FetchSignal` →
   `SignalStatus`. The single place a client can make the daemon execute
   anything, and it is a human-configured check run on an explicit click;

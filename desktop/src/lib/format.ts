@@ -26,7 +26,8 @@ export function stamp(ts: string | number): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/** Thousands separators. Tokens are counted, never priced — ADR-0005. */
+/** Thousands separators. A count, never a price — cost lives on Analytics
+ * alone ([ADR-0024](../../../docs/decisions/0024-equivalent-cost-in-dollars.md)). */
 export function num(n: number): string {
   return n.toLocaleString();
 }
