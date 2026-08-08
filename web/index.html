@@ -1,0 +1,1345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mogeung — which one needs you?</title>
+<meta name="description" content="A supervision layer over the Claude Code sessions you already run. One queue across every session, a diff per session, and a health panel that says what it cannot see." />
+<style>
+/* ------------------------------------------------------------------
+   mogeung - product site.
+   One deliberate visual world: the console the product already is.
+   Every screenshot on this page is dark; a light theme would make the
+   page fight its own images, so the palette is committed, not toggled.
+   Colours are taken from the app's own UI, not invented for marketing.
+   ------------------------------------------------------------------ */
+:root {
+  --ground:    #0a0c0e;
+  --panel:     #12161a;
+  --panel-2:   #171c21;
+  --line:      #242b32;
+  --line-soft: #1b2126;
+  --ink:       #d9e1e8;
+  --ink-dim:   #8b97a2;
+  --ink-faint: #5d6872;
+  --amber:     #e9a23b;   /* the app's own accent - the wall card border, the mascot */
+  --amber-dim: #7a5a22;
+
+  /* state colours, straight from the queue. semantic, not decorative. */
+  --st-approve: #e5484d;
+  --st-waiting: #e5484d;
+  --st-failed:  #d4713b;
+  --st-review:  #4c8dff;
+  --st-stalled: #8b7ad8;
+  --st-running: #4fa85c;
+
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Mono", "Roboto Mono", "Ubuntu Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --rail: 232px;
+  --maxw: 1180px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--ink); text-decoration-color: var(--amber-dim); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--amber); }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+h1, h2, h3 {
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin: 0;
+}
+
+p { margin: 0; }
+
+code, kbd { font-family: var(--mono); }
+
+/* ---- shared atoms ------------------------------------------------ */
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.prose { max-width: 62ch; color: var(--ink-dim); }
+.prose strong { color: var(--ink); font-weight: 600; }
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--ink-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.7;
+  color: #0a0c0e;
+  vertical-align: 1px;
+}
+.badge.approve { background: var(--st-approve); }
+.badge.waiting { background: var(--st-waiting); }
+.badge.failed  { background: var(--st-failed); }
+.badge.review  { background: var(--st-review); }
+.badge.stalled { background: var(--st-stalled); }
+.badge.running { background: var(--st-running); }
+.badge.lower   { text-transform: none; letter-spacing: 0.02em; }
+
+/* ---- page frame -------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 52px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(10, 12, 14, 0.86);
+  backdrop-filter: blur(10px);
+}
+.mark { display: flex; align-items: center; gap: 9px; text-decoration: none; }
+.mark img { width: 22px; height: 22px; display: block; }
+.mark span {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+.topbar .ver {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.topbar .spacer { flex: 1; }
+.topbar .links { display: flex; gap: 18px; font-size: 13.5px; color: var(--ink-dim); }
+.topbar .links a { color: var(--ink-dim); text-decoration: none; }
+.topbar .links a:hover { color: var(--ink); }
+@media (max-width: 720px) { .topbar .links { display: none; } }
+
+.shell { display: flex; align-items: flex-start; }
+
+/* The rail echoes the app's own tool-window rail: it is chrome, always
+   reachable, never a tile. Here it lists the panes it lists there. */
+.rail {
+  position: sticky;
+  top: 52px;
+  flex: 0 0 var(--rail);
+  width: var(--rail);
+  height: calc(100vh - 52px);
+  overflow-y: auto;
+  padding: 26px 0 40px 22px;
+  border-right: 1px solid var(--line);
+  background: var(--ground);
+  z-index: 20;
+}
+.rail .eyebrow { padding-left: 11px; }
+.rail ol { list-style: none; margin: 12px 0 0; padding: 0; }
+.rail li { margin: 0; }
+.rail a {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 11px;
+  border-left: 2px solid transparent;
+  color: var(--ink-faint);
+  font-size: 13px;
+  text-decoration: none;
+  transition: color .15s ease, border-color .15s ease;
+}
+.rail a:hover { color: var(--ink); }
+.rail a .key {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  opacity: .6;
+}
+.rail a.on { color: var(--ink); border-left-color: var(--amber); }
+.rail a.on .key { color: var(--amber); opacity: 1; }
+@media (max-width: 980px) { .rail { display: none; } }
+
+main { flex: 1; min-width: 0; }
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+section { padding: 84px 0; border-bottom: 1px solid var(--line-soft); }
+section:last-of-type { border-bottom: 0; }
+
+/* ---- hero -------------------------------------------------------- */
+
+.hero { padding: 92px 0 76px; border-bottom: 1px solid var(--line-soft); }
+.hero h1 {
+  font-size: clamp(2.6rem, 6.4vw, 4.6rem);
+  line-height: 1.02;
+  margin: 18px 0 0;
+}
+.hero h1 .quiet { color: var(--ink-faint); }
+.hero .lede {
+  margin-top: 24px;
+  max-width: 60ch;
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+.hero .lede strong { color: var(--ink); font-weight: 600; }
+.hero .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+.btn {
+  display: inline-block;
+  padding: 9px 17px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--panel);
+  transition: border-color .15s ease, background .15s ease;
+}
+.btn:hover { border-color: var(--ink-faint); background: var(--panel-2); }
+.btn.primary { background: var(--amber); border-color: var(--amber); color: #14100a; font-weight: 700; }
+.btn.primary:hover { background: #f2b256; border-color: #f2b256; }
+
+/* ---- the queue demo --------------------------------------------- */
+
+.demo {
+  margin-top: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 34px;
+  align-items: start;
+}
+@media (max-width: 860px) { .demo { grid-template-columns: minmax(0, 1fr); } }
+
+.qbox {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.qhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.qhead .n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-left: auto;
+}
+.qlist { position: relative; height: 300px; margin: 0; padding: 6px; list-style: none; }
+.qrow {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 6px;
+  height: 54px;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  transform: translateY(calc(var(--i) * 58px));
+  transition: transform .62s cubic-bezier(.22,.72,.24,1), background .45s ease, border-color .45s ease;
+}
+.qrow.lift { background: var(--panel-2); border-color: var(--line); }
+.qrow .line1 { display: flex; align-items: baseline; gap: 9px; }
+.qrow .title {
+  font-size: 13.5px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qrow .line2 {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  display: flex;
+  gap: 10px;
+}
+.qrow .repo { color: var(--ink-dim); }
+.qrow .branch { color: #6f8fa8; }
+@media (prefers-reduced-motion: reduce) { .qrow { transition: none; } }
+
+.demo-note { color: var(--ink-dim); font-size: 14px; line-height: 1.62; }
+.demo-note .eyebrow { display: block; margin-bottom: 10px; }
+
+/* ---- figures ----------------------------------------------------- */
+
+figure { margin: 0; }
+.plate {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .5);
+}
+.plate img { display: block; width: 100%; height: auto; }
+figcaption {
+  margin-top: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+}
+.hero-figure { margin-top: 54px; }
+
+/* ---- the refusal ------------------------------------------------- */
+
+.claims {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 40px;
+  background: var(--line-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  overflow: hidden;
+}
+@media (max-width: 860px) { .claims { grid-template-columns: minmax(0, 1fr); } }
+.claim { padding: 26px 24px; background: var(--ground); }
+.claim h3 { font-size: 15px; letter-spacing: -0.02em; margin-bottom: 10px; }
+.claim p { font-size: 14px; color: var(--ink-dim); line-height: 1.62; }
+
+/* ---- states table ------------------------------------------------ */
+
+.states { margin-top: 36px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.state {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 18px;
+  align-items: baseline;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+}
+.state:last-child { border-bottom: 0; }
+.state > .badge { justify-self: start; }
+.state p { font-size: 14px; color: var(--ink-dim); }
+.state p b { color: var(--ink); font-weight: 600; }
+@media (max-width: 620px) { .state { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
+
+.keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin-top: 28px;
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+.keys span { display: inline-flex; align-items: center; gap: 7px; }
+
+/* ==================================================================
+   THE STAGE - one screen at a time, driven by scroll.
+
+   A sticky viewport-height stage holds every frame stacked on top of
+   one another; behind it sits one 100vh "slide" per frame, and that is
+   what the scroll actually moves through. An observer marks whichever
+   slide crosses the middle of the window and brings the matching frame
+   forward. Statement frames carry no screenshot and break the run of
+   panes into chapters.
+
+   Nothing here hijacks the wheel. A flick still moves the page the
+   distance it asked to move; the frames just change while it does.
+   ================================================================== */
+
+.stage-wrap { position: relative; border-bottom: 1px solid var(--line-soft); }
+
+.stage {
+  position: sticky;
+  top: 52px;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+.frame {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 40px 44px 44px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(14px) scale(.988);
+  transition: opacity .5s ease,
+              transform .62s cubic-bezier(.22,.72,.24,1),
+              visibility 0s linear .5s;
+}
+.frame.on {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity .5s ease,
+              transform .62s cubic-bezier(.22,.72,.24,1),
+              visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .frame,
+  .frame.on { transition: opacity .01s linear, visibility 0s; transform: none; }
+}
+
+/* A grid rather than a wrapping flex row: the title and its chord share a
+   line, the description always takes its own. Flex could not be made to
+   promise that: capping the paragraph's measure let it sit back up beside
+   the title, because a max-width beats the 100% basis meant to push it down. */
+.frame-head {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 10px 16px;
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+}
+.frame-head h3 { grid-column: 1; font-size: clamp(1.3rem, 2.4vw, 1.85rem); }
+.frame-head .k { grid-column: 2; justify-self: end; }
+.frame-head .said {
+  grid-column: 1 / -1;
+  max-width: 92ch;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+.frame-head .said strong { color: var(--ink); font-weight: 600; }
+
+/* The shot sits in the same column the head does, so the composition holds
+   its shape on a laptop and on an ultrawide alike. The image keeps its
+   natural size when it fits; upscaling a screenshot only blurs it. */
+.frame-shot {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.frame-shot img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .58);
+}
+
+/* the chapter breaks - copy alone, mid-transition */
+.frame.say { justify-content: center; align-items: center; text-align: center; gap: 26px; }
+.frame.say .big {
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  font-size: clamp(1.9rem, 5vw, 3.5rem);
+  line-height: 1.06;
+  max-width: 21ch;
+  text-wrap: balance;
+}
+.frame.say .big em { font-style: normal; color: var(--amber); }
+.frame.say .under {
+  max-width: 56ch;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+.frame.say .rule { width: 46px; height: 2px; background: var(--amber); opacity: .85; }
+
+/* the pane that has no screenshot yet */
+.frame-pending {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(135deg, transparent 0 9px, rgba(36, 43, 50, .28) 9px 10px),
+    var(--panel);
+  text-align: center;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+/* progress - one tick per frame, down the right edge */
+.ticks {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  z-index: 5;
+}
+.ticks button {
+  width: 16px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line);
+  cursor: pointer;
+  transition: background .2s ease, width .2s ease;
+}
+.ticks button:hover { background: var(--ink-faint); }
+.ticks button.on { background: var(--amber); width: 22px; }
+.ticks button.chapter { height: 4px; }
+@media (max-width: 860px) { .ticks { display: none; } }
+
+/* `proximity`, never `mandatory`: with eighteen slides, a scroll that must
+   land on one of them is a scroll that can trap you. This one settles when
+   you let go near a boundary and otherwise stays out of the way. */
+html { scroll-snap-type: y proximity; }
+@media (prefers-reduced-motion: reduce) { html { scroll-snap-type: none; } }
+
+.slides { position: relative; margin-top: calc(-100vh + 52px); pointer-events: none; }
+.slide { height: calc(100vh - 52px); scroll-snap-align: start; }
+
+/* Short or narrow viewports get the plain stacked reading instead: a
+   sticky full-height stage needs height to work in, and a phone has
+   none to spare. */
+@media (max-width: 860px), (max-height: 560px) {
+  .stage { position: static; height: auto; overflow: visible; }
+  .frame {
+    position: static;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    padding: 54px 22px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .frame-shot { display: block; }
+  .frame-shot img { max-height: none; width: 100%; }
+  .frame-pending { min-height: 200px; padding: 32px; }
+  .frame.say { padding: 72px 22px; }
+  .slides { display: none; }
+}
+
+/* ---- install ----------------------------------------------------- */
+
+.cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 30px;
+  margin-top: 36px;
+}
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+
+pre {
+  margin: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--ink);
+}
+pre .c { color: var(--ink-faint); }
+
+.facts { list-style: none; margin: 22px 0 0; padding: 0; }
+.facts li {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+.facts li .lbl {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-top: 3px;
+}
+@media (max-width: 620px) { .facts li { grid-template-columns: minmax(0, 1fr); gap: 3px; } }
+
+.warn {
+  margin-top: 40px;
+  padding: 20px 22px;
+  border: 1px solid var(--amber-dim);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: rgba(233, 162, 59, .05);
+}
+.warn .eyebrow { color: var(--amber); }
+.warn p { margin-top: 9px; font-size: 14.5px; color: var(--ink-dim); line-height: 1.65; max-width: 68ch; }
+
+footer {
+  padding: 44px 0 64px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+footer .row { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: center; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="mark" href="#top">
+    <img src="shots/mark.png" alt="" />
+    <span>mogeung</span>
+  </a>
+  <span class="ver">v0.2</span>
+  <span class="spacer"></span>
+  <nav class="links">
+    <a href="#queue">The queue</a>
+    <a href="#screens">Screens</a>
+    <a href="#install">Install</a>
+  </nav>
+</header>
+
+<div class="shell">
+
+  <nav class="rail" aria-label="Screens">
+    <p class="eyebrow">Screens</p>
+    <ol>
+      <li><a href="#queue">Attention<span class="key">Alt+1</span></a></li>
+      <li><a href="#screens" data-slide="0">Changes<span class="key">Alt+2</span></a></li>
+      <li><a href="#screens" data-slide="1">Transcript<span class="key">Alt+3</span></a></li>
+      <li><a href="#screens" data-slide="2">Bookmarks<span class="key">Alt+B</span></a></li>
+      <li><a href="#screens" data-slide="3">Notes<span class="key">Alt+N</span></a></li>
+      <li><a href="#screens" data-slide="5">Git<span class="key">Alt+9</span></a></li>
+      <li><a href="#screens" data-slide="6">Worktree<span class="key">Alt+F</span></a></li>
+      <li><a href="#screens" data-slide="7">Search<span class="key">⌘⇧F</span></a></li>
+      <li><a href="#screens" data-slide="9">Insight<span class="key">Alt+4</span></a></li>
+      <li><a href="#screens" data-slide="10">Debt<span class="key">Alt+5</span></a></li>
+      <li><a href="#screens" data-slide="11">Docs<span class="key">Alt+4</span></a></li>
+      <li><a href="#screens" data-slide="12">Decisions<span class="key">Alt+4</span></a></li>
+      <li><a href="#screens" data-slide="14">The wall<span class="key">Alt+W</span></a></li>
+      <li><a href="#screens" data-slide="15">Health<span class="key">Alt+H</span></a></li>
+      <li><a href="#screens" data-slide="16">Keyboard<span class="key">Alt+K</span></a></li>
+      <li><a href="#screens" data-slide="17">Agent<span class="key">Alt+A</span></a></li>
+      <li><a href="#install">Install</a></li>
+    </ol>
+  </nav>
+
+  <main id="top">
+
+    <!-- ---------------------------------------------------------- -->
+    <div class="wrap hero">
+      <p class="eyebrow">A supervision layer for Claude Code</p>
+      <h1>Which one<br /><span class="quiet">needs you?</span></h1>
+      <p class="lede">
+        You already run <code>claude</code> in four terminal tabs. mogeung reads the
+        files Claude Code writes and answers the only question you cannot answer
+        yourself: <strong>which session to look at next.</strong>
+        It watches. <strong>It never starts, steers or stops an agent.</strong>
+      </p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Run it</a>
+        <a class="btn" href="#screens">See every screen</a>
+      </div>
+
+      <div class="demo">
+        <div class="qbox">
+          <div class="qhead">
+            <span class="eyebrow">Attention</span>
+            <span class="n">5</span>
+          </div>
+          <ul class="qlist" id="qlist">
+            <li class="qrow" style="--i:0" data-rank-a="0" data-rank-b="1">
+              <div class="line1"><span class="badge waiting">WAITING</span><span class="title">Settle the label rules</span></div>
+              <div class="line2"><span class="repo">mogeung</span><span class="branch">main</span><span>waiting for you — 4m07s</span></div>
+            </li>
+            <li class="qrow" style="--i:1" data-rank-a="1" data-rank-b="2">
+              <div class="line1"><span class="badge review">REVIEW</span><span class="title">A pane per file</span></div>
+              <div class="line2"><span class="repo">mogeung</span><span class="branch">main</span><span>12 file(s), +1103 −86 unread</span></div>
+            </li>
+            <li class="qrow" style="--i:2" data-rank-a="2" data-rank-b="3">
+              <div class="line1"><span class="badge review">REVIEW</span><span class="title">Two agents at once</span></div>
+              <div class="line2"><span class="repo">mogeung</span><span class="branch">main</span><span>42 file(s), +4747 −177 unread</span></div>
+            </li>
+            <li class="qrow" id="q-flip" style="--i:3" data-rank-a="3" data-rank-b="0">
+              <div class="line1"><span class="badge running lower" id="q-flip-badge">running</span><span class="title">Codex adapter — classify every line</span></div>
+              <div class="line2"><span class="repo">mogeung</span><span class="branch">codex</span><span id="q-flip-sub">Bash: cargo test --workspace</span></div>
+            </li>
+            <li class="qrow" style="--i:4" data-rank-a="4" data-rank-b="4">
+              <div class="line1"><span class="badge running lower">running</span><span class="title">Doc staleness sweep</span></div>
+              <div class="line2"><span class="repo">mogeung</span><span class="branch">main</span><span>Read: docs/design/architecture.md</span></div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="demo-note">
+          <span class="eyebrow">Rank, not recency</span>
+          <p>
+            A session that hits a permission prompt is <em>blocked</em>, not merely
+            finished — so <span class="badge approve">APPROVE</span> outranks
+            everything and climbs to the top the moment it happens.
+          </p>
+          <p style="margin-top:12px">
+            <code>WAITING</code> is not a guess. Claude Code publishes
+            <code>busy</code>/<code>idle</code> in its own live registry. mogeung is
+            told, not inferring.
+          </p>
+        </div>
+      </div>
+
+      <figure class="hero-figure">
+        <div class="plate">
+          <img src="shots/queue-changes.png" alt="The mogeung window: the attention queue down the left, ranked by state, with the Changes pane open showing a risk-ordered diff." width="1196" height="704" />
+        </div>
+        <figcaption>The whole job in one frame — the queue on the left, the diff of whichever row you picked along the bottom.</figcaption>
+      </figure>
+    </div>
+
+    <!-- ---------------------------------------------------------- -->
+    <section class="wrap" id="why">
+      <p class="eyebrow">The shape of it</p>
+      <h2 style="font-size:clamp(1.5rem,3.4vw,2.1rem);margin-top:14px">Supervision has to be additive.</h2>
+      <p class="prose" style="margin-top:18px">
+        The first version of mogeung spawned and wrapped agents. It made every
+        individual session worse, and it was thrown away. What replaced it only
+        reads: because it never sits between you and the agent, it cannot cost you
+        anything you already had.
+      </p>
+
+      <div class="claims">
+        <div class="claim">
+          <h3>Reads, never writes</h3>
+          <p>
+            It watches the files Claude Code already leaves behind. Nothing is ever
+            written to <code>~/.claude</code>. Your interactive loop, plan mode,
+            slash commands and permission prompts are untouched.
+          </p>
+        </div>
+        <div class="claim">
+          <h3>The change is the root object</h3>
+          <p>
+            Not the file. What you reason about is what moved, whether it is safe,
+            and whether you have read it — so the diff, not the tree, is what the
+            window is built around.
+          </p>
+        </div>
+        <div class="claim">
+          <h3>The daemon is the product</h3>
+          <p>
+            Every UI is a client with no local authority. The window can host the
+            daemon or attach to one that outlives it — including one on another
+            machine, over an ssh tunnel.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- -->
+    <section class="wrap" id="queue">
+      <p class="eyebrow">Attention · Alt+1</p>
+      <h2 style="font-size:clamp(1.5rem,3.4vw,2.1rem);margin-top:14px">One queue across every session.</h2>
+      <p class="prose" style="margin-top:18px">
+        Every session you have run in the last 14 days, in one list, sorted by who
+        needs you rather than by what happened last. Nothing to configure and no
+        repos to register.
+      </p>
+
+      <div class="states">
+        <div class="state"><span class="badge approve">APPROVE</span><p><b>Blocked on a permission prompt</b> it needs you to answer. An unanswered tool call, not merely an idle agent.</p></div>
+        <div class="state"><span class="badge waiting">WAITING</span><p><b>Alive and idle</b> — it is waiting for you to type.</p></div>
+        <div class="state"><span class="badge failed">FAILED</span><p><b>Hit an API error</b> and stopped there.</p></div>
+        <div class="state"><span class="badge review">REVIEW</span><p><b>Exited, and left changes nobody has read.</b> The count of unread hunks is on the row.</p></div>
+        <div class="state"><span class="badge stalled">STALLED</span><p><b>Alive and busy, but silent</b> past a threshold.</p></div>
+        <div class="state"><span class="badge running lower">running</span><p>Working normally. Nothing for you to do.</p></div>
+      </div>
+
+      <div class="keys">
+        <span><kbd>j</kbd><kbd>k</kbd> move</span>
+        <span><kbd>enter</kbd> jump to that session's terminal</span>
+        <span><kbd>r</kbd> mark read</span>
+        <span><kbd>s</kbd> snooze</span>
+        <span><kbd>/</kbd> filter</span>
+        <span><kbd>Alt</kbd>+<kbd>1</kbd> focus the queue</span>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         THE STAGE — one screen per scroll
+         ============================================================ -->
+    <div class="stage-wrap" id="screens">
+      <div class="stage" id="stage">
+
+        <div class="ticks" id="ticks"></div>
+
+        <!-- 0 -->
+        <div class="frame on" data-frame="0">
+          <div class="frame-head">
+            <h3>Changes</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>2</kbd></span>
+            <p class="said">
+              One diff per session, <strong>ordered by risk rather than by path</strong> —
+              so reading order is risk order, and the hunk that touches error handling or
+              a public API arrives before the import shuffle. Tick hunks as you read them;
+              the marks are anchored to content, so they survive the agent rewriting the
+              file underneath you.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img src="shots/queue-changes.png" alt="The Changes pane: a diff with hunks tagged error-handling and public-api, above a per-hunk read counter." />
+          </div>
+        </div>
+
+        <!-- 1 -->
+        <div class="frame" data-frame="1">
+          <div class="frame-head">
+            <h3>Transcript</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>3</kbd></span>
+            <p class="said">
+              The conversation as structure, not scrollback: every line classified as
+              prompt, agent, tool call, result or thinking, and filterable on that.
+              Markdown renders, thinking folds away, and newest-first turns the whole
+              thing around when you are catching up rather than reading through.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/transcript.png" alt="The Transcript pane: turns labelled prompt, agent, tool and result, with markdown and thinking toggles." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 2 -->
+        <div class="frame" data-frame="2">
+          <div class="frame-head">
+            <h3>Bookmarks</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>B</kbd></span>
+            <p class="said">
+              Mark the turn you will want again, and it is in one list across every
+              session — newest first, each showing the turn it points at, each a click
+              away from jumping back there. <strong>Marking a turn and writing about it
+              are one gesture with two depths:</strong> an empty mark is a plain bookmark,
+              and anything you type becomes its name.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/bookmarks.jpg" alt="The Bookmarks rail beside the transcript: two marked turns, each with its remark and the text of the turn it points at." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 3 -->
+        <div class="frame" data-frame="3">
+          <div class="frame-head">
+            <h3>Notes, and copy-to-note</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>N</kbd></span>
+            <p class="said">
+              A mark <em>points at</em> a turn and dies with the transcript. A note
+              <strong>takes the words with it</strong> and outlives the session — so one
+              button copies a turn, or a whole conversation, into a note of its own. A
+              copied conversation states what it left behind rather than looking
+              complete: <em>&ldquo;Earlier 117 turn(s) not copied — this is the
+              tail.&rdquo;</em> Every note is mirrored to
+              <code>~/.mogeung/notes/*.md</code>, so losing the database loses history
+              but not the writing.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/notes.jpg" alt="The Notes rail with a copied conversation open, headed by its turn count and a line stating which earlier turns were not copied." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 4 -->
+        <div class="frame say" data-frame="4">
+          <p class="big">With one agent you need <em>no tool</em>.</p>
+          <div class="rule"></div>
+          <p class="under">
+            With four, the bottleneck is not reading code. It is knowing which of the
+            four to read. Everything else on this page is downstream of answering that.
+          </p>
+        </div>
+
+        <!-- 5 -->
+        <div class="frame" data-frame="5">
+          <div class="frame-head">
+            <h3>Git</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>9</kbd></span>
+            <p class="said">
+              A commit view built to the standard of a commercial client: log with
+              message filtering, local branches, refs, stashes, file history and blame.
+              Pick a commit and you get its message, the refs it carries, its files and
+              the diff of the one you click. Staging, committing, branching and stashing
+              are <strong>local writes only</strong> — nothing is ever pushed for you.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/git-commit.png" alt="The Git pane: commit log on the left, and on the right the selected commit's message, refs and per-file diff." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 6 -->
+        <div class="frame" data-frame="6">
+          <div class="frame-head">
+            <h3>Worktree &amp; file panes</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>F</kbd></span>
+            <p class="said">
+              The repository the selected session is working in, with a regex filter over
+              names and content. Open a file and it gets a pane of its own — syntax
+              highlighting, a minimap, go-to-symbol. <strong>A viewer, not an
+              editor</strong>: this window shows you what the agent did, and the agent
+              keeps the write lock.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/editor.png" alt="A file pane showing README.md with syntax highlighting and a minimap, beside the worktree rail." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 7 -->
+        <div class="frame" data-frame="7">
+          <div class="frame-head">
+            <h3>Search everything</h3>
+            <span class="k"><kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>F</kbd></span>
+            <p class="said">
+              Three scopes at once: this conversation, this session's files, and every
+              session you have ever run. Exact matches sort above fuzzy ones. The overlay
+              is the ask-and-go one; the rail on <kbd>Alt</kbd>+<kbd>S</kbd> is the
+              keep-it-open one.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/search.jpg" alt="The search overlay: results grouped into this conversation, this session's files, and every session." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 8 -->
+        <div class="frame say" data-frame="8">
+          <p class="big">The root object is the <em>change</em>.</p>
+          <div class="rule"></div>
+          <p class="under">
+            Not the file. Files are a projection of accumulated changes; what you
+            actually reason about is what moved, whether it is safe, and whether you
+            have read it.
+          </p>
+        </div>
+
+        <!-- 9 -->
+        <div class="frame" data-frame="9">
+          <div class="frame-head">
+            <h3>Insight</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>4</kbd></span>
+            <p class="said">
+              Ten views over everything you have ever run: Search, Analytics, Digest,
+              Prompts, Failures, Decisions, Blame, Docs, Memory and Skills. Analytics is
+              the shape of your own working week — sessions and prompts per day, the
+              hours you actually work, and token burn. <strong>Tokens, never
+              dollars</strong>: the price list is not ours to quote.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/analytics.png" alt="Insight, Analytics: charts for sessions per day, prompts per day, hour-of-day activity and token burn." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 10 -->
+        <div class="frame" data-frame="10">
+          <div class="frame-head">
+            <h3>Debt</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>5</kbd></span>
+            <p class="said">
+              Unread work, worst first — not a list of sessions but a list of files,
+              ranked by how much has landed in them that nobody has looked at. This is
+              the backlog you accrue by letting four agents run while you read one.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/debt.png" alt="The Debt pane: 15 of 15 hunks unread across 1 session, with the worst-affected files listed first." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 11 -->
+        <div class="frame" data-frame="11">
+          <div class="frame-head">
+            <h3>Doc staleness</h3>
+            <span class="k">Insight → Docs</span>
+            <p class="said">
+              Point it at a repository and it inventories the markdown, then flags every
+              document whose covered code has moved since it was last updated —
+              <code>docs/design/architecture.md · desktop moved 35 commit(s) since</code>.
+              <strong>Proposals only.</strong> The daemon never writes to a watched repo.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/docs-staleness.png" alt="Insight, Docs: 84 stale documents, each with the code path that has moved and how many commits ago." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 12 -->
+        <div class="frame" data-frame="12">
+          <div class="frame-head">
+            <h3>Decisions &amp; claims</h3>
+            <span class="k">Insight → Decisions</span>
+            <p class="said">
+              The moments an agent chose one thing over another, lifted out of the
+              transcript — <em>rather than</em>, <em>instead of</em>, <em>because</em> —
+              so a design argument buried in turn 212 is findable later. Candidates for a
+              human to skim, never authority. Alongside it, verification: a claim like
+              <em>the build passes</em> is checked against whether a build was actually
+              run, and contradicted claims are marked.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/decisions.png" alt="Insight, Decisions: extracted decision candidates, each with its transcript line number and cue word." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 13 -->
+        <div class="frame say" data-frame="13">
+          <p class="big">It says what it <em>cannot</em> see.</p>
+          <div class="rule"></div>
+          <p class="under">
+            Every format it reads is undocumented and can change on an upgrade. Going
+            quietly blind must not look like a quiet day — so the blind spot is a number
+            on the screen rather than an assumption.
+          </p>
+        </div>
+
+        <!-- 14 -->
+        <div class="frame" data-frame="14">
+          <div class="frame-head">
+            <h3>The wall</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>W</kbd></span>
+            <p class="said">
+              Every live session at once, as tiles — state, how long it has been in it,
+              turns, diff size, tokens out, and the last thing it did. Click a tile to go
+              to it. This is where a session gets called <em>thrashing</em>, and where a
+              <strong>collision warning</strong> lands when two live sessions edit the
+              same file: the one thing no single agent can know about itself.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/wall.png" alt="The wall: live session tiles showing state, duration, turn count, diff size and the last action." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 15 -->
+        <div class="frame" data-frame="15">
+          <div class="frame-head">
+            <h3>Health</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>H</kbd></span>
+            <p class="said">
+              The panel that exists to say what mogeung <em>cannot</em> see. Every line
+              is accounted for — parsed, ignored-and-known, malformed, unknown type — and
+              the blind spot is a number on the screen. It also notices when the CLI
+              version moves under it.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/health.jpg" alt="The Health panel: per-line accounting, a blind spot of 0.00%, and an alert that the Claude Code version changed." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 16 -->
+        <div class="frame" data-frame="16">
+          <div class="frame-head">
+            <h3>Keyboard</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>K</kbd></span>
+            <p class="said">
+              Forty-two actions, every one rebindable — click a key to change it. The
+              dock uses digits rather than initials on purpose:
+              <kbd>Alt</kbd>+<kbd>T</kbd> is Claude Code's own <em>toggle thinking</em>,
+              and a window that keeps it is a window that steals a key from the agent it
+              is showing you.
+            </p>
+          </div>
+          <div class="frame-shot">
+            <img data-src="shots/keymap.jpg" alt="The Keyboard window: 42 rebindable actions grouped into Dock, Panes and Navigation." decoding="async" />
+          </div>
+        </div>
+
+        <!-- 17 -->
+        <div class="frame" data-frame="17">
+          <div class="frame-head">
+            <h3>Agent</h3>
+            <span class="k"><kbd>Alt</kbd>+<kbd>A</kbd></span>
+            <p class="said">
+              The session's own terminal, attached rather than owned. mogeung opens a
+              view onto the tmux session the agent is already running in — so you type
+              into the real Claude Code loop, with its permission prompts and plan mode
+              intact. Two Agent panes can sit side by side, each pinned to a different
+              session.
+            </p>
+          </div>
+          <div class="frame-pending">
+            <span>screenshot pending</span>
+            <span style="color:var(--ink-dim)">This pane needs a real pty, and a browser tab has none —<br />it is the one screen that cannot be captured from the dev server.</span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="slides" id="slides" aria-hidden="true"></div>
+    </div>
+
+    <!-- ---------------------------------------------------------- -->
+    <section class="wrap" id="install">
+      <p class="eyebrow">Install</p>
+      <h2 style="font-size:clamp(1.5rem,3.4vw,2.1rem);margin-top:14px">One executable, nothing to configure.</h2>
+      <p class="prose" style="margin-top:18px">
+        It starts a daemon if none is watching, attaches to one if there is, and a
+        daemon it started stops when you close the window. If you have run
+        <code>claude</code> anywhere in the last 14 days, it appears.
+      </p>
+
+      <div class="cols">
+        <div>
+          <p class="eyebrow" style="margin-bottom:11px">The window</p>
+<pre><span class="c"># builds a binary plus .deb, .rpm and an AppImage</span>
+cd desktop &amp;&amp; npm install
+npm run tauri build</pre>
+        </div>
+        <div>
+          <p class="eyebrow" style="margin-bottom:11px">A daemon that outlives it</p>
+<pre>cargo build --release
+./target/release/mogeungd --notify
+
+<span class="c"># or push, when you are away from the desk</span>
+mogeungd --push-url https://ntfy.sh/your-topic</pre>
+        </div>
+      </div>
+
+      <ul class="facts">
+        <li><span class="lbl">Needs</span><span>Rust 1.85+, <code>git</code>, and Claude Code 2.1.x on <code>PATH</code>. The window additionally wants node 20+ and the system webview; the daemon needs neither.</span></li>
+        <li><span class="lbl">Platforms</span><span>macOS and Linux. Windows is not supported and is not planned.</span></li>
+        <li><span class="lbl">State</span><span>Lives in <code>~/.mogeung/mogeung.db</code>, with notes mirrored to <code>~/.mogeung/notes/</code>. Nothing is ever written to <code>~/.claude</code>.</span></li>
+        <li><span class="lbl">Exposure</span><span>Binds loopback and needs no token there. Beyond loopback it refuses to start without a shared secret, and there is no flag to talk it out of that. The safest route stays an ssh tunnel.</span></li>
+        <li><span class="lbl">Notifications</span><span>Fire on the transition into needing you, once — never on a state that is merely continuing. The tray carries the waiting count.</span></li>
+        <li><span class="lbl">Also reads</span><span>A Codex adapter is in progress, behind the same classifier.</span></li>
+      </ul>
+
+      <div class="warn">
+        <p class="eyebrow">The caveat worth knowing up front</p>
+        <p>
+          Everything here rests on <strong>undocumented</strong> Claude Code file
+          formats that an update can change. That is why the Health panel is a
+          headline feature rather than a diagnostic: the failure mode this tool has
+          to defend against is going blind without saying so. mogeung is
+          <strong>v0.2</strong> — working and tested, with its core premise still
+          unproven.
+        </p>
+      </div>
+    </section>
+
+    <div class="wrap">
+      <footer>
+        <div class="row">
+          <span>mogeung v0.2</span>
+          <span>·</span>
+          <span>observe, do not spawn</span>
+          <span>·</span>
+          <span>tokens, never dollars</span>
+          <span>·</span>
+          <span>read-only against <code>~/.claude</code></span>
+        </div>
+      </footer>
+    </div>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var railLinks = Array.prototype.slice.call(document.querySelectorAll(".rail a"));
+
+  /* ---- the hero's one orchestrated moment ------------------------
+     A running session hits a permission prompt, becomes APPROVE, and
+     climbs to the top. It is the product's whole thesis, so it happens
+     in front of you rather than being described. */
+  function rank(attr) {
+    var rows = document.querySelectorAll("#qlist .qrow");
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].style.setProperty("--i", rows[i].getAttribute(attr));
+    }
+  }
+  function flip() {
+    var row = document.getElementById("q-flip");
+    if (!row) return;
+    var badge = document.getElementById("q-flip-badge");
+    var sub = document.getElementById("q-flip-sub");
+    badge.className = "badge approve";
+    badge.textContent = "APPROVE";
+    /* An escape rather than a literal em dash: the inlined build carries
+       no charset of its own, so this script has to stay ASCII. */
+    sub.textContent = "blocked \u2014 Bash(cargo test --workspace)";
+    row.classList.add("lift");
+    rank("data-rank-b");
+  }
+
+  rank("data-rank-a");
+  var qbox = document.getElementById("qlist");
+  if (reduce || !qbox || !("IntersectionObserver" in window)) {
+    flip();
+  } else {
+    var fired = false;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting && !fired) {
+          fired = true;
+          setTimeout(flip, 1500);
+          io.disconnect();
+        }
+      });
+    }, { threshold: 0.55 });
+    io.observe(qbox);
+  }
+
+  /* ---- the stage ------------------------------------------------
+     One viewport-height slide per frame sits behind the sticky stage;
+     whichever slide is crossing the middle of the window decides which
+     frame is forward. */
+  var stage = document.getElementById("stage");
+  var slidesBox = document.getElementById("slides");
+  var ticksBox = document.getElementById("ticks");
+  var frames = stage ? Array.prototype.slice.call(stage.querySelectorAll(".frame")) : [];
+  var goTo = null;
+
+  if (frames.length && slidesBox && ticksBox) {
+    var slides = [];
+    var ticks = [];
+
+    frames.forEach(function (f, i) {
+      var s = document.createElement("div");
+      s.className = "slide";
+      s.setAttribute("data-slide", String(i));
+      slidesBox.appendChild(s);
+      slides.push(s);
+
+      var name = f.querySelector("h3");
+      var t = document.createElement("button");
+      t.type = "button";
+      if (f.classList.contains("say")) t.className = "chapter";
+      t.setAttribute("aria-label", name ? name.textContent : "chapter break");
+      t.addEventListener("click", function () { goTo(i); });
+      ticksBox.appendChild(t);
+      ticks.push(t);
+    });
+
+    /* Only the frame in front and its two neighbours ever get a `src`.
+       Handing the browser twelve full-size screenshots at once is enough
+       to lock a renderer up for several seconds, and none of them are
+       wanted until the scroll reaches them. */
+    function load(i) {
+      if (i < 0 || i >= frames.length) return;
+      var img = frames[i].querySelector("img[data-src]");
+      if (!img) return;
+      img.src = img.getAttribute("data-src");
+      img.removeAttribute("data-src");
+    }
+
+    var current = -1;
+    function show(i) {
+      if (i === current) return;
+      current = i;
+      load(i); load(i + 1); load(i - 1);
+      frames.forEach(function (f, n) { f.classList.toggle("on", n === i); });
+      ticks.forEach(function (t, n) { t.classList.toggle("on", n === i); });
+      railLinks.forEach(function (a) {
+        var d = a.getAttribute("data-slide");
+        a.classList.toggle("on", d !== null && Number(d) === i);
+      });
+    }
+
+    goTo = function (i) {
+      var top = slides[i].getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({ top: top + 4, behavior: reduce ? "auto" : "smooth" });
+    };
+
+    if ("IntersectionObserver" in window) {
+      var sio = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) show(Number(e.target.getAttribute("data-slide")));
+        });
+      }, { rootMargin: "-50% 0px -50% 0px", threshold: 0 });
+      slides.forEach(function (s) { sio.observe(s); });
+    }
+    show(0);
+  }
+
+  /* ---- rail ------------------------------------------------------ */
+  railLinks.forEach(function (a) {
+    var d = a.getAttribute("data-slide");
+    if (d === null) return;
+    a.addEventListener("click", function (e) {
+      if (!goTo) return;
+      e.preventDefault();
+      goTo(Number(d));
+    });
+  });
+
+  // The sections outside the stage spy the ordinary way.
+  var plain = ["why", "queue", "install"]
+    .map(function (id) { return document.getElementById(id); })
+    .filter(Boolean);
+
+  if (plain.length && "IntersectionObserver" in window) {
+    var pio = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        railLinks.forEach(function (a) {
+          a.classList.toggle("on", a.getAttribute("href") === "#" + e.target.id);
+        });
+      });
+    }, { rootMargin: "-45% 0px -50% 0px", threshold: 0 });
+    plain.forEach(function (t) { pio.observe(t); });
+  }
+})();
+</script>
+
+</body>
+</html>
