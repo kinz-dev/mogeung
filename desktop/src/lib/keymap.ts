@@ -14,6 +14,7 @@
 import { useEffect, type RefObject } from "react";
 import { tinykeys } from "tinykeys";
 import type { DockviewApi } from "dockview";
+import { currentPlatform, type Platform } from "@/lib/platform";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
 import { exportText } from "@/lib/tauri";
@@ -31,7 +32,11 @@ export interface Action {
   id: string;
   label: string;
   group: string;
-  /** tinykeys syntax. The keymap window shows this verbatim. */
+  /**
+   * tinykeys syntax, and **the binding everywhere that is not a Mac**. A Mac
+   * takes `MAC_KEYS[id]` when there is one; `defaultKeys` is the only thing
+   * that should read this field directly.
+   */
   keys: string[];
   run: (dock: DockviewApi | null) => void;
 }
@@ -480,6 +485,96 @@ export const ACTIONS: Action[] = [
 ];
 
 /**
+ * What a Mac gets instead, by action id. `R-J19`.
+ *
+ * **The rule: `⌘` where `⌘` is free, `⌥` where it is not** — and where it is
+ * not, the binding is respelled by *physical key* (`Alt+KeyA`, never `Alt+a`),
+ * which is the only spelling of an Option chord that fires on macOS at all.
+ * `platform.ts` explains why: Option composes a character rather than
+ * modifying one, so `Alt+a` is matched against `"å"` and quietly never runs.
+ * That is the bug this table exists for — every `Alt+<letter>` and
+ * `Alt+<digit>` binding we ship is dead on a Mac today.
+ *
+ * **The exceptions are not taste.** `⌘` is already the modifier macOS and this
+ * window's own `$mod` family speak for, so a blanket `Alt → ⌘` would take:
+ *
+ * | chord | already belongs to |
+ * | ----- | ------------------ |
+ * | `⌘A` `⌘C` | select all, copy — Tauri's default macOS menu owns these before the webview is asked |
+ * | `⌘W` `⌘H` | close the window, hide the application |
+ * | `⌘K` | our own command palette (`$mod+k`) |
+ * | `⌘0` | our own reset zoom (`$mod+Digit0`) |
+ *
+ * A chord we handle is a chord we `preventDefault`, so taking any of those
+ * would not be a clash you notice and route around — it would be copy, or
+ * select-all, silently ceasing to work in every text box in the window.
+ *
+ * **What is absent from this table is deliberate too.** Arrows, `F12`,
+ * `Escape`, `[`, `]`, `j`/`k` and the whole `$mod` family already carry the
+ * same key on both platforms — `Alt+Shift+ArrowLeft` works on a Mac because an
+ * arrow has no character to compose, and tinykeys turns `$mod` into `⌘` by
+ * itself. Adding rows for those would be two spellings of one binding, which
+ * is the drift `RELEASE_CHORD` exists to avoid.
+ *
+ * Every row is a *default*. A Mac that disagrees costs a rebind (`R-B12`),
+ * not a patch.
+ */
+export const MAC_KEYS: Record<string, string[]> = {
+  // Digits: free on macOS, and they still read as the strip they number.
+  "queue.focus": ["Meta+1"],
+  "dock.changes": ["Meta+2"],
+  "dock.transcript": ["Meta+3"],
+  "dock.insight": ["Meta+4"],
+  "dock.debt": ["Meta+5"],
+  "dock.git": ["Meta+9"],
+  // `⌘0` is reset-zoom, so the digit keeps its `⌥` — respelled to fire.
+  "layout.reset": ["Alt+Digit0"],
+
+  // Letters where `⌘` is free.
+  "rail.files": ["Meta+f"],
+  "rail.search": ["Meta+s"],
+  "rail.notes": ["Meta+n"],
+  "rail.bookmarks": ["Meta+b"],
+  "info.toggle": ["Meta+o"],
+  rescan: ["Meta+r"],
+  "prefs.export": ["Meta+Shift+e"],
+  "terminal.focus_app": ["Meta+Shift+o"],
+  theme: ["Meta+Shift+t"],
+
+  // Letters where `⌘` is spoken for. The mnemonic survives; only the modifier
+  // and the spelling change.
+  "pane.agent": ["Alt+KeyA"], // `⌘A` selects all
+  "pane.code": ["Alt+KeyC"], // `⌘C` copies
+  wall: ["Alt+KeyW"], // `⌘W` closes the window
+  health: ["Alt+KeyH"], // `⌘H` hides the application
+  keymap: ["Alt+KeyK"], // `⌘K` is the palette
+  // These two stay beside the pane they act on rather than following the
+  // free-`⌘` rule: splitting the Agent pane is `⌥⇧A` because reaching it is
+  // `⌥A`, and a family split across two modifiers is a family you have to
+  // memorise twice.
+  "pane.agent.split": ["Alt+Shift+KeyA"],
+  "pane.agent.hold": ["Alt+Shift+KeyH"],
+
+  // `⌥F12` opens macOS' sound settings, and `⌃\`` is the chord a Mac already
+  // knows from VS Code — so the second binding goes rather than being kept as
+  // a chord that reaches System Settings instead of this window.
+  "terminal.toggle": ["Control+`"],
+  /**
+   * `Ctrl+F4` is not reachable on a Mac laptop without `fn`, and `R-J18` said
+   * as much when it chose the chord: *a Mac is better served rebinding this to
+   * `Cmd+W`*. It cannot **be** `⌘W` — that is the window's own close — so it
+   * is `⌘⇧W`, with `Ctrl+F4` kept alongside for an external keyboard with F
+   * keys switched to standard.
+   */
+  "file.close": ["Meta+Shift+w", "Control+F4"],
+};
+
+/** The binding this action ships with **on this machine**. */
+export function defaultKeys(action: Action, platform: Platform = currentPlatform()): string[] {
+  return platform === "mac" ? (MAC_KEYS[action.id] ?? action.keys) : action.keys;
+}
+
+/**
  * Step to the next session **as the queue is showing it**. `R-J13`.
  *
  * This walked the raw `queue` — straight from the daemon, unfiltered and in
@@ -515,24 +610,95 @@ function moveSelection(delta: number): void {
  * written in and what a person recognises: `4`, `ArrowDown`, `F12`. tinykeys
  * matches `e.key` first, so a recorded chord and a hand-written one behave
  * identically.
+ *
+ * **Except under Option on a Mac**, where `e.key` is the composed character —
+ * `⌥A` is `"å"`, `⌥2` is `"™"`. Recording that spelling would produce a
+ * binding that *happens* to work (the same physical key composes the same
+ * character every time) and reads as line noise in the shortcuts window, and
+ * it would break the moment a keyboard layout changed under it. The physical
+ * key is recorded instead: `Alt+KeyA`, which is what `MAC_KEYS` ships and what
+ * tinykeys matches against `e.code`. `R-J19`.
  */
-export function chordFromEvent(e: KeyboardEvent): string | null {
+export function chordFromEvent(e: KeyboardEvent, platform: Platform = currentPlatform()): string | null {
   if (["Control", "Alt", "Shift", "Meta", "OS"].includes(e.key)) return null;
   const parts: string[] = [];
   if (e.ctrlKey) parts.push("Control");
   if (e.altKey) parts.push("Alt");
   if (e.metaKey) parts.push("Meta");
+  const composed = platform === "mac" && e.altKey && /^(Key[A-Z]|Digit\d)$/.test(e.code);
   // Shift only when the character does not already carry it. `Shift+$` is
-  // noise — the `$` *is* the shift. `Shift+Tab` is not.
-  if (e.shiftKey && e.key.length > 1) parts.push("Shift");
-  parts.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  // noise — the `$` *is* the shift. `Shift+Tab` is not. A composed key is
+  // named by its code, which carries no shift of its own, so `⌥⇧A` needs it.
+  if (e.shiftKey && (composed || e.key.length > 1)) parts.push("Shift");
+  parts.push(composed ? e.code : e.key.length === 1 ? e.key.toLowerCase() : e.key);
   return parts.join("+");
 }
 
-/** The bindings in force for an action: the user's, if they set any, else ours. */
-export function bindingsFor(action: Action, overrides: Record<string, string[]>): string[] {
+/**
+ * The bindings in force for an action: the user's, if they set any, else the
+ * ones this platform ships with.
+ */
+export function bindingsFor(
+  action: Action,
+  overrides: Record<string, string[]>,
+  platform: Platform = currentPlatform(),
+): string[] {
   const own = overrides[action.id];
-  return own ? own : action.keys;
+  return own ? own : defaultKeys(action, platform);
+}
+
+const MAC_MODS: Record<string, string> = {
+  $mod: "⌘",
+  Meta: "⌘",
+  Control: "⌃",
+  Alt: "⌥",
+  Shift: "⇧",
+};
+
+const MODS: Record<string, string> = { $mod: "Ctrl", Control: "Ctrl", Meta: "Meta" };
+
+/** Physical-key spellings, back to the key you are looking at. */
+const KEY_LABELS: Record<string, string> = { Equal: "=", Minus: "−", Backquote: "`" };
+
+/**
+ * A chord as it should be **read**, which is not always how it is matched.
+ *
+ * Three spellings in `ACTIONS` are for tinykeys rather than for a person:
+ * `$mod` (Control here, `⌘` there), `KeyA`/`Digit0` (a physical key, so an
+ * Option chord fires on macOS) and `Equal`/`Minus` (a *code*, so `Ctrl++` and
+ * `Ctrl+=` are one gesture). All three used to reach the shortcuts window
+ * verbatim, which made the one place that documents the keyboard the place
+ * least able to say what to press. `R-J19`.
+ *
+ * Mac spelling is the platform's own — `⌘⇧E`, no separators — because that is
+ * what every other Mac application shows and what the keycaps say.
+ */
+export function formatChord(chord: string, platform: Platform = currentPlatform()): string {
+  const parts = chord.split("+");
+  const key = parts.pop() ?? "";
+  const mac = platform === "mac";
+  const mods = parts.map((m) => (mac ? (MAC_MODS[m] ?? m) : (MODS[m] ?? m)));
+  const named = KEY_LABELS[key] ?? key.replace(/^Key([A-Z])$/, "$1").replace(/^Digit(\d)$/, "$1");
+  const label = named.length === 1 ? named.toUpperCase() : named;
+  return mac ? [...mods, label].join("") : [...mods, label].join("+");
+}
+
+/**
+ * The chord to *advertise* for an action, formatted — what a tooltip says.
+ *
+ * A hook rather than a constant because it reads the rebinds: the dock strip
+ * used to name `Alt+2` in a `title` string beside a keymap that no longer said
+ * so, and the rail's tooltips named four chords (`Alt+4`–`Alt+7`) that had not
+ * been the rail's since `R-B47` moved the digits to the dock. A tooltip that
+ * lies about a key is worse than one that says nothing, and on a Mac every one
+ * of them would have lied.
+ */
+export function useChord(actionId: string): string {
+  const overrides = useStore((s) => s.prefs.keymap);
+  const action = ACTIONS.find((a) => a.id === actionId);
+  if (!action) return "";
+  const keys = bindingsFor(action, overrides);
+  return keys.length > 0 ? formatChord(keys[0]) : "";
 }
 
 /**

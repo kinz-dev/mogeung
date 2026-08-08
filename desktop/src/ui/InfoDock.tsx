@@ -15,12 +15,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useStore } from "@/store";
+import { useChord } from "@/lib/keymap";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { InfoPane } from "@/panes/InfoPane";
 
 const MIN_HEIGHT = 100;
 
 export function InfoDock() {
+  const chord = useChord("info.toggle");
   const open = useStore((s) => s.prefs.infoOpen);
   const stored = useStore((s) => s.prefs.infoHeight);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -61,7 +63,7 @@ export function InfoDock() {
         type="button"
         onClick={() => setPrefs({ infoOpen: !open })}
         aria-expanded={open}
-        title={open ? "collapse Info  (Alt+O)" : "show Info about the selected session  (Alt+O)"}
+        title={`${open ? "collapse Info" : "show Info about the selected session"}${chord ? `  (${chord})` : ""}`}
         className="flex h-6 shrink-0 items-center gap-2 px-2 text-left outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-[var(--state-hover)] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
       >
         <span className="text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase">Info</span>

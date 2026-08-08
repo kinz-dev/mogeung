@@ -11,7 +11,8 @@ import { RotateCcw, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, Empty, IconButton, Input, Kbd } from "@/ui/primitives";
-import { ACTIONS, bindingsFor, chordFromEvent, rebind } from "@/lib/keymap";
+import { ACTIONS, bindingsFor, chordFromEvent, defaultKeys, formatChord, rebind } from "@/lib/keymap";
+import { isMac } from "@/lib/platform";
 import { scorePath } from "@/lib/search";
 import { cn } from "@/lib/cn";
 
@@ -50,7 +51,9 @@ export function KeymapWindow() {
       if (!chord) return;
       const { next, stoleFrom } = rebind(overridesRef.current, recording, chord);
       setPrefs({ keymap: next });
-      setNote(stoleFrom ? `${chord} was “${stoleFrom}” — reassigned, and that is now unbound` : null);
+      setNote(
+        stoleFrom ? `${formatChord(chord)} was “${stoleFrom}” — reassigned, and that is now unbound` : null,
+      );
       setRecording(null);
     };
     window.addEventListener("keydown", onKey, true);
@@ -155,7 +158,7 @@ export function KeymapWindow() {
                       ) : keys.length === 0 ? (
                         <Dim className="text-2xs italic">unbound</Dim>
                       ) : (
-                        keys.map((k) => <Kbd key={k}>{k}</Kbd>)
+                        keys.map((k) => <Kbd key={k}>{formatChord(k)}</Kbd>)
                       )}
                     </button>
 
@@ -171,7 +174,7 @@ export function KeymapWindow() {
                       )}
                       {custom && (
                         <IconButton
-                          title={`back to ${a.keys.join(" / ") || "unbound"}`}
+                          title={`back to ${defaultKeys(a).map((k) => formatChord(k)).join(" / ") || "unbound"}`}
                           onClick={() => {
                             const next = { ...overrides };
                             delete next[a.id];
@@ -218,6 +221,13 @@ export function KeymapWindow() {
         </div>
 
         <Dim className="block px-2 text-2xs">
+          {isMac() && (
+            <>
+              These are the <strong>macOS</strong> defaults: <Kbd>⌘</Kbd> where macOS leaves it free,{" "}
+              <Kbd>⌥</Kbd> where it does not — <Kbd>⌘C</Kbd>, <Kbd>⌘A</Kbd>, <Kbd>⌘W</Kbd> and{" "}
+              <Kbd>⌘H</Kbd> belong to the system and are left alone.{" "}
+            </>
+          )}
           Stored with your preferences. An old{" "}
           <code className="font-mono">~/.mogeung/keymap.json</code> is left alone — it belongs to the
           retired egui window and is keyed by its action names.

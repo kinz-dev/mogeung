@@ -28,6 +28,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { useStore } from "@/store";
+import { useChord } from "@/lib/keymap";
 import type { DockTool } from "@/store/prefs";
 import { IconButton } from "@/ui/primitives";
 import { ZoomPane } from "@/ui/ZoomPane";
@@ -43,18 +44,32 @@ import { TranscriptPane } from "@/panes/TranscriptPane";
  * right, and Git sits at the far right on `Alt+9`. Changes and Transcript lead
  * because they are what you open the dock *for*; the rest is what you consult
  * afterwards, and Git is furthest from the ones reached most.
+ *
+ * **The chord is not written here.** It was, in each `hint`, and a Mac reads
+ * `⌘2` where this said `Alt+2` (`R-J19`) — as would anyone who had rebound
+ * one. `useChord` appends the live binding instead, so the order this comment
+ * describes is asserted by a test against the keymap rather than by two
+ * strings agreeing.
  */
 export const DOCK_TOOLS: { id: DockTool; label: string; hint: string }[] = [
-  { id: "changes", label: "Changes", hint: "what this session changed, risk-ordered, with read marks  (Alt+2)" },
-  { id: "transcript", label: "Transcript", hint: "the conversation, turn by turn  (Alt+3)" },
-  { id: "insight", label: "Insight", hint: "across every session — search, analytics, digest, docs  (Alt+4)" },
-  { id: "debt", label: "Debt", hint: "how much of this repo's agent output nobody has read  (Alt+5)" },
-  { id: "git", label: "Git", hint: "commits, changes and diffs of this session's repo  (Alt+9)" },
+  { id: "changes", label: "Changes", hint: "what this session changed, risk-ordered, with read marks" },
+  { id: "transcript", label: "Transcript", hint: "the conversation, turn by turn" },
+  { id: "insight", label: "Insight", hint: "across every session — search, analytics, digest, docs" },
+  { id: "debt", label: "Debt", hint: "how much of this repo's agent output nobody has read" },
+  { id: "git", label: "Git", hint: "commits, changes and diffs of this session's repo" },
 ];
 
 const MIN_HEIGHT = 140;
 
 export function BottomDock() {
+  // One per tool, in the strip's own order — a hook cannot go in the map.
+  const chords: Record<DockTool, string> = {
+    changes: useChord("dock.changes"),
+    transcript: useChord("dock.transcript"),
+    insight: useChord("dock.insight"),
+    debt: useChord("dock.debt"),
+    git: useChord("dock.git"),
+  };
   const dock = useStore((s) => s.prefs.dock);
   const stored = useStore((s) => s.prefs.dockHeight);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -114,7 +129,7 @@ export function BottomDock() {
           <button
             key={t.id}
             type="button"
-            title={t.hint}
+            title={`${t.hint}${chords[t.id] ? `  (${chords[t.id]})` : ""}`}
             aria-pressed={dock === t.id}
             onClick={() => show(t.id)}
             className={cn(

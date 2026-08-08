@@ -11,6 +11,7 @@
 
 import { Activity, Bell, BellOff, Command, Flag, Keyboard, Moon, RefreshCw, Rocket, ScreenShare, Sun, Monitor, HeartPulse, SquareTerminal } from "lucide-react";
 import { useStore } from "@/store";
+import { useChord } from "@/lib/keymap";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
 import { showPane } from "@/lib/panes";
@@ -20,6 +21,16 @@ import { bellState, ensurePermission } from "@/lib/notify";
 const THEMES = ["dark", "light", "system"] as const;
 
 export function TopBar() {
+  // The chords the buttons advertise, read from the keymap rather than typed
+  // into each `title`. `R-J19`. Two of them were wrong before this — the theme
+  // button said `Alt+T`, which `R-B47` gave to the Transcript — and on a Mac
+  // every one of them named a chord this window is not listening for.
+  const paletteChord = useChord("palette");
+  const terminalChord = useChord("terminal.toggle");
+  const rescanChord = useChord("rescan");
+  const healthChord = useChord("health");
+  const keymapChord = useChord("keymap");
+  const themeChord = useChord("theme");
   const conn = useStore((s) => s.conn);
   const daemon = useStore((s) => s.daemon);
   const send = useStore((s) => s.send);
@@ -136,18 +147,18 @@ export function TopBar() {
         >
           <ScreenShare size={13} />
         </IconButton>
-        <IconButton title="command palette  (Ctrl+K)" onClick={() => useStore.setState({ paletteOpen: true })}>
+        <IconButton title={`command palette${paletteChord ? `  (${paletteChord})` : ""}`} onClick={() => useStore.setState({ paletteOpen: true })}>
           <Command size={13} />
         </IconButton>
         <IconButton
-          title="your own shells, across the bottom  (Ctrl+`)"
+          title={`your own shells, across the bottom${terminalChord ? `  (${terminalChord})` : ""}`}
           active={showTerminal}
           onClick={() => useStore.setState({ showTerminal: !showTerminal })}
         >
           <SquareTerminal size={13} />
         </IconButton>
         <IconButton
-          title={rescanning ? "scanning…" : "rescan now  (Alt+R)"}
+          title={rescanning ? "scanning…" : `rescan now${rescanChord ? `  (${rescanChord})` : ""}`}
           active={rescanning}
           onClick={() => {
             // The spin *is* the feedback. A scan takes under a second and
@@ -162,7 +173,7 @@ export function TopBar() {
           <RefreshCw size={13} className={rescanning ? "animate-spin" : undefined} />
         </IconButton>
         <IconButton
-          title="what mogeung can and cannot see  (Alt+H)"
+          title={`what mogeung can and cannot see${healthChord ? `  (${healthChord})` : ""}`}
           onClick={() => {
             send({ cmd: "fetch_health" });
             useStore.setState({ showHealth: true });
@@ -223,11 +234,11 @@ export function TopBar() {
         >
           {prefs.notify ? <Bell size={13} /> : <BellOff size={13} />}
         </IconButton>
-        <IconButton title="keyboard shortcuts  (Alt+K)" onClick={() => useStore.setState({ showKeymap: true })}>
+        <IconButton title={`keyboard shortcuts${keymapChord ? `  (${keymapChord})` : ""}`} onClick={() => useStore.setState({ showKeymap: true })}>
           <Keyboard size={13} />
         </IconButton>
         <IconButton
-          title={`theme: ${prefs.theme}  (Alt+T)`}
+          title={`theme: ${prefs.theme}${themeChord ? `  (${themeChord})` : ""}`}
           onClick={() => setPrefs({ theme: THEMES[(THEMES.indexOf(prefs.theme) + 1) % THEMES.length] })}
         >
           <ThemeIcon size={13} />

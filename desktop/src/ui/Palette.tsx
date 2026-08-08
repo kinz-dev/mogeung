@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Command } from "cmdk";
 import type { DockviewApi } from "dockview";
 import { useStore } from "@/store";
-import { ACTIONS } from "@/lib/keymap";
+import { ACTIONS, bindingsFor, formatChord } from "@/lib/keymap";
 import { scorePath } from "@/lib/search";
 import { openFile } from "@/lib/explorer";
 import { Dim, Kbd, Mono } from "@/ui/primitives";
@@ -26,6 +26,10 @@ export function Palette({ dock }: { dock: RefObject<DockviewApi | null> }) {
   const id = useStore((s) => s.selected);
   const tree = useStore((s) => (s.selected ? s.explorer[s.selected]?.treePaths : undefined));
   const send = useStore((s) => s.send);
+  // The binding in force, not the one that shipped: the palette is where an
+  // action is found, so it is where a rebind has to show — and on a Mac the
+  // shipped `keys` are not the ones this window is listening for at all.
+  const overrides = useStore((s) => s.prefs.keymap);
   const patchExplorer = useStore((s) => s.patchExplorer);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -121,7 +125,7 @@ export function Palette({ dock }: { dock: RefObject<DockviewApi | null> }) {
                       className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1 text-sm data-[selected=true]:bg-[var(--selection-bg)] data-[selected=true]:text-[var(--text-strong)]"
                     >
                       <span className="flex-1">{a.label}</span>
-                      <Kbd>{a.keys[0]}</Kbd>
+                      {bindingsFor(a, overrides)[0] && <Kbd>{formatChord(bindingsFor(a, overrides)[0])}</Kbd>}
                     </Command.Item>
                   ))}
                 </Command.Group>
