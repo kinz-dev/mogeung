@@ -5,3 +5,32 @@ node_modules/
 *.db-wal
 *.db-shm
 .DS_Store
+# Added by code-review-graph
+.code-review-graph/
+
+# Other agents' local configuration.
+#
+# Several tools write their own setup into this repo — directories, dotfiles,
+# and (against this project's own rule) markdown at the root. None of it is
+# mogeung's, none of it should travel with a clone, and the three root .md
+# files are what `check-docs` was failing on: the rule is about the tree, so
+# ignoring them is what actually makes the check honest rather than silenced.
+# They stay on disk; they just stop being the repo's business.
+.claude/
+.codebuddy/
+.cursor/
+.gemini/
+.github/
+.kiro/
+.qoder/
+.vscode/
+.cursorrules
+.windsurfrules
+.mcp.json
+opencode.jsonc
+CODEBUDDY.md
+GEMINI.md
+QODER.md
+
+# Browser-automation output, written when the app is driven for a check.
+.playwright-mcp/

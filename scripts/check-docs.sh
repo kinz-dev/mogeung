@@ -25,6 +25,19 @@ say "Root markdown files"
 allowed="AGENTS.md CLAUDE.md README.md CHANGELOG.md STATUS.md"
 for f in *.md; do
     [ -e "$f" ] || continue
+    # A file git ignores is not this repository's to police. Several other
+    # agent tools write markdown into the root, and the rule exists to keep
+    # *our* docs in docs/ — not to make this check a permanent red light over
+    # somebody else's config. `docscan.rs` already draws the line in the same
+    # place (`gitignored_files_are_not_inventoried`), so this is consistency
+    # rather than an exception.
+    #
+    # The trade is real and worth naming: a stray doc of our own could be
+    # silenced by gitignoring it. That is a deliberate act, and it leaves its
+    # evidence in .gitignore where a reviewer sees it.
+    if git check-ignore -q -- "$f" 2>/dev/null; then
+        continue
+    fi
     case " $allowed " in
         *" $f "*) ok "$f" ;;
         *) err "$f — no markdown at the repo root; see docs/README.md" ;;
