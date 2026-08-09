@@ -122,13 +122,102 @@ pub struct AppState {
 /// mid-session is possible, just not worth a fork per tick to notice sooner.
 const REPO_RECHECK_TICKS: u32 = 40;
 
+
+/// A touched file, relative to the repository root — **tolerating two
+/// spellings of one place**. `R-J27`.
+///
+/// The two sides of this comparison come from different places and do not have
+/// to agree textually. `repo_root` is `git rev-parse --show-toplevel`, which
+/// answers with the path **resolved** through every symlink; `touched_files`
+/// carry whatever the transcript wrote, which is the agent's own `cwd` prefix,
+/// unresolved. On macOS those differ for every temp directory — `/var` is a
+/// firmlink to `/private/var` — and for any checkout reached through a symlink,
+/// which is an ordinary way to keep a repo on an external volume.
+///
+/// When they disagree the textual strip leaves an absolute path, nothing
+/// matches the relative paths a diff carries, `retain` empties the file list,
+/// and the session reports **no changes at all**. Silent, and it looks exactly
+/// like a session that has not touched the worktree.
+///
+/// Resolution is on the **miss path only**: the fast case is a string compare,
+/// and only a genuine mismatch pays a `canonicalize`.
+///
+/// The values themselves are deliberately left as they were found. `cwd` is
+/// shown to the user (`R-J16`) and reached for over tmux, and `repo_root` keys
+/// the review-debt rollup; rewriting either to satisfy this comparison would
+/// trade a contained fix for a change every reader of those fields has to know
+/// about.
+fn relative_to_root(root: &str, path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(&format!("{root}/")) {
+        return rest.to_string();
+    }
+    let resolved = resolve(Path::new(path));
+    if let Ok(rest) = resolved.strip_prefix(resolve(Path::new(root))) {
+        return rest.to_string_lossy().into_owned();
+    }
+    path.to_string()
+}
+
+/// A path as the filesystem spells it, resolving what exists and keeping the
+/// rest.
+///
+/// `std::fs::canonicalize` fails outright on a path whose last component is
+/// gone, and a **deleted** file is exactly the case a diff cares about — so
+/// this canonicalises the longest existing ancestor and puts the tail back.
+/// Falls back to the path unchanged, which is what makes it safe to call on
+/// anything.
+fn resolve(path: &Path) -> PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(cur) {
+            let mut out = real;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 impl AppState {
     pub fn new(store: Store) -> Result<Arc<Self>> {
         Self::with_home(store, watcher::default_home())
     }
 
+    /// **The Codex home is the sibling of the Claude one, not the machine's.**
+    /// `R-J27`.
+    ///
+    /// It used to be `codex::default_home()`, which reads `$HOME/.codex`
+    /// whatever home was injected — so every caller handing this a *fake*
+    /// `.claude` still scanned the real Codex installation beside it. Harmless
+    /// while `~/.codex` was empty, and not harmless once it was not: the canary
+    /// tests began reporting seven unclassified Codex event types out of the
+    /// developer's own sessions, which is a true finding arriving through a
+    /// test that had no business seeing it.
+    ///
+    /// Deriving the sibling keeps production identical — `$HOME/.claude` and
+    /// `$HOME/.codex` are siblings by construction — while a test that builds a
+    /// fake home gets the fake `.codex` beside it, which is what
+    /// [ADR-0006](../../../docs/decisions/0006-inject-the-watch-root.md) means
+    /// by injecting the root. `CODEX_HOME` still wins where it is set, because
+    /// an explicitly chosen root outranks an inferred one.
     pub fn with_home(store: Store, claude_home: PathBuf) -> Result<Arc<Self>> {
-        Self::with_homes(store, claude_home, crate::codex::default_home())
+        let codex = match std::env::var("CODEX_HOME") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => match claude_home.parent() {
+                Some(parent) => parent.join(".codex"),
+                None => crate::codex::default_home(),
+            },
+        };
+        Self::with_homes(store, claude_home, codex)
     }
 
     pub fn with_homes(
@@ -1410,11 +1499,7 @@ impl AppState {
             let touched: Vec<String> = session
                 .touched_files
                 .iter()
-                .map(|p| {
-                    p.strip_prefix(&format!("{root}/"))
-                        .unwrap_or(p)
-                        .to_string()
-                })
+                .map(|p| relative_to_root(&root, p))
                 .collect();
             change
                 .files
@@ -3670,6 +3755,77 @@ fn search_tree(
         }
     }
     (matches, truncated)
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    /// A directory, plus a symlink pointing at it — the two spellings this
+    /// exists to reconcile. macOS makes them for free (`/var` is a firmlink to
+    /// `/private/var`, so every temp directory has both), and a person makes
+    /// them on purpose to keep a checkout on another volume.
+    fn linked(name: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("mogeung-path-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(real.join("src")).unwrap();
+        std::fs::write(real.join("src/lib.rs"), "fn hi() {}\n").unwrap();
+        let link = base.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // The root as git answers it: resolved.
+        (std::fs::canonicalize(&real).unwrap(), link)
+    }
+
+    #[test]
+    fn strips_a_root_that_already_matches() {
+        assert_eq!(relative_to_root("/w/repo", "/w/repo/src/lib.rs"), "src/lib.rs");
+    }
+
+    /// **The bug.** `repo_root` comes from git and is resolved; a transcript's
+    /// `file_path` carries the session's own unresolved prefix. Left
+    /// unreconciled, the strip fails, nothing matches the relative paths a diff
+    /// carries, and the session reports no changes at all.
+    #[test]
+    #[cfg(unix)]
+    fn strips_a_root_reached_through_a_symlink() {
+        let (root, link) = linked("symlink");
+        let touched = link.join("src/lib.rs");
+        assert_eq!(
+            relative_to_root(&root.to_string_lossy(), &touched.to_string_lossy()),
+            "src/lib.rs"
+        );
+    }
+
+    /// A **deleted** file is exactly what a diff is about, and plain
+    /// `canonicalize` fails outright on one — so the resolution has to walk up
+    /// to what still exists and put the tail back.
+    #[test]
+    #[cfg(unix)]
+    fn resolves_a_file_that_is_no_longer_there() {
+        let (root, link) = linked("deleted");
+        let touched = link.join("src/gone.rs");
+        assert!(!touched.exists());
+        assert_eq!(
+            relative_to_root(&root.to_string_lossy(), &touched.to_string_lossy()),
+            "src/gone.rs"
+        );
+    }
+
+    /// A path from another repository is not this session's, and must come back
+    /// untouched rather than being mangled into something that might match.
+    #[test]
+    fn leaves_an_unrelated_path_alone() {
+        assert_eq!(relative_to_root("/w/repo", "/elsewhere/other.rs"), "/elsewhere/other.rs");
+    }
+
+    /// Relative input stays relative: some transcripts write a bare path, and
+    /// resolving one against the daemon's own cwd would invent an answer.
+    #[test]
+    fn leaves_a_relative_path_alone() {
+        assert_eq!(relative_to_root("/w/repo", "src/lib.rs"), "src/lib.rs");
+    }
 }
 
 #[cfg(test)]
