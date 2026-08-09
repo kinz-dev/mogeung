@@ -78,7 +78,27 @@ cargo test --workspace      # all free — nothing spawns an agent
 cd desktop && npm test      # the window's own suite; cargo does not run it
 ./scripts/check-docs.sh     # REQUIRED after any doc change — see above
 ./scripts/gen-status.sh     # rewrite STATUS.md
+
+cargo run -q -p mogeungd --bin sweep    # what the formats look like today
 ```
+
+### Run the sweep after a Claude Code or Codex upgrade
+
+`A4` says the formats are undocumented and move without warning, and the
+canary proves it — but the canary only speaks from a **running daemon**, so
+`R-J12`'s fourteenth event type was found by a hand-written script over a
+corpus that had grown by 80 files since anyone looked.
+
+`--bin sweep` is that script, kept: it reads the same `HANDLED` /
+`KNOWN_IGNORED` / `KNOWN_ITEMS` the parser uses, over whatever corpus is on
+this machine, and **exits non-zero if anything is unclassified**. It also
+inventories the shapes *below* the type — models, usage keys, content blocks —
+because no list exists to check those against and a new one appearing is how
+prompt caching arrived.
+
+An unclassified shape is a decision, not a chore: it goes in `HANDLED` if it
+carries something, `KNOWN_IGNORED` if it does not, and in
+`tests/fixtures/corpus.jsonl` either way so the choice is pinned.
 
 `start.sh --fresh` uses a throwaway database. Worth reaching for when a diff
 looks wrong: sessions pin their diff base the first time they are seen, so a

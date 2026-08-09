@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-05
+updated: 2026-08-09
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -25,6 +25,14 @@ cheap version — comparing cumulative `touched_files` — is useless: any two
 sessions in a repo eventually overlap, and a warning that is always on is off.
 So each touch is timestamped (`Session::recent_touches`, capped at 200) and only
 recent ones count.
+
+**A touched path and a diff path are matched after resolution** (`R-J27`): the
+transcript writes the session's own `cwd` prefix and git answers with the
+resolved root, so a checkout reached through a symlink — or any macOS temp
+directory — spells the same file two ways. Collision detection compares paths
+from two transcripts and is therefore consistent either way; the attribution
+filter in `state.rs` compares a transcript's path against git's and is not,
+which is where the reconciliation lives.
 
 Recomputed **every scan**, not only when files move, because a collision also
 *ends* — one side exits, or the window lapses — and a stale collision warning is

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-08
+updated: 2026-08-09
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -391,6 +391,21 @@ survive the layout being reset.
 
 No supervisor, no child processes, no writes to `~/.claude`. See
 [ADR-0003](../decisions/0003-observe-do-not-spawn.md).
+
+## Diff attribution, and two spellings of one path
+
+`R-J27`. A session's `touched_files` carry the prefix its transcript wrote,
+unresolved; `repo_root` is what `git rev-parse --show-toplevel` answers, which
+is resolved through every symlink. They differ for any checkout reached through
+one — an ordinary way to keep a repo on another volume — and on macOS for every
+temp directory, since `/var` is a firmlink to `/private/var`.
+
+Unreconciled, the attribution filter in `state.rs` matches nothing, `retain`
+empties the file list, and the session reports **no changes at all** — which
+looks exactly like a session that has not touched the worktree. The comparison
+resolves on the miss path only, so the ordinary case stays a string compare,
+and it canonicalises the longest *existing* ancestor because a deleted file is
+precisely what a diff is about.
 
 ## Modules added 2026-07-29
 
