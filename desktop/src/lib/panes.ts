@@ -63,6 +63,17 @@ export function nextAgentSlot(api: DockviewApi | null): string | null {
   return null;
 }
 
+/** The Agent panes currently in the tree, in slot order. */
+export function agentSlots(api: DockviewApi | null): string[] {
+  if (!api) return [];
+  const out: string[] = [];
+  for (let n = 1; n <= MAX_AGENT_PANES; n++) {
+    const id = n === 1 ? "agent" : `agent:${n}`;
+    if (api.getPanel(id)) out.push(id);
+  }
+  return out;
+}
+
 let dock: DockviewApi | null = null;
 
 /** Set once, by `App` when dockview is ready. */
@@ -156,10 +167,10 @@ export function filePanes(api: DockviewApi | null): string[] {
  * of them. `direction: "right"` against the active group is what makes the
  * default gesture produce the arrangement the feature exists for.
  */
-export function splitAgent(): void {
-  if (!dock) return;
+export function splitAgent(): string | null {
+  if (!dock) return null;
   const id = nextAgentSlot(dock);
-  if (!id) return;
+  if (!id) return null;
   const active = dock.activeGroup;
   dock.addPanel({
     id,
@@ -167,6 +178,64 @@ export function splitAgent(): void {
     title: "Agent",
     position: active ? { referenceGroup: active, direction: "right" } : undefined,
   });
+  return id;
+}
+
+/**
+ * Put a session on screen, wherever it belongs. `R-J31`.
+ *
+ * The queue used to call `select` directly, which is only half an answer: a
+ * selection is what the *unheld* panes follow, and once every pane on screen is
+ * held there is nothing left to follow it. Clicking a queue row then changed
+ * the dock, the rail and the status bar while the centre — the part you were
+ * looking at — stayed exactly as it was. Reported 2026-08-09 with one pane, the
+ * worst version of it: the app appeared to ignore the click entirely.
+ *
+ * Three cases, in order, and the order is the design:
+ *
+ * 1. **A pane is already held on this session.** Raise it. This is the case
+ *    that must come first — a session you have deliberately moored somewhere is
+ *    a session with a home, and a second pane for it would be two views of one
+ *    agent, which is what `R-B49` exists *not* to make.
+ * 2. **Some pane is unheld.** It follows the selection, so selecting is the
+ *    whole job. Splitting here would grow the layout on every click, which is
+ *    how you end up at the ceiling by lunchtime.
+ * 3. **Every pane is held and none of them holds this one.** Split, and let the
+ *    new pane arrive unheld so it follows the selection into place.
+ *
+ * At the ceiling case 3 has nowhere to go, and that is said out loud rather
+ * than silently falling back to case 2's no-op — "four panes, all moored" is a
+ * state you got into deliberately and can only get out of deliberately.
+ */
+export function revealSession(sessionId: string): void {
+  const api = dock;
+  const { select, scoped, pushNotice } = useStore.getState();
+  if (!api) {
+    select(sessionId);
+    return;
+  }
+
+  const slots = agentSlots(api);
+  const hold = scoped().paneHold;
+
+  const holder = slots.find((id) => hold[id] === sessionId);
+  if (holder) {
+    // `select` first: activating the pane fires the handler in `App.tsx` that
+    // writes the hold back to the selection, and doing our own write after that
+    // one would be the same value twice.
+    select(sessionId);
+    api.getPanel(holder)?.api.setActive();
+    return;
+  }
+
+  select(sessionId);
+  if (slots.some((id) => !hold[id])) return;
+
+  if (!splitAgent()) {
+    pushNotice(
+      `every Agent pane is held, and there is no room for a ${MAX_AGENT_PANES + 1}th — drop an anchor to look at another session`,
+    );
+  }
 }
 
 /**

@@ -16,6 +16,9 @@ import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
 import { matchesFilter, visibleQueue } from "@/lib/queue";
+// Clicking a queue row means *put that session on screen*, which is not the
+// same as `select` once a pane can be held — see `revealSession`. `R-J31`.
+import { revealSession } from "@/lib/panes";
 
 // Re-exported so `QueueFilter.test.ts` and anything else that learnt this name
 // here keeps working; it lives in `lib/queue.ts` now, where the keymap can
@@ -128,7 +131,6 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
 
 function Strip() {
   const setPrefs = useStore((s) => s.setPrefs);
-  const select = useStore((s) => s.select);
   const selected = useStore((s) => s.selected);
   const scoped = useStore((s) => s.scoped());
   const rows = useVisibleQueue();
@@ -165,7 +167,7 @@ function Strip() {
             >
               <button
                 type="button"
-                onClick={() => select(session.id)}
+                onClick={() => revealSession(session.id)}
                 className={cn(
                 "outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)]",
                   "grid h-5 w-5 shrink-0 place-items-center rounded-sm text-2xs font-bold",
@@ -188,7 +190,6 @@ function Strip() {
 }
 
 function QueueRow({ item, session }: { item: AttentionItem; session: Session }) {
-  const select = useStore((s) => s.select);
   const selected = useStore((s) => s.selected);
   const setScoped = useStore((s) => s.setScoped);
   const scoped = useStore((s) => s.scoped());
@@ -227,7 +228,7 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
           // selection surface, which is the case where a surface is free.
           selected={isSelected && !tint}
           aria-selected={isSelected}
-          onClick={() => select(session.id)}
+          onClick={() => revealSession(session.id)}
           style={tint ? ({ "--tag-bg": tint } as CSSProperties) : undefined}
           className={cn(
             "relative border-b border-[var(--border)] py-1.5 pr-2 pl-2",

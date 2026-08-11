@@ -1,8 +1,8 @@
 ---
 title: Two agents at once
 status: shipped
-updated: 2026-08-06
-roadmap: [R-B49]
+updated: 2026-08-09
+roadmap: [R-B49, R-J31]
 depends_on: [A30, A14, A11]
 ---
 
@@ -69,6 +69,9 @@ first.
 - [x] The Code tab names the file it is showing, for the same reason
 - [x] The Code pane has one header row, not three
 - [x] Clicking an Agent pane makes its session the current one
+- [x] Clicking a queue row puts that session on screen even when every pane is
+      held — raising the pane that holds it, or splitting one that does not
+      exist yet (`R-J31`, 2026-08-09)
 
 *"Pinned" became **held** during the build — see the first note below.*
 
@@ -140,6 +143,9 @@ ripple into the queue, the dock and the rail.
 | `desktop/src/index.css` | `.dv-tab` uppercase off; 30px → 26px; a ring on the active group |
 | `desktop/src/panes/CodePane.tsx` | the path row folds into the file strip — one header row instead of three |
 | `desktop/src/ui/QueuePanel.tag.test.tsx` | its hand-built `ScopedPrefs` builds on `emptyScoped()` |
+| `desktop/src/lib/panes.ts` | `R-J31` — `agentSlots`, `revealSession`; `splitAgent` returns the slot it made or `null` |
+| `desktop/src/ui/QueuePanel.tsx` | `R-J31` — both click sites call `revealSession` rather than `select` |
+| `desktop/src/lib/revealSession.test.tsx` | `R-J31` — new, the four cases below |
 
 ### Risks and unknowns
 
@@ -174,6 +180,16 @@ What is ours and would fail today:
 - a tab's title tracks the session's label when the label changes
 
 dockview's tree is not ours and is not re-tested, the same rule `R-B20` set.
+
+Added by `R-J31`, and three of the four fail against the `select` this replaced:
+
+- one pane, held on somebody else, and a queue click adds a second one bound to
+  the session that was clicked — the report, verbatim
+- a click on a session some pane already holds raises that pane and adds nothing
+- a click while any pane is unheld adds nothing at all, which is the regression
+  guard rather than the fix: it is the case that passed before and must keep
+  passing, or the layout grows by one on every click
+- four held panes have nowhere to put a fifth session, and say so
 
 ## Notes
 
@@ -284,6 +300,33 @@ holds, so the pane you clicked stays moored. The interaction to know is that a
 *mix* of held and unheld panes will pull the unheld ones onto the clicked
 session — which is what "unheld" means, and does not arise in the arrangement
 this was asked for, where every pane is held.
+
+**The risk in the list above happened, and the glyph was not enough** —
+`R-J31`, 2026-08-09. *"A pane left pinned and forgotten makes clicking the queue
+appear to do nothing"* was written here as the design's worst failure mode, with
+the anchor on the tab as its mitigation. The report came back three days later
+in the sharpest possible form: **one** pane, held, and every click on the queue
+answered by a window that changed everywhere except the place being looked at.
+The glyph did its job — it says *why* nothing happened — but explaining a dead
+end is not the same as not having one, and the fix has to be in the gesture.
+
+So the queue stopped calling `select`. *Which session is current* and *put this
+session on screen* had been the same call since before a pane could be held, and
+holding is exactly what split them: a selection is what the **unheld** panes
+follow, so once none of them is unheld it steers nothing. `revealSession` answers
+the second question, in three cases and in this order — raise the pane already
+holding it; else select, because some pane is following; else split, and let the
+new pane arrive unheld so the selection it was just given is what points it
+there. Nothing new binds a pane to a session, which is the point: a pane created
+this way is ordinary, and unheld, so the person who never anchored anything has
+nothing to release afterwards.
+
+Two boundaries worth stating. The order is not arbitrary — a held pane wins over
+splitting, or clicking a session you deliberately moored would open a *second*
+view of the one agent that already has a home, which is the arrangement this
+feature exists not to make. And this is **clicks only**: `j`/`k` and the arrows
+still call `select`, because cursoring down the queue is not opening anything,
+and a split per keystroke is four panes nobody asked for.
 
 **Still unproven, and the honest list.** The focus ring is CSS on
 `.dv-active-group` and has no test — jsdom will assert a class but not that the
