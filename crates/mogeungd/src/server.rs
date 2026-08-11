@@ -32,6 +32,8 @@ pub struct Options {
     pub ssh_target: Option<String>,
     /// Announce this daemon over mDNS (`R-I8`). Off unless asked for.
     pub advertise: bool,
+    /// Permit starting processes on a non-loopback bind. ADR-0025 clause 4.
+    pub allow_run: bool,
 }
 
 impl Default for Options {
@@ -44,6 +46,7 @@ impl Default for Options {
             token: None,
             ssh_target: None,
             advertise: false,
+            allow_run: false,
         }
     }
 }
@@ -171,6 +174,35 @@ where
         posture,
         Posture::Loopback | Posture::TokenGated
     ));
+    // ADR-0025 clause 4, decided from the bind address for the same reason the
+    // write guard is: one place computes "is this safe", so the start-up
+    // refusal and the per-request gate cannot come to disagree.
+    state
+        .runs
+        .set_allowed(crate::run::runs_allowed(addr, opts.allow_run));
+
+    // Run output reaches clients as events on the socket everything else uses.
+    // Spawned here rather than inside `Runs` because `Runs` has no opinion
+    // about the wire — it owns processes, and the daemon owns the broadcast.
+    {
+        let s = state.clone();
+        let mut rx = state.runs.subscribe();
+        tokio::spawn(async move {
+            while let Ok(ev) = rx.recv().await {
+                s.broadcast(match ev {
+                    crate::run::RunEvent::Started(run) => {
+                        mogeung_core::ServerMsg::RunStarted { run: Box::new(run) }
+                    }
+                    crate::run::RunEvent::Output(line) => {
+                        mogeung_core::ServerMsg::RunOutput { line }
+                    }
+                    crate::run::RunEvent::Ended(run) => {
+                        mogeung_core::ServerMsg::RunEnded { run: Box::new(run) }
+                    }
+                });
+            }
+        });
+    }
 
     {
         let s = state.clone();

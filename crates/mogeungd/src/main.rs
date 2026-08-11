@@ -73,6 +73,17 @@ struct Args {
     /// requires --token.
     #[arg(long)]
     advertise: bool,
+
+    /// Let this daemon start processes when bound anywhere but loopback.
+    ///
+    /// ADR-0025 clause 4. A run verb means anyone who can reach the port can
+    /// cause code to execute on this machine, and "the code was already checked
+    /// in" is a mitigation rather than an answer. On loopback — the same trust
+    /// boundary as the terminal panel, which can already run anything — runs
+    /// are allowed without this. Anywhere else needs this **and** the token
+    /// `R-I10` already demands: two deliberate acts, not one.
+    #[arg(long)]
+    allow_run: bool,
 }
 
 /// Command line over file over default, resolved in one place so the order can
@@ -96,6 +107,7 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             token: args.token.or(cfg.token),
             ssh_target: args.ssh_target.or(cfg.ssh_target),
             advertise: args.advertise || cfg.advertise.unwrap_or(false),
+            allow_run: args.allow_run,
         },
     )
 }
@@ -148,6 +160,7 @@ mod tests {
             token: None,
             ssh_target: None,
             advertise: false,
+            allow_run: false,
         }
     }
 

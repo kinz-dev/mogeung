@@ -31,6 +31,11 @@ pub struct HealthTracker {
     /// view is stable between frames rather than shuffling on every repaint.
     unknown_types: BTreeMap<String, u64>,
 
+    /// Run-configuration types nobody has classified. `R-N2`. Held apart from
+    /// `unknown_types` because an unknown event is dropped and an unknown
+    /// configuration is listed — one is data loss, the other is a decision.
+    unknown_run_types: BTreeMap<String, u64>,
+
     /// Every version seen anywhere in the watched history.
     versions: BTreeSet<String>,
 
@@ -80,6 +85,17 @@ impl HealthTracker {
 
     pub fn record_unknown(&mut self, event_type: &str) {
         *self.unknown_types.entry(event_type.to_string()).or_insert(0) += 1;
+    }
+
+    /// A run-configuration type nobody has classified. `R-N2`.
+    ///
+    /// Held apart from `unknown_types` because the consequence is different: an
+    /// unknown transcript event is **dropped**, an unknown run configuration is
+    /// **listed and refused**. Mixing them would report a decision waiting to
+    /// be taken as data going missing.
+    pub fn record_unknown_run_config(&mut self, ty: &str, count: u64) {
+        let e = self.unknown_run_types.entry(ty.to_string()).or_insert(0);
+        *e = (*e).max(count);
     }
 
     /// Note the Claude Code version a transcript line reported, and when that
@@ -183,6 +199,16 @@ impl HealthTracker {
             alerts.push(Alert::VersionChanged {
                 from: from.clone(),
                 to: to.clone(),
+            });
+        }
+
+        let mut run_types: Vec<(String, u64)> =
+            self.unknown_run_types.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        run_types.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        for (ty, count) in &run_types {
+            alerts.push(Alert::UnknownRunConfigType {
+                ty: ty.clone(),
+                count: *count,
             });
         }
 

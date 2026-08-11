@@ -841,6 +841,51 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 err(e);
             }
         }
+        // Run and Debug. `R-N4`, `R-N5`.
+        //
+        // Note what is **not** here: a verb carrying a command. ADR-0025
+        // clause 1 is the whole security argument for this feature, and the
+        // shape of these four arms is where it is kept.
+        ClientMsg::FetchRunConfigs { session_id } => {
+            let (configs, unknown) = state.run_configs(&session_id).await;
+            if !unknown.is_empty() {
+                state.record_unknown_run_types(&unknown).await;
+            }
+            state.broadcast(ServerMsg::RunConfigs {
+                session_id,
+                configs,
+                allowed: state.runs.allowed(),
+            });
+        }
+        ClientMsg::RunStart {
+            session_id,
+            config_id,
+        } => {
+            let (configs, _) = state.run_configs(&session_id).await;
+            let Some(repo) = state.run_repo(&session_id).await else {
+                err(anyhow::anyhow!("no such session"));
+                return;
+            };
+            match state
+                .runs
+                .start(&repo, &config_id, Some(session_id), &configs)
+                .await
+            {
+                Ok(_) => {}
+                // A refusal is not a crash and reads as one if it arrives as a
+                // bare error, so ADR-0025's own wording travels intact.
+                Err(why) => state.broadcast(ServerMsg::Error { message: why }),
+            }
+        }
+        ClientMsg::RunStop { run_id } => {
+            if let Err(why) = state.runs.stop(&run_id).await {
+                state.broadcast(ServerMsg::Error { message: why });
+            }
+        }
+        ClientMsg::FetchRunOutput { run_id } => {
+            let lines = state.runs.lines(&run_id).await;
+            state.broadcast(ServerMsg::RunOutputHistory { run_id, lines });
+        }
         ClientMsg::LaunchTerminal { dir, worktree } => {
             if let Err(e) = state.launch_terminal(&dir, worktree).await {
                 err(e);

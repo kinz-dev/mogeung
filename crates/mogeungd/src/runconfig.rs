@@ -40,7 +40,9 @@
 //! deferral has a measurement behind it rather than becoming permanent by
 //! forgetting.
 
+use mogeung_core::run::{Origin, RunConfig};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// `type/request` pairs we intend to run, and the languages are not an accident:
@@ -308,6 +310,218 @@ fn drop_trailing_commas(src: &str) -> String {
     out
 }
 
+/// Everything a repository's VS Code files offer, and what could not be read.
+pub struct Scan {
+    pub configs: Vec<RunConfig>,
+    /// `type/request` → how many, for the health alert. `R-N2`.
+    pub unknown: BTreeMap<String, u64>,
+}
+
+/// Read both VS Code files into configurations. `R-N2`.
+///
+/// **Nothing is hidden.** An entry mogeung cannot run comes back with a reason
+/// attached rather than being dropped, because a configuration that silently
+/// vanishes reads as *"mogeung did not find it"* — the complaint `R-J12` cost a
+/// fortnight to notice, applied to a third private format.
+pub fn scan(repo: &Path) -> Scan {
+    let mut configs = Vec::new();
+    let mut unknown: BTreeMap<String, u64> = BTreeMap::new();
+
+    for e in read_launch(repo) {
+        let verdict = classify(Source::Launch, &e.key);
+        if verdict == Verdict::Unclassified {
+            *unknown.entry(e.key.clone()).or_default() += 1;
+        }
+        configs.push(launch_config(repo, &e, verdict));
+    }
+    for e in read_tasks(repo) {
+        let verdict = classify(Source::Tasks, &e.key);
+        if verdict == Verdict::Unclassified {
+            *unknown.entry(e.key.clone()).or_default() += 1;
+        }
+        configs.push(task_config(repo, &e, verdict));
+    }
+    Scan { configs, unknown }
+}
+
+/// The name shown when the file did not give one.
+fn named(e: &Entry) -> String {
+    if e.name.is_empty() { e.key.clone() } else { e.name.clone() }
+}
+
+/// One `launch.json` entry as a configuration.
+///
+/// **`HANDLED` means understood, not runnable**, and the difference is the one
+/// design decision this row needed. `launch.json` describes *debug* launches,
+/// and Phase 1 has no debugger — the only real entry in the corpus is an `lldb`
+/// configuration whose command is a `cargo` block for codelldb to interpret,
+/// with no program in it at all. Pretending that is runnable would produce a
+/// button that cannot work; hiding it would break *hide nothing*. So it is
+/// listed, understood, and told what it is waiting for.
+fn launch_config(repo: &Path, e: &Entry, verdict: Verdict) -> RunConfig {
+    let raw = read_jsonc(&repo.join(".vscode/launch.json"));
+    let obj = raw
+        .as_ref()
+        .and_then(|v| v.get("configurations"))
+        .and_then(Value::as_array)
+        .and_then(|xs| xs.iter().find(|o| matches(o, e)));
+
+    let dir = obj
+        .and_then(|o| o.get("cwd"))
+        .and_then(Value::as_str)
+        .map(|s| workspace_relative(s))
+        .unwrap_or_default();
+
+    match verdict {
+        Verdict::Unclassified => {
+            RunConfig::new(Origin::VsCode, named(e), "", vec![], dir).unclassified(&e.ty)
+        }
+        Verdict::Ignored => RunConfig::new(Origin::VsCode, named(e), "", vec![], dir).cannot_run(
+            format!(
+                "mogeung understands `{}` and does not run it in this cut — an `attach` needs a \
+                 live debug session, which is Phase 2 (`R-N9`)",
+                e.key
+            ),
+        ),
+        Verdict::Handled => {
+            let program = obj.and_then(|o| o.get("program")).and_then(Value::as_str);
+            let Some(program) = program else {
+                return RunConfig::new(Origin::VsCode, named(e), "", vec![], dir).cannot_run(
+                    "this configuration names no program — it describes a debug launch for an \
+                     extension to interpret, and running it needs the debugger Phase 2 adds \
+                     (`R-N9`)",
+                );
+            };
+            let args: Vec<String> = obj
+                .and_then(|o| o.get("args"))
+                .and_then(Value::as_array)
+                .map(|xs| xs.iter().filter_map(|a| a.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+
+            let program = workspace_relative(program);
+            let c = RunConfig::new(Origin::VsCode, named(e), &program, args, dir);
+            unresolved(c)
+        }
+    }
+}
+
+/// One `tasks.json` entry as a configuration.
+fn task_config(repo: &Path, e: &Entry, verdict: Verdict) -> RunConfig {
+    let raw = read_jsonc(&repo.join(".vscode/tasks.json"));
+    let obj = raw
+        .as_ref()
+        .and_then(|v| v.get("tasks"))
+        .and_then(Value::as_array)
+        .and_then(|xs| xs.iter().find(|o| matches(o, e)));
+
+    let dir = obj
+        .and_then(|o| o.get("options"))
+        .and_then(|o| o.get("cwd"))
+        .and_then(Value::as_str)
+        .map(|s| workspace_relative(s))
+        .unwrap_or_default();
+
+    match verdict {
+        Verdict::Unclassified => {
+            RunConfig::new(Origin::VsCode, named(e), "", vec![], dir).unclassified(&e.ty)
+        }
+        Verdict::Ignored => RunConfig::new(Origin::VsCode, named(e), "", vec![], dir).cannot_run(
+            format!("mogeung understands `{}` tasks and does not run them", e.ty),
+        ),
+        Verdict::Handled => {
+            // An `npm` task names a script rather than a command line.
+            if e.ty == "npm" {
+                let script = obj
+                    .and_then(|o| o.get("script"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("test");
+                let args = if script == "test" || script == "start" {
+                    vec![script.to_string()]
+                } else {
+                    vec!["run".to_string(), script.to_string()]
+                };
+                return RunConfig::new(Origin::VsCode, named(e), "npm", args, dir);
+            }
+            let Some(command) = obj.and_then(|o| o.get("command")).and_then(Value::as_str) else {
+                return RunConfig::new(Origin::VsCode, named(e), "", vec![], dir)
+                    .cannot_run("this task names no command to run");
+            };
+            let args: Vec<String> = obj
+                .and_then(|o| o.get("args"))
+                .and_then(Value::as_array)
+                .map(|xs| xs.iter().filter_map(|a| a.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let c = RunConfig::new(Origin::VsCode, named(e), workspace_relative(command), args, dir);
+            unresolved(c)
+        }
+    }
+}
+
+/// Does this raw object correspond to the entry we classified?
+fn matches(o: &Value, e: &Entry) -> bool {
+    let name = o.get("name").or_else(|| o.get("label")).and_then(Value::as_str).unwrap_or("");
+    let ty = o.get("type").and_then(Value::as_str).unwrap_or("");
+    ty == e.ty && name == e.name
+}
+
+/// `${workspaceFolder}/x` → `x`, because a configuration is stored relative to
+/// the repository and a remote daemon has it at a different absolute path.
+fn workspace_relative(s: &str) -> String {
+    s.replace("${workspaceFolder}/", "")
+        .replace("${workspaceFolder}", "")
+        .trim_start_matches('/')
+        .to_string()
+}
+
+/// Refuse anything still carrying a VS Code variable we cannot resolve.
+///
+/// `${command:pickProcess}` is in the corpus, and there is no honest value for
+/// it outside VS Code. Running a command with the literal text in it would
+/// produce a failure nobody could read, so it is listed and refused instead.
+fn unresolved(c: RunConfig) -> RunConfig {
+    let line = c.command_line();
+    let Some(at) = line.find("${") else { return c };
+    let token: String = line[at..].chars().take_while(|&ch| ch != '}').collect();
+    c.cannot_run(format!(
+        "this configuration uses `{token}}}`, which only VS Code can answer — mogeung will not \
+         guess at it"
+    ))
+}
+
+/// Everything mogeung could run in this repository, both sources combined.
+///
+/// The one call the daemon and the panel make. Detection first because it is
+/// the source (ADR-0026), files layered on top because a human wrote them.
+pub fn all(repo: &Path) -> Scan {
+    let scanned = scan(repo);
+    Scan {
+        configs: merge(crate::detect::detect(repo), scanned.configs),
+        unknown: scanned.unknown,
+    }
+}
+
+/// Detected entries, with a human's own wherever the two describe the same run.
+///
+/// ADR-0026: *"they win over a detected entry with the same command, because a
+/// human wrote them."* Same **command**, not same name — a person naming their
+/// test run *"Run all the tests (fast)"* has still written down `cargo test`,
+/// and showing both would be showing one thing twice.
+pub fn merge(detected: Vec<RunConfig>, from_files: Vec<RunConfig>) -> Vec<RunConfig> {
+    let human: std::collections::HashSet<String> = from_files
+        .iter()
+        .filter(|c| c.runnable())
+        .map(|c| format!("{}\u{1}{}", c.dir, c.command_line()))
+        .collect();
+
+    let mut out = from_files;
+    out.extend(
+        detected
+            .into_iter()
+            .filter(|c| !human.contains(&format!("{}\u{1}{}", c.dir, c.command_line()))),
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,5 +663,166 @@ mod tests {
         let d = scratch("broken");
         write(&d, ".vscode/launch.json", "{ this is not json at all ");
         assert!(read_launch(&d).is_empty());
+    }
+
+    fn reasons(cs: &[RunConfig]) -> Vec<(String, Option<String>)> {
+        cs.iter().map(|c| (c.name.clone(), c.unrunnable.clone())).collect()
+    }
+
+    /// **Hide nothing.** The whole of `R-N2` in one assertion: a type nobody
+    /// has classified is still on the list, still carries the human's own
+    /// name, names the type, and raises the alert that asks for a decision.
+    #[test]
+    fn an_unclassified_type_is_listed_named_and_reported() {
+        let d = scratch("unknown");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[{"type":"holodeck","request":"launch","name":"Deck 5"}]}"#,
+        );
+        let scan = scan(&d);
+        assert_eq!(scan.configs.len(), 1, "it must not be dropped");
+        let c = &scan.configs[0];
+        assert_eq!(c.name, "Deck 5");
+        assert!(!c.runnable());
+        assert!(c.unrunnable.as_ref().unwrap().contains("holodeck"));
+        assert_eq!(scan.unknown.get("holodeck/launch"), Some(&1));
+    }
+
+    /// The corpus entry, and the decision this row turned on. `HANDLED` means
+    /// *understood*: an `lldb` launch with a `cargo` block names no program, so
+    /// Phase 1 lists it and says what it is waiting for rather than offering a
+    /// button that cannot work.
+    #[test]
+    fn a_debug_only_configuration_is_listed_and_says_what_it_needs() {
+        let d = scratch("debugonly");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[
+                 {"type":"lldb","request":"launch","name":"Cargo launch",
+                  "cargo":{"args":["build","--bin=codex-tui"]}}]}"#,
+        );
+        let scan = scan(&d);
+        let c = &scan.configs[0];
+        assert!(!c.runnable(), "there is no program to start");
+        assert!(c.unrunnable.as_ref().unwrap().contains("R-N9"), "{:?}", c.unrunnable);
+        // Understood, so it is not reported as a decision anybody owes.
+        assert!(scan.unknown.is_empty(), "{:?}", scan.unknown);
+    }
+
+    /// An entry that does name a program is runnable today, without a debugger.
+    #[test]
+    fn a_launch_entry_naming_a_program_runs() {
+        let d = scratch("program");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[
+                 {"type":"node","request":"launch","name":"server",
+                  "program":"${workspaceFolder}/server.js","args":["--port","8080"]}]}"#,
+        );
+        let c = &scan(&d).configs[0];
+        assert!(c.runnable(), "{:?}", c.unrunnable);
+        assert_eq!(c.command_line(), "server.js --port 8080");
+        assert_eq!(c.origin, Origin::VsCode);
+    }
+
+    /// `${command:pickProcess}` is in the real corpus and only VS Code can
+    /// answer it. Running the literal text produces a failure nobody can read.
+    #[test]
+    fn a_configuration_using_an_unresolvable_variable_is_refused_by_name() {
+        let d = scratch("vars");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[
+                 {"type":"node","request":"launch","name":"attach-ish",
+                  "program":"${command:pickProcess}"}]}"#,
+        );
+        let c = &scan(&d).configs[0];
+        assert!(!c.runnable());
+        assert!(
+            c.unrunnable.as_ref().unwrap().contains("${command:pickProcess}"),
+            "{:?}",
+            c.unrunnable
+        );
+    }
+
+    /// An `attach` is understood and declined, and says which cut it is waiting
+    /// for rather than looking like a gap in coverage.
+    #[test]
+    fn an_attach_is_declined_with_its_reason() {
+        let d = scratch("attach");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[{"type":"lldb","request":"attach","name":"Attach"}]}"#,
+        );
+        let c = &scan(&d).configs[0];
+        assert!(!c.runnable());
+        assert!(c.unrunnable.as_ref().unwrap().contains("attach"), "{:?}", c.unrunnable);
+    }
+
+    /// Comments and a trailing comma, which VS Code tolerates and so must this.
+    #[test]
+    fn a_task_survives_comments_and_a_trailing_comma() {
+        let d = scratch("tasks");
+        write(
+            &d,
+            ".vscode/tasks.json",
+            r#"{
+              // the build everyone runs
+              "tasks": [
+                { "type": "shell", "label": "build", "command": "make", "args": ["-j8"], },
+              ],
+            }"#,
+        );
+        let c = &scan(&d).configs[0];
+        assert!(c.runnable(), "{:?}", c.unrunnable);
+        assert_eq!(c.name, "build");
+        assert_eq!(c.command_line(), "make -j8");
+    }
+
+    /// ADR-0026: a human's entry wins over a detected one **with the same
+    /// command**, because a human wrote it — and by command rather than name,
+    /// since naming a run *"Run all the tests (fast)"* is still `cargo test`.
+    #[test]
+    fn a_human_entry_replaces_the_detected_one_it_duplicates() {
+        let detected = vec![
+            RunConfig::new(Origin::Detected, "cargo test", "cargo", vec!["test".into()], ""),
+            RunConfig::new(Origin::Detected, "cargo build", "cargo", vec!["build".into()], ""),
+        ];
+        let human = vec![RunConfig::new(
+            Origin::VsCode,
+            "Run all the tests (fast)",
+            "cargo",
+            vec!["test".into()],
+            "",
+        )];
+
+        let merged = merge(detected, human);
+        let lines: Vec<String> = merged.iter().map(|c| c.command_line()).collect();
+        assert_eq!(lines.iter().filter(|l| *l == "cargo test").count(), 1, "{lines:?}");
+        let kept = merged.iter().find(|c| c.command_line() == "cargo test").unwrap();
+        assert_eq!(kept.origin, Origin::VsCode, "the human's wins");
+        assert_eq!(kept.name, "Run all the tests (fast)");
+        // …and the one it does not duplicate survives untouched.
+        assert!(merged.iter().any(|c| c.command_line() == "cargo build"));
+    }
+
+    /// An **unrunnable** human entry must not shadow a detected one that works
+    /// — otherwise listing a broken configuration would remove a working way to
+    /// run the same thing, which is the opposite of *hide nothing*.
+    #[test]
+    fn an_unrunnable_entry_does_not_displace_a_working_detected_one() {
+        let detected =
+            vec![RunConfig::new(Origin::Detected, "cargo test", "cargo", vec!["test".into()], "")];
+        let human = vec![RunConfig::new(Origin::VsCode, "theirs", "cargo", vec!["test".into()], "")
+            .unclassified("holodeck")];
+
+        let merged = merge(detected, human);
+        assert_eq!(merged.len(), 2, "both are listed:\n{:?}", reasons(&merged));
+        assert!(merged.iter().any(|c| c.runnable() && c.origin == Origin::Detected));
     }
 }

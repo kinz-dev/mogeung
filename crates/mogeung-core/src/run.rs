@@ -67,11 +67,16 @@ pub struct RunConfig {
     /// remote daemon, where the repository is at a different path.
     pub dir: String,
     pub origin: Origin,
-    /// `Some(type)` when the entry is **listed but cannot be run** — the
-    /// classification `R-N2` gives a `launch.json` type nobody has decided
-    /// about. It carries the type so the panel can name it, because a
-    /// configuration silently missing reads as *"mogeung did not find it"*.
-    pub unsupported: Option<String>,
+    /// `Some(reason)` when the entry is **listed but cannot be started**, in
+    /// words a person can act on.
+    ///
+    /// `R-N2`'s rule is *hide nothing*: a configuration mogeung cannot run is
+    /// still shown, because one that silently vanishes reads as *"mogeung did
+    /// not find it"*. There are three ways to end up here and the reason
+    /// distinguishes them — a type nobody classified, a type we decline (an
+    /// `attach` needs a debugger this cut does not have), and an entry that
+    /// names no program at all.
+    pub unrunnable: Option<String>,
 }
 
 impl RunConfig {
@@ -85,13 +90,22 @@ impl RunConfig {
     ) -> Self {
         let (name, program, dir) = (name.into(), program.into(), dir.into());
         let id = id_for(origin, &dir, &program, &args);
-        RunConfig { id, name, program, args, dir, origin, unsupported: None }
+        RunConfig { id, name, program, args, dir, origin, unrunnable: None }
     }
 
-    /// Listed, named, and refused. `R-N2`.
-    pub fn unsupported(mut self, ty: impl Into<String>) -> Self {
-        self.unsupported = Some(ty.into());
+    /// Listed, named, and refused, with the reason shown. `R-N2`.
+    pub fn cannot_run(mut self, why: impl Into<String>) -> Self {
+        self.unrunnable = Some(why.into());
         self
+    }
+
+    /// A type neither list has an opinion about. Names the type, because that
+    /// is the thing somebody has to make a decision about.
+    pub fn unclassified(self, ty: &str) -> Self {
+        self.cannot_run(format!(
+            "`{ty}` is not a configuration type mogeung knows how to run — it is listed \
+             so you can see it exists, and classifying it is a one-line decision"
+        ))
     }
 
     /// The command as a person would type it. Display and **deduplication** —
@@ -108,7 +122,7 @@ impl RunConfig {
 
     /// Can this be started? `R-N2`'s unrunnable entries still appear in lists.
     pub fn runnable(&self) -> bool {
-        self.unsupported.is_none()
+        self.unrunnable.is_none()
     }
 }
 
@@ -147,6 +161,69 @@ fn slug(s: &str) -> String {
         out.pop();
     }
     out
+}
+
+/// Where a run is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Running,
+    /// Finished on its own, with the code it returned.
+    Exited,
+    /// Stopped by a person. Deliberately not the same as `Exited`: *"you
+    /// stopped it"* and *"it failed"* are different answers to **did the tests
+    /// pass**, and `R-N7` shows this beside a claim.
+    Stopped,
+    /// Never started — the program could not be spawned at all.
+    Failed,
+}
+
+/// One run, as a client sees it. `R-N4`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Run {
+    pub id: String,
+    pub config_id: String,
+    /// Copied from the configuration, so a client needs only this to draw a row.
+    pub name: String,
+    pub command: String,
+    /// The session this was started from, when it was started from one — the
+    /// whole of `R-N7`'s mechanism.
+    pub session_id: Option<crate::session::SessionId>,
+    pub state: RunState,
+    pub exit_code: Option<i32>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How many lines fell off the front of the buffer. **Stated, never
+    /// silent** — a log that quietly loses its middle is worse than one that
+    /// admits it.
+    pub dropped: u64,
+}
+
+impl Run {
+    /// Did this run actually pass? `None` while it is still going.
+    ///
+    /// A **stopped** run is not a pass and not a failure: nobody let it finish.
+    /// `R-N7` needs that third answer, because showing "stopped" as a red cross
+    /// beside a claim would be mogeung asserting something it does not know.
+    pub fn passed(&self) -> Option<bool> {
+        match self.state {
+            RunState::Running => None,
+            RunState::Stopped => None,
+            RunState::Failed => Some(false),
+            RunState::Exited => Some(self.exit_code == Some(0)),
+        }
+    }
+}
+
+/// A line of output, as it arrives.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunLine {
+    pub run_id: String,
+    pub seq: u64,
+    pub text: String,
+    /// `true` for stderr. Kept apart so a panel can colour it, and interleaved
+    /// in arrival order so the sequence still reads like a terminal.
+    pub stderr: bool,
 }
 
 /// The agent CLIs mogeung must never start. ADR-0025 clause 2.
@@ -238,13 +315,15 @@ mod tests {
         assert!(msg.contains("claude"), "{msg}");
     }
 
-    /// An unrunnable entry is still an entry — it is listed, and it carries the
-    /// type so the panel can say what it did not understand.
+    /// An unrunnable entry is still an entry — it is listed, it keeps the
+    /// human's own name, and it says what it did not understand. `R-N2`'s
+    /// *hide nothing* is the rule being pinned here.
     #[test]
-    fn an_unsupported_entry_is_listed_and_names_its_type() {
-        let c = RunConfig::new(Origin::VsCode, "Deck 5", "", vec![], "").unsupported("holodeck");
+    fn an_unrunnable_entry_is_listed_and_names_its_type() {
+        let c = RunConfig::new(Origin::VsCode, "Deck 5", "", vec![], "").unclassified("holodeck");
         assert!(!c.runnable());
-        assert_eq!(c.unsupported.as_deref(), Some("holodeck"));
         assert_eq!(c.name, "Deck 5", "it keeps the human's own name");
+        let why = c.unrunnable.expect("a reason");
+        assert!(why.contains("holodeck"), "the type has to be named: {why}");
     }
 }

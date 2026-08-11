@@ -306,6 +306,24 @@ pub enum ClientMsg {
     /// known limit hits. Computed from the transcripts on demand and cached
     /// incrementally daemon-side. Tokens, never dollars. `R-G1`–`R-G3`.
     FetchUsage,
+    /// What this session's repository could be asked to run. `R-N5`.
+    FetchRunConfigs { session_id: SessionId },
+    /// Start a configuration **by id**. `R-N4`.
+    ///
+    /// **There is deliberately no field for a command.**
+    /// [ADR-0025](../../../docs/decisions/0025-run-a-process-you-named-never-an-agent.md)
+    /// clause 1 is the whole security argument for this feature: the daemon
+    /// runs what the repository already describes, so reaching the port lets
+    /// you run its test suite rather than handing you a shell. Adding a
+    /// `command: String` here would quietly undo that.
+    RunStart {
+        session_id: SessionId,
+        config_id: String,
+    },
+    /// Stop a run this daemon owns, and everything it started.
+    RunStop { run_id: String },
+    /// The output buffered so far, for a client that just connected.
+    FetchRunOutput { run_id: String },
     /// Configure a repo's signal command (tests/typecheck); empty clears it.
     /// The command is the user's own — mogeung never invents one. `R-E2`.
     SetSignalCommand { repo: String, command: String },
@@ -915,6 +933,28 @@ pub enum ServerMsg {
     /// the wrong file — the same rule the search answers follow.
     KitDoc { doc: crate::kit::KitDoc },
     Error { message: String },
+    /// What a session's repository offers, and whether this daemon will run
+    /// anything at all. `R-N5`.
+    ///
+    /// `allowed` is ADR-0025 clause 4 travelling to the client, so the panel
+    /// can say *"this daemon was started without `--allow-run`"* instead of
+    /// drawing buttons that will be refused.
+    RunConfigs {
+        session_id: SessionId,
+        configs: Vec<crate::run::RunConfig>,
+        allowed: bool,
+    },
+    /// Every run this daemon owns, newest first. Sent on connect, so a window
+    /// reopened after a restart still shows what is going.
+    Runs { runs: Vec<crate::run::Run> },
+    RunStarted { run: Box<crate::run::Run> },
+    RunOutput { line: crate::run::RunLine },
+    RunEnded { run: Box<crate::run::Run> },
+    /// The buffered output of one run, in order.
+    RunOutputHistory {
+        run_id: String,
+        lines: Vec<crate::run::RunLine>,
+    },
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ pub mod health;
 pub mod machine;
 pub mod notes;
 pub mod notify;
+pub mod run;
 pub mod runconfig;
 pub mod runner;
 pub mod server;

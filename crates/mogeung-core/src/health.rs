@@ -52,6 +52,13 @@ pub enum Alert {
         session_id: String,
         skipped_bytes: u64,
     },
+    /// A `launch.json` / `tasks.json` type nobody has classified. `R-N2`.
+    ///
+    /// Separate from [`Alert::UnknownEventType`] because the consequence is
+    /// different: a transcript event we do not know is **dropped**, where a run
+    /// configuration we do not know is still **listed**, named and refused. So
+    /// this is a prompt to decide, not a warning that the board is lying.
+    UnknownRunConfigType { ty: String, count: u64 },
 }
 
 impl Alert {
@@ -79,6 +86,10 @@ impl Alert {
                 short_id(session_id),
                 human_bytes(*skipped_bytes)
             ),
+            Alert::UnknownRunConfigType { ty, count } => format!(
+                "Run configuration type {ty:?} seen {count}× — mogeung lists it but \
+                 cannot run it. Classify it in runconfig::HANDLED or KNOWN_IGNORED."
+            ),
         }
     }
 
@@ -87,7 +98,13 @@ impl Alert {
     /// A skipped tail is a stated limitation, not a fault; the other three mean
     /// mogeung may be lying by omission.
     pub fn is_urgent(&self) -> bool {
-        !matches!(self, Alert::HistorySkipped { .. })
+        // A listed-but-unrunnable configuration is a decision waiting to be
+        // taken, not a board that is wrong — the entry is on screen with its
+        // type named, which is the whole of ADR-0026's "hide nothing".
+        !matches!(
+            self,
+            Alert::HistorySkipped { .. } | Alert::UnknownRunConfigType { .. }
+        )
     }
 }
 

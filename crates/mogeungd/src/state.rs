@@ -73,6 +73,8 @@ pub struct AppState {
     /// `identity` because the constructor is shared with tests that have no
     /// config to read; `server::prepare` fills it in once.
     pub ssh_target: std::sync::OnceLock<String>,
+    /// Every run this daemon owns. `R-N4`.
+    pub runs: crate::run::Runs,
     /// Whether this daemon may write to a repository at all. `R-D19`.
     ///
     /// A `OnceLock` for the same reason `ssh_target` is one: only the code
@@ -317,6 +319,7 @@ impl AppState {
             seqs: Mutex::new(seqs),
             identity,
             ssh_target: std::sync::OnceLock::new(),
+            runs: crate::run::Runs::new(),
             writes_allowed: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
@@ -600,6 +603,45 @@ impl AppState {
             sessions,
             queue,
             daemon: Some(self.daemon_identity()),
+        }
+    }
+
+    /// Where a session's runs happen: its repository root, or its working
+    /// directory when it is not in one. `R-N4`.
+    pub async fn run_repo(&self, session_id: &SessionId) -> Option<PathBuf> {
+        self.get(session_id).await.map(|s| crate::run::repo_of(&s))
+    }
+
+    /// Everything this session's repository could be asked to run, and the
+    /// configuration types nobody has classified. `R-N2`, `R-N3`.
+    ///
+    /// Read from disk each time rather than cached: a `launch.json` is edited
+    /// by a human between one click and the next, and a panel showing a stale
+    /// list is the *"mogeung did not find it"* complaint in another costume.
+    pub async fn run_configs(
+        &self,
+        session_id: &SessionId,
+    ) -> (Vec<mogeung_core::run::RunConfig>, std::collections::BTreeMap<String, u64>) {
+        let Some(repo) = self.run_repo(session_id).await else {
+            return (Vec::new(), Default::default());
+        };
+        let scan = tokio::task::spawn_blocking(move || crate::runconfig::all(&repo))
+            .await
+            .unwrap_or_else(|_| crate::runconfig::Scan {
+                configs: Vec::new(),
+                unknown: Default::default(),
+            });
+        (scan.configs, scan.unknown)
+    }
+
+    /// A configuration type nobody has decided about joins the canary. `R-N2`.
+    pub async fn record_unknown_run_types(
+        &self,
+        unknown: &std::collections::BTreeMap<String, u64>,
+    ) {
+        let mut h = self.health.lock().await;
+        for (ty, count) in unknown {
+            h.record_unknown_run_config(ty, *count);
         }
     }
 
