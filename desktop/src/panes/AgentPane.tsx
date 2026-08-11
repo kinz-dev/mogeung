@@ -14,7 +14,10 @@
  * dockview tab, which now names the session rather than repeating the word
  * `Agent`, and moved the controls into the group's actions — see
  * [`PaneChrome`](../ui/PaneChrome.tsx). What is left here is the terminal and
- * the three sentences that explain why there sometimes is not one.
+ * the four sentences that explain why there sometimes is not one — and which of
+ * them is chosen matters more than any of them reads: a session that has
+ * **ended** used to be told it was not running under tmux, because both facts
+ * arrive as a `tmux_target` of `null`.
  */
 
 import { useMemo } from "react";
@@ -70,7 +73,36 @@ export function AgentPane() {
           id={`${paneId}:${s.id}`}
           command={command}
           refusal={
-            !s.tmux_target ? (
+            // **Dead first, and the order is the whole fix.** A session that has
+            // ended has no pane, so `tmux_target` is `null` for it too (see
+            // `state.rs`, which clears the target rather than leaving a stale
+            // one) — and the tmux branch below therefore used to answer for it,
+            // blaming the launcher for a session that simply finished. That
+            // reads as a broken pane and sends you to check tmux, which is the
+            // wrong place: reported 2026-08-11 against a **held** pane, where
+            // it is worst, because the sentence is fixed on screen and no
+            // change of selection will replace it.
+            //
+            // The empty state above catches only the held session that has left
+            // the store entirely. This is the same fact one step earlier, while
+            // the session is still known and merely over.
+            !s.alive ? (
+              <div className="max-w-md space-y-2">
+                <div className="text-sm font-semibold text-[var(--text-strong)]">
+                  That session has ended.
+                </div>
+                <p className="text-xs text-[var(--dim)]">
+                  A pty dies with the process that owned it, so there is nothing left to attach to.
+                  Everything it did is still here — the transcript, its diff and the review.
+                </p>
+                {held && (
+                  <p className="text-xs text-[var(--dim)]">
+                    This pane is <strong>held</strong> on it, so picking another session will not
+                    change it. Drop the anchor in the header to follow the queue again.
+                  </p>
+                )}
+              </div>
+            ) : !s.tmux_target ? (
               <div className="max-w-md space-y-2">
                 <div className="text-sm font-semibold text-[var(--text-strong)]">
                   This session is not running under tmux.
