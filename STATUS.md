@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 332 passing |
-| Rust | 24254 lines |
-| Docs | 79 files, 23 ADRs |
+| Tests | 353 passing |
+| Rust | 25569 lines |
+| Docs | 85 files, 26 ADRs |
 
 ## Assumptions
 
-Untested: **8** · At risk: **4** · Supported: 17 · Refuted: 1
+Untested: **12** · At risk: **6** · Supported: 18 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -53,4 +53,7 @@ Untested: **8** · At risk: **4** · Supported: 17 · Refuted: 1
 | [Two agents at once](docs/features/0030-two-agents-at-once.md) | `shipped` | [A30, A14, A11] |
 | [The wall](docs/features/0031-the-wall.md) | `shipped` | [A1, A6] |
 | [A pane per file](docs/features/0032-a-pane-per-file.md) | `shipped` | [A14, A15, A16, A30] |
+| [Cost per model](docs/features/0033-cost-per-model.md) | `shipped` | [A4, A31] |
+| [Mermaid in the file pane, then the Transcript](docs/features/0034-mermaid-in-the-file-pane.md) | `shipped` | [A6] |
+| [Run and Debug](docs/features/0035-run-and-debug.md) | `draft` | [A4, A32, A33, A34] |
 
