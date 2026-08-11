@@ -305,3 +305,39 @@ not no passing check") is the standard to hold to.
   **The walk skips dot-directories.** A deleted checkout in
   `~/.local/share/Trash` answered as a repository on the first real run, which
   read the one number this tool exists for 13% low.
+- **2026-08-11, `R-N3` built, and the acceptance criterion earned its place.**
+  The test strategy above asks for detection to be *"asserted against this
+  repository itself — a test that says mogeung offers `cargo test --workspace`
+  for its own root would fail today and keeps failing if the detectors
+  regress."* It found **three** bugs on its first run, none of which a fixture
+  would have shown.
+  **`str::parse::<toml::Value>()` does not parse a document.** In `toml` 0.9 it
+  parses a *value*, and fails at column 12 of `[workspace]`. Every `Cargo.toml`
+  was rejected silently, so the list came back with npm entries and no cargo
+  ones at all — the failure a fixture-only suite would have reproduced
+  faithfully, since the fixture would have been written against the same wrong
+  call. `toml::from_str` is correct.
+  **A `tests/` directory is not a Python project.** ADR-0026 says *"pytest from
+  a `pyproject.toml` or a `tests/` directory"*, and every Rust crate in this
+  workspace has the latter — so `mogeungd` was offered `python -m pytest`. That
+  is the *"wrong inference is now a first impression"* cost the same ADR named,
+  arriving about an hour after it was written down. The directory now counts
+  only when it contains `.py`.
+  **A workspace member is not its own project.** Offering each member's
+  directory separately produced twenty entries where thirteen were wanted,
+  three of them for `mogeung-core`, which is a library and cannot be run at
+  all. Skipping members fixed it and immediately hid `desktop/src-tauri` —
+  because an **empty `[workspace]`** is how a nested crate detaches from its
+  parent, Tauri writes one into every `src-tauri`, and the member-collector
+  read it as a workspace whose sole member was itself.
+  Worth recording that the second and third are the same lesson from opposite
+  directions: detection's failures are not missing entries, they are **confident
+  wrong ones**, and the only thing that surfaces them is running it against a
+  real tree.
+- **The sweep grew a second number, and the pair is the point.** `R-N1`
+  reported how many repositories carry no configuration file; it now also
+  reports how many detection can offer nothing for, because ADR-0026 moved the
+  feature's weight onto detection and *"60% carry no file"* is only half an
+  argument. `--detected` prints the list itself, which is the only form in
+  which *"why is `cargo run -p mogeung-tray` in my list"* can actually be
+  answered.

@@ -64,6 +64,12 @@ struct Report {
     inventory: BTreeMap<String, u64>,
     /// Repos with no configuration from any source at all.
     bare: Vec<PathBuf>,
+    /// Repos where `R-N3`'s detection finds nothing to offer. **This is the
+    /// number the pillar is now betting on**: `bare` says how many projects a
+    /// parser cannot help, and this says how many detection cannot help either
+    /// — the population that would open an empty panel.
+    undetected: Vec<PathBuf>,
+    detected_entries: u64,
 }
 
 #[derive(Default)]
@@ -100,6 +106,10 @@ fn main() {
     }
 
     print(&roots, &r, quiet);
+    if args.iter().any(|a| a == "--detected") {
+        println!("\n=== what detection would offer ===");
+        show_detected(&r.repos);
+    }
 
     if r.unknown.is_empty() {
         println!(
@@ -225,6 +235,16 @@ fn scan_repo(repo: &Path, r: &mut Report) {
     if !any {
         r.bare.push(repo.to_path_buf());
     }
+
+    // What `R-N3` would offer here. Measured in the same pass because the two
+    // numbers only mean anything beside each other: ADR-0026 moved the feature
+    // onto detection, so "how many repositories carry no file" is only half the
+    // argument — the other half is whether detection reaches the ones it left.
+    let found = mogeungd::detect::detect(repo);
+    r.detected_entries += found.len() as u64;
+    if found.is_empty() {
+        r.undetected.push(repo.to_path_buf());
+    }
 }
 
 fn xml_files(dir: &Path) -> Vec<PathBuf> {
@@ -336,6 +356,47 @@ fn print(roots: &[PathBuf], r: &Report, quiet: bool) {
     );
     println!("    this is the population R-N3's detection has to cover alone");
     names(r.bare.iter());
+
+    // …and whether it does.
+    let covered = r.repos.len() - r.undetected.len();
+    let cpct = if r.repos.is_empty() {
+        0
+    } else {
+        covered * 100 / r.repos.len()
+    };
+    println!(
+        "\n  detection (R-N3) offers something in: {covered} of {} ({cpct}%), {} entries in total",
+        r.repos.len(),
+        r.detected_entries
+    );
+    if r.undetected.is_empty() {
+        println!("    every repository here would open a panel with something in it");
+    } else {
+        println!("    these would open an empty panel:");
+        names(r.undetected.iter());
+    }
+}
+
+/// Print what detection would actually offer, repository by repository.
+///
+/// ADR-0026 promoted detection to *the source* and named the price in the same
+/// breath: *"a wrong inference is now a first impression"*, and **"why is
+/// `cargo run -p mogeung-tray` in my list" is a question that has to have a
+/// good answer.** A count cannot answer it. This is the flag that shows the
+/// list you would actually be looking at, so a bad inference is something you
+/// can see rather than something a user reports.
+fn show_detected(repos: &[PathBuf]) {
+    for repo in repos {
+        let found = mogeungd::detect::detect(repo);
+        if found.is_empty() {
+            continue;
+        }
+        println!("\n  {}", repo.display());
+        for c in found {
+            let place = if c.dir.is_empty() { String::new() } else { format!("  ({})", c.dir) };
+            println!("    {:<40}{place}", c.command_line());
+        }
+    }
 }
 
 fn names<'a>(mut it: impl Iterator<Item = &'a PathBuf>) {
