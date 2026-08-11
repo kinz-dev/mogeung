@@ -28,7 +28,7 @@ export type RailTool = "files" | "search" | "notes" | "bookmarks";
  * time**, so the diff and the conversation can no longer be split side by side
  * the way the tile tree allowed. That was possible before and is not now.
  */
-export type DockTool = "insight" | "git" | "debt" | "changes" | "transcript";
+export type DockTool = "insight" | "git" | "debt" | "changes" | "transcript" | "run";
 
 /**
  * The half of the preferences that is about a *machine* rather than about this

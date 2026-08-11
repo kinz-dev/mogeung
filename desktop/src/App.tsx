@@ -53,7 +53,6 @@ import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
 import { dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
 import { PaneScope, paneKind } from "@/lib/paneScope";
-import { RunPane } from "@/panes/RunPane";
 import { PaneActions, PaneCwd, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
 
@@ -93,7 +92,6 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // own panel id (`R-B53`), so the registry needs one entry rather than one
   // per file.
   file: pane("file", FilePane, { scale: false }),
-  run: pane("run", RunPane),
 };
 
 const LAYOUT_KEY = "mogeung.layout";
@@ -109,9 +107,6 @@ const LAYOUT_KEY = "mogeung.layout";
  */
 const PANES: readonly (readonly [string, string])[] = [
   ["agent", "Agent"],
-  // `R-N5`. Always present for the reason the Agent pane is: a pane you can
-  // only reach by remembering its shortcut is a pane you have lost.
-  ["run", "Run"],
 ];
 
 /**
@@ -125,7 +120,10 @@ const PANES: readonly (readonly [string, string])[] = [
  * `R-B53` did not move it, it dissolved it into one pane per file. Any layout
  * written before that still names it.
  */
-const MOVED_TO_DOCK = ["git", "info", "debt", "insight", "changes", "transcript", "code"];
+// `run` joined them on 2026-08-11, the day after it arrived: a layout saved
+// while it was a centre pane would otherwise restore a tab whose component is
+// no longer registered.
+const MOVED_TO_DOCK = ["git", "info", "debt", "insight", "changes", "transcript", "code", "run"];
 
 /**
  * Panels naming a file, stripped on load. `R-B53`.

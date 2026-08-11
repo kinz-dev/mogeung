@@ -307,8 +307,9 @@ export const ACTIONS: Action[] = [
   },
 
   // The rest of the strip, in the order it is drawn.
-  dockTool("insight", "Insight", ["Alt+4"]),
+  dockTool("run", "Run", ["Alt+4"]),
   dockTool("debt", "Debt", ["Alt+5"]),
+  dockTool("insight", "Insight", ["Alt+8"]),
   dockTool("git", "Git", ["Alt+9"]),
 
   {
@@ -558,8 +559,9 @@ export const MAC_KEYS: Record<string, string[]> = {
   "queue.focus": ["Meta+1"],
   "dock.changes": ["Meta+2"],
   "dock.transcript": ["Meta+3"],
-  "dock.insight": ["Meta+4"],
+  "dock.run": ["Meta+4"],
   "dock.debt": ["Meta+5"],
+  "dock.insight": ["Meta+8"],
   "dock.git": ["Meta+9"],
   // `⌘0` is reset-zoom, so the digit keeps its `⌥` — respelled to fire.
   "layout.reset": ["Alt+Digit0"],

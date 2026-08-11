@@ -374,10 +374,14 @@ describe("the keyboard", () => {
     render(<App />);
     press("9", { altKey: true });
     expect(useStore.getState().prefs.dock).toBe("git");
+    // `Alt+4` is **Run** since 2026-08-11, asked for directly; Insight moved to
+    // `Alt+8`. The cheaper chord belongs to the thing reached mid-flow.
     press("4", { altKey: true });
-    expect(useStore.getState().prefs.dock).toBe("insight");
+    expect(useStore.getState().prefs.dock).toBe("run");
     press("4", { altKey: true });
     expect(useStore.getState().prefs.dock).toBe(null);
+    press("8", { altKey: true });
+    expect(useStore.getState().prefs.dock).toBe("insight");
   });
 
   /**
@@ -446,7 +450,11 @@ describe("the keyboard", () => {
     const { DOCK_TOOLS } = await import("@/ui/BottomDock");
     const { ACTIONS } = await import("@/lib/keymap");
     const chords = DOCK_TOOLS.map((t) => ACTIONS.find((a) => a.id === `dock.${t.id}`)?.keys[0]);
-    expect(chords).toEqual(["Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+9"]);
+    // Ascending, left to right. When Run took `Alt+4` and Insight `Alt+8`,
+    // Insight had to move along the strip as well — this is the assertion that
+    // said so, and a strip whose numbers jump about is one you read rather
+    // than reach for.
+    expect(chords).toEqual(["Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+8", "Alt+9"]);
   });
 
   /**

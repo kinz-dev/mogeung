@@ -19,6 +19,10 @@ socket. The *why* is [feature 0035](../features/0035-run-and-debug.md);
 [ADR-0026](../decisions/0026-other-peoples-run-configurations.md) are the
 decisions this implements.
 
+**The panel lives in the bottom dock**, on `Alt+4`, beside Changes and
+Transcript — it is something you consult against the centre rather than the
+thing you are doing. It moved there hours after it first shipped in the centre.
+
 **Phase 1 is built.** `R-N1`–`R-N8`: the sweep, the reader, detection, process
 ownership, the panel, masking, the corroboration type and mogeung's own
 checked-in configuration. Phase 2 — the DAP client, breakpoints, per-language
