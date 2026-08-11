@@ -1,6 +1,6 @@
 ---
 title: Run and Debug
-status: draft
+status: active
 updated: 2026-08-11
 roadmap: R-N1
 depends_on: [A4, A32, A33, A34]
@@ -278,3 +278,30 @@ not no passing check") is the standard to hold to.
   version would have spent its largest parser on a gitignored file with an
   open-ended type namespace, to reach ten repositories that detection reaches
   anyway.
+- **2026-08-11, `R-N1` built — and the first run disagreed with the table it
+  was written to reproduce.** Same tool, different machine: Linux, **58**
+  repositories rather than nineteen. VS Code is unchanged and if anything worse
+  — `launch.json` in **1** of 58, still `github/codex`, `tasks.json` in none —
+  but `.idea/runConfigurations/*.xml` is in **5** repositories where the Mac
+  measured **zero**, and `.run/*.run.xml` in **8** where it measured one. All
+  thirteen are the user's own projects. **35 of 58 (60%) still carry nothing at
+  all**, so `R-N3`'s rank is untouched and detection still has to cover the
+  majority alone. What moved is the deferral: A32's own SUPPORTED condition
+  (*"configurations exist for the projects actually worked in"*) is now met, in
+  the one format this cut declined to read. Recorded against `R-N12` rather
+  than acted on, which is what ADR-0026 asked for — and worth noticing that the
+  sweep produced its first real finding on the day it was written, exactly as
+  the shell loop it replaces did.
+- **Three things the plan did not have**, all found by writing it.
+  **The classification key is `type/request`, not `type`.** ADR-0026 says *"a
+  `type` we run goes in `HANDLED`"* and the corpus is one word short of that:
+  the single real `launch.json` carries `lldb` twice, `launch` and `attach`,
+  and Phase 1 can honour exactly one of them. The compound is reported the way
+  `codex.rs`'s nested taxonomy already is.
+  **IntelliJ's types must never fail the run.** They are an inventory, not a
+  verdict — nine distinct types appear here, including `docker-deploy` — and a
+  check that can never pass is a check people stop running, which would cost
+  the measurement `R-N12` depends on.
+  **The walk skips dot-directories.** A deleted checkout in
+  `~/.local/share/Trash` answered as a repository on the first real run, which
+  read the one number this tool exists for 13% low.

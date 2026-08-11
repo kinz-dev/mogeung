@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 353 passing |
-| Rust | 25569 lines |
+| Tests | 370 passing |
+| Rust | 26546 lines |
 | Docs | 85 files, 26 ADRs |
 
 ## Assumptions
@@ -55,5 +55,5 @@ Untested: **12** · At risk: **6** · Supported: 18 · Refuted: 2
 | [A pane per file](docs/features/0032-a-pane-per-file.md) | `shipped` | [A14, A15, A16, A30] |
 | [Cost per model](docs/features/0033-cost-per-model.md) | `shipped` | [A4, A31] |
 | [Mermaid in the file pane, then the Transcript](docs/features/0034-mermaid-in-the-file-pane.md) | `shipped` | [A6] |
-| [Run and Debug](docs/features/0035-run-and-debug.md) | `draft` | [A4, A32, A33, A34] |
+| [Run and Debug](docs/features/0035-run-and-debug.md) | `active` | [A4, A32, A33, A34] |
 

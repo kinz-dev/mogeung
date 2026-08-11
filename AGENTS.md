@@ -80,6 +80,7 @@ cd desktop && npm test      # the window's own suite; cargo does not run it
 ./scripts/gen-status.sh     # rewrite STATUS.md
 
 cargo run -q -p mogeungd --bin sweep    # what the formats look like today
+cargo run -q -p mogeungd --bin runconfigs   # what run configurations exist here
 ```
 
 ### Run the sweep after a Claude Code or Codex upgrade
