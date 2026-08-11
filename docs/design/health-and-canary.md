@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-08-05
+updated: 2026-08-11
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -54,10 +54,19 @@ saying so.
 | `MalformedLines` | any unreadable line | yes |
 | `VersionChanged` | the *current* Claude Code version moves | yes |
 | `HistorySkipped` | a transcript was over the size cap | no |
+| `UnknownRunConfigType` | a `launch.json` / `tasks.json` `type` nobody classified (`R-N2`) | no |
 
 `HistorySkipped` is deliberately not urgent. It is a stated limitation working
 as designed, not a fault — and treating it as an emergency would train the user
 to dismiss the whole panel.
+
+**`UnknownRunConfigType` is not urgent either, and the reason is worth stating
+because the two look alike.** An unclassified *transcript event* is urgent
+because the line is **dropped** — mogeung is lying by omission. An unclassified
+*run configuration* is **listed**, named and refused in the panel, so nothing is
+hidden and nothing is wrong; it is a decision waiting to be taken. They are
+counted separately in the tracker for the same reason, so that a pile of run
+configurations can never make it look as though data is going missing.
 
 Every alert carries a `message()` written for someone who has not read the
 source. An alert that says `unknown_type: 3` is a log line; the panel needs a

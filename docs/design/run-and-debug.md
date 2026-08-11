@@ -7,6 +7,8 @@ covers:
   - crates/mogeungd/src/detect.rs
   - crates/mogeungd/src/runconfig.rs
   - crates/mogeungd/src/bin/runconfigs.rs
+  - crates/mogeungd/src/run.rs
+  - desktop/src/panes/RunPane.tsx
 ---
 
 # Run and debug
@@ -17,9 +19,10 @@ socket. The *why* is [feature 0035](../features/0035-run-and-debug.md);
 [ADR-0026](../decisions/0026-other-peoples-run-configurations.md) are the
 decisions this implements.
 
-**Only the reading half exists.** `R-N1` and `R-N3` are built; nothing here
-starts a process yet. `run.rs`, the daemon's ownership of a child, the wire
-verbs and DAP are `R-N4` onwards.
+**Phase 1 is built.** `R-N1`–`R-N8`: the sweep, the reader, detection, process
+ownership, the panel, masking, the corroboration type and mogeung's own
+checked-in configuration. Phase 2 — the DAP client, breakpoints, per-language
+adapters — is not started.
 
 ## Two sources, and one of them is the source
 
@@ -149,13 +152,57 @@ numbers that only mean something together:
 `--detected` prints the entries themselves, which is the only form in which a
 wrong inference can be seen rather than reported.
 
+## Owning a process
+
+`run.rs` holds a `Runs` per daemon: a `Run` and a bounded output ring per
+child. Four things are load-bearing.
+
+**All four ADR-0025 clauses are enforced where a process is actually spawned**,
+not where a request arrives — a check on the *configuration* could be walked
+around by anything that rewrites one:
+
+1. `start()` takes a **configuration id** and looks it up in what the
+   repository produced. An id that is not there is refused, naming the clause.
+2. `is_agent()` is checked on the program about to be spawned. The limit is
+   known and ADR-0025 states it: a script in the repository that goes on to
+   call `claude` walks past this.
+3. Runs live on `AppState`, so one survives the window closing.
+4. `runs_allowed(bind, --allow-run)` mirrors `writes_allowed` exactly — one
+   place computes *is this safe*, so the start-up refusal and the per-request
+   gate cannot come to disagree.
+
+**Children get their own process group** (`setsid`), and stopping signals the
+group. A `cargo test` that leaves its test binary running is a stop button that
+stops nothing.
+
+**Stopped is not Exited.** *"You stopped it"* and *"it failed"* are different
+answers to **did the tests pass**, and `R-N7` shows this beside a claim, so
+`Run::passed()` returns `None` for a stopped run.
+
+**The output ring is bounded and says what it dropped.** A log that quietly
+loses its middle is worse than one that admits it.
+
+## Secrets never travel
+
+`RunConfig` carries `env_keys: Vec<String>` — **names, and there is nowhere to
+put a value**. That is deliberate: a shape that *could* carry values is one
+somebody fills in later, and ADR-0026 warned that a mask added afterwards is a
+mask that was missing. Values are read from disk at the moment of spawning, and
+revealing one is a separate verb taking a **single key**.
+
+The test serialises a configuration whose `env` holds a fake key and asserts the
+secret is absent from the payload — the thing that actually travels, so a field
+added tomorrow still fails it.
+
+## A run beside a claim, never merged
+
+`Corroboration` puts what the agent said next to the runs you did, and has **no
+field that merges them**. A run mogeung executed must not be able to launder a
+claim the agent made; `R-E3`'s standard holds — *unverified means no completed
+check, not no passing check*.
+
 ## Not yet built
 
-`R-N2` (entries become `RunConfig`s, with a health alert for the unclassified
-and a human's entry beating a detected one with the same command), `R-N4`
-(the daemon owning a process), `R-N5` (the panel), `R-N6` (env masking),
-`R-N7` (a run beside the claim), and all of Phase 2.
-
-The ADR-0025 refusals are **written but not yet enforced anywhere**:
-`run::is_agent` and `run::agent_refusal` exist and are tested; the verb that has
-to call them is `R-N4`.
+All of Phase 2: `dap.rs`, breakpoints in the file pane, the Debug panel, and
+per-adapter language support (`R-N9`–`R-N11`). Also `R-N12` (IntelliJ and Java,
+deferred with a measurement behind it) and `R-N14` (Docker and compose).

@@ -399,7 +399,8 @@ fn launch_config(repo: &Path, e: &Entry, verdict: Verdict) -> RunConfig {
                 .unwrap_or_default();
 
             let program = workspace_relative(program);
-            let c = RunConfig::new(Origin::VsCode, named(e), &program, args, dir);
+            let c = RunConfig::new(Origin::VsCode, named(e), &program, args, dir)
+                .with_env_keys(env_keys(obj));
             unresolved(c)
         }
     }
@@ -451,10 +452,77 @@ fn task_config(repo: &Path, e: &Entry, verdict: Verdict) -> RunConfig {
                 .and_then(Value::as_array)
                 .map(|xs| xs.iter().filter_map(|a| a.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
-            let c = RunConfig::new(Origin::VsCode, named(e), workspace_relative(command), args, dir);
+            let c = RunConfig::new(Origin::VsCode, named(e), workspace_relative(command), args, dir)
+                .with_env_keys(env_keys(obj.and_then(|o| o.get("options"))));
             unresolved(c)
         }
     }
+}
+
+/// The environment a configuration sets, **values included**. `R-N6`.
+///
+/// Read from disk at the moment it is needed — spawning a run, or answering a
+/// deliberate request to reveal one value — and never stored on a [`RunConfig`],
+/// because a `RunConfig` travels to every connected client. The sweep behind
+/// ADR-0026 found a plaintext API key in a checked-in configuration's `env`
+/// block, so this is not a hypothetical rule.
+pub fn env_for(repo: &Path, config_id: &str) -> Vec<(String, String)> {
+    for (file, list, place) in [
+        (".vscode/launch.json", "configurations", None),
+        (".vscode/tasks.json", "tasks", Some("options")),
+    ] {
+        let Some(v) = read_jsonc(&repo.join(file)) else { continue };
+        let Some(items) = v.get(list).and_then(Value::as_array) else { continue };
+        for o in items {
+            let ty = o.get("type").and_then(Value::as_str).unwrap_or("");
+            let name = o.get("name").or_else(|| o.get("label")).and_then(Value::as_str).unwrap_or("");
+            let request = o.get("request").and_then(Value::as_str);
+            let key = match request {
+                Some(r) => format!("{ty}/{r}"),
+                None => ty.to_string(),
+            };
+            let entry = Entry::new(name.to_string(), ty.to_string(), request.map(str::to_string));
+            let _ = key;
+            // The id is derived the same way the configuration's was, so this
+            // finds the one that was actually asked for rather than guessing.
+            let holder = match place {
+                Some(p) => o.get(p),
+                None => Some(o),
+            };
+            let env = holder.and_then(|h| h.get("env")).and_then(Value::as_object);
+            let Some(env) = env else { continue };
+            if !id_matches(repo, &entry, config_id, place.is_some()) {
+                continue;
+            }
+            return env
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Does the configuration this entry produces carry `config_id`?
+fn id_matches(repo: &Path, e: &Entry, config_id: &str, task: bool) -> bool {
+    let verdict = classify(if task { Source::Tasks } else { Source::Launch }, &e.key);
+    let c = if task {
+        task_config(repo, e, verdict)
+    } else {
+        launch_config(repo, e, verdict)
+    };
+    c.id == config_id
+}
+
+/// The variable **names** a configuration sets, for display. Values never.
+fn env_keys(holder: Option<&Value>) -> Vec<String> {
+    let mut keys: Vec<String> = holder
+        .and_then(|h| h.get("env"))
+        .and_then(Value::as_object)
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
 }
 
 /// Does this raw object correspond to the entry we classified?
@@ -663,6 +731,102 @@ mod tests {
         let d = scratch("broken");
         write(&d, ".vscode/launch.json", "{ this is not json at all ");
         assert!(read_launch(&d).is_empty());
+    }
+
+    /// **`R-N6`, and the sweep found this one for real**: a plaintext API key
+    /// in the `env` block of a checked-in configuration. The value must not
+    /// reach a client at all — not in the panel, not in a copy, not in an
+    /// export — and the only version of that rule which cannot be forgotten is
+    /// that the payload has nowhere to put one.
+    #[test]
+    fn an_env_value_never_reaches_the_wire_payload() {
+        let d = scratch("secrets");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[
+                 {"type":"node","request":"launch","name":"api","program":"server.js",
+                  "env":{"API_KEY":"sk-live-do-not-leak","PORT":"8080"}}]}"#,
+        );
+        let scan = scan(&d);
+        let c = &scan.configs[0];
+
+        // The names are shown, because "this run sets API_KEY" is worth knowing.
+        assert_eq!(c.env_keys, vec!["API_KEY".to_string(), "PORT".to_string()]);
+
+        // The value is in none of it. Serialised, because that is what actually
+        // travels — a field could be added tomorrow and this would catch it.
+        let json = serde_json::to_string(c).expect("serialises");
+        assert!(!json.contains("sk-live-do-not-leak"), "the secret is in the payload: {json}");
+        assert!(!json.contains("8080"), "no value travels, not just the scary one: {json}");
+    }
+
+    /// …and it is still readable at the moment of spawning, or the masking
+    /// would have broken the feature rather than secured it.
+    #[test]
+    fn the_value_is_readable_from_disk_when_a_run_actually_starts() {
+        let d = scratch("secrets-read");
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{"configurations":[
+                 {"type":"node","request":"launch","name":"api","program":"server.js",
+                  "env":{"API_KEY":"sk-live-do-not-leak"}}]}"#,
+        );
+        let c = &scan(&d).configs[0];
+        let env = env_for(&d, &c.id);
+        assert_eq!(env, vec![("API_KEY".to_string(), "sk-live-do-not-leak".to_string())]);
+    }
+
+    /// A task's environment lives one level down, under `options`.
+    #[test]
+    fn a_tasks_environment_is_masked_the_same_way() {
+        let d = scratch("task-env");
+        write(
+            &d,
+            ".vscode/tasks.json",
+            r#"{"tasks":[{"type":"shell","label":"deploy","command":"make",
+                 "options":{"env":{"TOKEN":"hunter2"}}}]}"#,
+        );
+        let c = &scan(&d).configs[0];
+        assert_eq!(c.env_keys, vec!["TOKEN".to_string()]);
+        assert!(!serde_json::to_string(c).unwrap().contains("hunter2"));
+        assert_eq!(env_for(&d, &c.id), vec![("TOKEN".into(), "hunter2".into())]);
+    }
+
+    /// **`R-N8`, against this repository rather than a fixture.**
+    ///
+    /// `.vscode/tasks.json` here carries `cargo test --workspace`, which
+    /// `detect.rs` also infers. That duplicate is deliberate: it is the one
+    /// place the precedence rule fires every time the panel opens, so if it
+    /// ever stops firing the list grows a visible duplicate row rather than
+    /// failing quietly. The row exists because *"the kind of thing that never
+    /// happens unless it is a row"*.
+    #[test]
+    fn the_checked_in_task_beats_the_inferred_one_in_this_repository() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let all = all(&root);
+
+        let same: Vec<&RunConfig> = all
+            .configs
+            .iter()
+            .filter(|c| c.command_line() == "cargo test --workspace" && c.dir.is_empty())
+            .collect();
+        assert_eq!(same.len(), 1, "one row, not two:\n{same:#?}");
+        assert_eq!(same[0].origin, Origin::VsCode, "the human's entry has to win");
+
+        // The launch.json entry is read too, and this repository's files parse
+        // with the comments and trailing commas they were written with.
+        assert!(
+            all.configs.iter().any(|c| c.name == "the window's own suite"),
+            "the checked-in launch.json must be read:\n{:#?}",
+            all.configs.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        // And nothing in our own files is a type nobody classified.
+        assert!(all.unknown.is_empty(), "{:?}", all.unknown);
     }
 
     fn reasons(cs: &[RunConfig]) -> Vec<(String, Option<String>)> {

@@ -324,6 +324,17 @@ pub enum ClientMsg {
     RunStop { run_id: String },
     /// The output buffered so far, for a client that just connected.
     FetchRunOutput { run_id: String },
+    /// Reveal **one** environment value, deliberately. `R-N6`.
+    ///
+    /// One at a time and by name, because unmasking is a per-value act: the
+    /// sweep behind ADR-0026 found a plaintext API key in a checked-in
+    /// configuration, and a verb that returned the whole block would make
+    /// "show me this one" indistinguishable from "print every secret".
+    RevealRunEnv {
+        session_id: SessionId,
+        config_id: String,
+        key: String,
+    },
     /// Configure a repo's signal command (tests/typecheck); empty clears it.
     /// The command is the user's own — mogeung never invents one. `R-E2`.
     SetSignalCommand { repo: String, command: String },
@@ -954,6 +965,12 @@ pub enum ServerMsg {
     RunOutputHistory {
         run_id: String,
         lines: Vec<crate::run::RunLine>,
+    },
+    /// One environment value, because it was asked for by name. `R-N6`.
+    RunEnvValue {
+        config_id: String,
+        key: String,
+        value: String,
     },
 }
 

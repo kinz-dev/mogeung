@@ -16,6 +16,9 @@ import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
   Analytics,
+  Run,
+  RunConfig,
+  RunLine,
   AttentionItem,
   BlameLine,
   BlastRadius,
@@ -387,6 +390,18 @@ export interface AppState {
   /** The session whose label is being edited. `R-B26`. */
   labelEditing: SessionId | null;
 
+  // -- Run and debug. `R-N5`. ---------------------------------------------
+  /** What the selected session's repository offers, keyed by session. */
+  runConfigs: Record<SessionId, RunConfig[]>;
+  /** ADR-0025 clause 4 as the client sees it: will this daemon start anything? */
+  runsAllowed: boolean;
+  /** Every run the daemon owns, newest first. */
+  runs: Run[];
+  /** Output per run, bounded the same way the daemon's ring is. */
+  runOutput: Record<string, RunLine[]>;
+  /** Values revealed **one at a time**, deliberately. `R-N6`. */
+  revealedEnv: Record<string, string>;
+
   // -- actions ------------------------------------------------------------
   send: (msg: ClientMsg) => void;
   ingest: (msg: ServerMsg) => void;
@@ -531,6 +546,11 @@ export const useStore = create<AppState>((set, get) => ({
   daemonStatus: null,
   rescanning: false,
   labelEditing: null,
+  runConfigs: {},
+  runsAllowed: true,
+  runs: [],
+  runOutput: {},
+  revealedEnv: {},
   url: defaultUrl(),
 
   send: (msg) => {
@@ -728,6 +748,46 @@ export const useStore = create<AppState>((set, get) => ({
         // The daemon sends this after every scan, which makes it the honest
         // signal that a rescan finished.
         set({ health: msg.health, rescanning: false });
+        break;
+      case "run_configs":
+        set((st) => ({
+          runConfigs: { ...st.runConfigs, [msg.session_id]: msg.configs },
+          runsAllowed: msg.allowed,
+        }));
+        break;
+      case "runs":
+        set({ runs: msg.runs });
+        break;
+      case "run_started":
+        set((st) => ({ runs: [msg.run, ...st.runs.filter((r) => r.id !== msg.run.id)] }));
+        break;
+      case "run_ended":
+        set((st) => ({ runs: st.runs.map((r) => (r.id === msg.run.id ? msg.run : r)) }));
+        break;
+      case "run_output":
+        set((st) => {
+          // Bounded here too. The daemon's ring is the source of truth; a
+          // client that grew without limit would be a memory leak with a
+          // scrollbar.
+          const prev = st.runOutput[msg.line.run_id] ?? [];
+          const next = [...prev, msg.line];
+          return {
+            runOutput: {
+              ...st.runOutput,
+              [msg.line.run_id]: next.length > 2000 ? next.slice(-2000) : next,
+            },
+          };
+        });
+        break;
+      case "run_output_history":
+        set((st) => ({ runOutput: { ...st.runOutput, [msg.run_id]: msg.lines } }));
+        break;
+      case "run_env_value":
+        // Keyed by config **and** name, so revealing one value never uncovers
+        // its neighbour. `R-N6`.
+        set((st) => ({
+          revealedEnv: { ...st.revealedEnv, [`${msg.config_id}\u0001${msg.key}`]: msg.value },
+        }));
         break;
       case "review_debt":
         set({ debt: msg.debt });

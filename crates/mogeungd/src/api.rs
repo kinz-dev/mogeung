@@ -882,6 +882,36 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 state.broadcast(ServerMsg::Error { message: why });
             }
         }
+        ClientMsg::RevealRunEnv {
+            session_id,
+            config_id,
+            key,
+        } => {
+            let Some(repo) = state.run_repo(&session_id).await else {
+                err(anyhow::anyhow!("no such session"));
+                return;
+            };
+            let value = tokio::task::spawn_blocking({
+                let (repo, config_id, key) = (repo, config_id.clone(), key.clone());
+                move || {
+                    crate::runconfig::env_for(&repo, &config_id)
+                        .into_iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| v)
+                }
+            })
+            .await
+            .ok()
+            .flatten();
+            match value {
+                Some(value) => state.broadcast(ServerMsg::RunEnvValue {
+                    config_id,
+                    key,
+                    value,
+                }),
+                None => err(anyhow::anyhow!("no `{key}` in that configuration")),
+            }
+        }
         ClientMsg::FetchRunOutput { run_id } => {
             let lines = state.runs.lines(&run_id).await;
             state.broadcast(ServerMsg::RunOutputHistory { run_id, lines });

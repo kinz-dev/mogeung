@@ -724,6 +724,63 @@ export interface DaemonIdentity {
 // wire.rs — ClientMsg
 // ---------------------------------------------------------------------------
 
+/** One thing mogeung could run. `R-N3`. */
+export interface RunConfig {
+  id: string;
+  name: string;
+  program: string;
+  args: string[];
+  /** Relative to the repository root; empty means the root. */
+  dir: string;
+  origin: "detected" | "vs_code";
+  /**
+   * Variable **names** only — values never travel. `R-N6`.
+   *
+   * The sweep behind ADR-0026 found a plaintext API key in a checked-in
+   * configuration's env block. Asking for one value is a deliberate act.
+   */
+  env_keys: string[];
+  /** Set when the entry is listed but cannot be started, with the reason. */
+  unrunnable: string | null;
+}
+
+export type RunState = "running" | "exited" | "stopped" | "failed";
+
+/** One run the daemon owns. `R-N4`. */
+export interface Run {
+  id: string;
+  config_id: string;
+  name: string;
+  command: string;
+  session_id: SessionId | null;
+  state: RunState;
+  exit_code: number | null;
+  started_at: string;
+  ended_at: string | null;
+  /** Lines dropped off the front of the buffer. Stated, never silent. */
+  dropped: number;
+}
+
+export interface RunLine {
+  run_id: string;
+  seq: number;
+  text: string;
+  stderr: boolean;
+}
+
+/**
+ * Did this run actually pass? `null` while running **and when stopped**.
+ *
+ * A stopped run answers neither question, because nobody let it finish —
+ * calling one a failure would have the window asserting something it does not
+ * know. `R-N7` depends on this third answer existing.
+ */
+export function runPassed(r: Run): boolean | null {
+  if (r.state === "running" || r.state === "stopped") return null;
+  if (r.state === "failed") return false;
+  return r.exit_code === 0;
+}
+
 export type ClientMsg =
   | { cmd: "subscribe" }
   | { cmd: "set_hunk_reviewed"; session_id: SessionId; anchor: string; reviewed: boolean }
@@ -731,6 +788,12 @@ export type ClientMsg =
   | { cmd: "refresh_change"; session_id: SessionId }
   | { cmd: "fetch_events"; session_id: SessionId; since: number }
   | { cmd: "forget_session"; session_id: SessionId }
+  | { cmd: "fetch_run_configs"; session_id: SessionId }
+  // No `command` field, ever — ADR-0025 clause 1 is the shape of this line.
+  | { cmd: "run_start"; session_id: SessionId; config_id: string }
+  | { cmd: "run_stop"; run_id: string }
+  | { cmd: "fetch_run_output"; run_id: string }
+  | { cmd: "reveal_run_env"; session_id: SessionId; config_id: string; key: string }
   | { cmd: "launch_terminal"; dir: string; worktree: boolean }
   | { cmd: "rescan" }
   | { cmd: "fetch_health" }
@@ -936,7 +999,14 @@ export type ServerMsg =
   | { ev: "decision_report"; session_id: SessionId; candidates: DecisionCandidate[] }
   | { ev: "file_sessions"; path: string; entries: FileSession[] }
   | { ev: "doc_report"; repo: string; inventory: DocInventory }
-  | { ev: "error"; message: string };
+  | { ev: "error"; message: string }
+  | { ev: "run_configs"; session_id: SessionId; configs: RunConfig[]; allowed: boolean }
+  | { ev: "runs"; runs: Run[] }
+  | { ev: "run_started"; run: Run }
+  | { ev: "run_output"; line: RunLine }
+  | { ev: "run_ended"; run: Run }
+  | { ev: "run_output_history"; run_id: string; lines: RunLine[] }
+  | { ev: "run_env_value"; config_id: string; key: string; value: string };
 
 // ---------------------------------------------------------------------------
 // Derived helpers — the Rust `impl` blocks this client actually needs.

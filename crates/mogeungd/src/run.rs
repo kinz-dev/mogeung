@@ -162,8 +162,14 @@ impl Runs {
         let dir = if cfg.dir.is_empty() { repo.to_path_buf() } else { repo.join(&cfg.dir) };
         let id = format!("run-{}", self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 
+        // **Values are read here and nowhere else.** `R-N6`: a `RunConfig`
+        // travels to every connected client, so it carries variable *names*
+        // only, and the secrets are fetched from disk at the last moment.
+        let env = crate::runconfig::env_for(repo, &cfg.id);
+
         let mut cmd = tokio::process::Command::new(&cfg.program);
-        cmd.args(&cfg.args)
+        cmd.envs(env)
+            .args(&cfg.args)
             .current_dir(&dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

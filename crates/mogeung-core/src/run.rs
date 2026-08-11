@@ -67,6 +67,20 @@ pub struct RunConfig {
     /// remote daemon, where the repository is at a different path.
     pub dir: String,
     pub origin: Origin,
+    /// The **names** of environment variables this configuration sets, and
+    /// never their values. `R-N6`.
+    ///
+    /// The sweep that produced ADR-0026's table found a plaintext API key in an
+    /// `<env>` element of a checked-in `.run.xml`, and `launch.json` has an
+    /// `env` block of exactly the same kind. So the value does not travel: it
+    /// is read from disk at the moment of spawning, and a client that wants to
+    /// see one asks for it by name, one at a time.
+    ///
+    /// **This is why the field is `Vec<String>` rather than a map.** A shape
+    /// that *could* carry values is a shape someone fills in later — masking
+    /// added afterwards is masking that was missing, and the type is the only
+    /// version of this rule that cannot be forgotten.
+    pub env_keys: Vec<String>,
     /// `Some(reason)` when the entry is **listed but cannot be started**, in
     /// words a person can act on.
     ///
@@ -90,7 +104,13 @@ impl RunConfig {
     ) -> Self {
         let (name, program, dir) = (name.into(), program.into(), dir.into());
         let id = id_for(origin, &dir, &program, &args);
-        RunConfig { id, name, program, args, dir, origin, unrunnable: None }
+        RunConfig { id, name, program, args, dir, origin, env_keys: Vec::new(), unrunnable: None }
+    }
+
+    /// The names of the variables this configuration sets. Values never.
+    pub fn with_env_keys(mut self, keys: Vec<String>) -> Self {
+        self.env_keys = keys;
+        self
     }
 
     /// Listed, named, and refused, with the reason shown. `R-N2`.
@@ -215,6 +235,46 @@ impl Run {
     }
 }
 
+/// What the two kinds of evidence say about a claim, side by side. `R-N7`.
+///
+/// This is the reason this pillar is not IDE parity, and the one rule it lives
+/// or dies by: **the two are shown together and never merged.** `R-E1`'s
+/// [`VerifyRun`](crate::verify::VerifyRun) records what the *agent* ran and
+/// whether its tool call came back; a mogeung-owned [`Run`] has a real exit
+/// code. A run *we* did must not be able to launder a claim the agent made.
+///
+/// So this type deliberately has no "overall verdict" field. Anything that
+/// collapsed the two into one answer would be the laundering, and `R-E3`'s
+/// standard is the one to hold: *unverified means no completed check, not no
+/// passing check.*
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Corroboration {
+    /// What the agent said it did, if anything — `None` when the claim rests
+    /// on nothing at all, which is a state `R-E3` insists stays visible.
+    pub agent_said: Option<String>,
+    /// Whether the agent's own tool call came back, and how. `None` is an
+    /// honest unknown rather than a pass.
+    pub agent_ok: Option<bool>,
+    /// The runs a human started for this session, newest first.
+    pub yours: Vec<Run>,
+}
+
+impl Corroboration {
+    /// The runs that actually finished and passed — nothing else counts.
+    pub fn your_passes(&self) -> usize {
+        self.yours.iter().filter(|r| r.passed() == Some(true)).count()
+    }
+
+    /// Did a human check this themselves, either way?
+    ///
+    /// A **stopped** run does not count in either direction, because nobody let
+    /// it finish; counting one as a failure would have mogeung asserting
+    /// something it does not know.
+    pub fn checked_yourself(&self) -> bool {
+        self.yours.iter().any(|r| r.passed().is_some())
+    }
+}
+
 /// A line of output, as it arrives.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunLine {
@@ -305,6 +365,62 @@ mod tests {
         // Not a substring match: a project of one's own must not be refused.
         assert!(!is_agent("claude-tools"));
         assert!(!is_agent("my-codex-helper"));
+    }
+
+    fn run_with(state: RunState, code: Option<i32>) -> Run {
+        Run {
+            id: "r".into(),
+            config_id: "c".into(),
+            name: "n".into(),
+            command: "cargo test".into(),
+            session_id: Some("s".into()),
+            state,
+            exit_code: code,
+            started_at: chrono::Utc::now(),
+            ended_at: None,
+            dropped: 0,
+        }
+    }
+
+    /// A stopped run answers neither question. Counting one as a failure would
+    /// be mogeung asserting something nobody let it find out.
+    #[test]
+    fn a_stopped_run_is_not_a_pass_and_not_a_failure() {
+        assert_eq!(run_with(RunState::Stopped, None).passed(), None);
+        assert_eq!(run_with(RunState::Running, None).passed(), None);
+        assert_eq!(run_with(RunState::Exited, Some(0)).passed(), Some(true));
+        assert_eq!(run_with(RunState::Exited, Some(1)).passed(), Some(false));
+        assert_eq!(run_with(RunState::Failed, None).passed(), Some(false));
+    }
+
+    /// **`R-N7`'s rule, in the type.** The two kinds of evidence sit beside one
+    /// another and there is no field that merges them — a run we did must not
+    /// be able to launder a claim the agent made.
+    #[test]
+    fn a_run_you_did_never_answers_for_what_the_agent_claimed() {
+        let c = Corroboration {
+            agent_said: Some("cargo test --workspace".into()),
+            agent_ok: None, // the agent's own tool call never came back
+            yours: vec![run_with(RunState::Exited, Some(0))],
+        };
+        // Your run passed…
+        assert_eq!(c.your_passes(), 1);
+        assert!(c.checked_yourself());
+        // …and the agent's claim is still unverified, which is `R-E3`'s
+        // standard: unverified means no completed check, not no passing check.
+        assert_eq!(c.agent_ok, None, "your run must not fill this in");
+    }
+
+    /// A stopped run leaves the claim exactly as unchecked as it was.
+    #[test]
+    fn stopping_your_own_run_checks_nothing() {
+        let c = Corroboration {
+            agent_said: None,
+            agent_ok: None,
+            yours: vec![run_with(RunState::Stopped, None)],
+        };
+        assert!(!c.checked_yourself());
+        assert_eq!(c.your_passes(), 0);
     }
 
     /// The refusal has to name the clause, or it reads as a broken button.

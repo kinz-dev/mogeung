@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-08
+updated: 2026-08-11
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -236,6 +236,33 @@ rule, applied to superseded queries.
 `Health` is pushed after **every** scan, unsolicited. A client should never have
 to ask whether the board it is showing is complete — see
 [health-and-canary.md](health-and-canary.md).
+
+## Run and debug (`R-N4`, `R-N5`)
+
+```
+fetch_run_configs {session_id}          -> run_configs {session_id, configs, allowed}
+run_start {session_id, config_id}       -> run_started {run}, then run_output {line}…
+run_stop {run_id}                       -> run_ended {run}
+fetch_run_output {run_id}               -> run_output_history {run_id, lines}
+reveal_run_env {session_id, config_id, key} -> run_env_value {config_id, key, value}
+```
+
+**`run_start` has no `command` field, and that absence is the feature.**
+[ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) clause 1
+is *named, not supplied*: a request identifies a configuration the repository
+itself produced, so reaching this port lets you run the project's own test suite
+rather than handing you a shell. Adding a command string here would quietly turn
+an unauthenticated loopback port into a remote shell — it is the single change
+to this file that would matter most, and it should never be made.
+
+`allowed` carries clause 4 to the client, so a panel can explain that a daemon
+was started without `--allow-run` instead of drawing buttons that will be
+refused.
+
+**`reveal_run_env` takes one key.** `R-N6`: values never travel in
+`run_configs`, which carries variable *names* only, and unmasking is a per-value
+act — a verb returning the whole block would make *"show me this one"*
+indistinguishable from *"print every secret"*.
 
 ## Design rules
 

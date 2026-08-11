@@ -1,13 +1,19 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-09
+updated: 2026-08-11
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
 ---
 
 # Cross-session signals
+
+> `state.rs` also holds the run state `R-N4` added, which this document
+> deliberately does not describe — that belongs to
+> [run-and-debug.md](run-and-debug.md). Noted here because both docs cover the
+> same file, so a staleness warning on one can be raised by a change that has
+> nothing to do with it.
 
 Things no single agent can know about itself, because knowing them requires a
 view across sessions that none of them has. Roadmap `R-B3`, `R-B4`, `R-B5`,

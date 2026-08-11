@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-09
+updated: 2026-08-11
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -232,6 +232,16 @@ anything. A loopback bind refuses to advertise, since nobody could reach it, and
 that refusal is what makes every discoverable daemon token-gated by construction:
 the only binds that *can* advertise are the ones `admit` already requires a
 token for.
+
+**The daemon may start a process you named** (`R-N4`), and never an agent.
+[ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) is the
+whole reasoning; the shape here is that `AppState` holds a `Runs`, so a run
+outlives the window that started it, and that spawning is **opt-in past
+loopback** by `--allow-run`. That flag is read the same way `writes_allowed` is
+— from the bind address, once, by the code that bound the socket — so the
+start-up refusal and the per-request gate cannot come to disagree. Loopback
+needs no flag, because it is the trust boundary the terminal panel already has.
+See [run-and-debug.md](run-and-debug.md).
 
 **The daemon can be changed without restarting** (`R-I7`). The window keeps a
 saved list — client state, like the keymap — with a name, a URL and an optional

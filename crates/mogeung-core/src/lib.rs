@@ -24,7 +24,7 @@ pub use attention::{AttentionItem, AttentionReason};
 pub use change::{Change, FileChange, Hunk, RiskFlag, RiskLevel};
 pub use health::{Alert, Health, LineClass};
 pub use review::{BlastRadius, ReviewDebt};
-pub use run::{Origin, Run, RunConfig, RunLine, RunState};
+pub use run::{Corroboration, Origin, Run, RunConfig, RunLine, RunState};
 pub use session::{LiveStatus, Session, SessionId};
 pub use transcript::{EventKind, TranscriptEvent};
 pub use wire::{ClientMsg, ServerMsg};
