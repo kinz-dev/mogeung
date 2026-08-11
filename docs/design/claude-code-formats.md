@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-07
+updated: 2026-08-09
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -43,10 +43,23 @@ reason the observer model beats the spawning model.
 OS (`kill(pid, 0)`), or every session that ever ran looks alive. Pinned by a
 test.
 
+**This file exists before the transcript does.** Probed 2026-08-09: a `claude`
+started under tmux had its registry entry — pid, session id, cwd, `"status":
+"idle"`, pane, a derived name — within ~40 ms, and **no `.jsonl` at all** until
+the first message was sent. So the registry is a *discovery* source and not only
+a liveness one; a board that waited for a transcript could not see the session
+you had just opened, which is `R-J30` and is why the scan adopts registry
+entries no transcript mentions.
+
 ## `~/.claude/projects/<slug>/<session-id>.jsonl` — transcripts
 
 Append-only, one JSON object per line. `<slug>` is the cwd with separators
 replaced.
+
+**Written on the first message, not on launch** — see the registry section
+above. The exact slug rule is not derived anywhere in this codebase: the path is
+learnt by finding the file, never by constructing it from a cwd, because a
+mapping nobody documented is a mapping that will move (`A4`).
 
 **Every `type` is classified — there is no catch-all.** `adapter::HANDLED` and
 `adapter::KNOWN_IGNORED` between them must account for every type seen, and

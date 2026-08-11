@@ -162,6 +162,195 @@ async fn an_unanswered_tool_call_reads_as_a_permission_prompt() {
     assert_eq!(queue[0].reason, AttentionReason::AwaitingInput);
 }
 
+/// A session you have just opened and not yet spoken to.
+///
+/// Claude Code writes the registry entry on launch and the transcript on the
+/// **first message**, so for as long as the prompt sits empty there is no
+/// `.jsonl` anywhere. Discovering only from transcripts made a brand-new
+/// session invisible until you typed into it — reported 2026-08-09, with
+/// `/clear` as the workaround, which worked only because it writes a line.
+#[tokio::test]
+async fn a_session_with_no_transcript_yet_is_still_discovered() {
+    let home = fake_home("justopened");
+    let fresh = "33333333-3333-3333-3333-333333333333";
+    write(
+        &home.join("sessions").join("4243.json"),
+        &format!(
+            r#"{{"pid":{},"sessionId":"{fresh}","cwd":"/tmp","name":"demo-3",
+                "version":"2.1.226","kind":"interactive","status":"idle",
+                "startedAt":1784995957755,"statusUpdatedAt":1784995957755}}"#,
+            std::process::id()
+        ),
+    );
+    // Deliberately no transcript for `fresh`.
+    let store = Store::open(&home.join("mogeung.db")).unwrap();
+    let state = AppState::with_home(store, home.clone()).unwrap();
+    state.scan().await;
+
+    let s = state.get(fresh).await.expect("a launched session must be on the board");
+    assert!(s.alive, "its pid is running");
+    assert_eq!(s.live_status, Some(LiveStatus::Idle));
+    assert_eq!(s.cwd, "/tmp", "the registry knows the cwd before any line does");
+    assert_eq!(s.name.as_deref(), Some("demo-3"));
+    assert_eq!(s.turns, 0);
+    assert!(
+        s.transcript_path.is_empty(),
+        "there is no transcript to point at yet; guessing the path would be \
+         guessing at the slug rule"
+    );
+
+    // It is what the queue is for: an idle live session is waiting for you.
+    let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+    let queue = mogeung_core::attention::rank(&sessions, chrono::Utc::now(), &state.attention);
+    let item = queue
+        .iter()
+        .find(|i| i.session_id == fresh)
+        .expect("missing from the queue");
+    assert_eq!(item.reason, AttentionReason::AwaitingInput);
+
+    // And when the first message finally lands, the same session adopts the
+    // file rather than a second one appearing beside it.
+    write(
+        &home.join("projects").join("-tmp").join(format!("{fresh}.jsonl")),
+        r#"{"type":"user","timestamp":"2026-07-25T11:00:00.000Z","cwd":"/tmp","message":{"role":"user","content":"first thing i typed"}}"#,
+    );
+    state.scan().await;
+
+    let s = state.get(fresh).await.unwrap();
+    assert_eq!(s.turns, 1);
+    assert_eq!(s.last_prompt.as_deref(), Some("first thing i typed"));
+    assert!(
+        s.transcript_path.ends_with(&format!("{fresh}.jsonl")),
+        "the transcript must be adopted, not ignored: {}",
+        s.transcript_path
+    );
+    assert_eq!(
+        state.sessions.read().await.len(),
+        3,
+        "adopting a transcript must not fork the session in two"
+    );
+}
+
+/// The ordering that makes the above safe. A **resumed** session is live and
+/// already has a transcript, so it must still go through the first-sight cap
+/// (`R-A5`) rather than being adopted from the registry and then read whole
+/// inside the scan loop.
+#[tokio::test]
+async fn a_resumed_session_over_the_cap_is_still_followed_from_its_tail() {
+    let home = fake_home("resumed");
+    let big = "44444444-4444-4444-4444-444444444444";
+    write(
+        &home.join("sessions").join("4244.json"),
+        &format!(
+            r#"{{"pid":{},"sessionId":"{big}","cwd":"/tmp","name":"demo-4",
+                "kind":"interactive","status":"idle","startedAt":1784995957755}}"#,
+            std::process::id()
+        ),
+    );
+    let mut body = String::new();
+    // Over MAX_TRANSCRIPT_BYTES (4 MiB) by enough that the tail is a small
+    // fraction of it.
+    for i in 0..40_000 {
+        body.push_str(&format!(
+            r#"{{"type":"user","timestamp":"2026-07-25T09:00:00.000Z","cwd":"/tmp","message":{{"role":"user","content":"line {i} {}"}}}}"#,
+            "x".repeat(120)
+        ));
+        body.push('\n');
+    }
+    assert!(body.len() > 4 << 20, "fixture must exceed the cap");
+    write(
+        &home.join("projects").join("-tmp").join(format!("{big}.jsonl")),
+        &body,
+    );
+
+    let store = Store::open(&home.join("mogeung.db")).unwrap();
+    let state = AppState::with_home(store, home).unwrap();
+    state.scan().await;
+
+    assert!(
+        state.health().await.history_skipped_bytes > 0,
+        "an oversized transcript must be followed from its tail, whether or not \
+         the session is also in the live registry"
+    );
+    let s = state.get(big).await.unwrap();
+    assert!(s.alive);
+    assert!(s.turns < 40_000, "history was read whole: {} turns", s.turns);
+}
+
+/// A repository with one commit and one uncommitted edit already in it, which
+/// is what a working checkout looks like most of the time.
+fn dirty_repo(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("mogeung-disc-repo-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+        assert!(out.status.success(), "git {args:?} failed");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(dir.join("kept.txt"), "one\n").unwrap();
+    git(&["add", "kept.txt"]);
+    git(&["commit", "-q", "-m", "first"]);
+    // Your own work in progress, made before any agent was started.
+    std::fs::write(dir.join("kept.txt"), "one\ntwo\n").unwrap();
+    dir
+}
+
+/// The other half of `R-J30`. A session adopted from the registry has a cwd
+/// from the moment it is born, and diff attribution falls back to the **whole**
+/// worktree when a session has no touched files — so a session you open, ignore
+/// and close would otherwise exit into the REVIEW tier holding work you did
+/// yourself.
+#[tokio::test]
+async fn a_session_that_never_spoke_claims_none_of_your_uncommitted_work() {
+    let home = fake_home("untouched");
+    let repo = dirty_repo("untouched");
+    let idle = "55555555-5555-5555-5555-555555555555";
+    let entry = home.join("sessions").join("4245.json");
+    write(
+        &entry,
+        &format!(
+            r#"{{"pid":{},"sessionId":"{idle}","cwd":"{}","name":"demo-5",
+                "kind":"interactive","status":"idle","startedAt":{}}}"#,
+            std::process::id(),
+            repo.display(),
+            chrono::Utc::now().timestamp_millis()
+        ),
+    );
+
+    let store = Store::open(&home.join("mogeung.db")).unwrap();
+    let state = AppState::with_home(store, home).unwrap();
+    state.scan().await;
+    assert!(state.get(idle).await.unwrap().alive);
+
+    // It exits without ever having been typed into: the registry entry goes,
+    // and `just_exited` asks for a diff.
+    std::fs::remove_file(&entry).unwrap();
+    state.scan().await;
+
+    let s = state.get(idle).await.unwrap();
+    assert!(!s.alive);
+    assert_eq!(
+        s.files_changed, 0,
+        "a session that wrote no transcript line made no edit to review"
+    );
+    let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+    let item = mogeung_core::attention::rank(&sessions, chrono::Utc::now(), &state.attention)
+        .into_iter()
+        .find(|i| i.session_id == idle)
+        .expect("missing from the queue");
+    assert_ne!(item.reason, AttentionReason::NeedsReview);
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 #[tokio::test]
 async fn rescanning_is_idempotent() {
     let state = boot("idempotent").await;

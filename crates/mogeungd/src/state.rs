@@ -187,6 +187,63 @@ fn resolve(path: &Path) -> PathBuf {
     }
 }
 
+/// A session with nothing observed about it yet.
+///
+/// Three discovery paths reach this shape — a transcript, the live registry,
+/// a Codex rollout — and `Session` has forty fields. Written out three times,
+/// a field added to the struct is a field two of them forget; written once,
+/// the compiler asks each caller only about what it actually knows.
+fn blank_session(
+    id: SessionId,
+    source: mogeung_core::session::SessionSource,
+    started_at: chrono::DateTime<Utc>,
+    last_event_at: chrono::DateTime<Utc>,
+) -> Session {
+    Session {
+        id,
+        title: None,
+        name: None,
+        last_prompt: None,
+        cwd: String::new(),
+        repo_root: None,
+        git_branch: None,
+        pid: None,
+        alive: false,
+        live_status: None,
+        version: None,
+        started_at,
+        last_event_at,
+        status_since: None,
+        turns: 0,
+        tool_calls: 0,
+        tokens_in: 0,
+        tokens_out: 0,
+        last_activity: None,
+        touched_files: Vec::new(),
+        base_sha: None,
+        files_changed: 0,
+        insertions: 0,
+        deletions: 0,
+        error: None,
+        transcript_path: String::new(),
+        reviewed: false,
+        open_tools: Vec::new(),
+        snoozed_until: None,
+        collisions: Vec::new(),
+        loop_signal: None,
+        recent_touches: Vec::new(),
+        recent_tools: Vec::new(),
+        // Filled by the scan's liveness pass, which is where the pid it needs
+        // becomes known.
+        tmux_target: None,
+        limit_hit_at: None,
+        limit_resets: None,
+        verify_runs: Vec::new(),
+        claims: Vec::new(),
+        source,
+    }
+}
+
 impl AppState {
     pub fn new(store: Store) -> Result<Arc<Self>> {
         Self::with_home(store, watcher::default_home())
@@ -685,6 +742,17 @@ impl AppState {
             touched_ids.push(f.session_id.clone());
         }
 
+        // A session that was started and not yet spoken to has a registry entry
+        // and no transcript at all. Adopt it *after* the transcript pass, never
+        // before: a resumed session is live and has a transcript already, and
+        // taking it in here would sidestep `ensure_session`'s cap and read an
+        // 11 MB history whole inside the scan loop (`R-A5`).
+        for e in live_by_id.values() {
+            if !self.sessions.read().await.contains_key(&e.session_id) {
+                self.ensure_live_session(e).await;
+            }
+        }
+
         // Apply liveness to every known session, not just the ones that moved:
         // a session going from busy to idle produces no transcript line, and
         // that transition is the single most important signal we have.
@@ -930,49 +998,13 @@ impl AppState {
 
     /// Register a transcript we have not seen before.
     async fn ensure_session(&self, f: &watcher::TranscriptFile) {
-        let s = Session {
-            id: f.session_id.clone(),
-            title: None,
-            name: None,
-            last_prompt: None,
-            cwd: String::new(),
-            repo_root: None,
-            git_branch: None,
-            pid: None,
-            alive: false,
-            live_status: None,
-            version: None,
-            started_at: f.modified,
-            last_event_at: f.modified,
-            status_since: None,
-            turns: 0,
-            tool_calls: 0,
-            tokens_in: 0,
-            tokens_out: 0,
-            last_activity: None,
-            touched_files: Vec::new(),
-            base_sha: None,
-            files_changed: 0,
-            insertions: 0,
-            deletions: 0,
-            error: None,
-            transcript_path: f.path.to_string_lossy().to_string(),
-            reviewed: false,
-            open_tools: Vec::new(),
-            snoozed_until: None,
-            collisions: Vec::new(),
-            loop_signal: None,
-            recent_touches: Vec::new(),
-            recent_tools: Vec::new(),
-            // Filled by the scan's liveness pass, which is where the pid it
-            // needs becomes known.
-            tmux_target: None,
-            limit_hit_at: None,
-            limit_resets: None,
-            verify_runs: Vec::new(),
-            claims: Vec::new(),
-            source: Default::default(),
-        };
+        let mut s = blank_session(
+            f.session_id.clone(),
+            mogeung_core::session::SessionSource::ClaudeCode,
+            f.modified,
+            f.modified,
+        );
+        s.transcript_path = f.path.to_string_lossy().to_string();
         self.sessions.write().await.insert(s.id.clone(), s);
 
         // Cap the first read. The previous guard here compared the file's age
@@ -1000,6 +1032,52 @@ impl AppState {
                     .record_skipped(&f.session_id, started_at);
             }
         }
+    }
+
+    /// Register a session that the live registry knows about and no transcript
+    /// mentions yet.
+    ///
+    /// **Claude Code writes `~/.claude/projects/…/<id>.jsonl` on the first
+    /// message, not on launch**, and it writes `~/.claude/sessions/<pid>.json`
+    /// within milliseconds of the process starting. Discovering only from
+    /// transcripts therefore left a session you had just opened invisible until
+    /// you typed something into it — which is precisely when you have stopped
+    /// needing to be told where it is. Reported 2026-08-09 as *"I have to run
+    /// `/clear` first to make mogeungd detect it"*, and `/clear` worked because
+    /// it starts a fresh id **and writes a line**.
+    ///
+    /// Everything else is left to the liveness pass, which already fills
+    /// `alive`, the pid, the status and the tmux target from this same entry —
+    /// so a session adopted here is broadcast once, by that pass, rather than
+    /// twice. `transcript_path` stays empty until the file appears;
+    /// [`Self::apply_lines`] adopts it then. Deriving the path from the cwd was
+    /// the alternative and it would be a guess at the slug rule, which is
+    /// exactly the kind of undocumented mapping `A4` says will move.
+    async fn ensure_live_session(&self, e: &watcher::LiveEntry) {
+        let at = e.started_at.unwrap_or_else(Utc::now);
+        let mut s = blank_session(
+            e.session_id.clone(),
+            mogeung_core::session::SessionSource::ClaudeCode,
+            at,
+            at,
+        );
+        s.cwd = e.cwd.clone();
+        s.name = e.name.clone();
+        s.version = e.version.clone();
+        // The base has to be pinned **here**, not left to the first line.
+        // `recompute_change_inner` needs only a cwd to run, and a session
+        // adopted from the registry has one from the moment it is born — so a
+        // session opened, left alone and closed again would diff against HEAD,
+        // attribute whatever was already uncommitted in that worktree to
+        // itself, and exit into the REVIEW tier having done nothing. Pinning at
+        // launch is also the more honest base: it is the last commit predating
+        // the session, taken at the moment the session actually started rather
+        // than whenever it first spoke.
+        if let Some((root, base)) = self.probe_repo(&s.cwd, s.started_at).await {
+            s.repo_root = Some(root);
+            s.base_sha = base;
+        }
+        self.sessions.write().await.insert(s.id.clone(), s);
     }
 
     /// Fold newly-read transcript lines into a session.
@@ -1339,46 +1417,13 @@ impl AppState {
             };
 
             let existing = self.get(&t.id).await;
-            let mut s = existing.unwrap_or_else(|| Session {
-                id: t.id.clone(),
-                title: None,
-                name: None,
-                last_prompt: None,
-                cwd: String::new(),
-                repo_root: None,
-                git_branch: None,
-                pid: None,
-                alive: false,
-                live_status: None,
-                version: None,
-                started_at: t.created_at.unwrap_or(now),
-                last_event_at: t.updated_at.unwrap_or(now),
-                status_since: None,
-                turns: 0,
-                tool_calls: 0,
-                tokens_in: 0,
-                tokens_out: 0,
-                last_activity: None,
-                touched_files: Vec::new(),
-                base_sha: None,
-                files_changed: 0,
-                insertions: 0,
-                deletions: 0,
-                error: None,
-                transcript_path: String::new(),
-                reviewed: false,
-                open_tools: Vec::new(),
-                snoozed_until: None,
-                collisions: Vec::new(),
-                loop_signal: None,
-                recent_touches: Vec::new(),
-                recent_tools: Vec::new(),
-                tmux_target: None,
-                limit_hit_at: None,
-                limit_resets: None,
-                verify_runs: Vec::new(),
-                claims: Vec::new(),
-                source: SessionSource::Codex,
+            let mut s = existing.unwrap_or_else(|| {
+                blank_session(
+                    t.id.clone(),
+                    SessionSource::Codex,
+                    t.created_at.unwrap_or(now),
+                    t.updated_at.unwrap_or(now),
+                )
             });
 
             let before = serde_json::to_string(&s).unwrap_or_default();
@@ -1475,6 +1520,19 @@ impl AppState {
     async fn recompute_change_inner(&self, id: &str, always_announce: bool) -> Option<Change> {
         let session = self.get(id).await?;
         if session.cwd.is_empty() {
+            return None;
+        }
+        // No transcript has ever been folded into this session, so it has made
+        // no tool call we could attribute anything to. That matters because
+        // attribution below is skipped when `touched_files` is empty — the
+        // session is then credited with the **whole** worktree diff, which is
+        // the right answer for a session whose edits we failed to attribute and
+        // the wrong one for a session that has not said a word. Reachable since
+        // `R-J30`: a session adopted from the live registry has a cwd from the
+        // moment it is born, so one opened, left alone and closed again would
+        // otherwise exit into the REVIEW tier holding whatever you had left
+        // uncommitted in that repo.
+        if session.transcript_path.is_empty() {
             return None;
         }
         let reviewed = self.store.reviewed_anchors(id).unwrap_or_default();

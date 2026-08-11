@@ -164,18 +164,29 @@ Then every `--poll-ms` (default 1500):
    re-reading the file whole (`R-A6`, and see
    [data-model.md](data-model.md#read-positions-are-part-of-the-record-r-a6)
    for what re-reading it did).
-4. Apply liveness to **every** known session, not only ones that moved — a
+4. Adopt any live-registry entry no transcript has mentioned. **Claude Code
+   writes the `.jsonl` on the first message, not on launch**, so a session you
+   have just opened exists only in step 1's registry — and a board that
+   discovered sessions from transcripts alone could not see it until you typed
+   into it, which is after the moment you needed pointing at it (`R-J30`). It
+   happens *after* step 3 on purpose: a **resumed** session is live and has a
+   transcript already, and taking it in from the registry first would skip
+   step 2's cap and read an 11 MB history whole inside the loop. Nothing is
+   guessed — the transcript path stays empty until the file appears, because
+   deriving it means deriving Claude Code's project-slug rule, which `A4` says
+   will move.
+5. Apply liveness to **every** known session, not only ones that moved — a
    session going busy→idle produces no transcript line, and that transition is
    the most important signal we have. The same pass resolves each live session's
    tmux pane (`R-B18`), using one `tmux list-panes` and one `ps` for the whole
    scan rather than a subprocess per session — both on the blocking pool, like
    every subprocess and git call the scan makes, so the API stays answerable
    mid-pass.
-5. Recompute diffs for sessions that changed, and for any that just exited.
+6. Recompute diffs for sessions that changed, and for any that just exited.
    Untracked files are rendered in-process rather than via `git diff
    --no-index` per file, which used to fork up to 200 short-lived processes
    per tick while an agent worked.
-6. Rank the queue and broadcast it — **only if it differs** from the last
+7. Rank the queue and broadcast it — **only if it differs** from the last
    announcement, and the same gate applies to each recomputed diff
    (`ChangeUpdated`). Health is broadcast every pass, deliberately ungated:
    it is small and doubles as the daemon's heartbeat.
