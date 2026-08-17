@@ -13,14 +13,14 @@
  */
 
 import * as React from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, FileText, Flag, Zap } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, IconButton, Mono } from "@/ui/primitives";
 import { cn } from "@/lib/cn";
 import { openFile } from "@/lib/explorer";
 import { FileIcon } from "@/ui/FileIcon";
-import { highlight, pairs, sideBySide, wordDiff, type Tok } from "@/lib/diff";
+import { highlight, hunkStart, pairs, sideBySide, wordDiff, type Tok } from "@/lib/diff";
 import { changedLines } from "@/lib/prompt";
 import { riskFromScore, type FileChange, type Hunk, type RiskLevel } from "@/wire/types";
 
@@ -144,39 +144,109 @@ const DiffLine = React.memo(function DiffLine({
   );
 });
 
-/** Side by side: the removed file on the left, the added one on the right. */
+/**
+ * One line of one side, with its number in the file.
+ *
+ * The number sits in a `sticky` gutter rather than in a column of its own, so
+ * it stays put while a long line scrolls under it — and so the two halves need
+ * no agreement about gutter width to stay in step.
+ *
+ * An absent side draws an empty row with a faint wash. It is not decoration:
+ * without it the rows after a lopsided run would slide up one column, and the
+ * whole point of this view is that a row means the same line on both sides.
+ */
+const SplitRow = React.memo(function SplitRow({
+  line,
+  no,
+  other,
+  syntax,
+  wordDiffOn,
+}: {
+  line: string | null;
+  no: number | null;
+  other: string | null;
+  syntax: boolean;
+  wordDiffOn: boolean;
+}) {
+  const kind = line?.[0];
+  const bg =
+    kind === "+"
+      ? "var(--add-bg)"
+      : kind === "-"
+        ? "var(--del-bg)"
+        : line === null
+          ? "var(--bg-faint)"
+          : undefined;
+  const fg =
+    kind === "+" ? "var(--add-fg)" : kind === "-" ? "var(--del-fg)" : "var(--ctx-fg)";
+  return (
+    <div className="flex font-mono text-sm leading-[1.45]" style={{ background: bg, color: fg }}>
+      <span
+        className="sticky left-0 z-10 flex w-11 shrink-0 items-center justify-end px-1.5 text-2xs text-[var(--noise)] select-none"
+        style={{ background: bg ?? "var(--bg-panel)" }}
+      >
+        {no ?? " "}
+      </span>
+      <span className="whitespace-pre pr-3 pl-1">
+        {line === null ? (
+          " "
+        ) : (
+          <LineText line={line} other={other ?? undefined} syntax={syntax} wordDiffOn={wordDiffOn} />
+        )}
+      </span>
+    </div>
+  );
+});
+
+/**
+ * Side by side: the file as it was on the left, as it is on the right. `R-D6`.
+ *
+ * **Two scrollers, moved together.** One shared scroller would let a long line
+ * on one side push the other side off the screen, and a scroller per side that
+ * moved independently would break the one promise this view makes — that a row
+ * is the same line on both halves. So each half scrolls its own text and each
+ * tells the other where it went.
+ */
 const SplitLines = React.memo(function SplitLines({
   lines,
+  header,
   syntax,
   wordDiffOn,
 }: {
   lines: string[];
+  header: string;
   syntax: boolean;
   wordDiffOn: boolean;
 }) {
-  const rows = useMemo(() => sideBySide(lines), [lines]);
+  const rows = useMemo(() => sideBySide(lines, hunkStart(header)), [lines, header]);
+  const left = useRef<HTMLDivElement>(null);
+  const right = useRef<HTMLDivElement>(null);
+
+  // Comparing before assigning is what stops the echo: an equal write fires no
+  // scroll event, so the two sides settle instead of handing the event back.
+  const follow = (from: React.RefObject<HTMLDivElement | null>, to: React.RefObject<HTMLDivElement | null>) => () => {
+    const a = from.current;
+    const b = to.current;
+    if (!a || !b || a.scrollLeft === b.scrollLeft) return;
+    b.scrollLeft = a.scrollLeft;
+  };
+
   return (
-    <div className="grid grid-cols-2">
-      {rows.map((r, i) => (
-        <React.Fragment key={i}>
-          {/* An absent side is a blank cell, not a missing one, or every row
-              after an unbalanced hunk would slide up one column. */}
-          <div className="border-r border-[var(--border)]">
-            {r.left === null ? (
-              <div className="px-2 font-mono text-sm leading-[1.45]">{" "}</div>
-            ) : (
-              <DiffLine line={r.left} other={r.right ?? undefined} syntax={syntax} wordDiffOn={wordDiffOn} />
-            )}
-          </div>
-          <div>
-            {r.right === null ? (
-              <div className="px-2 font-mono text-sm leading-[1.45]">{" "}</div>
-            ) : (
-              <DiffLine line={r.right} other={r.left ?? undefined} syntax={syntax} wordDiffOn={wordDiffOn} />
-            )}
-          </div>
-        </React.Fragment>
-      ))}
+    <div className="grid grid-cols-2 bg-[var(--bg-panel)]">
+      <div
+        ref={left}
+        onScroll={follow(left, right)}
+        className="min-w-0 overflow-x-auto border-r border-[var(--border)]"
+      >
+        {rows.map((r, i) => (
+          <SplitRow key={i} line={r.left} no={r.leftNo} other={r.right} syntax={syntax} wordDiffOn={wordDiffOn} />
+        ))}
+      </div>
+      <div ref={right} onScroll={follow(right, left)} className="min-w-0 overflow-x-auto">
+        {rows.map((r, i) => (
+          <SplitRow key={i} line={r.right} no={r.rightNo} other={r.left} syntax={syntax} wordDiffOn={wordDiffOn} />
+        ))}
+      </div>
     </div>
   );
 });
@@ -272,9 +342,11 @@ const HunkBlock = React.memo(function HunkBlock({
         </div>
       </div>
       {open && (
-        <div className="overflow-x-auto">
+        // Split scrolls each half itself, so an outer scroller here would be a
+        // second one wrapping the first.
+        <div className={cn(!split && "overflow-x-auto")}>
           {split ? (
-            <SplitLines lines={hunk.lines} syntax={syntax} wordDiffOn={wordDiffOn} />
+            <SplitLines lines={hunk.lines} header={hunk.header} syntax={syntax} wordDiffOn={wordDiffOn} />
           ) : (
             hunk.lines.map((l, i) => {
               // The line this one replaces, when the hunk pairs them — that is

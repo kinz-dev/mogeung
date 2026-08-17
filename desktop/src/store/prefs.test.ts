@@ -17,7 +17,9 @@ import {
   exportFilename,
   exportPayload,
   loadPrefs,
+  migrateDefaults,
   migrateSuccession,
+  PREFS_VERSION,
   savePrefs,
   successions,
   type ScopedPrefs,
@@ -71,6 +73,32 @@ describe("loading preferences written by an older build", () => {
   it("falls back to the defaults on a file that is not JSON", () => {
     localStorage.setItem("mogeung.prefs", "{{{");
     expect(loadPrefs()).toEqual(defaultPrefs());
+  });
+
+  /**
+   * The merge above cannot carry a *changed* default: `savePrefs` writes every
+   * field, so an old file states the old answer explicitly and would keep it
+   * for ever. This is the seam that lets a default actually change.
+   */
+  it("moves an unversioned file onto a default that has since changed", () => {
+    localStorage.setItem("mogeung.prefs", JSON.stringify({ sideBySide: false, theme: "light" }));
+    const prefs = loadPrefs();
+    expect(prefs.sideBySide).toBe(true);
+    // Only the changed default moves. Everything else the file said stands.
+    expect(prefs.theme).toBe("light");
+    expect(prefs.version).toBe(PREFS_VERSION);
+  });
+
+  it("leaves a file already at this version exactly as its owner set it", () => {
+    localStorage.setItem(
+      "mogeung.prefs",
+      JSON.stringify({ version: PREFS_VERSION, sideBySide: false }),
+    );
+    expect(loadPrefs().sideBySide).toBe(false);
+  });
+
+  it("nudges nothing at all once a file is current", () => {
+    expect(migrateDefaults({ version: PREFS_VERSION })).toEqual({});
   });
 });
 

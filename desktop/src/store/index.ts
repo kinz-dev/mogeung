@@ -147,7 +147,12 @@ export interface GitState {
   submodules: SubmoduleInfo[] | null;
   reflog: ReflogEntry[] | null;
   worktrees: WorktreeInfo[] | null;
-  fileDiff: Record<string, FileChange[]>;
+  /**
+   * The working-tree file whose diff the pane asked for, which is to the
+   * `local` list what `selected` is to the log: it highlights the row, and it
+   * is what a late answer is checked against before it is shown.
+   */
+  selectedPath: string | null;
   fetching: boolean;
   fetched: string[] | null;
   /** The three stages of a conflicted file, read-only. `R-D16`. */
@@ -173,7 +178,7 @@ export const emptyGit = (): GitState => ({
   submodules: null,
   reflog: null,
   worktrees: null,
-  fileDiff: {},
+  selectedPath: null,
   fetching: false,
   fetched: null,
   conflict: null,
@@ -939,10 +944,21 @@ export const useStore = create<AppState>((set, get) => ({
       case "git_file_diff":
         set((s) => {
           const st = s.git[msg.session_id] ?? emptyGit();
+          // The answer to a row that is no longer the selected one is a
+          // stray — same rule the commit diff follows above. It used to land
+          // in a `fileDiff` map nothing read, so clicking a file in `local`
+          // fetched a diff and then showed the empty state.
+          if (st.selectedPath !== msg.path) return {};
           return {
             git: {
               ...s.git,
-              [msg.session_id]: { ...st, fileDiff: { ...st.fileDiff, [msg.path]: msg.files } },
+              [msg.session_id]: {
+                ...st,
+                diff: msg.files,
+                detail: null,
+                conflict: null,
+                diffLabel: `${msg.path} — the working tree against HEAD`,
+              },
             },
           };
         });
@@ -981,13 +997,19 @@ export const useStore = create<AppState>((set, get) => ({
           diff: msg.files,
           detail: null,
           conflict: null,
+          selectedPath: null,
           // `git_compare` answers with this event too, so the label says which
           // two ends were compared rather than leaving the pane unattributed.
           diffLabel: `${msg.from.slice(0, 8)}..${msg.to.slice(0, 8)}`,
         });
         break;
       case "git_stash_diff":
-        get().patchGit(msg.session_id, { diff: msg.files, detail: null, conflict: null });
+        get().patchGit(msg.session_id, {
+          diff: msg.files,
+          detail: null,
+          conflict: null,
+          selectedPath: null,
+        });
         break;
       case "git_conflict_stages":
         get().patchGit(msg.session_id, {

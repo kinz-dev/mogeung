@@ -207,24 +207,64 @@ export function wordDiff(oldLine: string, newLine: string): [Span[], Span[]] {
 export interface Row {
   left: string | null;
   right: string | null;
+  /**
+   * The line's own number in each file, `null` where that side has no line —
+   * and `null` on both when the hunk header could not be read.
+   */
+  leftNo: number | null;
+  rightNo: number | null;
+}
+
+/** Where a hunk's two sides begin, in their own files. */
+export interface HunkStart {
+  old: number;
+  new: number;
 }
 
 /**
- * Pair a unified hunk's lines into left/right rows.
+ * The two starting line numbers of an `@@ -a,b +c,d @@` header.
+ *
+ * `null` rather than a default of `1` for anything it cannot read — a combined
+ * merge header (`@@@`) is the case that turns up. A gutter of confidently wrong
+ * numbers is worse than no gutter: you would go to the file and edit the wrong
+ * line, and nothing on screen would have warned you.
+ */
+export function hunkStart(header: string): HunkStart | null {
+  const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(header);
+  return m ? { old: Number(m[1]), new: Number(m[2]) } : null;
+}
+
+/**
+ * Pair a unified hunk's lines into left/right rows, numbered.
  *
  * Runs of removals and additions are zipped so a modified line sits opposite
  * the line it replaced — which is what makes side-by-side worth having, and
  * what gives the word diff a pair to work on. Unmatched leftovers get a blank
  * opposite.
+ *
+ * The numbers come from `start`, walked down the hunk: each side advances only
+ * on the rows that side actually has, which is what keeps a lopsided run — six
+ * lines removed, two added — counting correctly on both.
  */
-export function sideBySide(lines: readonly string[]): Row[] {
+export function sideBySide(lines: readonly string[], start?: HunkStart | null): Row[] {
   const rows: Row[] = [];
   let dels: string[] = [];
   let adds: string[] = [];
+  let old = start?.old ?? 0;
+  let now = start?.new ?? 0;
+
+  const push = (left: string | null, right: string | null) => {
+    rows.push({
+      left,
+      right,
+      leftNo: start && left !== null ? old++ : null,
+      rightNo: start && right !== null ? now++ : null,
+    });
+  };
 
   const flush = () => {
     const n = Math.max(dels.length, adds.length);
-    for (let i = 0; i < n; i++) rows.push({ left: dels[i] ?? null, right: adds[i] ?? null });
+    for (let i = 0; i < n; i++) push(dels[i] ?? null, adds[i] ?? null);
     dels = [];
     adds = [];
   };
@@ -235,7 +275,7 @@ export function sideBySide(lines: readonly string[]): Row[] {
     else if (c === "+") adds.push(l);
     else {
       flush();
-      rows.push({ left: l, right: l });
+      push(l, l);
     }
   }
   flush();

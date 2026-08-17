@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { highlight, pairs, sideBySide, wordDiff, type Span } from "@/lib/diff";
+import { highlight, hunkStart, pairs, sideBySide, wordDiff, type Span } from "@/lib/diff";
 
 const toks = (line: string) => highlight(line).map((p) => p.tok);
 const changed = (spans: Span[]) => spans.filter((s) => s.changed).map((s) => s.text).join("");
@@ -89,18 +89,51 @@ describe("the word diff", () => {
 describe("side-by-side pairing", () => {
   it("puts a modified line opposite the one it replaced", () => {
     const rows = sideBySide([" ctx", "-old", "+new", " tail"]);
-    expect(rows).toEqual([
-      { left: " ctx", right: " ctx" },
-      { left: "-old", right: "+new" },
-      { left: " tail", right: " tail" },
+    expect(rows.map((r) => [r.left, r.right])).toEqual([
+      [" ctx", " ctx"],
+      ["-old", "+new"],
+      [" tail", " tail"],
     ]);
   });
 
   it("leaves a blank opposite an unmatched leftover", () => {
     const rows = sideBySide(["-a", "-b", "+c"]);
-    expect(rows).toEqual([
-      { left: "-a", right: "+c" },
-      { left: "-b", right: null },
+    expect(rows.map((r) => [r.left, r.right])).toEqual([
+      ["-a", "+c"],
+      ["-b", null],
+    ]);
+  });
+
+  /** No header, no numbers — never a guess. */
+  it("numbers nothing when it was given no starting point", () => {
+    const rows = sideBySide([" ctx", "-old", "+new"]);
+    expect(rows.every((r) => r.leftNo === null && r.rightNo === null)).toBe(true);
+  });
+
+  it("reads the two starting lines off a hunk header", () => {
+    expect(hunkStart("@@ -6,7 +6,9 @@ fn main() {")).toEqual({ old: 6, new: 6 });
+    expect(hunkStart("@@ -0,0 +1,2 @@")).toEqual({ old: 0, new: 1 });
+    // One-line sides drop the count entirely.
+    expect(hunkStart("@@ -12 +14 @@")).toEqual({ old: 12, new: 14 });
+    // A merge's combined header describes three sides, not two.
+    expect(hunkStart("@@@ -1,2 -3,4 +5,6 @@@")).toBeNull();
+    expect(hunkStart("not a header")).toBeNull();
+  });
+
+  /**
+   * The lopsided run is the case worth pinning: four lines removed against
+   * two added, and the side that ran out must not go on counting. Getting this
+   * wrong puts every number after the hunk's first change off by two, which is
+   * the kind of wrong you only notice after opening the file.
+   */
+  it("advances each side only on the lines that side has", () => {
+    const rows = sideBySide([" a", "-b", "-c", "-d", "+B", " e"], { old: 10, new: 20 });
+    expect(rows.map((r) => [r.leftNo, r.rightNo])).toEqual([
+      [10, 20], // " a"
+      [11, 21], // "-b" / "+B"
+      [12, null], // "-c" against a blank
+      [13, null], // "-d" against a blank
+      [14, 22], // " e" — the right side skipped the two blanks
     ]);
   });
 

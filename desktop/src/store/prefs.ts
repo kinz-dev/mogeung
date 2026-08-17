@@ -74,6 +74,14 @@ export interface ScopedPrefs {
 }
 
 export interface Prefs {
+  /**
+   * Which defaults this file was written against. See [`PREFS_VERSION`].
+   *
+   * Absent in every file written before 2026-08-17, which is exactly what makes
+   * it usable as a mark.
+   */
+  version: number;
+
   scope: Scope;
   theme: ThemeMode;
 
@@ -160,7 +168,21 @@ export const emptyScoped = (): ScopedPrefs => ({
   paneHold: {},
 });
 
+/**
+ * Bumped only when a **default changes** and an existing file has to be told.
+ *
+ * The merge in [`loadPrefs`] fills in what a saved file lacks, which is right
+ * for a new setting and useless for a changed one: `savePrefs` writes every
+ * field, so a file written yesterday states the old default explicitly and
+ * would keep it for ever. This is the one-time nudge for those files. It moves
+ * a setting the reader may have chosen, so a bump needs to be worth that.
+ *
+ * - **1** — side-by-side became the default diff (2026-08-17).
+ */
+export const PREFS_VERSION = 1;
+
 export const defaultPrefs = (): Prefs => ({
+  version: PREFS_VERSION,
   scope: "needs_you",
   theme: "dark",
   queueCollapsed: false,
@@ -180,7 +202,7 @@ export const defaultPrefs = (): Prefs => ({
   hideNoise: true,
   syntax: true,
   wordDiff: true,
-  sideBySide: false,
+  sideBySide: true,
   markdown: true,
   showThinking: true,
   newestFirst: false,
@@ -194,6 +216,24 @@ export const defaultPrefs = (): Prefs => ({
 });
 
 const KEY = "mogeung.prefs";
+
+/**
+ * The settings a file older than [`PREFS_VERSION`] is moved onto, once.
+ *
+ * Exported for its test, and kept as a pure function of the saved file so that
+ * test can state the whole rule: an old file is nudged, and a file already at
+ * this version is left exactly as its owner set it.
+ */
+export function migrateDefaults(saved: Partial<Prefs>): Partial<Prefs> {
+  const from = saved.version ?? 0;
+  const out: Partial<Prefs> = {};
+  // 1 — side-by-side is the default diff now. Every file written before this
+  // says `false`, whether that was a choice or the old default, and there is no
+  // way to tell the two apart. Moving them all is the cost of changing a
+  // default at all; the toggle in Changes and in Git is one click back.
+  if (from < 1) out.sideBySide = true;
+  return out;
+}
 
 /**
  * Load, filling anything missing from the defaults.
@@ -224,7 +264,14 @@ export function loadPrefs(): Prefs {
     for (const [key, value] of Object.entries(saved.scoped ?? {})) {
       scoped[key] = { ...emptyScoped(), ...(value ?? {}) };
     }
-    return { ...base, ...saved, zoom: { ...base.zoom, ...saved.zoom }, scoped };
+    return {
+      ...base,
+      ...saved,
+      ...migrateDefaults(saved),
+      version: PREFS_VERSION,
+      zoom: { ...base.zoom, ...saved.zoom },
+      scoped,
+    };
   } catch {
     return base;
   }

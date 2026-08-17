@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { CloudDownload, Filter, GitBranch, GitCommitVertical, RefreshCw } from "lucide-react";
+import { CloudDownload, Columns2, Filter, GitBranch, GitCommitVertical, RefreshCw } from "lucide-react";
 import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, IconButton, Input, Mono, PaneHeader, Row, Segmented } from "@/ui/primitives";
 import { DiffList } from "@/ui/DiffView";
@@ -36,6 +36,10 @@ export function GitPane() {
   const git = useStore((st) => (st.selected ? st.git[st.selected] : undefined));
   const patchGit = useStore((st) => st.patchGit);
   const send = useStore((st) => st.send);
+  // Field by field, for the reason ChangesPane states: this header sits above
+  // every line of the diff.
+  const sideBySide = useStore((st) => st.prefs.sideBySide);
+  const setPrefs = useStore((st) => st.setPrefs);
   const [view, setView] = useState<View>("log");
   const [grep, setGrep] = useState("");
   const [author, setAuthor] = useState("");
@@ -68,7 +72,14 @@ export function GitPane() {
 
   const selectCommit = (sha: string) => {
     if (!id) return;
-    patchGit(id, { selected: sha, diff: null, detail: null, conflict: null, diffLabel: null });
+    patchGit(id, {
+      selected: sha,
+      selectedPath: null,
+      diff: null,
+      detail: null,
+      conflict: null,
+      diffLabel: null,
+    });
     send({ cmd: "git_show", session_id: id, sha });
   };
 
@@ -98,6 +109,16 @@ export function GitPane() {
     <div className="flex h-full min-h-0 bg-[var(--bg-panel)]">
       <div className="flex w-[340px] shrink-0 flex-col border-r border-[var(--border)]">
         <PaneHeader title="Git">
+          {/* The pref is shared with Changes, and until now only Changes could
+              reach it — so the diff on this side of the window was whatever you
+              had last set on the other, with nothing here saying so. */}
+          <IconButton
+            title="side by side — the file as it was left, as it is right  (R-D6)"
+            active={sideBySide}
+            onClick={() => setPrefs({ sideBySide: !sideBySide })}
+          >
+            <Columns2 size={13} />
+          </IconButton>
           <IconButton
             title="update remote-tracking refs — the only outbound call there is (Ctrl+T)"
             onClick={() => {
@@ -251,9 +272,17 @@ export function GitPane() {
                 .map((e) => (
                   <Row
                     key={e.path}
+                    selected={git.selectedPath === e.path}
                     onClick={() => {
                       if (!id) return;
-                      patchGit(id, { selected: null, diff: null, detail: null, conflict: null });
+                      patchGit(id, {
+                        selected: null,
+                        selectedPath: e.path,
+                        diff: null,
+                        detail: null,
+                        conflict: null,
+                        diffLabel: null,
+                      });
                       // A conflicted file has no ordinary diff worth reading —
                       // it has three sides. `R-D16`.
                       if (e.conflicted) send({ cmd: "git_conflict_file", session_id: id, path: e.path });
@@ -516,6 +545,14 @@ export function GitPane() {
                 </Dim>
               )}
             </div>
+          ) : git?.diff?.length === 0 ? (
+            /* An answer with no files at all is not the same as no answer, and
+               rendering an empty list for it looks exactly like the pane
+               having ignored the click. A binary file and a mode-only change
+               both arrive this way. */
+            <Empty hint="a binary file, or a change git shows no text for">
+              nothing to show for {git.selectedPath ?? "that"}
+            </Empty>
           ) : git?.diff && id ? (
             <DiffList files={git.diff} sessionId={id} />
           ) : (

@@ -14,6 +14,17 @@ import type { CommitDetail, FileChange } from "@/wire/types";
 
 const SESSION = "s1";
 const files: FileChange[] = [];
+const one: FileChange = {
+  path: "src/main.rs",
+  old_path: null,
+  status: "modified",
+  insertions: 1,
+  deletions: 0,
+  hunks: [],
+  flags: [],
+  score: 0,
+  truncated: false,
+};
 
 describe("the git answers", () => {
   beforeEach(() => useStore.setState({ git: {} }));
@@ -76,6 +87,36 @@ describe("the git answers", () => {
     const git = useStore.getState().git[SESSION];
     expect(git.detail).toBeNull();
     expect(git.conflict).toBeNull();
+  });
+
+  /**
+   * `git_file_diff` was the same wound as `git_conflict_stages`: it landed in a
+   * `fileDiff` map with no reader, so clicking a file under `local` asked the
+   * daemon, got an answer, and left "pick a commit or a changed file" up.
+   */
+  it("shows the diff of a changed file the local list asked for", () => {
+    useStore.getState().patchGit(SESSION, { selectedPath: "src/main.rs" });
+    useStore.getState().ingest({
+      ev: "git_file_diff",
+      session_id: SESSION,
+      path: "src/main.rs",
+      files: [one],
+    });
+    const git = useStore.getState().git[SESSION];
+    expect(git.diff).toEqual([one]);
+    expect(git.diffLabel).toContain("src/main.rs");
+  });
+
+  /** Click one file, click another before the first answers. */
+  it("drops the diff of a file that is no longer the selected one", () => {
+    useStore.getState().patchGit(SESSION, { selectedPath: "b.rs" });
+    useStore.getState().ingest({
+      ev: "git_file_diff",
+      session_id: SESSION,
+      path: "a.rs",
+      files: [one],
+    });
+    expect(useStore.getState().git[SESSION].diff).toBeNull();
   });
 
   it("clears a conflict when a stash diff arrives", () => {

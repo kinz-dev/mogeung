@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-11
+updated: 2026-08-17
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -265,6 +265,18 @@ swaps the terminal tabs — so a tab rooted at a worktree on the dev box does no
 follow you to the laptop that happens to have the same path. Keying on
 `machine_id` rather than the URL is the same reason `R-I5` exists: an `ssh -L`
 tunnel makes a remote daemon answer on `127.0.0.1`.
+
+**A saved preferences file is always older than the build that reads it**, and
+the two ways it can be out of date need different answers. A field the file has
+never heard of is filled from the defaults on load, at the boundary, once —
+which is what stops a newly added key being `undefined` at every read site. A
+default that has *changed* cannot be reached that way at all: the whole object
+is written on every save, so a file from last month states the old answer
+explicitly and would keep it for ever. `PREFS_VERSION` is the seam for those.
+A file below the current version is moved onto the new default once and stamped,
+and a file already at it is left exactly as its owner set it. Bumping it moves a
+setting somebody may have chosen on purpose, so a bump has to be worth that; the
+first one is side-by-side becoming the default diff.
 
 Session ids are not stable across `/clear`, which mints a new one for the same
 conversation, so anything keyed by one has to be able to *move*. The window
