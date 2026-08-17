@@ -420,7 +420,8 @@ export function QueuePanel() {
   const selected = useStore((s) => s.selected);
   const parentRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(prefs.queueWidth);
-  const dragging = useRef(false);
+  // The width as of *now*, for the pointer-up handler to read. See `onDrag`.
+  const latest = useRef(width);
   // Not persisted, matching the egui client: which repos you folded away is a
   // property of this sitting, and a queue that opens with its urgent half
   // collapsed from last week would hide the thing it exists to show.
@@ -481,18 +482,21 @@ export function QueuePanel() {
   if (prefs.queueCollapsed) return <Strip />;
 
   const onDrag = (e: React.MouseEvent) => {
-    dragging.current = true;
     const startX = e.clientX;
-    const startW = width;
+    const startW = latest.current;
     const move = (ev: MouseEvent) => {
-      const w = Math.min(620, Math.max(280, startW + ev.clientX - startX));
-      setWidth(w);
+      // Through the ref as well as through state, because `up` below is
+      // registered once and closes over the render it was made in. Reading
+      // `width` there saved the width the drag *started* at, so the file
+      // trailed a drag behind and a reload gave you back the size before the
+      // one you had just chosen.
+      latest.current = Math.min(620, Math.max(280, startW + ev.clientX - startX));
+      setWidth(latest.current);
     };
     const up = () => {
-      dragging.current = false;
       // Written on pointer-up only — a drag would otherwise save on every
       // frame of the drag, which is the rule the layout already follows.
-      setPrefs({ queueWidth: width });
+      setPrefs({ queueWidth: latest.current });
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
