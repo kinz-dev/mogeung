@@ -100,6 +100,12 @@ export interface Prefs {
   /** The Notes editor's share of the rail. */
   notesEditorHeight: number;
   queueWidth: number;
+  /**
+   * The Git pane's list of commits and paths. Its own setting rather than a
+   * shared one: what it holds is repository paths, which are longer than
+   * anything else the window puts in a column.
+   */
+  gitSidebarWidth: number;
 
   groupByRepo: boolean;
   autoSelect: boolean;
@@ -195,6 +201,7 @@ export const defaultPrefs = (): Prefs => ({
   infoHeight: 240,
   notesEditorHeight: 256,
   queueWidth: 380,
+  gitSidebarWidth: 340,
   groupByRepo: false,
   autoSelect: false,
   previewOnSelect: true,

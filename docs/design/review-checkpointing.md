@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-08-05
+updated: 2026-08-17
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
@@ -144,10 +144,32 @@ Eliding from the left is the point — leading directories are identical across
 most of a repo, so truncating from the right would leave a column of
 `crates/mog…` telling you nothing. Pinned by a test.
 
+`dirTail` is that rule, and the Git pane's own lists use it rather than a second
+one. Its budget is in characters while a column is in pixels, so a resizable
+list estimates the budget from its width; the estimate only chooses which end
+gives way, and CSS truncation is still the backstop. The Git list is draggable
+because no fixed width is right for both `src/main.rs` and a path six
+directories deep, and the untouched path is on the hover either way.
+
 **Side by side (`R-D6`)** zips equal-length runs of removals and additions so a
 modified line sits opposite the line it replaced, which is what makes the word
 diff meaningful. Lopsided runs get blanks. A test asserts no line is ever
-dropped or invented.
+dropped or invented. **It is the default since 2026-08-17**, which an existing
+preferences file needs `PREFS_VERSION` to be told —
+[architecture.md](architecture.md) says why a merge cannot do it.
+
+Rows carry the line's number in each file, read off the `@@` header and walked
+down the hunk so each side advances only on the lines that side has. A lopsided
+run is what gets this wrong, and is what the test pins. A header that cannot be
+read — a merge's combined `@@@` — draws no gutter at all rather than numbers
+that are a guess: you would go to the file and edit the wrong line, with nothing
+on screen having warned you.
+
+The two halves are separate scrollers that move together. One shared scroller
+lets a long line on one side push the other off the screen; two independent ones
+break the single promise this view makes, that a row is the same line on both
+sides. The number rides in a `sticky` gutter, so it stays while the code scrolls
+under it.
 
 ## Review debt (`R-D8`)
 

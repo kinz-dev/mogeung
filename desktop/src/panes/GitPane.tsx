@@ -13,12 +13,12 @@
  * runs on a timer and it never pushes or merges.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CloudDownload, Columns2, Filter, GitBranch, GitCommitVertical, RefreshCw } from "lucide-react";
 import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, IconButton, Input, Mono, PaneHeader, Row, Segmented } from "@/ui/primitives";
 import { DiffList } from "@/ui/DiffView";
-import { stamp } from "@/lib/format";
+import { dirTail, stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 type View = "log" | "local" | "refs" | "stashes" | "more";
@@ -29,6 +29,34 @@ const ON_DEMAND = {
   worktrees: "git_worktrees",
   submodules: "git_submodules",
 } as const;
+
+/**
+ * A path in a column narrower than it is.
+ *
+ * Plain `truncate` spends the width it has on the leading directories and then
+ * cuts off the file name — the one part you were reading, and the reason a
+ * column of `desktop/src/store/prefs.…` says nothing about which seven files
+ * changed. [`dirTail`] is the house answer and is used here rather than a
+ * second one: whole segments come off the front, never mid-name, because a
+ * half-cut directory reads as a directory that exists.
+ *
+ * The budget is in characters and the column is in pixels, so it is estimated
+ * from the pane's width — deliberately roughly. It only decides *which end*
+ * gives way; CSS truncation is still the backstop, and the untouched path is on
+ * the title for when two directories end the same way.
+ */
+function FilePath({ path, chars }: { path: string; chars: number }) {
+  const shown = dirTail(path, chars);
+  const cut = shown.lastIndexOf("/");
+  const dir = cut < 0 ? "" : shown.slice(0, cut + 1);
+  const name = shown.slice(cut + 1);
+  return (
+    <span className="flex min-w-0 items-baseline" title={path}>
+      {dir && <Mono className="truncate text-xs text-[var(--dim)]">{dir}</Mono>}
+      <Mono className="shrink-0 text-xs">{name}</Mono>
+    </span>
+  );
+}
 
 export function GitPane() {
   const s = useSelectedSession();
@@ -51,6 +79,35 @@ export function GitPane() {
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const repoRoot = s?.repo_root ?? null;
+
+  // The list is a column of paths, and 340px was not enough for most of them.
+  // Same idiom as the queue's edge: local state during the drag, the
+  // preferences file written once on release.
+  const savedWidth = useStore((st) => st.prefs.gitSidebarWidth);
+  const [width, setWidth] = useState(savedWidth);
+  const latest = useRef(width);
+  const onDrag = (e: React.MouseEvent) => {
+    const startX = e.clientX;
+    const startW = latest.current;
+    const move = (ev: MouseEvent) => {
+      // Through a ref as well as through state: the `up` below is registered
+      // once and closes over this render's `width` for ever, so reading the
+      // state there saves the width the drag *started* at.
+      latest.current = Math.min(900, Math.max(220, startW + ev.clientX - startX));
+      setWidth(latest.current);
+    };
+    const up = () => {
+      setPrefs({ gitSidebarWidth: latest.current });
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  // How many `text-xs` monospace characters this width holds, less the state
+  // column and the padding. An estimate, and only ever an estimate — see
+  // [`FilePath`].
+  const chars = Math.max(12, Math.floor((width - 56) / 7));
 
   // One door for fetching, in the render, so a docked pane works unswitched.
   useEffect(() => {
@@ -107,7 +164,7 @@ export function GitPane() {
 
   return (
     <div className="flex h-full min-h-0 bg-[var(--bg-panel)]">
-      <div className="flex w-[340px] shrink-0 flex-col border-r border-[var(--border)]">
+      <div className="flex shrink-0 flex-col border-r border-[var(--border)]" style={{ width }}>
         <PaneHeader title="Git">
           {/* The pref is shared with Changes, and until now only Changes could
               reach it — so the diff on this side of the window was whatever you
@@ -298,7 +355,7 @@ export function GitPane() {
                     >
                       {e.state}
                     </Mono>
-                    <Mono className="truncate text-xs">{e.path}</Mono>
+                    <FilePath path={e.path} chars={chars} />
                     {e.conflicted && <Chip color="var(--red)">conflict</Chip>}
                   </Row>
                 ))
@@ -412,7 +469,7 @@ export function GitPane() {
               ) : (
                 git.worktrees.map((w) => (
                   <div key={w.path} className="border-b border-[var(--border)] px-2 py-1">
-                    <Mono className="block truncate text-xs">{w.path}</Mono>
+                    <FilePath path={w.path} chars={chars} />
                     <div className="flex items-center gap-2">
                       <Dim className="text-2xs">{w.branch ?? "(detached)"}</Dim>
                       <Mono className="text-2xs text-[var(--dim)]">{w.sha.slice(0, 8)}</Mono>
@@ -429,7 +486,7 @@ export function GitPane() {
               ) : (
                 git.submodules.map((m) => (
                   <div key={m.path} className="border-b border-[var(--border)] px-2 py-1">
-                    <Mono className="block truncate text-xs">{m.path}</Mono>
+                    <FilePath path={m.path} chars={chars} />
                     <div className="flex items-center gap-2">
                       <Mono className="text-2xs text-[var(--dim)]">{m.sha.slice(0, 8)}</Mono>
                       {m.note && <Dim className="truncate text-2xs">{m.note}</Dim>}
@@ -491,6 +548,12 @@ export function GitPane() {
           </div>
         )}
       </div>
+
+      <div
+        onMouseDown={onDrag}
+        className="w-1 shrink-0 cursor-col-resize hover:bg-[var(--blue)]"
+        title="drag to resize — a path is longer than a list is wide"
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         {git?.detail && (
