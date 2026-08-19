@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-11
+updated: 2026-08-19
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -14,6 +14,12 @@ covers:
 > [run-and-debug.md](run-and-debug.md). Noted here because both docs cover the
 > same file, so a staleness warning on one can be raised by a change that has
 > nothing to do with it.
+>
+> What *does* belong here, and is easy to mistake for the same coincidence, is
+> anything in `state.rs` that reaches out to the machine on the daemon's behalf
+> — launching a terminal, focusing one, and since `R-J34` showing a folder in
+> the file manager. They are the same family and they teach each other, so
+> they are described together below.
 
 Things no single agent can know about itself, because knowing them requires a
 view across sessions that none of them has. Roadmap `R-B3`, `R-B4`, `R-B5`,
@@ -141,6 +147,36 @@ Exiting **zero** immediately is also success and deliberately distinguished:
 symlink to whichever one the user chose, and the flag that carries a command
 differs between them — `-e` takes argv for xterm and a single string for
 terminator. It is resolved to its real target so the row matches the program.
+
+### Handing a folder to the desktop (`R-J34`)
+
+`open_folder` is the third thing in this file that reaches for another
+application — `open` on macOS, `xdg-open` elsewhere — and it is here rather
+than in the window for the reason the other two are: **this is the machine the
+folder is on.** A client dialled into another machine's daemon that opened the
+path locally would show whatever happens to sit there, which is `R-J27`'s
+lesson one layer up — one path is two answers on two machines.
+
+`open` is macOS-only and that is not a house style. Linux has a program called
+`open` too: `openvt`, from util-linux, which switches virtual terminals. The
+familiar name on the wrong platform would not fail — it would do something
+else, quietly and successfully.
+
+**It deliberately does not apply the lesson above.** A launch waits to see
+whether the child is still alive, because a terminal handed flags it does not
+understand exits before you can tell. A file manager is not worth that wait:
+the answer to the client is *asked*, and a handler that sat on the connection
+until a desktop had finished starting Nautilus would trade a reporting nicety
+for a stalled socket. What it does instead is **reap** — `xdg-open` hands the
+directory over and exits at once, and a child nobody waits on is a zombie, one
+per click on a button meant to be clicked often. The wait happens on a thread
+of its own, where a non-zero exit becomes a log line rather than an error the
+user has already been told did not happen.
+
+Reading a worktree and never writing it is what makes this a handoff rather
+than a step towards an editor: the moment you want to *do* something to a file,
+the answer is an application that can, which is what
+[pillar K](../product/roadmap.md#k-explicitly-not) asks for.
 
 ## Jump to terminal (`R-B2`)
 
