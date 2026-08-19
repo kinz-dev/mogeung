@@ -337,16 +337,19 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         </button>
       )}
       {/*
-        Only the extra panes close, and only from here. The base `agent` pane is
-        permanent for the reason `PaneTab` has no close button at all: a pane
-        you can lose is a pane you have to rediscover, and a split you cannot
-        undo is worse than no split.
+        **Every Agent pane closes, slot 1 included**, since 2026-08-19. Only the
+        extra ones did before, and the asymmetry was reported as a bug on the
+        day it bit: split, and the pane you want rid of is as often the first as
+        the second — but the first refused, so the way back to one agent was to
+        close the *other* one and re-aim what was left.
+
+        A close is a detach either way, and the pane comes back four ways —
+        `Alt+A`, the palette, `Alt+0`, or the next launch — so there is nothing
+        left for the exception to protect. See `closeAgentPane`.
       */}
-      {paneId !== "agent" && (
-        <IconButton title="close this Agent pane — it detaches, it never kills" onClick={() => closeAgentPane(paneId)}>
-          <X className="h-3.5 w-3.5" />
-        </IconButton>
-      )}
+      <IconButton title="close this Agent pane — it detaches, it never kills" onClick={() => closeAgentPane(paneId)}>
+        <X className="h-3.5 w-3.5" />
+      </IconButton>
     </div>
   );
 }

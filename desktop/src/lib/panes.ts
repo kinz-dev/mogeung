@@ -246,13 +246,22 @@ export function revealSession(sessionId: string): void {
  * already held on a session you chose last week, which looks like the split
  * ignoring your selection.
  *
- * The base `agent` pane is never closed — every other pane in the centre is
- * permanent (`PaneTab` has no close button for exactly this reason), and a
- * window with no Agent pane at all is one you can only recover from with a
- * shortcut you have to remember.
+ * **Every Agent pane closes, slot 1 included.** It did not until 2026-08-19,
+ * on the reasoning that a window with no Agent pane is one you can only
+ * recover from with a shortcut you have to remember — but the price of that
+ * was worse and was being paid every day: split, decide the *first* pane is
+ * the one you are done with, and the only way to be left with one agent again
+ * is to close the other and re-aim it. A pane that is special for a reason you
+ * cannot see reads as a bug, and it was reported as one.
+ *
+ * What made it safe is that the shortcut is no longer the only way back:
+ * `Alt+A` raises the Agent pane and re-adds it when it is gone, the same
+ * action is in the palette under its name, `Alt+0` resets the layout, and
+ * `PANES` in [`App.tsx`](../App.tsx) re-adds slot 1 on the next launch. Four
+ * ways back, only one of which you have to remember.
  */
 export function closeAgentPane(id: string): void {
-  if (!dock || id === "agent") return;
+  if (!dock) return;
   dropHold(id);
   dock.getPanel(id)?.api.close();
 }

@@ -292,3 +292,40 @@ describe("the merged header", () => {
     expect(screen.queryByText(/raise its window/i)).toBeNull();
   });
 });
+
+/**
+ * The × on every Agent pane, slot 1 included. 2026-08-19.
+ *
+ * It was on the extra panes only, so the pane you happened to start in could
+ * never be the one you got rid of. Reported as "there is a main agent panel
+ * which I can't close" — which is exactly what it looked like from outside.
+ */
+describe("closing an Agent pane from its header", () => {
+  const actions = (paneId: string) =>
+    render(
+      <PaneActions
+        activePanel={{ id: paneId } as never}
+        containerApi={{ getPanel: () => undefined } as never}
+        api={{} as never}
+        group={{} as never}
+        panels={[]}
+        isGroupActive
+      />,
+    );
+
+  it("offers the base pane the same close the extra ones have", () => {
+    actions("agent");
+    expect(screen.getByLabelText(/close this Agent pane/i)).toBeInTheDocument();
+  });
+
+  it("still offers it on an extra pane", () => {
+    actions("agent:3");
+    expect(screen.getByLabelText(/close this Agent pane/i)).toBeInTheDocument();
+  });
+
+  /** A dock tool's header is not an agent's, and has nothing to close. */
+  it("offers nothing on a pane that is not an agent", () => {
+    actions("changes");
+    expect(screen.queryByLabelText(/close this Agent pane/i)).toBeNull();
+  });
+});

@@ -14,9 +14,10 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import type { DockviewApi } from "dockview";
-import { filePaneId, jumpToTurn, setDock, showPane } from "@/lib/panes";
+import { closeAgentPane, filePaneId, jumpToTurn, setDock, showPane } from "@/lib/panes";
 import { openFile } from "@/lib/explorer";
 import { useStore } from "@/store";
+import { defaultPrefs, emptyScoped } from "@/store/prefs";
 
 function fakeDock(existing: string[]) {
   const setActive = vi.fn();
@@ -209,5 +210,63 @@ describe("a file gets a pane of its own", () => {
     useStore.setState({ selected: "s1", explorer: {} });
     render(<App />);
     expect(filePanes(getDock())).toHaveLength(0);
+  });
+});
+
+/**
+ * Closing an Agent pane, slot 1 included. 2026-08-19.
+ *
+ * The base `agent` pane refused to close until this, and the asymmetry was
+ * reported as a bug: with two panes up, the one you are finished with is as
+ * often the first as the second, and only the second would go. The guard is
+ * gone — these pin that it went, and that the hold went with the pane.
+ */
+describe("closing an Agent pane", () => {
+  function dockWithClose(existing: string[]) {
+    const close = vi.fn();
+    const api = {
+      getPanel: (id: string) => (existing.includes(id) ? { api: { close } } : undefined),
+      addPanel: vi.fn(),
+    } as unknown as DockviewApi;
+    return { api, close };
+  }
+
+  beforeEach(() => {
+    useStore.setState({ prefs: defaultPrefs(), selected: null });
+  });
+
+  it("closes the base pane, which used to be the one exception", () => {
+    const { api, close } = dockWithClose(["agent"]);
+    setDock(api);
+
+    closeAgentPane("agent");
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("closes an extra pane as it always did", () => {
+    const { api, close } = dockWithClose(["agent", "agent:2"]);
+    setDock(api);
+
+    closeAgentPane("agent:2");
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * The hold has to go with the pane whichever slot it was. Left behind, the
+   * next split into that number arrives already moored to a session you chose
+   * last week — which reads as the split ignoring your selection.
+   */
+  it("lets go of the session the closed pane was held on", () => {
+    const { api } = dockWithClose(["agent"]);
+    setDock(api);
+    useStore.setState({
+      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), paneHold: { agent: "s1", "agent:2": "s2" } } } },
+    });
+
+    closeAgentPane("agent");
+
+    expect(useStore.getState().scoped().paneHold).toEqual({ "agent:2": "s2" });
   });
 });

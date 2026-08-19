@@ -1,7 +1,7 @@
 ---
 title: Two agents at once
 status: shipped
-updated: 2026-08-09
+updated: 2026-08-19
 roadmap: [R-B49, R-J31]
 depends_on: [A30, A14, A11]
 ---
@@ -146,6 +146,8 @@ ripple into the queue, the dock and the rail.
 | `desktop/src/lib/panes.ts` | `R-J31` — `agentSlots`, `revealSession`; `splitAgent` returns the slot it made or `null` |
 | `desktop/src/ui/QueuePanel.tsx` | `R-J31` — both click sites call `revealSession` rather than `select` |
 | `desktop/src/lib/revealSession.test.tsx` | `R-J31` — new, the four cases below |
+| `desktop/src/lib/panes.ts` | 2026-08-19 — `closeAgentPane` no longer refuses slot 1 |
+| `desktop/src/ui/PaneChrome.tsx` | 2026-08-19 — the × is on every Agent pane, not only the extra ones |
 
 ### Risks and unknowns
 
@@ -334,3 +336,34 @@ thing is *visible*, which is the whole claim. Whether two live terminals fight
 over the keyboard in practice is a question `A11` was never asked at this scale.
 And `A30` itself is untested by construction: the row is built, the verdict
 needs a week.
+
+### The base pane was the one exception, and it read as a bug
+
+Slot 1 could not be closed until 2026-08-19. The reasoning was the one behind
+every other permanent tab in the centre — a pane you can lose is a pane you
+have to rediscover, and a window with no Agent pane at all is recoverable only
+through a shortcut you have to remember.
+
+It was reported as a bug the moment two panes were up:
+
+> I found that there is a "main" agent panel which I can't close.
+
+Which is fair. Once splitting is ordinary, *which* pane you are finished with
+is not correlated with the order they were made — as often the first as the
+second — and the only way back to one agent was to close the other one and
+re-aim what was left. An exception nobody can see the reason for is
+indistinguishable from a control that is broken.
+
+What made lifting it safe is that the shortcut stopped being the only way back
+some time ago: `Alt+A` raises the Agent pane and *adds* it when there is none,
+the same action sits in the palette under its name, `Alt+0` resets the layout,
+and `PANES` in `App.tsx` re-adds slot 1 on the next launch. Four ways back,
+one of which you have to remember.
+
+The empty centre is therefore a state you can reach, and that is the accepted
+cost: it is reachable deliberately, it is legible — the watermark, not a blank
+pane — and it is what someone reading files across two worktrees with no agent
+to watch actually wants. It does not survive a restart, which is the one rough
+edge left: close every Agent pane, reopen the window, and slot 1 is back.
+Leaving that alone was deliberate, since the alternative is a window that can
+open with nothing in the centre at all.
