@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, Columns2, Folder, GitBranch, X } from "lucide-react";
+import { Anchor, Columns2, Folder, FolderOpen, GitBranch, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { closeAgentPane, nextAgentSlot, parseFilePaneId, splitAgent } from "@/lib/panes";
@@ -318,6 +318,30 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         onClick={() => togglePaneHold(paneId)}
       >
         <Anchor className="h-3.5 w-3.5" />
+      </IconButton>
+      {/*
+        **The folder, in the machine's own file manager.** Asked for
+        2026-08-19, and placed here — beside the anchor — at the same ask.
+
+        A handoff, which is what pillar K asks for rather than an exception to
+        it: this window reads a worktree and never writes it, so moving,
+        renaming or opening a file with something else belongs to an
+        application that can. The daemon runs it, because the folder is on the
+        daemon's machine and a path is not the same answer on two of them.
+
+        Disabled without a `cwd` rather than hidden: the control is per group
+        and a button that comes and goes is one you stop reaching for.
+      */}
+      <IconButton
+        title={
+          session?.cwd
+            ? `show ${session.cwd} in the file manager`
+            : "no folder to show — this pane has no session"
+        }
+        disabled={!session?.cwd}
+        onClick={() => session && send({ cmd: "open_folder", session_id: session.id })}
+      >
+        <FolderOpen className="h-3.5 w-3.5" />
       </IconButton>
       <IconButton
         title={canSplit ? "another Agent pane, beside this one" : "four Agent panes is the ceiling"}

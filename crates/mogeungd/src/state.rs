@@ -2370,6 +2370,62 @@ impl AppState {
         }
     }
 
+    /// Show a session's folder in the desktop's file manager. `R-J34`.
+    ///
+    /// Asked for 2026-08-19, and it is a **handoff** rather than a feature
+    /// growing towards an editor: what the window can do with a worktree is
+    /// read it, so the moment you want to move, rename or open a file with
+    /// something else, the honest answer is the machine's own file manager.
+    ///
+    /// **`cwd`, not `repo_root`** — the same choice the pane header already
+    /// makes. The question is where this session is working, and the two
+    /// differ exactly when the agent was started in a subdirectory, which is
+    /// the case where being taken to the repository root is wrong.
+    ///
+    /// It runs here rather than in the window because this is where the folder
+    /// is: a window dialled into another machine's daemon would otherwise open
+    /// whatever happens to sit at the same path locally, which `R-J27` is the
+    /// standing reminder about — the same path, on two machines, is two
+    /// different answers.
+    pub async fn open_folder(&self, id: &str) -> Result<()> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow!("no such session"))?;
+        let dir = PathBuf::from(shellexpand(&session.cwd));
+        // Checked before spawning, so a folder that has been moved or deleted
+        // says so here instead of opening a file manager on nothing.
+        if !dir.is_dir() {
+            return Err(anyhow!("that folder is gone: {}", dir.display()));
+        }
+        let shown = dir.display().to_string();
+        let (program, args) = file_manager_command(&shown, cfg!(target_os = "macos"));
+        match std::process::Command::new(&program).args(&args).spawn() {
+            Ok(mut child) => {
+                // **Reaped, on a thread of its own.** `xdg-open` hands the
+                // folder to the desktop and exits at once, and a child nobody
+                // waits on is a zombie — one per click, on a button meant to
+                // be clicked often. Nothing *awaits* this: the answer to the
+                // client is "asked", and a handler that sat on the connection
+                // until a file manager had finished starting would trade a
+                // leak for a stall. A non-zero exit is a log line rather than
+                // an error, because by then the client has been told.
+                std::thread::spawn(move || match child.wait() {
+                    Ok(status) if !status.success() => {
+                        tracing::warn!("{program} exited {status} opening {shown}");
+                    }
+                    Err(e) => tracing::warn!("{program} could not be waited on: {e}"),
+                    _ => {}
+                });
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(anyhow!(
+                "{program} is not installed, so there is nothing here that opens a folder"
+            )),
+            Err(e) => Err(anyhow!("could not open {}: {e}", dir.display())),
+        }
+    }
+
     /// Open a terminal running interactive `claude` in `dir`.
     ///
     /// This is the one thing mogeung starts, and note what it starts: the real
@@ -2405,6 +2461,20 @@ impl AppState {
             launch_terminal_linux(&target)
         }
     }
+}
+
+/// What shows a directory in the desktop's file manager.
+///
+/// Pure and given the platform, like [`in_terminal_command`], so both shapes
+/// are pinned by tests on whichever machine runs them.
+///
+/// **`open` is macOS-only here, and that is not a stylistic choice.** Linux
+/// has a program called `open` too — it is `openvt` from util-linux, which
+/// switches virtual terminals. Reaching for the familiar name on the wrong
+/// platform would not fail; it would do something else entirely.
+fn file_manager_command(dir: &str, macos: bool) -> (String, Vec<String>) {
+    let program = if macos { "open" } else { "xdg-open" };
+    (program.to_string(), vec![dir.to_string()])
 }
 
 /// The macOS launch path, byte-for-byte the original: `open -a Terminal`
@@ -3495,6 +3565,29 @@ mod terminal_tests {
     #[test]
     fn a_process_outside_tmux_has_no_target() {
         assert_eq!(tmux_target_of(1), None);
+    }
+
+    /// Finder on a Mac, the desktop's own handler everywhere else — and never
+    /// `open` off macOS, where that name belongs to `openvt` and would switch
+    /// virtual terminals rather than show a folder.
+    #[test]
+    fn a_folder_opens_with_the_platform_s_own_file_manager() {
+        assert_eq!(
+            file_manager_command("/some/repo", true),
+            ("open".to_string(), vec!["/some/repo".to_string()])
+        );
+        let (program, args) = file_manager_command("/some/repo", false);
+        assert_eq!(program, "xdg-open");
+        assert_eq!(args, vec!["/some/repo".to_string()]);
+    }
+
+    /// A path is argv, never a string a shell gets to look at — a directory
+    /// with a space or a `$` in its name is ordinary, and quoting it here
+    /// would be quoting it twice.
+    #[test]
+    fn a_folder_s_path_is_passed_whole_and_unquoted() {
+        let (_, args) = file_manager_command("/some/dir with space/$repo", false);
+        assert_eq!(args, vec!["/some/dir with space/$repo".to_string()]);
     }
 
     /// The Linux launch table must speak Linux — no `open`, no `osascript` —

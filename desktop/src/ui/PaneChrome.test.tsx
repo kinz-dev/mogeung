@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, beforeEach } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PaneScope } from "@/lib/paneScope";
 import { PaneActions, PaneCwd, usePaneTitle } from "@/ui/PaneChrome";
 import { AgentPane } from "@/panes/AgentPane";
@@ -192,6 +192,53 @@ describe("the branch on the pane header", () => {
     );
     expect(screen.getByText("the-held-one")).toBeInTheDocument();
     expect(screen.queryByText("main")).toBeNull();
+  });
+});
+
+/**
+ * Show this session's folder in the machine's file manager. `R-J34`, asked for
+ * 2026-08-19.
+ *
+ * The half worth pinning is **which** session's folder. A held pane is on a
+ * session the queue is not (`R-B49`), and a button that sent the *selected*
+ * one would open the wrong repository at exactly the moment two agents are up
+ * — which is the arrangement it is most wanted in.
+ */
+describe("showing a session's folder", () => {
+  const header = (paneId = "agent") =>
+    render(
+      <PaneActions
+        activePanel={{ id: paneId } as never}
+        containerApi={{ getPanel: () => undefined } as never}
+        api={{} as never}
+        group={{} as never}
+        panels={[]}
+        isGroupActive
+      />,
+    );
+
+  it("asks the daemon to open the pane's own session, not the selected one", () => {
+    const sent: unknown[] = [];
+    useStore.setState({
+      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), paneHold: { agent: "s2" } } } },
+      selected: "s1",
+      sessions: { s1: session("s1", { cwd: "/tmp/one" }), s2: session("s2", { cwd: "/tmp/two" }) },
+      send: (msg: unknown) => sent.push(msg),
+    } as never);
+    header();
+
+    fireEvent.click(screen.getByTitle("show /tmp/two in the file manager"));
+
+    expect(sent).toEqual([{ cmd: "open_folder", session_id: "s2" }]);
+  });
+
+  /** Disabled rather than absent: a control that comes and goes is one you
+   *  stop reaching for. */
+  it("is there but dead when the pane has no session to show", () => {
+    useStore.setState({ selected: null, sessions: {} } as never);
+    header();
+
+    expect(screen.getByTitle(/no folder to show/)).toBeDisabled();
   });
 });
 

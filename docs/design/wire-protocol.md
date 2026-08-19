@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-11
+updated: 2026-08-19
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -31,6 +31,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchReviewDebt` | How much of a repo's agent output nobody has read |
 | `FetchBlastRadius` | What else references the symbols a file's diff changed |
 | `FocusTerminal` | Bring the terminal *app* a live session runs in to the front — iTerm2, Terminal.app, the tmux client; not a mogeung pane |
+| `OpenFolder` | Show a session's `cwd` in the machine's file manager — Finder on macOS, `xdg-open`'s handler elsewhere (`R-J34`). A handoff, and it runs where the daemon is, because a path is not the same answer on two machines |
 | `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`) |
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
@@ -54,7 +55,10 @@ available as plain REST so the daemon is curl-able without a UI.
 ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
 
 `FocusTerminal` is not an exception. It moves *your* window; the agent is
-untouched and nothing is typed. Nor is "copy as prompt" a command at all — the
+untouched and nothing is typed. Neither is `OpenFolder`: it hands a directory
+to another application, which is what [pillar K](../product/roadmap.md#k-explicitly-not)
+asks for — this window reads a worktree and never writes it, so anything you
+want to *do* to a file belongs to a program that can. Nor is "copy as prompt" a command at all — the
 client builds the text and puts it on your clipboard, and you paste it
 ([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
 

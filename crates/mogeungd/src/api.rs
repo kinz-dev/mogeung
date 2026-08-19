@@ -1034,6 +1034,11 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 err(e);
             }
         }
+        ClientMsg::OpenFolder { session_id } => {
+            if let Err(e) = state.open_folder(&session_id).await {
+                err(e);
+            }
+        }
         ClientMsg::ListDir { session_id, path } => {
             match state.list_dir(&session_id, &path).await {
                 Ok(entries) => state.broadcast(ServerMsg::DirListing {

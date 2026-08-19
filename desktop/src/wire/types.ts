@@ -801,6 +801,8 @@ export type ClientMsg =
   | { cmd: "fetch_review_debt"; repo: string }
   | { cmd: "fetch_blast_radius"; session_id: SessionId; path: string }
   | { cmd: "focus_terminal"; session_id: SessionId }
+  /** Show the session's folder in the machine's file manager. `R-J34`. */
+  | { cmd: "open_folder"; session_id: SessionId }
   | { cmd: "list_dir"; session_id: SessionId; path: string }
   | { cmd: "fetch_file"; session_id: SessionId; path: string }
   | { cmd: "list_tree"; session_id: SessionId }

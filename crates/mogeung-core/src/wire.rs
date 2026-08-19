@@ -55,6 +55,15 @@ pub enum ClientMsg {
     ///
     /// Still not steering the agent: it moves *your* window, and then you type.
     FocusTerminal { session_id: SessionId },
+    /// Show a session's folder in the desktop's file manager — Finder on
+    /// macOS, whatever `xdg-open` resolves to elsewhere. `R-J34`.
+    ///
+    /// A **handoff**, which is the one thing pillar K positively asks for:
+    /// mogeung reads the worktree and never writes it, so the moment you want
+    /// to *do* something with a file the answer is another application. It
+    /// runs on the daemon's machine, like `FocusTerminal` and for the same
+    /// reason — that is where the folder is.
+    OpenFolder { session_id: SessionId },
     /// List one directory of the session's worktree. `path` is relative to the
     /// session root (repo root when known, else cwd); empty means the root.
     ///
