@@ -29,6 +29,22 @@ beforeAll(() => {
   vi.stubGlobal("WebSocket", FakeSocket);
 });
 
+/** Enough of a session for the window to render one — the status bar reads its
+ *  repository, so `{ id }` alone brings the whole render down. */
+const labelled = (id: string) =>
+  ({
+    id,
+    title: `session ${id}`,
+    cwd: "/tmp/repo",
+    repo_root: "/tmp/repo",
+    alive: true,
+    touched_files: [],
+    collisions: [],
+    verify_runs: [],
+    claims: [],
+    last_event_at: new Date().toISOString(),
+  }) as never;
+
 function press(key: string, mods: Partial<Record<"ctrlKey" | "altKey" | "shiftKey" | "metaKey", boolean>> = {}) {
   window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...mods }));
 }
@@ -236,6 +252,38 @@ describe("the keyboard", () => {
     fireEvent.change(field2, { target: { value: "  " } });
     fireEvent.keyDown(field2, { key: "Enter" });
     expect(useStore.getState().scoped().labels.s1).toBeUndefined();
+  });
+
+  /**
+   * `F2` renames the selected session. Asked for 2026-08-19.
+   *
+   * The dialog existed only behind a right-click on a queue row, which is the
+   * wrong cost for something you do to a session as soon as you start caring
+   * about it. This asserts the whole path — a real keystroke at `window`, the
+   * store, the dialog on screen — because the cheaper version (does `ACTIONS`
+   * contain an `F2`?) passes just as happily with the key never arriving.
+   */
+  it("opens the label editor for the selected session on F2", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    useStore.setState({ selected: "s1", sessions: { s1: labelled("s1") } });
+
+    press("F2");
+
+    expect(useStore.getState().labelEditing).toBe("s1");
+    expect(await screen.findByRole("dialog", { name: /label/i })).toBeInTheDocument();
+  });
+
+  /** Nothing selected is a state worth saying out loud, not a silent no-op. */
+  it("says what is missing when nothing is selected", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    useStore.setState({ selected: null, notices: [] });
+
+    press("F2");
+
+    expect(useStore.getState().labelEditing).toBeNull();
+    expect(useStore.getState().notices.map((n) => n.text).join(" ")).toMatch(/pick a session first/i);
   });
 
   /**

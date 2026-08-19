@@ -1,7 +1,7 @@
 ---
 title: Session labels
 status: shipped
-updated: 2026-08-07
+updated: 2026-08-19
 roadmap: [R-B26]
 depends_on: [A13, A17]
 ---
@@ -97,6 +97,7 @@ keymap and therefore the palette for free.
 | `crates/mogeung-ui/src/ui.rs` | `label_color` palette hash |
 | `crates/mogeung-ui/src/app.rs` | badge on the card, click-to-filter, context menu, edit window |
 | `crates/mogeung-ui/src/keymap.rs` | `LabelSession`, default `L` |
+| `desktop/src/lib/keymap.ts` | 2026-08-19 — `session.label`, default `F2`, restoring the key the port dropped |
 
 ### Risks and unknowns
 
@@ -209,3 +210,26 @@ each predecessor donates its hop **once**. A view that re-points itself on
 every tick would make a finished session impossible to sit and read — a worse
 window than the one that leaves a pane blank, and one the tests in
 `store/succession.test.ts` now forbid.
+
+**The key came back as `F2` (2026-08-19), not as `L`.** The egui client bound
+`L` to the editor and the TypeScript port dropped it, leaving the right-click
+menu as the only way in — which is the wrong cost for something you do to a
+session the moment you start caring about which one it is. Asked for directly:
+
+> add a shortcut "F2" when a session is selected, it will popup the "Edit
+> label" dialog.
+
+`F2` over restoring `L` for two reasons beyond the ask. It is the rename key
+every file manager and IDE has already trained, so it needs learning once
+rather than remembering; and a **bare letter** aimed at an Agent pane is a
+letter the agent does not receive — `focusOwns` hands bare keys to whatever
+has focus, so `L` would have been dead exactly where you spend most of your
+time, while a function key is one no shell line-edits with. Same key on macOS,
+so there is no `MAC_KEYS` row: a function key composes no character, which is
+the trap every `Alt+<letter>` binding here fell into.
+
+It names the **selected** session, not the one a held pane is showing. The
+dialog belongs to the queue and the selection is what the queue highlights;
+renaming something other than the highlighted row would be the worse surprise.
+Nothing selected pushes a notice rather than doing nothing, because a key that
+answers with silence is indistinguishable from a key that is not bound.

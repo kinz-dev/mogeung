@@ -504,6 +504,44 @@ export const ACTIONS: Action[] = [
     },
   },
   {
+    id: "session.label",
+    // Named for the noun the dialog, the badge and the filter all use. The
+    // palette searches `group + label`, so "rename" is the word it will not
+    // find — accepted, because "label" is the one this window taught.
+    label: "Label the selected session",
+    group: "Session",
+    /**
+     * `F2`, asked for 2026-08-19 — the rename key every file manager and IDE
+     * has trained, pointed at the one thing in this window you name yourself.
+     *
+     * The label dialog existed only on the queue row's context menu, so naming
+     * a session meant right-click, read a menu, click. A session you triage by
+     * is a session you name early and often, and a menu is the wrong cost for
+     * that.
+     *
+     * **A bare key, so a focused terminal keeps it.** `focusOwns` hands bare
+     * keys to whatever has focus, which is the rule that lets an agent receive
+     * `j` — and `F2` is a key a TUI may well want. With the queue focused, or
+     * the window generally, it fires; clicked into an Agent pane it reaches the
+     * agent, and `Shift+Escape` is the way back out. Same key on a Mac, so
+     * there is no `MAC_KEYS` row: a function key composes no character.
+     *
+     * It names the **selected** session rather than the one a held pane is
+     * showing. The dialog is the queue's, the selection is what the queue
+     * highlights, and a rename that renamed something other than the row you
+     * are looking at would be the worse surprise.
+     */
+    keys: ["F2"],
+    run: () => {
+      const { selected, sessions, pushError } = useStore.getState();
+      if (!selected || !sessions[selected]) {
+        pushError("pick a session first — a label needs something to name");
+        return;
+      }
+      useStore.setState({ labelEditing: selected });
+    },
+  },
+  {
     id: "queue.next",
     label: "Next session in the queue",
     group: "Navigation",
