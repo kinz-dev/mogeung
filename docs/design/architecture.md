@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-17
+updated: 2026-08-19
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -405,6 +405,18 @@ Attention queue on the left, the terminal across the bottom, and since
 tree (`R-B41`) and global search (`R-F13`). None of these are dock panels; each
 is laid out around the dock, so closing every pane cannot take the queue with
 it.
+
+The rail holds **as many of its tools as you open**, stacked down one column in
+strip order, since `R-J33` on 2026-08-19 —
+[ADR-0027](../decisions/0027-the-rail-stacks.md), which is ADR-0017's own
+revisit trigger being pulled rather than a change to its rule. So `prefs.rail`
+is a *list*, read through `railList` because every file written before that day
+holds a single tool's name where the window now iterates, and each section's
+share of the height is a **weight** rather than a pixel count: the rail is as
+tall as the window, and a saved height would need re-dragging on a machine with
+a different screen. The bottom dock is still one tool at a time, and that
+asymmetry is deliberate — it is horizontal, and two stacked dock tools would
+each get half of the shortest panel in the window.
 
 **The wall is neither** (`R-B50`, 2026-08-07). It is an overlay on a chord —
 every session as a tile, positions keyed by session id so they never move —

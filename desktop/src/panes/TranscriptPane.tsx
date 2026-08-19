@@ -29,6 +29,7 @@ import {
   X,
 } from "lucide-react";
 import { useStore } from "@/store";
+import { openRail } from "@/lib/rail";
 import { Badge, Checkbox, Dim, Empty, IconButton, Input, Mono } from "@/ui/primitives";
 import { best, type Engine } from "@/lib/search";
 import { clock, oneLine } from "@/lib/format";
@@ -333,7 +334,7 @@ export function TranscriptPane() {
       // Open the rail on Notes: a copy that lands somewhere you cannot see
       // looks like a button that did nothing, and the next thing you want is
       // to write the sentence explaining why you kept it.
-      setPrefs({ rail: "notes" });
+      setPrefs({ rail: openRail(useStore.getState().prefs.rail, "notes") });
     },
     [id, sessions, send, setPrefs],
   );

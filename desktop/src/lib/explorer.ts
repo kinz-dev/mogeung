@@ -9,6 +9,7 @@
  */
 
 import { useStore, emptyExplorer, type FileTab } from "@/store";
+import { openRail } from "@/lib/rail";
 import { closeFilePane, showFilePane } from "@/lib/panes";
 import type { SessionId } from "@/wire/types";
 
@@ -169,7 +170,10 @@ export function reveal(id: SessionId, path: string): void {
 export function revealInFiles(id: SessionId, path: string): void {
   const { prefs, setPrefs, selected, select } = useStore.getState();
   if (selected !== id) select(id);
-  if (prefs.rail !== "files") setPrefs({ rail: "files" });
+  // Opened *beside* whatever else the rail is showing since `R-J33`, rather
+  // than in place of it: a reveal that closed the search results you were
+  // working from would be a worse answer than the one you asked for.
+  if (!prefs.rail.includes("files")) setPrefs({ rail: openRail(prefs.rail, "files") });
   reveal(id, path);
 }
 

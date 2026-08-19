@@ -17,6 +17,7 @@ import type { DockviewApi } from "dockview";
 import { currentPlatform, type Platform } from "@/lib/platform";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
+import { toggleRail } from "@/lib/rail";
 import { exportText } from "@/lib/tauri";
 import { focusPane, movePane, parseFilePaneId, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
 import { closeFile } from "@/lib/explorer";
@@ -74,10 +75,14 @@ const rail = (tool: RailTool, label: string, keys: string[]): Action => ({
   run: () => {
     const { prefs, setPrefs } = useStore.getState();
     // One key both ways — reaching a thing and leaving it should not be two
-    // chords to learn.
-    setPrefs({ rail: prefs.rail === tool ? null : tool });
+    // chords to learn. Since `R-J33` the opening half **adds**: the chord no
+    // longer takes away the tool you were already reading.
+    setPrefs({ rail: toggleRail(prefs.rail, tool) });
   },
 });
+
+/** What `]` put away, so pressing it again brings the same stack back. */
+let collapsed: RailTool[] = ["files"];
 
 export const ACTIONS: Action[] = [
   // **Numbered, left to right along the dock strip**, since 2026-08-06.
@@ -368,7 +373,16 @@ export const ACTIONS: Action[] = [
     keys: ["]"],
     run: () => {
       const { prefs, setPrefs } = useStore.getState();
-      setPrefs({ rail: prefs.rail ? null : "files" });
+      // Collapsing remembers the stack, so `]` twice gets you back what you
+      // had rather than Files alone. Deliberately **not** a preference: it is
+      // about the gesture you just made, and a remembered stack restored after
+      // a restart would reopen tools you had closed before quitting.
+      if (prefs.rail.length > 0) {
+        collapsed = prefs.rail;
+        setPrefs({ rail: [] });
+      } else {
+        setPrefs({ rail: collapsed });
+      }
     },
   },
   {

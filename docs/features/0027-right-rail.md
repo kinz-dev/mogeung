@@ -1,8 +1,8 @@
 ---
 title: The right tool-window rail
 status: shipped
-updated: 2026-08-03
-roadmap: [R-B40, R-B41]
+updated: 2026-08-19
+roadmap: [R-B40, R-B41, R-J33]
 depends_on: [A13, A14, A15, A16, A28]
 ---
 
@@ -92,6 +92,11 @@ That condition is also ADR-0017's first revisit trigger.
   ADR-0017. It will be asked for; the answer is written down.
 - **Two tool windows open at once.** The rail shows one. IntelliJ splits its
   rail into two stacks and that is a different panel, not a bigger one.
+  **Reopened 2026-08-19** — asked for directly, and answered by stacking the
+  tools in one column rather than by splitting the rail:
+  [ADR-0027](../decisions/0027-the-rail-stacks.md), `R-J33`. The line above is
+  left as it was written, because the reason it gives is still why the *two
+  stacks* were not built.
 - **A left rail.** The Attention panel owns the left edge and is not being
   generalised into a tool-window host.
 - **Vector icons.** This window's chrome is text glyphs (`«`, `»`, `↻`) and

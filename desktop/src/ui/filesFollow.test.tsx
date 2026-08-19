@@ -46,7 +46,7 @@ const session = (id: string, cwd: string) =>
 
 function setup(opts: { selected: string; activeFor: string; path: string; follow: boolean }) {
   useStore.setState({
-    prefs: { ...defaultPrefs(), filesFollow: opts.follow, rail: "files" },
+    prefs: { ...defaultPrefs(), filesFollow: opts.follow, rail: ["files"] },
     selected: opts.selected,
     sessions: { s1: session("s1", "/repo/one"), s2: session("s2", "/repo/two") },
     explorer: { s1: emptyExplorer(), s2: emptyExplorer() },

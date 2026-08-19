@@ -84,9 +84,36 @@ describe("the keyboard", () => {
     const { default: App } = await import("@/App");
     render(<App />);
     press("f", { altKey: true });
-    expect(useStore.getState().prefs.rail).toBe("files");
+    expect(useStore.getState().prefs.rail).toEqual(["files"]);
     press("f", { altKey: true });
-    expect(useStore.getState().prefs.rail).toBe(null);
+    expect(useStore.getState().prefs.rail).toEqual([]);
+  });
+
+  /**
+   * The half `R-J33` changed, and the one that would have failed before it:
+   * the second chord used to *replace* the first tool.
+   */
+  it("adds a second tool to the rail rather than swapping the first out", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    press("s", { altKey: true });
+    press("f", { altKey: true });
+    // Strip order, not the order they were pressed in.
+    expect(useStore.getState().prefs.rail).toEqual(["files", "search"]);
+    press("s", { altKey: true });
+    expect(useStore.getState().prefs.rail).toEqual(["files"]);
+  });
+
+  /** `]` puts the stack away and the same key brings *that* stack back. */
+  it("collapses the rail and restores what it was showing", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    press("f", { altKey: true });
+    press("n", { altKey: true });
+    press("]");
+    expect(useStore.getState().prefs.rail).toEqual([]);
+    press("]");
+    expect(useStore.getState().prefs.rail).toEqual(["files", "notes"]);
   });
 
   /**

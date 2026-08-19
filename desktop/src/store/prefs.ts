@@ -13,7 +13,16 @@ import type { SessionId } from "@/wire/types";
 
 export type Scope = "needs_you" | "live" | "all";
 export type ThemeMode = "dark" | "light" | "system";
-export type RailTool = "files" | "search" | "notes" | "bookmarks";
+/**
+ * The rail's tools, in the order the strip draws them — which is also the
+ * order they stack in when more than one is open (`R-J33`). A set, written as
+ * a list: the stack does not reorder itself around the order you opened
+ * things in, because a panel that moves when you add a second one is a panel
+ * you have to re-find.
+ */
+export const RAIL_TOOLS = ["files", "search", "notes", "bookmarks"] as const;
+
+export type RailTool = (typeof RAIL_TOOLS)[number];
 
 /**
  * What the bottom dock can show.
@@ -86,9 +95,28 @@ export interface Prefs {
   theme: ThemeMode;
 
   queueCollapsed: boolean;
-  /** Which tool the right rail shows, or `null` for the strip. `R-B40`. */
-  rail: RailTool | null;
+  /**
+   * Which tools the right rail shows, stacked top to bottom, or empty for the
+   * strip. `R-B40`, and a **list** since `R-J33` — it was one tool at a time
+   * until 2026-08-19.
+   *
+   * Written by `railList` on load, so a preferences file saved as the old
+   * `"files"` or `null` becomes `["files"]` or `[]` rather than putting a
+   * string where the window now iterates.
+   */
+  rail: RailTool[];
   railWidth: number;
+  /**
+   * Each stacked tool's share of the rail's height, as a flex weight rather
+   * than a pixel count. `R-J33`.
+   *
+   * Weights and not pixels because the rail is as tall as the window: a saved
+   * `240px` means half the rail on a laptop and a third of it on the desktop,
+   * and the stack would have to be re-dragged on every machine. A weight
+   * survives the resize. Missing means 1, so a tool opened for the first time
+   * takes an even share of what is already there.
+   */
+  railSizes: Partial<Record<RailTool, number>>;
   /** The bottom dock's open tool, or `null` for the strip. */
   dock: DockTool | null;
   dockHeight: number;
@@ -192,8 +220,9 @@ export const defaultPrefs = (): Prefs => ({
   scope: "needs_you",
   theme: "dark",
   queueCollapsed: false,
-  rail: null,
+  rail: [],
   railWidth: 300,
+  railSizes: {},
   dock: null,
   dockHeight: 280,
   infoOpen: false,
@@ -243,6 +272,26 @@ export function migrateDefaults(saved: Partial<Prefs>): Partial<Prefs> {
 }
 
 /**
+ * The rail's open tools, out of whatever a saved file happens to hold. `R-J33`.
+ *
+ * Three shapes reach this, and only one of them is current:
+ *
+ * - `["files", "notes"]` — today's, filtered to the tools this build has;
+ * - `"files"` — every file written before 2026-08-19, when the rail showed one
+ *   tool at a time;
+ * - `null` or absent — the rail was collapsed, or the file predates it.
+ *
+ * Forgiving on purpose, and the reason is older than this row: `Prefs` is one
+ * `JSON.parse`, so a tool name from a newer build must cost that name and not
+ * every setting in the file. The result is also put back in strip order, so
+ * the stack reads the same way whichever order the tools were opened in.
+ */
+export function railList(value: unknown): RailTool[] {
+  const raw = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+  return RAIL_TOOLS.filter((t) => raw.includes(t));
+}
+
+/**
  * Load, filling anything missing from the defaults.
  *
  * Merging rather than replacing matters across versions: preferences saved
@@ -275,6 +324,10 @@ export function loadPrefs(): Prefs {
       ...base,
       ...saved,
       ...migrateDefaults(saved),
+      // After the spread, never before: `...saved` would otherwise put the old
+      // single-tool string straight into a field the window now iterates, and
+      // `"files".map` is a blank window rather than a lost setting.
+      rail: railList(saved.rail),
       version: PREFS_VERSION,
       zoom: { ...base.zoom, ...saved.zoom },
       scoped,
