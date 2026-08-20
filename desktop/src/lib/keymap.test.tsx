@@ -45,7 +45,15 @@ const labelled = (id: string) =>
     last_event_at: new Date().toISOString(),
   }) as never;
 
-function press(key: string, mods: Partial<Record<"ctrlKey" | "altKey" | "shiftKey" | "metaKey", boolean>> = {}) {
+function press(
+  key: string,
+  mods: Partial<Record<"ctrlKey" | "altKey" | "shiftKey" | "metaKey", boolean>> & { code?: string } = {},
+) {
+  // `code` matters for the bindings spelled as physical keys (`R-J19`), and
+  // for one of them it is the difference between passing and not: with Shift
+  // held, `Digit3` arrives as `key: "#"` on a US layout and as something else
+  // again elsewhere, which is exactly why those chords name the key and not
+  // the character.
   window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...mods }));
 }
 
@@ -114,6 +122,63 @@ describe("the keyboard", () => {
     expect(useStore.getState().prefs.rail).toEqual([]);
     press("]");
     expect(useStore.getState().prefs.rail).toEqual(["files", "notes"]);
+  });
+
+  /**
+   * Numbered bookmarks. `R-J37`, asked for as IntelliJ's chords.
+   *
+   * The interesting half is the refusal: a chord fires wherever the keyboard
+   * is, so *set bookmark 3* has to know whether the pane it is aimed at is a
+   * file at all — and say so when it is not, because a silent no-op on a
+   * keystroke is indistinguishable from a binding that never fired.
+   */
+  it("sets a numbered bookmark on the line the cursor is in", async () => {
+    const { default: App } = await import("@/App");
+    const { noteCursor } = await import("@/lib/marks");
+    render(<App />);
+    const pane = "file:s1::src/a.ts";
+    noteCursor(pane, "s1", "src/a.ts", 42);
+    useStore.setState({ activePane: pane });
+
+    press("#", { ctrlKey: true, shiftKey: true, code: "Digit3" });
+
+    expect(useStore.getState().scoped().bookmarks).toEqual([["s1", "src/a.ts", 42, "3"]]);
+  });
+
+  it("says so rather than doing nothing when the keyboard is not in a file", async () => {
+    const { default: App } = await import("@/App");
+    const { noteCursor } = await import("@/lib/marks");
+    render(<App />);
+    noteCursor("file:s1::src/a.ts", "s1", "src/a.ts", 42);
+    // The keyboard is in the Agent pane, which has no line to bookmark.
+    useStore.setState({ activePane: "agent" });
+
+    press("#", { ctrlKey: true, shiftKey: true, code: "Digit3" });
+
+    expect(useStore.getState().scoped().bookmarks).toEqual([]);
+    expect(useStore.getState().notices.at(-1)?.text).toMatch(/needs a line/);
+  });
+
+  it("says so when the digit you jumped to has nothing on it", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+
+    press("7", { ctrlKey: true, code: "Digit7" });
+
+    expect(useStore.getState().notices.at(-1)?.text).toMatch(/no bookmark 7/);
+  });
+
+  /**
+   * `$mod+Digit0` is reset-zoom and `$mod+Shift+Digit0` resets every pane's,
+   * which is why the range stops at nine. This is the test that fails if
+   * somebody later gives `0` to a bookmark without moving the zoom first.
+   */
+  it("leaves the zoom resets holding zero", async () => {
+    const { ACTIONS } = await import("@/lib/keymap");
+    const at = (chord: string) => ACTIONS.filter((a) => a.keys.includes(chord)).map((a) => a.id);
+    expect(at("$mod+Digit0")).toEqual(["zoom.reset"]);
+    expect(at("$mod+Shift+Digit0")).toEqual(["zoom.reset.panes"]);
+    expect(ACTIONS.some((a) => a.id === "mark.set.0" || a.id === "mark.go.0")).toBe(false);
   });
 
   /**

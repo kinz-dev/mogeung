@@ -18,6 +18,8 @@ import { currentPlatform, type Platform } from "@/lib/platform";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
 import { toggleRail } from "@/lib/rail";
+import { cursorIn, markFor, setMnemonic, MNEMONICS } from "@/lib/marks";
+import { openFile } from "@/lib/explorer";
 import { exportText } from "@/lib/tauri";
 import { focusPane, movePane, parseFilePaneId, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
 import { closeFile } from "@/lib/explorer";
@@ -78,6 +80,62 @@ const rail = (tool: RailTool, label: string, keys: string[]): Action => ({
     // chords to learn. Since `R-J33` the opening half **adds**: the chord no
     // longer takes away the tool you were already reading.
     setPrefs({ rail: toggleRail(prefs.rail, tool) });
+  },
+});
+
+/**
+ * The nine numbered bookmarks. `R-J37`.
+ *
+ * Two actions per digit, and they are deliberately not symmetrical about where
+ * they can be used. **Setting** needs a file and a line, so it refuses unless
+ * the pane the keyboard is in *is* a file pane — a chord fires wherever focus
+ * is, including over a terminal, and `R-B47` is the standing reminder that a
+ * chord this window claims is one it takes from whatever is underneath.
+ * **Jumping** works from anywhere, which is the entire point of a mnemonic:
+ * you press it because you are somewhere else.
+ *
+ * Both say something when they cannot act. A silent no-op on a chord is
+ * indistinguishable from a binding that is broken — `R-J5`'s argument about
+ * empty states, applied to a keystroke.
+ */
+const setMark = (d: string): Action => ({
+  id: `mark.set.${d}`,
+  label: `Set bookmark ${d} on this line`,
+  group: "Bookmarks",
+  keys: [`$mod+Shift+Digit${d}`],
+  run: () => {
+    const { activePane, scoped, setScoped, pushNotice } = useStore.getState();
+    const at = cursorIn(activePane);
+    if (!at) {
+      pushNotice(`bookmark ${d} needs a line — put the cursor in a file first`);
+      return;
+    }
+    const next = setMnemonic(scoped().bookmarks, at.session, at.path, at.line, d);
+    setScoped({ bookmarks: next });
+    pushNotice(
+      markFor(next, d)
+        ? `bookmark ${d} — ${at.path.slice(at.path.lastIndexOf("/") + 1)}:${at.line}`
+        : `bookmark ${d} cleared`,
+    );
+  },
+});
+
+const goMark = (d: string): Action => ({
+  id: `mark.go.${d}`,
+  label: `Go to bookmark ${d}`,
+  group: "Bookmarks",
+  keys: [`$mod+Digit${d}`],
+  run: () => {
+    const { scoped, pushNotice } = useStore.getState();
+    const mark = markFor(scoped().bookmarks, d);
+    if (!mark) {
+      pushNotice(`no bookmark ${d} yet — set one with the same chord and Shift`);
+      return;
+    }
+    const [session, path, line] = mark;
+    // The same door a search hit and a diff row already use: it opens the
+    // file, pins it, raises the pane and asks for the line.
+    openFile(session, path, { pin: true, line });
   },
 });
 
@@ -329,6 +387,10 @@ export const ACTIONS: Action[] = [
       setPrefs({ infoOpen: !prefs.infoOpen });
     },
   },
+
+  // `R-J37`. Nine of each, generated in one place so the palette lists them
+  // in order rather than in whatever order eighteen literals were typed.
+  ...MNEMONICS.flatMap((d) => [setMark(d), goMark(d)]),
 
   rail("files", "the worktree", ["Alt+f"]),
   rail("search", "global search", ["Alt+s"]),

@@ -622,3 +622,36 @@ textarea {
   width: 3px !important;
   margin-left: 3px;
 }
+
+/*
+  A numbered bookmark says its number. `R-J37`.
+
+  The stripe widens to hold a digit rather than growing a second decoration
+  beside it: Monaco's line-decoration column is a fixed width shared by
+  everything that draws there, and two marks on one line would fight for it.
+  `::after` because the stripe itself is the element Monaco owns.
+*/
+[class*="bookmark-mark-"] {
+  width: 12px !important;
+  border-radius: 2px;
+}
+
+[class*="bookmark-mark-"]::after {
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  display: block;
+  text-align: center;
+}
+
+.bookmark-mark-1::after { content: "1"; }
+.bookmark-mark-2::after { content: "2"; }
+.bookmark-mark-3::after { content: "3"; }
+.bookmark-mark-4::after { content: "4"; }
+.bookmark-mark-5::after { content: "5"; }
+.bookmark-mark-6::after { content: "6"; }
+.bookmark-mark-7::after { content: "7"; }
+.bookmark-mark-8::after { content: "8"; }
+.bookmark-mark-9::after { content: "9"; }

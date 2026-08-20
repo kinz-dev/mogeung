@@ -31,6 +31,7 @@ import {
 import { useStore } from "@/store";
 import { usePaneId } from "@/lib/paneScope";
 import { filePaneId, parseFilePaneId } from "@/lib/panes";
+import { forgetCursor, noteCursor, toggleMark } from "@/lib/marks";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
 import { explorerFetch, forgetFileBodies, languageOf } from "@/lib/explorer";
 import { base } from "@/lib/format";
@@ -287,12 +288,16 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
    * On the way **in** only: while the pane stays forward nothing re-reads, so
    * this cannot become a fetch per render.
    */
-  const active = useStore((s) => s.activePane === filePaneId(session, path, rev));
+  const pane = filePaneId(session, path, rev);
+  const active = useStore((s) => s.activePane === pane);
   const wasActive = useRef(active);
   useEffect(() => {
     if (active && !wasActive.current && rev === null && id) forgetFileBodies(id, [path]);
     wasActive.current = active;
   }, [active, id, path, rev]);
+
+  // `R-J37`: a closed file is not a place a bookmark chord may land.
+  useEffect(() => () => forgetCursor(pane), [pane]);
 
   /**
    * **Keep your place when the file is re-read.** `R-J38`.
@@ -386,10 +391,18 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
         });
       });
     }
-    for (const [, , line] of marks) {
+    for (const [, , line, digit] of marks) {
       next.push({
         range: new monaco.Range(line, 1, line, 1),
-        options: { isWholeLine: true, linesDecorationsClassName: "bookmark-mark" },
+        options: {
+          isWholeLine: true,
+          // A numbered mark **says its number**. Nine CSS rules rather than
+          // nine icons: the digit is the whole point of a mnemonic bookmark,
+          // and a stripe that looks like every other stripe would send you
+          // back to a list to find out which one you are looking at.
+          linesDecorationsClassName: digit ? `bookmark-mark bookmark-mark-${digit}` : "bookmark-mark",
+          glyphMarginHoverMessage: digit ? { value: `bookmark ${digit}` } : undefined,
+        },
       });
     }
     decorations.current.set(next);
@@ -409,19 +422,22 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const wrap = wrapPaths.includes(tab.path);
   const symbols = outline(tab.content, ext);
 
-  const toggleMark = (line: number) => {
+  const markLine = (line: number) => {
     if (!id) return;
-    const has = marks.some(([, , l]) => l === line);
-    setScoped({
-      bookmarks: has
-        ? scoped.bookmarks.filter(([sid, p, l]) => !(sid === id && p === tab.path && l === line))
-        : [...scoped.bookmarks, [id, tab.path, line]],
-    });
+    setScoped({ bookmarks: toggleMark(scoped.bookmarks, id, tab.path, line) });
   };
 
   const onMount: OnMount = (ed, monaco) => {
     editorRef.current = ed;
     monacoRef.current = monaco;
+    // Where the cursor is, for `R-J37`'s set-a-bookmark chord. Published to a
+    // module rather than to the store on purpose — see `noteCursor`: this
+    // moves on every arrow key, and a store write per keystroke would render
+    // every pane to tell them a number none of them reads.
+    if (id) noteCursor(pane, id, tab.path, ed.getPosition()?.lineNumber ?? 1);
+    ed.onDidChangeCursorPosition((e) => {
+      if (id) noteCursor(pane, id, tab.path, e.position.lineNumber);
+    });
     defineMogeungThemes(monaco);
     monaco.editor.setTheme(monacoTheme(theme));
     // The glyph margin is the gesture: a click in it marks the line. Nothing
@@ -429,7 +445,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
     ed.onMouseDown((e) => {
       if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
       const line = e.target.position?.lineNumber;
-      if (line) toggleMark(line);
+      if (line) markLine(line);
     });
   };
 
@@ -478,7 +494,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
             active={marks.length > 0}
             onClick={() => {
               const line = editorRef.current?.getPosition()?.lineNumber;
-              if (line) toggleMark(line);
+              if (line) markLine(line);
             }}
           >
             <Bookmark size={12} />

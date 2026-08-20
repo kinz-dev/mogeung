@@ -10,6 +10,7 @@
  */
 
 import type { SessionId } from "@/wire/types";
+import type { Mark } from "@/lib/marks";
 
 export type Scope = "needs_you" | "live" | "all";
 export type ThemeMode = "dark" | "light" | "system";
@@ -57,7 +58,13 @@ export interface ScopedPrefs {
   pinned: SessionId[];
   labels: Record<SessionId, string>;
   editorWrap: string[];
-  bookmarks: [SessionId, string, number][];
+  /**
+   * Marked lines in files: `[session, path, line]`, plus a digit since
+   * `R-J37`. See [`lib/marks.ts`](../lib/marks.ts) — the fourth element is
+   * absent on every mark made by clicking the margin, so an older preferences
+   * file loads unchanged.
+   */
+  bookmarks: Mark[];
   /**
    * A colour you put on a session yourself, by id — see `lib/tags.ts`.
    * Machine-scoped like the labels, because a session id from the dev box means
