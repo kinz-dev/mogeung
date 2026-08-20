@@ -49,6 +49,13 @@ pub const KNOWN_IGNORED: &[&str] = &[
     // classification over the corpus, which had grown to 315 transcripts and
     // sprouted a fourteenth type since the last sweep.
     "bridge-session",
+    // Three keys — `type`, `sessionId`, `atis` — and `atis` is the **empty
+    // string in all 380 of them**, across 7 transcripts of the 274 swept on
+    // 2026-08-20. So this is not "a field we chose not to read": there is
+    // nothing in it to read. If a non-empty one ever appears it will not be
+    // loud, which is the honest cost of ignoring a type by its name rather
+    // than by its shape — noted here so the next sweep can look.
+    "atis-latch",
 ];
 
 /// Types this parser extracts data from.
@@ -60,6 +67,8 @@ pub const HANDLED: &[&str] = &[
     "assistant",
     "user",
     "ai-title",
+    // A second writer of the title, found 2026-08-20. See the parse arm.
+    "agent-name",
     "last-prompt",
     "file-history-delta",
 ];
@@ -422,6 +431,26 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
             out.title = str_at(&v, "aiTitle").map(str::to_string);
         }
 
+        // The same title, under a second name. Appeared 2026-08-20, 249 lines
+        // across 3 of the 274 transcripts on this machine.
+        //
+        // **Read rather than ignored, and the redundancy is the reason.** Every
+        // value it carries is already an `ai-title` in the same file, `ai-title`
+        // wrote it first in all six cases, and it never disagrees with the title
+        // in force — so today this arm cannot change a single session's name.
+        // What it buys is that the title survives `ai-title` being renamed or
+        // retired, which is not a hypothetical in a private format that grew two
+        // new types in a fortnight: two writers of one field is cheaper than
+        // discovering, from a queue full of untitled sessions, that the one we
+        // read went away.
+        //
+        // It cannot smuggle in a *subagent's* name, which is what the type's
+        // spelling suggests it might: its `sessionId` was the transcript's own
+        // in every line swept.
+        "agent-name" => {
+            out.title = str_at(&v, "agentName").map(str::to_string);
+        }
+
         "last-prompt" => {
             out.last_prompt = str_at(&v, "lastPrompt").map(|s| truncate(s, 400));
         }
@@ -654,7 +683,7 @@ mod tests {
     /// has been up long enough to make it.
     #[test]
     fn types_found_in_the_real_corpus_are_all_classified() {
-        for ty in ["queue-operation", "pr-link", "frame-link", "bridge-session"] {
+        for ty in ["queue-operation", "pr-link", "frame-link", "bridge-session", "atis-latch"] {
             let line = format!(r#"{{"type":"{ty}","sessionId":"s"}}"#);
             assert_eq!(
                 class(&line),
@@ -662,6 +691,23 @@ mod tests {
                 "{ty} occurs in real transcripts and must be classified, not unknown"
             );
         }
+    }
+
+    /// `agent-name` is the session's title under a second name, found by the
+    /// 2026-08-20 sweep. It is **read**, not ignored: every value it carries is
+    /// already an `ai-title` today, and reading both is what keeps a title on
+    /// the queue if the CLI ever retires the name we depend on.
+    #[test]
+    fn a_second_writer_of_the_title_is_read_like_the_first() {
+        let line = r#"{"type":"agent-name","agentName":"the migration","sessionId":"s"}"#;
+        assert_eq!(parsed(line).title.as_deref(), Some("the migration"));
+    }
+
+    /// A handled type that yields nothing is `Barren`, never `Ignored` — the
+    /// distinction that would tell us the shape moved under the name.
+    #[test]
+    fn a_nameless_agent_name_is_barren_rather_than_quietly_skipped() {
+        assert_eq!(class(r#"{"type":"agent-name","sessionId":"s"}"#), LineClass::Barren);
     }
 
     #[test]

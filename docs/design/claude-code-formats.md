@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-09
+updated: 2026-08-20
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -82,9 +82,15 @@ anything else raises an alert. Counts below are from the author's corpus on
 | `pr-link` | 6 | Ignored |
 | `frame-link` | 2 | Ignored |
 | `bridge-session` | 47¹ | Ignored — the web/desktop bridge's bookkeeping: `bridgeSessionId`, `lastSequenceNum` |
+| `agent-name` | 249² | **Read** — `agentName`, the session's title under a second name |
+| `atis-latch` | 384² | Ignored — `atis`, and it is the empty string in every one |
 
 ¹ From a **later** sweep and not comparable with the column above: 2026-08-07,
 across the 60 newest transcripts of a corpus that had grown to 315.
+
+² From the 2026-08-20 sweep, over 275 transcripts and 99,106 lines — a whole
+corpus rather than a window, so these two are comparable with each other and
+with nothing above them.
 
 `queue-operation`, `pr-link` and `frame-link` were **found by the canary**. They
 existed in real transcripts throughout v0.2 and were swallowed by a catch-all
@@ -99,6 +105,27 @@ check in the repository stayed green. The classification is only as fresh as the
 last long-running daemon, and after a CLI upgrade that is worth checking by hand
 rather than waiting to be told. See [A4](../product/assumptions.md), which this
 is evidence *for* rather than against: the drift was findable within two weeks.
+
+**`agent-name` and `atis-latch` arrived together**, found on 2026-08-20 by the
+same hand-run sweep — which is now `--bin sweep` (`R-J28`) rather than a script
+somebody once wrote, and which **exits non-zero** on an unclassified shape. That
+is the third drift event in four weeks, and the first where the tooling reported
+it as a failing command rather than as a paragraph somebody had to read.
+
+They took opposite dispositions, and the reasoning is the point:
+
+- **`atis-latch` carries nothing.** Three keys, and `atis` is the empty string
+  in all 384 lines across 7 transcripts. Not "a field we chose not to read" —
+  there is nothing in it. The honest cost is stated in the code: a non-empty one
+  appearing later would *not* be loud, because ignoring is by name and not by
+  shape.
+- **`agent-name` carries the title, again.** Every value it holds is already an
+  `ai-title` in the same file, `ai-title` wrote it first in all six cases seen,
+  and it never disagrees with the title in force — so reading it changes no
+  session's name today. It is read anyway, because two writers of one field is
+  cheaper than discovering from a queue of untitled sessions that the one we
+  read had been retired. Its `sessionId` is the transcript's own in every line,
+  so despite the name it cannot smuggle a *subagent's* name into a session.
 
 Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
 `version`, `isSidechain`, `uuid`, `parentUuid`. Also seen: `effort`, `slug`,

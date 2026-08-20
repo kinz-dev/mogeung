@@ -107,7 +107,10 @@ fn the_corpus_actually_produces_data() {
     assert!(tools >= 3, "no tool calls in the corpus");
     assert!(touched >= 1, "no touched files in the corpus");
     assert_eq!(errors, 1, "the API-error shape is not represented");
-    assert_eq!(titles, 1, "the ai-title shape is not represented");
+    // Two writers since 2026-08-20: `ai-title` and `agent-name`. Exact rather
+    // than `>= 1`, so losing either example from the fixture is a failure
+    // rather than a quiet halving of what this file covers.
+    assert_eq!(titles, 2, "both title shapes — ai-title and agent-name — must be represented");
     assert!(tokens_out > 0, "usage accounting is not represented");
 }
 
