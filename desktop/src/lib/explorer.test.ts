@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useStore } from "@/store";
 import { setDock } from "@/lib/panes";
-import { closeFile, fileFilter, openFile } from "@/lib/explorer";
+import {
+  closeFile,
+  explorerFetch,
+  fileFilter,
+  forgetEveryFileBody,
+  forgetFileBodies,
+  openFile,
+} from "@/lib/explorer";
 
 /**
  * The Files filter. Written against the two things that made the old one
@@ -123,5 +130,98 @@ describe("opening files, one pane each", () => {
     openFile("s2", "b.rs", { pin: true });
     expect(useStore.getState().explorer.s1.open.map((t) => t.path)).toEqual(["a.rs"]);
     expect(useStore.getState().explorer.s2.open.map((t) => t.path)).toEqual(["b.rs"]);
+  });
+});
+
+/**
+ * A file re-read after it changed underneath the pane. `R-J38`.
+ *
+ * Reported 2026-08-20: *"if I edit an opened file somewhere else, on the
+ * editor, I can still see the old content until I have to re-open it."* The
+ * body was fetched once and cached in the tab, and nothing ever put that cache
+ * down — so the pane showed the version it read when the file was opened, with
+ * nothing to say it was stale. Every test here fails against that.
+ */
+describe("re-reading a file that changed underneath", () => {
+  const sent: unknown[] = [];
+
+  beforeEach(() => {
+    sent.length = 0;
+    useStore.setState({
+      selected: "s1",
+      explorer: {},
+      send: ((m: unknown) => sent.push(m)) as never,
+    });
+  });
+
+  const openWithBody = (path: string, body: string, rev: string | null = null) => {
+    openFile("s1", path, { pin: true, rev: rev ?? undefined });
+    const st = useStore.getState().explorer.s1;
+    useStore.getState().patchExplorer("s1", {
+      open: st.open.map((t) => (t.path === path ? { ...t, rev, content: body } : t)),
+      pendingFiles: [],
+    });
+  };
+  const tab = (path: string) => useStore.getState().explorer.s1.open.find((t) => t.path === path)!;
+  const changed = (...paths: string[]) =>
+    useStore.getState().ingest({
+      ev: "change_updated",
+      session_id: "s1",
+      change: { files: paths.map((path) => ({ path })) },
+    } as never);
+
+  it("marks a changed file for re-reading without taking its body away", () => {
+    openWithBody("src/a.ts", "old");
+
+    changed("src/a.ts");
+
+    expect(tab("src/a.ts").reload).toBe(true);
+    // The body stays on screen: nulling it unmounts the editor and shows
+    // *loading…*, which would flash the pane every time an agent writes the
+    // file you are reading — which is when this fires.
+    expect(tab("src/a.ts").content).toBe("old");
+  });
+
+  it("leaves a file the change does not name alone", () => {
+    openWithBody("src/a.ts", "old");
+    openWithBody("src/b.ts", "also old");
+
+    changed("src/a.ts");
+
+    expect(tab("src/b.ts").reload).toBe(false);
+  });
+
+  /** A sha's content cannot change, so asking again could only ever return
+   *  what we already have. */
+  it("never re-reads a revision tab", () => {
+    openWithBody("src/a.ts", "at that commit", "abc1234");
+
+    changed("src/a.ts");
+    forgetEveryFileBody();
+
+    expect(tab("src/a.ts").reload).toBe(false);
+  });
+
+  it("asks the daemon again for a stale body, and not for one it still trusts", () => {
+    openWithBody("src/a.ts", "old");
+    explorerFetch("s1");
+    expect(sent.filter((m) => (m as { cmd: string }).cmd === "fetch_file")).toHaveLength(0);
+
+    forgetFileBodies("s1", ["src/a.ts"]);
+    explorerFetch("s1");
+
+    expect(sent).toContainEqual({ cmd: "fetch_file", session_id: "s1", path: "src/a.ts" });
+  });
+
+  /** The window coming forward is what catches an edit git cannot see — a
+   *  gitignored file, or one already reverted. */
+  it("forgets every open worktree body at once", () => {
+    openWithBody("src/a.ts", "old");
+    openWithBody("src/b.ts", "also old");
+
+    forgetEveryFileBody();
+
+    expect(tab("src/a.ts").reload).toBe(true);
+    expect(tab("src/b.ts").reload).toBe(true);
   });
 });

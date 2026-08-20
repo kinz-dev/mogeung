@@ -274,6 +274,37 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const index = st ? st.open.findIndex((t) => t.path === path && t.rev === rev) : -1;
   const tab = index >= 0 && st ? st.open[index] : null;
 
+  /**
+   * **Keep your place when the file is re-read.** `R-J38`.
+   *
+   * A reload hands Monaco a new string, and `@monaco-editor/react` calls
+   * `setValue` unconditionally on a **read-only** editor — no equality check,
+   * because a read-only editor cannot have unsaved edits to protect. That puts
+   * the viewport back at the top, which is worst in exactly the case the
+   * reload exists for: an agent rewriting the file you are reading, every few
+   * seconds.
+   *
+   * **Captured during render, deliberately.** At this point the child's effect
+   * has not run, so the editor still holds the *previous* body at the previous
+   * scroll; by the time any effect of ours runs, both have already moved. The
+   * restore is then an ordinary effect, because child effects run before the
+   * parent's — `setValue` has happened by then.
+   *
+   * A file that has just arrived is not a reload and is left alone, or every
+   * newly-opened file would fight `gotoLine` below for the viewport.
+   */
+  const drawn = useRef<string | null>(null);
+  const keepScroll = useRef<number | null>(null);
+  if (tab && tab.content !== drawn.current) {
+    if (drawn.current !== null && editorRef.current) keepScroll.current = editorRef.current.getScrollTop();
+    drawn.current = tab.content;
+  }
+  useEffect(() => {
+    if (keepScroll.current === null || !tab?.content) return;
+    editorRef.current?.setScrollTop(keepScroll.current);
+    keepScroll.current = null;
+  }, [tab?.content]);
+
   // Go to the line a search hit or a diff row asked for, once, when the body
   // is actually there. Doing it on every render would fight the scrollbar.
   useEffect(() => {

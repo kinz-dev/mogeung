@@ -96,6 +96,16 @@ export interface FileTab {
   content: string | null;
   truncated: boolean;
   gotoLine: number | null;
+  /**
+   * The body we are holding is known to be out of date. `R-J38`.
+   *
+   * A flag rather than `content = null`, and the difference is the whole
+   * behaviour: nulling it unmounts the editor and shows *loading…*, which
+   * would flash the pane — and lose the viewport — every time an agent writes
+   * the file you are reading, which is precisely when this fires. The old body
+   * stays on screen until the new one lands.
+   */
+  reload: boolean;
 }
 
 export interface ExplorerState {
@@ -747,7 +757,36 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       }
       case "change_updated":
-        set((s) => ({ changes: { ...s.changes, [msg.session_id]: msg.change } }));
+        set((s) => {
+          // **A changed file is a stale file.** `R-J38`. The daemon only
+          // announces this when the diff actually moved (`unchanged` gates the
+          // broadcast in `state.rs`), so an announcement naming a file we are
+          // holding means what we are holding is out of date — the agent wrote
+          // it while you were reading it, which is the whole scenario this
+          // window exists for.
+          //
+          // Done here rather than through `explorer.ts` because the cache is
+          // this store's, and reaching back the other way is the import cycle
+          // `panes.ts` documents at its own top.
+          const paths = new Set(msg.change.files.map((f) => f.path));
+          const st = s.explorer[msg.session_id];
+          const stale = (t: FileTab) => t.rev === null && t.content !== null && paths.has(t.path);
+          const changes = { ...s.changes, [msg.session_id]: msg.change };
+          if (!st || !st.open.some(stale)) return { changes };
+          return {
+            changes,
+            explorer: {
+              ...s.explorer,
+              [msg.session_id]: {
+                ...st,
+                open: st.open.map((t) => (stale(t) ? { ...t, reload: true } : t)),
+                // A read already in flight would land after this and put the
+                // old body back; dropping the key lets a fresh one go out.
+                pendingFiles: st.pendingFiles.filter((k) => !paths.has(k)),
+              },
+            },
+          };
+        });
         break;
       case "health":
         // The daemon sends this after every scan, which makes it the honest
@@ -844,7 +883,7 @@ export const useStore = create<AppState>((set, get) => ({
           const st = s.explorer[msg.session_id] ?? emptyExplorer();
           const open = st.open.map((t) =>
             t.rev === null && t.path === msg.path
-              ? { ...t, content: msg.content, truncated: msg.truncated }
+              ? { ...t, content: msg.content, truncated: msg.truncated, reload: false }
               : t,
           );
           // The search panel's preview is a second consumer of the same
@@ -869,7 +908,7 @@ export const useStore = create<AppState>((set, get) => ({
           const st = s.explorer[msg.session_id] ?? emptyExplorer();
           const open = st.open.map((t) =>
             t.rev === msg.sha && t.path === msg.path
-              ? { ...t, content: msg.content, truncated: msg.truncated }
+              ? { ...t, content: msg.content, truncated: msg.truncated, reload: false }
               : t,
           );
           const pendingFiles = st.pendingFiles.filter((k) => k !== `${msg.sha}:${msg.path}`);

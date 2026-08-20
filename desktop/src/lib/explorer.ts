@@ -8,6 +8,7 @@
  * rather than a second copy of the worktree.
  */
 
+import { useEffect } from "react";
 import { useStore, emptyExplorer, type FileTab } from "@/store";
 import { openRail } from "@/lib/rail";
 import { closeFilePane, showFilePane } from "@/lib/panes";
@@ -39,7 +40,9 @@ export function explorerFetch(id: SessionId): void {
   // rather than one per render.
   const wantBodies: string[] = [];
   for (const tab of st.open) {
-    if (tab.content !== null) continue;
+    // `reload` is a body we have and no longer trust — see `FileTab`. Asking
+    // again is the only difference between it and a body we never had.
+    if (tab.content !== null && !tab.reload) continue;
     // Keyed by (path, rev): the worktree twin of a path must not swallow a
     // revision tab's request, nor the other way round.
     const key = tab.rev ? `${tab.rev}:${tab.path}` : tab.path;
@@ -51,6 +54,64 @@ export function explorerFetch(id: SessionId): void {
   if (wantBodies.length > 0) {
     patchExplorer(id, { pendingFiles: [...st.pendingFiles, ...wantBodies] });
   }
+}
+
+/**
+ * Forget the bodies we are holding, so the next fetch reads disk again.
+ * `R-J38`.
+ *
+ * The pane cached a file the first time it was asked for and nothing ever put
+ * that cache down: edit the file anywhere else — your editor, another agent,
+ * `git checkout` — and mogeung kept showing the version it read when you opened
+ * it, with no sign that it was stale. Reported 2026-08-20, and it is a bad
+ * failure for *this* product specifically: the window exists to watch files an
+ * agent is rewriting under you.
+ *
+ * **A revision tab is never touched.** `file:<session>:<sha>:<path>` is the
+ * file *at a commit*, and a sha's content cannot change — re-reading it would
+ * be a request that can only ever return what we already have.
+ *
+ * `pendingFiles` is cleared alongside, or a fetch already in flight would block
+ * the new one and leave the pane holding whatever that older read returns.
+ * Replies arrive in order on one socket, so the later read wins.
+ */
+export function forgetFileBodies(id: SessionId, paths?: readonly string[]): void {
+  const { explorer, patchExplorer } = useStore.getState();
+  const st = explorer[id];
+  if (!st) return;
+  const hit = (t: FileTab) =>
+    t.rev === null && t.content !== null && !t.reload && (!paths || paths.includes(t.path));
+  if (!st.open.some(hit)) return;
+  patchExplorer(id, {
+    open: st.open.map((t) => (hit(t) ? { ...t, reload: true } : t)),
+    pendingFiles: st.pendingFiles.filter((k) => !st.open.some((t) => hit(t) && t.path === k)),
+  });
+}
+
+/** Every session's open worktree files, forgotten in one go. */
+export function forgetEveryFileBody(): void {
+  for (const id of Object.keys(useStore.getState().explorer)) forgetFileBodies(id);
+}
+
+/**
+ * Re-read open files when the window comes back to the front. `R-J38`.
+ *
+ * The other half of the reload story, and the half the report was actually
+ * about: *"if I edit an opened file somewhere else"*. A change the daemon can
+ * see arrives as `ChangeUpdated` and invalidates the file on its own, but an
+ * edit git cannot see — a gitignored file, a scratch file, an edit already
+ * reverted — produces no event at all, and neither does anything at all while
+ * the session has ended.
+ *
+ * Focus is the moment that costs nothing and means something: you were
+ * somewhere else, and now you are here. It is what every editor does when it
+ * comes forward, for the same reason.
+ */
+export function useReloadFilesOnFocus(): void {
+  useEffect(() => {
+    window.addEventListener("focus", forgetEveryFileBody);
+    return () => window.removeEventListener("focus", forgetEveryFileBody);
+  }, []);
 }
 
 export function toggleDir(id: SessionId, path: string): void {
@@ -103,6 +164,7 @@ export function openFile(id: SessionId, path: string, opts: { pin?: boolean; lin
     content: null,
     truncated: false,
     gotoLine: opts.line ?? null,
+    reload: false,
   };
 
   // Reuse the unpinned preview pane, if there is one — and close its pane, or

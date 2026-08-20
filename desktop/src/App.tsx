@@ -55,6 +55,7 @@ import { dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneCwd, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
+import { useReloadFilesOnFocus } from "@/lib/explorer";
 
 /**
  * The panes, by the **kind** the saved layout stores as `component`.
@@ -163,6 +164,8 @@ export default function App() {
   const dockRef = useRef<DockviewApi | null>(null);
   useKeymap(dockRef);
   useNotifications();
+  // Re-read open files when the window comes forward. `R-J38`.
+  useReloadFilesOnFocus();
 
   // The theme is an attribute on the root, so the CSS variables switch without
   // a re-render of anything that reads them. `system` follows the desktop.
