@@ -66,7 +66,11 @@ already says how the project is built and tested.
 
 So **detection is the source**, `launch.json` is a bonus on top, and IntelliJ's
 configurations and Java are **deferred** — cut from this scope on 2026-08-09,
-with `R-N12` holding the reasons and the condition to take them up.
+with `R-N12` holding the reasons and the condition to take them up. **That condition was met on 2026-08-20** and the
+checked-in half is taken up in principle by
+[ADR-0028](../decisions/0028-intellij-when-there-is-a-debugger.md), sequenced
+behind `R-N9` because every configuration in the corpus is a Java main class
+and starting one means attaching over JDWP.
 
 ### Acceptance
 

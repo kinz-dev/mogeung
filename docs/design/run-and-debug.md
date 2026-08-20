@@ -1,7 +1,7 @@
 ---
 title: Run and debug
 status: active
-updated: 2026-08-11
+updated: 2026-08-20
 covers:
   - crates/mogeung-core/src/run.rs
   - crates/mogeungd/src/detect.rs
@@ -136,6 +136,21 @@ deferred them; `R-N12` holds the condition to take them up; and the sweep keeps
 counting because *"a deferral with no measurement behind it becomes permanent by
 forgetting."*
 
+**That is what happened, on 2026-08-20** — the sweep's own numbers took the
+deferral up. 243 checked-in configurations across 13 of 59 repositories, all in
+the user's own projects, against one `launch.json` belonging to a clone, and a
+namespace of **three** types where `workspace.xml` has nine.
+[ADR-0028](../decisions/0028-intellij-when-there-is-a-debugger.md) reads the two
+halves apart: the checked-in files are taken up, `workspace.xml` stays deferred
+on the namespace it is actually about.
+
+Still read by nothing, and that is now a **sequence** rather than a doubt. Not
+one of the 243 names a command that can be spawned — 194 are a Java main class
+plus a module whose classpath IntelliJ resolves, 49 are composites of those — so
+the reader waits for `R-N9`, whose JDWP attach is the thing that makes them
+start. The sweep must keep counting `workspace.xml` even now that a decision not
+to read it exists, or the deferral loses the evidence that keeps it a decision.
+
 They are an **inventory, never a verdict** — nine distinct types appear on this
 machine, including `docker-deploy` — so they can never fail the sweep. A check
 that can never pass is a check people stop running, and stopping would cost the
@@ -208,5 +223,7 @@ check, not no passing check*.
 ## Not yet built
 
 All of Phase 2: `dap.rs`, breakpoints in the file pane, the Debug panel, and
-per-adapter language support (`R-N9`–`R-N11`). Also `R-N12` (IntelliJ and Java,
-deferred with a measurement behind it) and `R-N14` (Docker and compose).
+per-adapter language support (`R-N9`–`R-N11`). Also `R-N14` (Docker and
+compose), and `R-N12` — IntelliJ and Java, **taken up in principle on
+2026-08-20 and sequenced behind `R-N9`** rather than deferred on evidence any
+more (ADR-0028).
