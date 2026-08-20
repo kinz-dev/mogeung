@@ -1,8 +1,8 @@
 ---
 title: Run and Debug
 status: active
-updated: 2026-08-11
-roadmap: R-N1
+updated: 2026-08-20
+roadmap: [R-N1, R-N2, R-N3, R-N4, R-N5, R-N6, R-N7, R-N8]
 depends_on: [A4, A32, A33, A34]
 ---
 
@@ -341,3 +341,13 @@ not no passing check") is the standard to hold to.
   argument. `--detected` prints the list itself, which is the only form in
   which *"why is `cargo run -p mogeung-tray` in my list"* can actually be
   answered.
+- **The acceptance list above has not been swept since phase 1 landed**, and it
+  is left unticked rather than ticked from the code. Noticed 2026-08-20 while
+  marking `R-N2` and `R-N4` built in the roadmap — the same omission, one level
+  down. Some of these boxes are answerable from the test suite and some are
+  not, and the ones that are not are the interesting half: *output as it
+  arrives*, and **"closing the window and reopening it shows the run still
+  going"**, which is a claim about a daemon this window may itself be hosting.
+  Ticking a box because the code looks like it should pass is the failure this
+  file exists to prevent, so the sweep belongs to `R-N13` — the week of use —
+  and is named here so it cannot be mistaken for having been done.
