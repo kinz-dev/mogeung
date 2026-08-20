@@ -35,7 +35,7 @@ export function focusPane(api: DockviewApi | null, id: string, title: string): v
 }
 
 /**
- * The next free Agent slot, or `null` when the ceiling is reached. `R-B49`.
+ * The next free Agent slot. `R-B49`.
  *
  * **Numbered, never keyed by session.** The layout is persisted, and a panel id
  * naming a session restores a tab pointing at something that ended three days
@@ -43,35 +43,48 @@ export function focusPane(api: DockviewApi | null, id: string, title: string): v
  * a hold keeps the *arrangement* durable while leaving the *binding* free to be
  * dropped, which is the whole reason the two are separate ideas.
  *
- * The ceiling is not arithmetic shyness. Every visible Agent pane is a live
- * `tmux attach` and a pty, and unlike a hidden tab it cannot be free — so the
- * limit is stated here rather than discovered on the day someone splits nine
- * times and wonders why the fans came on.
+ * **There is no ceiling since 2026-08-20** (`R-J35`). There was one, at four,
+ * and the reason it gave is still true — every *visible* Agent pane is a live
+ * `tmux attach` and a pty, and unlike a hidden tab it cannot be free. What was
+ * wrong was who got to weigh that: a number picked here applies the same limit
+ * to a laptop and to a 49-inch screen, and it refused a fifth pane on a machine
+ * that could plainly carry one. The cost is now the user's to see and to
+ * arrange around, which is the same trade the whole docking tree already makes.
+ *
+ * `null` only where every function here answers `null` — before dockview is
+ * ready. The loop terminates on the first free number, and the tree holds
+ * finitely many panels, so it always finds one.
  */
-export const MAX_AGENT_PANES = 4;
-
 export function nextAgentSlot(api: DockviewApi | null): string | null {
   if (!api) return null;
   // Slot 1 is the bare `agent`, because it predates numbering and a layout
   // saved before this feature must keep working untouched.
-  for (let n = 1; n <= MAX_AGENT_PANES; n++) {
+  for (let n = 1; ; n++) {
     const id = n === 1 ? "agent" : `agent:${n}`;
     // Gaps are filled rather than skipped: close the middle pane of three and
-    // the next split reuses that number instead of climbing to the ceiling.
+    // the next split reuses that number instead of climbing past it.
     if (!api.getPanel(id)) return id;
   }
-  return null;
 }
 
-/** The Agent panes currently in the tree, in slot order. */
+/**
+ * The Agent panes currently in the tree, in slot order.
+ *
+ * Read off the tree rather than counted up to a limit — there is no limit to
+ * count to. Sorted numerically and not by string, or `agent:10` would file
+ * itself between `agent` and `agent:2`.
+ */
 export function agentSlots(api: DockviewApi | null): string[] {
   if (!api) return [];
-  const out: string[] = [];
-  for (let n = 1; n <= MAX_AGENT_PANES; n++) {
-    const id = n === 1 ? "agent" : `agent:${n}`;
-    if (api.getPanel(id)) out.push(id);
-  }
-  return out;
+  return (api.panels ?? [])
+    .map((p) => p.id)
+    .filter((id) => paneKind(id) === "agent")
+    .sort((a, b) => slotNumber(a) - slotNumber(b));
+}
+
+function slotNumber(id: string): number {
+  const cut = id.indexOf(":");
+  return cut === -1 ? 1 : Number(id.slice(cut + 1)) || 1;
 }
 
 let dock: DockviewApi | null = null;
@@ -160,12 +173,28 @@ export function filePanes(api: DockviewApi | null): string[] {
 }
 
 /**
- * Put another Agent pane beside this one.
+ * Put another Agent pane beside this one, **anchored on the session it opens
+ * with**. `R-J35`.
  *
  * Beside, not on top of: the ask was two agents *side by side*, and a split
  * that opened as a second tab in the same group would answer it by hiding one
  * of them. `direction: "right"` against the active group is what makes the
  * default gesture produce the arrangement the feature exists for.
+ *
+ * **The anchor is the default since 2026-08-20**, asked for directly. A split
+ * used to arrive unheld, which meant two panes both following the queue: the
+ * next click moved *both* of them and the arrangement you had just built
+ * collapsed back into two views of one session. So the second pane was only
+ * ever one manual click away from being useful, and everybody made that click
+ * every time.
+ *
+ * **The pane you split *from* is untouched**, and that is what keeps the queue
+ * working. A window whose every pane was moored would answer a queue click by
+ * splitting again (see `revealSession`), so the one pane that came back with
+ * the layout stays free to follow the selection unless you moor it yourself.
+ *
+ * Nothing is written when there is no selection: an anchor needs a session, and
+ * holding a pane on "nothing" is not a state — it is the absence of a hold.
  */
 export function splitAgent(): string | null {
   if (!dock) return null;
@@ -178,6 +207,8 @@ export function splitAgent(): string | null {
     title: "Agent",
     position: active ? { referenceGroup: active, direction: "right" } : undefined,
   });
+  const { selected, scoped, setScoped } = useStore.getState();
+  if (selected) setScoped({ paneHold: { ...scoped().paneHold, [id]: selected } });
   return id;
 }
 
@@ -200,12 +231,14 @@ export function splitAgent(): string | null {
  * 2. **Some pane is unheld.** It follows the selection, so selecting is the
  *    whole job. Splitting here would grow the layout on every click, which is
  *    how you end up at the ceiling by lunchtime.
- * 3. **Every pane is held and none of them holds this one.** Split, and let the
- *    new pane arrive unheld so it follows the selection into place.
+ * 3. **Every pane is held and none of them holds this one.** Split. The new
+ *    pane arrives held on this session, because `select` has already run and
+ *    an anchor is what a new pane comes with since `R-J35` — which is also
+ *    what it wanted before, by a longer route: it used to arrive unheld and
+ *    follow the selection into place.
  *
- * At the ceiling case 3 has nowhere to go, and that is said out loud rather
- * than silently falling back to case 2's no-op — "four panes, all moored" is a
- * state you got into deliberately and can only get out of deliberately.
+ * Case 3 no longer has a ceiling to hit (`R-J35`), so the only way it answers
+ * nothing is a window with no dockview — which is case 0, above.
  */
 export function revealSession(sessionId: string): void {
   const api = dock;
@@ -232,9 +265,7 @@ export function revealSession(sessionId: string): void {
   if (slots.some((id) => !hold[id])) return;
 
   if (!splitAgent()) {
-    pushNotice(
-      `every Agent pane is held, and there is no room for a ${MAX_AGENT_PANES + 1}th — drop an anchor to look at another session`,
-    );
+    pushNotice("there is nowhere to put this session — the window has no panes yet");
   }
 }
 

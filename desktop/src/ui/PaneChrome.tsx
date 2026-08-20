@@ -18,7 +18,7 @@ import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "doc
 import { Anchor, Columns2, Folder, FolderOpen, GitBranch, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
-import { closeAgentPane, nextAgentSlot, parseFilePaneId, splitAgent } from "@/lib/panes";
+import { closeAgentPane, parseFilePaneId, splitAgent } from "@/lib/panes";
 import { sessionLabel } from "@/wire/types";
 import { dirTail } from "@/lib/format";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
@@ -272,8 +272,6 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
 
   if (kind !== "agent" || !paneId) return null;
 
-  const canSplit = nextAgentSlot(props.containerApi) !== null;
-
   return (
     <div className="flex h-full items-center gap-1 pr-1">
       {session?.tmux_target && (
@@ -343,11 +341,14 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
       >
         <FolderOpen className="h-3.5 w-3.5" />
       </IconButton>
-      <IconButton
-        title={canSplit ? "another Agent pane, beside this one" : "four Agent panes is the ceiling"}
-        disabled={!canSplit}
-        onClick={() => splitAgent()}
-      >
+      {/*
+        **No ceiling since `R-J35`**, asked for 2026-08-20: *"just open the
+        panel and let the user move around himself to fit his own screen"*. The
+        cost the old limit named is real and is now yours to see — each pane is
+        a live `tmux attach` and a pty — but a number here applied the same
+        limit to a laptop and to a 49-inch screen.
+      */}
+      <IconButton title="another Agent pane, beside this one — it arrives anchored" onClick={() => splitAgent()}>
         <Columns2 className="h-3.5 w-3.5" />
       </IconButton>
       {session && (

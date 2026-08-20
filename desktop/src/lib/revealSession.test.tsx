@@ -8,13 +8,13 @@
  * held, that is the whole window ignoring the click.
  *
  * All four of these fail against `select`: the first two because nothing is
- * added, the third because something is, and the fourth because the ceiling
- * was reached in silence.
+ * added, the third because something is, and the fourth because a session with
+ * every pane already moored would land nowhere at all.
  */
 
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { DockviewApi } from "dockview";
-import { MAX_AGENT_PANES, revealSession, setDock } from "@/lib/panes";
+import { revealSession, setDock } from "@/lib/panes";
 import { useStore } from "@/store";
 
 /**
@@ -35,6 +35,12 @@ function fakeDock(initial: string[]) {
     getPanel: (id: string) => panels.get(id),
     addPanel,
     activeGroup: undefined,
+    // Dockview's own `panels` array, which `agentSlots` reads now that there
+    // is no ceiling to count up to. A getter, so a pane added mid-test is in
+    // it — the same reason this fake remembers what it holds at all.
+    get panels() {
+      return [...panels.keys()].map((id) => ({ id }));
+    },
   } as unknown as DockviewApi;
   return { api, addPanel, activated, panels };
 }
@@ -64,9 +70,11 @@ describe("putting a session on screen", () => {
     revealSession("s2");
 
     expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "agent:2", component: "agent" }));
-    // The new pane arrives unheld, so the selection is what points it at `s2`.
     expect(useStore.getState().selected).toBe("s2");
-    expect(useStore.getState().scoped().paneHold["agent:2"]).toBeUndefined();
+    // **Anchored on arrival** since `R-J35`. It used to come unheld and be
+    // pointed at `s2` by the selection, which looks the same in this frame and
+    // stops looking the same on the next queue click.
+    expect(useStore.getState().scoped().paneHold["agent:2"]).toBe("s2");
   });
 
   /**
@@ -89,6 +97,11 @@ describe("putting a session on screen", () => {
    * The case that must stay cheap. Two unheld panes both follow the selection,
    * so a click is a selection and nothing else — a split per click would reach
    * the ceiling in four.
+   *
+   * Still the rule with the ceiling gone (`R-J35`) and with new panes arriving
+   * anchored: what makes this cheap is that the pane which came back with the
+   * layout is *not* anchored, so there is always something following the queue
+   * until you moor it yourself.
    */
   it("adds nothing while a pane is still free to follow the selection", () => {
     const { api, addPanel } = fakeDock(["agent", "agent:2"]);
@@ -102,19 +115,20 @@ describe("putting a session on screen", () => {
   });
 
   /**
-   * Four held panes is a state you got into deliberately, and the click that
-   * cannot be answered says so — silence here is indistinguishable from the
-   * bug this row fixed.
+   * Four held panes used to be the end of the road: the click was refused with
+   * a notice, because the ceiling was four. `R-J35` took the ceiling out, so
+   * the fifth is a pane like any other — and it, too, arrives anchored.
    */
-  it("says so at the ceiling instead of failing quietly", () => {
-    const ids = Array.from({ length: MAX_AGENT_PANES }, (_, i) => (i === 0 ? "agent" : `agent:${i + 1}`));
+  it("keeps going past the four panes that used to be the ceiling", () => {
+    const ids = Array.from({ length: 4 }, (_, i) => (i === 0 ? "agent" : `agent:${i + 1}`));
     const { api, addPanel } = fakeDock(ids);
     setDock(api);
     holds(Object.fromEntries(ids.map((id, i) => [id, `s${i}`])));
 
     revealSession("late");
 
-    expect(addPanel).not.toHaveBeenCalled();
-    expect(useStore.getState().notices.at(-1)?.text).toMatch(/every Agent pane is held/);
+    expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "agent:5", component: "agent" }));
+    expect(useStore.getState().scoped().paneHold["agent:5"]).toBe("late");
+    expect(useStore.getState().notices).toEqual([]);
   });
 });

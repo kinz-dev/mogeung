@@ -1,8 +1,8 @@
 ---
 title: Two agents at once
 status: shipped
-updated: 2026-08-19
-roadmap: [R-B49, R-J31]
+updated: 2026-08-20
+roadmap: [R-B49, R-J31, R-J35]
 depends_on: [A30, A14, A11]
 ---
 
@@ -191,7 +191,10 @@ Added by `R-J31`, and three of the four fail against the `select` this replaced:
 - a click while any pane is unheld adds nothing at all, which is the regression
   guard rather than the fix: it is the case that passed before and must keep
   passing, or the layout grows by one on every click
-- four held panes have nowhere to put a fifth session, and say so
+- four held panes have nowhere to put a fifth session, and say so.
+  **Amended 2026-08-20 (`R-J35`)**: there is no fifth-pane case any more
+  because there is no ceiling. The test that stood here now asserts the
+  opposite — the fifth pane is added like any other, and arrives anchored
 
 ## Notes
 
@@ -255,6 +258,16 @@ the pane that had the problem.
 Agent pane is a live `tmux attach` and a pty, and unlike a hidden tab it cannot
 be free. The number is in `MAX_AGENT_PANES` with the reason beside it, and the
 split button says so when it is disabled rather than going quiet.
+
+> **Removed 2026-08-20 (`R-J35`)**, asked for directly: *"just open the panel
+> and let the user the move around himself to fit his own screen."* The
+> paragraph above is left standing because its *reason* is not what was wrong —
+> every visible pane really is a pty, and seven of them cost what seven cost.
+> What was wrong is who weighs it. A number in this file applies the same limit
+> to a laptop and to a 49-inch screen, and the fifth pane it refused was one the
+> machine could plainly carry. The cost is now visible in the arrangement rather
+> than enforced by a constant, which is the trade the whole docking tree already
+> makes.
 
 **The Code tab followed the same day, and the rule is the general one.** Asked
 for as soon as the Agent tab landed — *"can we do that to the Code panel as
@@ -322,6 +335,18 @@ new pane arrive unheld so the selection it was just given is what points it
 there. Nothing new binds a pane to a session, which is the point: a pane created
 this way is ordinary, and unheld, so the person who never anchored anything has
 nothing to release afterwards.
+
+> **The last clause stopped being true on 2026-08-20 (`R-J35`)**: a new pane
+> arrives **anchored** on the session it opens with, asked for in those words.
+> `revealSession`'s third case is unaffected in what it produces — `select` runs
+> before the split either way, so the pane lands on the session that was clicked
+> — and what changes is what happens on the *next* click. It used to move,
+> because it was only ever pointed there; now it stays.
+>
+> What keeps the paragraph above honest is which pane is *not* anchored: the one
+> that came back with the layout. There is always something following the queue
+> unless you moor it yourself, so case 2 — the cheap one, the regression guard —
+> keeps answering.
 
 Two boundaries worth stating. The order is not arbitrary — a held pane wins over
 splitting, or clicking a session you deliberately moored would open a *second*

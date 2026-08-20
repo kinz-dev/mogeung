@@ -17,7 +17,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { DockviewApi } from "dockview";
 import { PaneScope, paneKind } from "@/lib/paneScope";
-import { MAX_AGENT_PANES, nextAgentSlot } from "@/lib/panes";
+import { nextAgentSlot } from "@/lib/panes";
 import { togglePaneHold, useSelectedSession, usePaneBinding, useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
 import type { Session } from "@/wire/types";
@@ -172,10 +172,17 @@ describe("numbered slots", () => {
     expect(nextAgentSlot(dockWith(["agent", "agent:3"]))).toBe("agent:2");
   });
 
-  it("refuses past the ceiling, because every visible pane is a live pty", () => {
-    const full = Array.from({ length: MAX_AGENT_PANES }, (_, i) => (i === 0 ? "agent" : `agent:${i + 1}`));
-    expect(full).toHaveLength(MAX_AGENT_PANES);
-    expect(nextAgentSlot(dockWith(full))).toBeNull();
+  /**
+   * There was a ceiling at four until 2026-08-20 (`R-J35`), and the reason it
+   * gave is still true — every visible pane is a live pty. What changed is who
+   * weighs it: a number here applied one limit to a laptop and to a 49-inch
+   * screen. Well past where it used to refuse, and past the digit that would
+   * sort wrongly as a string.
+   */
+  it("keeps handing out slots past the four it used to stop at", () => {
+    const many = Array.from({ length: 10 }, (_, i) => (i === 0 ? "agent" : `agent:${i + 1}`));
+    expect(nextAgentSlot(dockWith(many.slice(0, 4)))).toBe("agent:5");
+    expect(nextAgentSlot(dockWith(many))).toBe("agent:11");
   });
 
   it("reads a slot back to the component that renders it", () => {

@@ -14,7 +14,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import type { DockviewApi } from "dockview";
-import { closeAgentPane, filePaneId, jumpToTurn, setDock, showPane } from "@/lib/panes";
+import { closeAgentPane, filePaneId, jumpToTurn, setDock, showPane, splitAgent } from "@/lib/panes";
 import { openFile } from "@/lib/explorer";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
@@ -221,6 +221,69 @@ describe("a file gets a pane of its own", () => {
  * often the first as the second, and only the second would go. The guard is
  * gone — these pin that it went, and that the hold went with the pane.
  */
+/**
+ * Splitting, and what the new pane arrives holding. `R-J35`, asked for
+ * 2026-08-20: *"by default please set the anchore = true when openning a new
+ * panel"*.
+ *
+ * Both of these fail against the split as it stood: it added a pane and wrote
+ * no hold at all, so two panes followed the queue and the next click collapsed
+ * the arrangement you had just made into two views of one session.
+ */
+describe("splitting an Agent pane", () => {
+  function dockWithSplit(existing: string[]) {
+    const panels = [...existing];
+    const addPanel = vi.fn((opts: { id: string }) => panels.push(opts.id));
+    const api = {
+      getPanel: (id: string) => (panels.includes(id) ? { api: { setActive: vi.fn() } } : undefined),
+      addPanel,
+      activeGroup: undefined,
+      get panels() {
+        return panels.map((id) => ({ id }));
+      },
+    } as unknown as DockviewApi;
+    return { api, addPanel };
+  }
+
+  beforeEach(() => {
+    useStore.setState({ prefs: defaultPrefs(), selected: null });
+  });
+
+  it("moors the new pane on the session you split from", () => {
+    const { api } = dockWithSplit(["agent"]);
+    setDock(api);
+    useStore.setState({ selected: "s1" });
+
+    expect(splitAgent()).toBe("agent:2");
+    expect(useStore.getState().scoped().paneHold["agent:2"]).toBe("s1");
+  });
+
+  /**
+   * The pane you split *from* keeps following the queue, and that is what
+   * keeps the queue working: with every pane moored, a click on a new session
+   * has to split again to land anywhere.
+   */
+  it("leaves the pane it split from following the selection", () => {
+    const { api } = dockWithSplit(["agent"]);
+    setDock(api);
+    useStore.setState({ selected: "s1" });
+
+    splitAgent();
+
+    expect(useStore.getState().scoped().paneHold["agent"]).toBeUndefined();
+  });
+
+  /** An anchor needs a session. Holding a pane on nothing is not a state. */
+  it("writes no anchor when nothing is selected", () => {
+    const { api } = dockWithSplit(["agent"]);
+    setDock(api);
+
+    splitAgent();
+
+    expect(useStore.getState().scoped().paneHold).toEqual({});
+  });
+});
+
 describe("closing an Agent pane", () => {
   function dockWithClose(existing: string[]) {
     const close = vi.fn();
