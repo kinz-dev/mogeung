@@ -16,7 +16,34 @@ export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-type Unlisten = () => void;
+export type Unlisten = () => void;
+
+/**
+ * Tell me when the **OS window** comes to the front. `R-J38`.
+ *
+ * The DOM's `window.focus` is not enough, and that is the whole reason this
+ * exists: in a Tauri webview, bringing the window forward does not reliably
+ * dispatch a DOM focus event — the page never lost focus as far as the
+ * document is concerned — so a listener that works perfectly in a browser tab
+ * does nothing at all in the shipped app. `tauri://focus` is the shell's own
+ * signal, and the shell is the only thing that knows.
+ *
+ * Answers a no-op unsubscriber in a browser, where the DOM event is the truth
+ * and this has nothing to add.
+ */
+export async function onWindowFocus(cb: () => void): Promise<Unlisten> {
+  if (!isTauri()) return () => {};
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    return await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) cb();
+    });
+  } catch {
+    // A shell without the permission is a window that does not re-read on
+    // focus, not a window that fails to open.
+    return () => {};
+  }
+}
 
 /**
  * Zoom the webview itself, the way a browser's `Ctrl+=` does.

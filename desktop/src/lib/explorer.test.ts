@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "@/store";
 import { setDock } from "@/lib/panes";
 import {
@@ -223,5 +223,58 @@ describe("re-reading a file that changed underneath", () => {
 
     expect(tab("src/a.ts").reload).toBe(true);
     expect(tab("src/b.ts").reload).toBe(true);
+  });
+});
+
+/**
+ * The reload has to fire in the **app**, not only in a browser tab. `R-J38`.
+ *
+ * The first cut listened for the DOM's `window.focus` and nothing else, which
+ * works in `npm run dev` and does nothing at all in the shipped window: a Tauri
+ * webview never loses document focus when its OS window goes behind another,
+ * so the event simply does not arrive. Reported the same day, in those words —
+ * *"it may be working in the web but not in the tauri desktop"*.
+ *
+ * What is pinned here is that the hook subscribes to the **shell's** signal as
+ * well, because that is the difference between the two, and a test that only
+ * dispatched a DOM event would have passed against the broken version.
+ */
+describe("re-reading when the window comes forward", () => {
+  it("subscribes to the shell's focus event, not only the DOM's", async () => {
+    const listeners: ((e: { payload: boolean }) => void)[] = [];
+    const unlisten = vi.fn();
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    vi.doMock("@tauri-apps/api/window", () => ({
+      getCurrentWindow: () => ({
+        onFocusChanged: (cb: (e: { payload: boolean }) => void) => {
+          listeners.push(cb);
+          return Promise.resolve(unlisten);
+        },
+      }),
+    }));
+
+    const { onWindowFocus } = await import("@/lib/tauri");
+    const fired: number[] = [];
+    const stop = await onWindowFocus(() => fired.push(1));
+
+    expect(listeners).toHaveLength(1);
+    // Losing focus is not the moment to re-read; coming back is.
+    listeners[0]({ payload: false });
+    expect(fired).toHaveLength(0);
+    listeners[0]({ payload: true });
+    expect(fired).toHaveLength(1);
+
+    stop();
+    expect(unlisten).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+    vi.doUnmock("@tauri-apps/api/window");
+  });
+
+  /** In a browser there is no shell to ask, and saying so must not throw. */
+  it("is a no-op outside the desktop shell", async () => {
+    vi.unstubAllGlobals();
+    const { onWindowFocus } = await import("@/lib/tauri");
+    const stop = await onWindowFocus(() => {});
+    expect(() => stop()).not.toThrow();
   });
 });

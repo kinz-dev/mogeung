@@ -11,6 +11,7 @@
 import { useEffect } from "react";
 import { useStore, emptyExplorer, type FileTab } from "@/store";
 import { openRail } from "@/lib/rail";
+import { onWindowFocus, type Unlisten } from "@/lib/tauri";
 import { closeFilePane, showFilePane } from "@/lib/panes";
 import type { SessionId } from "@/wire/types";
 
@@ -109,8 +110,23 @@ export function forgetEveryFileBody(): void {
  */
 export function useReloadFilesOnFocus(): void {
   useEffect(() => {
+    // **Both, and the second one is the one that matters.** The DOM event is
+    // what a browser tab sends; a Tauri window sends `tauri://focus` and may
+    // send no DOM event at all, because as far as the document is concerned it
+    // never lost focus. Shipping only the first is how this arrived working in
+    // `npm run dev` and doing nothing in the app — reported the same day.
     window.addEventListener("focus", forgetEveryFileBody);
-    return () => window.removeEventListener("focus", forgetEveryFileBody);
+    let stop: Unlisten | null = null;
+    let gone = false;
+    void onWindowFocus(forgetEveryFileBody).then((un) => {
+      if (gone) un();
+      else stop = un;
+    });
+    return () => {
+      gone = true;
+      window.removeEventListener("focus", forgetEveryFileBody);
+      stop?.();
+    };
   }, []);
 }
 

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-19
+updated: 2026-08-20
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -331,6 +331,16 @@ The window holds one WebSocket in the browser layer and pushes every message
 into a zustand store; nothing else in the client talks to the daemon. Panes read
 that store and render, which is the same discipline the egui client kept with a
 tokio thread and a std channel — one connection, one place state arrives.
+
+**A projection has to be able to go stale on purpose.** The one piece of daemon
+state the client holds *by value* rather than by subscription is a file's body:
+it arrives once, in answer to a `FetchFile` the pane asked for, and no event
+ever amends it. So the store carries the other half — a `reload` flag it raises
+when it has reason to believe what it holds is out of date (`R-J38`): a
+`ChangeUpdated` naming that path, the OS window coming forward, or the pane
+being clicked back onto. Raising a flag rather than dropping the body is the
+part worth knowing: the old text stays on screen until the new text lands, so a
+file being rewritten by an agent does not flash its pane between reads.
 
 ### The window
 

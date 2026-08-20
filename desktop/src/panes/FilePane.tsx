@@ -30,9 +30,9 @@ import {
 } from "lucide-react";
 import { useStore } from "@/store";
 import { usePaneId } from "@/lib/paneScope";
-import { parseFilePaneId } from "@/lib/panes";
+import { filePaneId, parseFilePaneId } from "@/lib/panes";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
-import { explorerFetch, languageOf } from "@/lib/explorer";
+import { explorerFetch, forgetFileBodies, languageOf } from "@/lib/explorer";
 import { base } from "@/lib/format";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
 import { outline, symbolGlyph } from "@/lib/symbols";
@@ -273,6 +273,26 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
 
   const index = st ? st.open.findIndex((t) => t.path === path && t.rev === rev) : -1;
   const tab = index >= 0 && st ? st.open[index] : null;
+
+  /**
+   * **Clicking back onto the pane re-reads the file too.** `R-J38`.
+   *
+   * The third trigger, and the one that needs nothing from the operating
+   * system: a window that never loses focus — two monitors, mogeung always
+   * visible — gets no focus event at all, and an edit git cannot attribute to
+   * this session raises no change event either. Coming back to the tab is
+   * *asking to look at the file*, which is as good a moment as any to make
+   * sure it is the file.
+   *
+   * On the way **in** only: while the pane stays forward nothing re-reads, so
+   * this cannot become a fetch per render.
+   */
+  const active = useStore((s) => s.activePane === filePaneId(session, path, rev));
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current && rev === null && id) forgetFileBodies(id, [path]);
+    wasActive.current = active;
+  }, [active, id, path, rev]);
 
   /**
    * **Keep your place when the file is re-read.** `R-J38`.
