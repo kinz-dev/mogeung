@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-08-07
+updated: 2026-08-20
 ---
 
 # Roadmap
@@ -29,12 +29,38 @@ leave the ledger claiming the idea was never had, and the next person to
 want a web client deserves to find the reason it went rather than the
 silence.
 
+> **Where this stands — 2026-08-20.** Written to be picked up from rather
+> than remembered. Nothing is in flight and nothing is half-built: the tree is
+> clean, `cargo test --workspace`, `npm test` and `./scripts/check-docs.sh` all
+> pass, and `--bin sweep` and `--bin runconfigs` both exit zero.
+>
+> **The pile that matters is not unbuilt work, it is unjudged work.** **34**
+> rows sit at `⏳` and twelve assumptions are `UNTESTED`, several with removal
+> conditions whose clocks are running — `A27` (notes, a month, nearly up),
+> `A33`/`A34` (run and debug, a fortnight), `A31` (dollars, a month). The
+> honest next move is `R-N13`'s week of use rather than another row: this
+> product's own rule is that building past an untested assumption is the
+> mistake, and it is now several deep in them.
+>
+> **What is genuinely unbuilt**, in the order it is worth doing: `R-J29` (Codex
+> drops four event kinds, and is blocked on `~/.codex` being empty here again),
+> then phase 2 of pillar `N` — `R-N9` the DAP client, `R-N10` the gutter and
+> panel, `R-N11` the three languages — which `R-N12` now waits behind. Then
+> `R-I13` (an agent in a container is invisible), `R-L3` (tasks) and `R-N14`
+> (Docker). `R-L4` and `R-D24` are questions, not work.
+>
+> **What was done on 2026-08-19 and 2026-08-20**, and is therefore the freshest
+> thing to judge: `R-J33` the stacked rail, `R-J34` show-this-folder, `R-J35`
+> anchored panes with no ceiling, `R-J36` two new event types classified, plus
+> two ledger repairs — `R-N2`/`R-N4` marked built nine days late, and `R-N12`
+> taken up as [ADR-0028](../decisions/0028-intellij-when-there-is-a-debugger.md).
+
 **Item 0 is done.** A week of real use, reported 2026-08-04: mogeung carries
 70–80% of the interaction with agents. A1 and A6 — the two assumptions the whole
 product rests on — are `SUPPORTED` rather than speculation for the first time
 since the project began. Pillar `M` is what that unlocked.
 
-Pillars `A`–`H` and `J` are shipped and verified. `E`–`I` (bar the two descopes
+Pillars `A`–`H` are shipped and verified. **`J` is not, any more** — it was, on 2026-07-29, and it has since become where every report and small ask lands: of the twenty-eight rows `R-J9`–`R-J36`, **25 are built and unjudged**, two are ✅ and one (`R-J29`) is not started. That is a bigger pile than the word *polish* implies. `E`–`I` (bar the two descopes
 in `I`) were **built 2026-07-29 in one pass** at an explicit *"finish the R-\*
 items in one-go"* ask — a deliberate override of the item-0 gate, recorded per
 spec (features 0015–0022) and in the ledger (A20–A25). That gamble was settled
@@ -528,7 +554,7 @@ shape to bring back if the case is reopened. The one thing that would reopen it
 is a named failure from actually running several windows — not a preference for
 one window.
 
-## J. Polish
+## J. Polish — **shipped as numbered (`R-J1`–`R-J8`); open as the landing strip for reports and small asks, and `R-J9`–`R-J36` are all awaiting a verdict**
 
 The last pillar to be numbered, and for a while the only one with unbuilt work
 — which is why "what is left?" could not be answered from this file. Numbered
@@ -555,6 +581,29 @@ Two rows arrived after that line was written: `R-J7` on 2026-08-02 and `R-J8`
 on 2026-08-05. `R-J8` is the perf pass, filed **after** it shipped rather than
 before — the one thing this file is not supposed to allow, and left visible in
 the row rather than backdated.
+
+**And then twenty-eight more, and the pillar's character changed with them.**
+`R-J9`–`R-J36`, from 2026-08-07 to 2026-08-20, are not the planned polish this
+preamble describes: they are what a product in daily use produces — a report, a
+question, a small ask — and J is where they land because they belong to no
+other pillar. Three kinds, and the mix is the interesting part:
+
+- **defects found by using it** (`R-J13`, `R-J15`, `R-J17`, `R-J18`, `R-J20`,
+  `R-J26`, `R-J30`, `R-J31`, `R-J32`), several of them reported in the user's
+  own words and quoted in the rows, because how a thing is described is
+  evidence about what it looked like from outside;
+- **defects found by instrument** (`R-J12`, `R-J27`, `R-J29`, `R-J36`) — the
+  canary, the sweep, and one failing test on a second OS. `R-J36` is the first
+  where the tooling reported drift as a **failing command** rather than as
+  output somebody had to read, which is what `R-J28` was built for;
+- **small asks, granted** (`R-J14`, `R-J16`, `R-J21`–`R-J25`, `R-J33`–`R-J35`),
+  each one small enough to build in a sitting and none of them planned here.
+
+The pillar is therefore **shipped end to end as originally numbered, and open
+as a landing strip**. Rows arriving here need a verdict like any other, and
+twenty-five of these twenty-eight are still waiting for one — `R-J9` and
+`R-J10` are the only two that were closed, and `R-J29` is the only one not
+built. See the note at the top of this file about which pile matters.
 
 | # | Item | Effort | |
 |---|---|---|---|
