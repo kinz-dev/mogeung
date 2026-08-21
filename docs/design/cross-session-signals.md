@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-19
+updated: 2026-08-21
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -20,6 +20,14 @@ covers:
 > — launching a terminal, focusing one, and since `R-J34` showing a folder in
 > the file manager. They are the same family and they teach each other, so
 > they are described together below.
+>
+> The **file surface** — which roots a session may be read through, and the
+> guard around them — is a third resident of `state.rs` and belongs to
+> [architecture.md](architecture.md), where `R-J40`'s workspaces are described.
+> Checked when that landed rather than assumed: none of the signals here reads
+> a root. A collision is computed from what two transcripts *say* was touched,
+> so widening what the explorer may open changes nothing about who is editing
+> the same file as whom.
 
 Things no single agent can know about itself, because knowing them requires a
 view across sessions that none of them has. Roadmap `R-B3`, `R-B4`, `R-B5`,

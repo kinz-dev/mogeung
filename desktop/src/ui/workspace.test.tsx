@@ -16,7 +16,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FilesTool } from "@/ui/tools/FilesTool";
 import { useStore, emptyExplorer } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
-import { ancestors } from "@/lib/explorer";
+import { ancestors, explorerFetch, openFile } from "@/lib/explorer";
+import { base } from "@/lib/format";
 
 class FakeSocket {
   static OPEN = 1;
@@ -111,6 +112,39 @@ describe("a workspace's added folders", () => {
 
     expect(screen.getByText("moved-away")).toBeInTheDocument();
     expect(screen.getByText(/missing/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Go-to-file and search reach the added folders. `R-J40`, second slice.
+ *
+ * The daemon walks every root on one budget and spells a file from an added
+ * folder **absolutely**, which is the same spelling its resolver reads back.
+ * The client needed nothing for that — which is the point of having picked one
+ * path grammar — so what is pinned here is that opening such a path really
+ * does ask for it unchanged, rather than joining a root onto it somewhere.
+ */
+describe("opening a file that lives in an added folder", () => {
+  it("asks the daemon for exactly the path the list gave it", () => {
+    setup({ dirs: ["/repo/sibling"] });
+    openFile("s1", "/repo/sibling/src/Main.java", { pin: true });
+    // The fetch is a render's job, the way the tool does it — one door.
+    explorerFetch("s1");
+
+    expect(sent).toContainEqual({
+      cmd: "fetch_file",
+      session_id: "s1",
+      path: "/repo/sibling/src/Main.java",
+    });
+  });
+
+  /** The tab is named by the file, not by the length of its path. */
+  it("names the pane after the file", () => {
+    setup({ dirs: ["/repo/sibling"] });
+    openFile("s1", "/repo/sibling/src/Main.java", { pin: true });
+    const tab = useStore.getState().explorer.s1.open.at(-1);
+    expect(tab?.path).toBe("/repo/sibling/src/Main.java");
+    expect(base(tab!.path)).toBe("Main.java");
   });
 });
 

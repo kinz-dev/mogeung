@@ -1915,11 +1915,8 @@ impl AppState {
     /// Runs on the blocking pool: a monorepo walk is real work, and the event
     /// loop must keep serving the other clients while it happens.
     pub async fn list_tree(&self, id: &str) -> Result<(Vec<String>, bool)> {
-        let root = self.session_root(id).await?;
-        let root = root
-            .canonicalize()
-            .map_err(|e| anyhow!("cannot open the session's directory: {e}"))?;
-        tokio::task::spawn_blocking(move || Ok(walk_tree(&root, TREE_CAP))).await?
+        let roots = self.session_roots(id).await?;
+        tokio::task::spawn_blocking(move || Ok(walk_workspace(&roots, TREE_CAP))).await?
     }
 
     /// Matching lines for a literal query across the worktree. `R-B25`.
@@ -1935,11 +1932,8 @@ impl AppState {
         if query.is_empty() {
             anyhow::bail!("nothing to search for");
         }
-        let root = self.session_root(id).await?;
-        let root = root
-            .canonicalize()
-            .map_err(|e| anyhow!("cannot open the session's directory: {e}"))?;
-        tokio::task::spawn_blocking(move || Ok(search_tree(&root, &query, MATCH_CAP))).await?
+        let roots = self.session_roots(id).await?;
+        tokio::task::spawn_blocking(move || Ok(search_workspace(&roots, &query, MATCH_CAP))).await?
     }
 
     // -----------------------------------------------------------------------
@@ -4011,6 +4005,86 @@ fn walk_tree(root: &Path, cap: usize) -> (Vec<String>, bool) {
     (paths, truncated)
 }
 
+/// A file's path as the wire names it, given which root it came from. `R-J40`.
+///
+/// The **first** root is the session's own and answers relative paths, which
+/// is what every path in this protocol has always been. Every other root
+/// answers absolute ones, because that is the only spelling that says *which*
+/// root without a second field — the same rule `resolve_in_workspace` reads
+/// back.
+fn workspace_path(root: &Path, primary: bool, rel: &str) -> String {
+    if primary {
+        rel.to_string()
+    } else {
+        format!("{}/{}", root.to_string_lossy().trim_end_matches('/'), rel)
+    }
+}
+
+/// How much of the budget root `i` of `n` may spend. `R-J40`.
+///
+/// **One budget for the workspace, shared rather than first-come**, and the
+/// difference is not theoretical: a broad query over this repository filled
+/// all 500 matches before the added folder was reached, so the feature — see
+/// the sibling repository's hits — did nothing at exactly the moment you were
+/// searching widely enough to need it.
+///
+/// Each root is reserved an equal share, and a root that does not spend its
+/// share leaves it to the ones after it: the reserve only covers the roots
+/// still to come, so the common case (a narrow query, few hits) still returns
+/// everything from everywhere.
+fn budget_for(cap: usize, used: usize, i: usize, n: usize) -> usize {
+    let share = cap / n.max(1);
+    let reserve = share * n.saturating_sub(i + 1);
+    cap.saturating_sub(used).saturating_sub(reserve)
+}
+
+/// Every file in the workspace, the session's own root first. `R-J40`.
+///
+/// Sorted **within** each root rather than across all of them: the files you
+/// are working in are the session's own, and mixing a sibling repository's
+/// tree into them alphabetically would bury them.
+fn walk_workspace(roots: &[PathBuf], cap: usize) -> (Vec<String>, bool) {
+    let mut out = Vec::new();
+    let mut truncated = false;
+    for (i, root) in roots.iter().enumerate() {
+        let Ok(root) = root.canonicalize() else { continue };
+        let allow = budget_for(cap, out.len(), i, roots.len());
+        if allow == 0 {
+            truncated = true;
+            continue;
+        }
+        let (paths, cut) = walk_tree(&root, allow);
+        truncated |= cut;
+        out.extend(paths.into_iter().map(|p| workspace_path(&root, i == 0, &p)));
+    }
+    (out, truncated)
+}
+
+/// The same query over every root, on the same shared budget. `R-J40`.
+fn search_workspace(
+    roots: &[PathBuf],
+    query: &str,
+    cap: usize,
+) -> (Vec<mogeung_core::wire::ContentMatch>, bool) {
+    let mut out = Vec::new();
+    let mut truncated = false;
+    for (i, root) in roots.iter().enumerate() {
+        let Ok(root) = root.canonicalize() else { continue };
+        let allow = budget_for(cap, out.len(), i, roots.len());
+        if allow == 0 {
+            truncated = true;
+            continue;
+        }
+        let (matches, cut) = search_tree(&root, query, allow);
+        truncated |= cut;
+        out.extend(matches.into_iter().map(|mut m| {
+            m.path = workspace_path(&root, i == 0, &m.path);
+            m
+        }));
+    }
+    (out, truncated)
+}
+
 /// Clip to `cap` bytes without splitting a character.
 fn clip_line(line: &str, cap: usize) -> String {
     if line.len() <= cap {
@@ -4168,6 +4242,93 @@ mod explorer_tests {
         assert!(resolve_inside(&dir, "src/../../etc").is_err(), "buried .. escapes");
         assert!(resolve_inside(&dir, "/etc/passwd").is_err(), "absolute escapes");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Go-to-file and search reach the added folders too, and each file comes
+    /// back spelled the way the resolver will read it. `R-J40`.
+    ///
+    /// This is the pair that has to agree: `walk_workspace` decides how a path
+    /// is *written* and `resolve_in_workspace` decides how it is *read*, and a
+    /// disagreement between them is a file you can see in the list and cannot
+    /// open. So the test spells both halves rather than trusting the rule.
+    #[test]
+    fn the_workspace_is_walked_as_one_list_and_reads_back() {
+        let own = scratch("walk-own");
+        let added = scratch("walk-added");
+        std::fs::write(added.join("src/other.rs"), "fn other() {}\n").unwrap();
+        let roots = vec![own.clone(), added.clone()];
+
+        let (paths, truncated) = walk_workspace(&roots, 100);
+        assert!(!truncated);
+        // The session's own root keeps relative paths — every client that has
+        // never heard of a workspace still sees exactly what it saw before.
+        assert!(paths.contains(&"src/lib.rs".to_string()), "{paths:?}");
+        // The added folder answers absolute ones, and they resolve.
+        let there = paths
+            .iter()
+            .find(|p| p.ends_with("other.rs"))
+            .expect("the added folder's file is missing");
+        assert!(there.starts_with('/'), "{there}");
+        assert!(resolve_in_workspace(&roots, there).is_ok(), "{there} does not read back");
+
+        // The session's own files come first: they are what you are working in.
+        let own_at = paths.iter().position(|p| p == "src/lib.rs").unwrap();
+        let added_at = paths.iter().position(|p| p == there).unwrap();
+        assert!(own_at < added_at);
+
+        let _ = std::fs::remove_dir_all(&own);
+        let _ = std::fs::remove_dir_all(&added);
+    }
+
+    /// One budget for the whole workspace, **shared** rather than first-come.
+    ///
+    /// The second assertion is the one written from a real failure: a broad
+    /// search over this repository filled all 500 matches inside the session's
+    /// own root and returned nothing at all from the added folder, which is
+    /// the feature failing exactly when the query was wide enough to need it.
+    #[test]
+    fn the_cap_is_shared_between_the_roots() {
+        let own = scratch("cap-own");
+        let added = scratch("cap-added");
+        let (paths, truncated) = walk_workspace(&[own.clone(), added.clone()], 1);
+        assert_eq!(paths.len(), 1);
+        assert!(truncated, "a cut list must say so");
+
+        // Ten files each, a budget of four: two from each root rather than
+        // four from the first.
+        for i in 0..10 {
+            std::fs::write(own.join(format!("src/o{i}.rs")), "x").unwrap();
+            std::fs::write(added.join(format!("src/a{i}.rs")), "x").unwrap();
+        }
+        let (paths, truncated) = walk_workspace(&[own.clone(), added.clone()], 4);
+        assert!(truncated);
+        assert_eq!(paths.iter().filter(|p| p.starts_with('/')).count(), 2, "{paths:?}");
+        assert_eq!(paths.iter().filter(|p| !p.starts_with('/')).count(), 2, "{paths:?}");
+
+        // And a root that underspends leaves its share to the next one, so a
+        // narrow query still returns everything from everywhere.
+        assert_eq!(budget_for(100, 3, 1, 2), 97);
+
+        let _ = std::fs::remove_dir_all(&own);
+        let _ = std::fs::remove_dir_all(&added);
+    }
+
+    /// A search reaches the added folders, and its hits open. Same pairing as
+    /// the walk above: found one way, resolved the other.
+    #[test]
+    fn a_search_reaches_the_added_folders() {
+        let own = scratch("find-own");
+        let added = scratch("find-added");
+        std::fs::write(added.join("src/needle.rs"), "// findmeplease\n").unwrap();
+        let roots = vec![own.clone(), added.clone()];
+
+        let (hits, _) = search_workspace(&roots, "findmeplease", 50);
+        let hit = hits.first().expect("no hit in the added folder");
+        assert!(hit.path.starts_with('/'), "{}", hit.path);
+        assert!(resolve_in_workspace(&roots, &hit.path).is_ok());
+
+        let _ = std::fs::remove_dir_all(&own);
+        let _ = std::fs::remove_dir_all(&added);
     }
 
     /// An absolute path is served only from inside the workspace. `R-J40`.
