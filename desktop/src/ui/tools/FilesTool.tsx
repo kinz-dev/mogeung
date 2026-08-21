@@ -10,11 +10,12 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, ChevronRight, Crosshair, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Crosshair, FolderPlus, RefreshCw, X } from "lucide-react";
 import { FileIcon } from "@/ui/FileIcon";
 import { useStore } from "@/store";
 import { Dim, Empty, IconButton, Input, Loading } from "@/ui/primitives";
 import { basename, explorerFetch, fileFilter, join, openFile, reveal, toggleDir } from "@/lib/explorer";
+import { chooseFolder } from "@/lib/tauri";
 import { parseFilePaneId } from "@/lib/panes";
 import { cn } from "@/lib/cn";
 import { repoName } from "@/wire/types";
@@ -26,6 +27,10 @@ interface FlatRow {
   isDir: boolean;
   depth: number;
   open: boolean;
+  /** An added folder's own row, which is removable and names its whole path. */
+  added?: boolean;
+  /** An added folder that is no longer there. `R-J40`. */
+  gone?: boolean;
 }
 
 /** Rows drawn for one query. Plain divs, not a virtual list — `.*` over a
@@ -73,6 +78,13 @@ export function FilesTool() {
     if (id) explorerFetch(id);
   });
 
+  // The workspace, once per session. `null` means nobody has asked yet, so
+  // this fires exactly once — the reply is what makes it stop being null, and
+  // an empty workspace is `[]` rather than `null`. `R-J40`.
+  useEffect(() => {
+    if (id && st && st.workspace === null) send({ cmd: "fetch_workspace", session_id: id });
+  }, [id, st, send]);
+
   const match = useMemo(() => fileFilter(filter), [filter]);
 
   // A filter searches the **whole worktree**, not the part that happens to be
@@ -102,6 +114,19 @@ export function FilesTool() {
       }
     };
     walk("", 0);
+    // **The added folders, after the session's own.** Its own tree is what the
+    // pane is for and stays where it has always been; a workspace folder is an
+    // extra root, drawn as a top-level row you expand like any other. Their
+    // children arrive under **absolute** paths, which is what lets one string
+    // keep naming one file whichever root it came from.
+    for (const dir of st.workspace?.dirs ?? []) {
+      const open = st.expanded.includes(dir);
+      out.push({ path: dir, name: basename(dir), isDir: true, depth: 0, open, added: true });
+      if (open) walk(dir, 1);
+    }
+    for (const dir of st.workspace?.missing ?? []) {
+      out.push({ path: dir, name: basename(dir), isDir: true, depth: 0, open: false, added: true, gone: true });
+    }
     return out;
   }, [st]);
 
@@ -157,6 +182,25 @@ export function FilesTool() {
             }}
           >
             <Crosshair size={12} />
+          </IconButton>
+          {/*
+            Add a folder to this workspace. `R-J40`.
+
+            A session can work in a sibling repository and mogeung's tree could
+            not follow, because the daemon serves one root and refuses
+            everything outside it. This is the manual half, and manual is the
+            point: the folder is one **you** authorised, which is a read
+            boundary you can explain, where a discovered one is a boundary that
+            widened while you were not looking.
+          */}
+          <IconButton
+            title="add a folder to this workspace — it is remembered for this repository"
+            onClick={async () => {
+              const dir = await chooseFolder();
+              if (dir) send({ cmd: "add_workspace_dir", session_id: id, path: dir });
+            }}
+          >
+            <FolderPlus size={12} />
           </IconButton>
           <IconButton
             title="re-list the directories that are open"
@@ -268,7 +312,34 @@ export function FilesTool() {
                   <span className="w-[11px] shrink-0" />
                 )}
                 <FileIcon name={r.name} isDir={r.isDir} open={r.open} className="shrink-0" />
-                <span className={r.isDir ? "text-[var(--text)]" : "text-[var(--text)]"}>{r.name}</span>
+                <span className={cn("text-[var(--text)]", r.gone && "line-through opacity-60")}>{r.name}</span>
+                {/*
+                  An added folder says where it is and how to let go of it.
+                  The path is dimmed and follows the name for the same reason a
+                  search hit's directory does: `immix-common` is the answer, and
+                  *which* `immix-common` is what you read second.
+
+                  A folder that has gone away is struck through rather than
+                  dropped — you added it deliberately, so it disappearing on its
+                  own would be the tree lying about what you asked for (`R-J5`).
+                */}
+                {r.added && (
+                  <>
+                    <Dim className="text-2xs">{r.gone ? "missing — " : ""}{r.path}</Dim>
+                    <button
+                      type="button"
+                      title={`remove ${r.path} from this workspace`}
+                      aria-label={`remove ${r.name} from this workspace`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        send({ cmd: "remove_workspace_dir", session_id: id, path: r.path });
+                      }}
+                      className="ml-1 shrink-0 opacity-50 outline-none transition-opacity duration-[var(--dur-fast)] hover:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+                    >
+                      <X size={11} />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>

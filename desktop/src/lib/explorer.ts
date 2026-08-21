@@ -216,9 +216,19 @@ export function closeFile(id: SessionId, path: string, rev: string | null): void
 export function ancestors(path: string): string[] {
   const parts = path.split("/").slice(0, -1);
   const out: string[] = [];
-  let acc = "";
+  // An **absolute** path — a file in a folder added to the workspace
+  // (`R-J40`) — keeps its leading slash, so its ancestors are real directories
+  // rather than the same names with the root filed off. Without this, `/a/b/c`
+  // would ask the tree to expand `a` and `a/b`, which are two directories that
+  // do not exist and would sit in `expanded` for ever.
+  let acc = path.startsWith("/") ? "" : "";
+  const absolute = path.startsWith("/");
   for (const p of parts) {
-    acc = acc ? `${acc}/${p}` : p;
+    if (absolute && p === "" && acc === "") {
+      acc = "";
+      continue;
+    }
+    acc = acc ? `${acc}/${p}` : absolute ? `/${p}` : p;
     out.push(acc);
   }
   return out;

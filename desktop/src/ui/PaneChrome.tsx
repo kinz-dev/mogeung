@@ -104,6 +104,10 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
 /** Absolute where the session's root is known, relative where it is not — a
  *  path that pretends to be absolute is worse than one that admits it is not. */
 export function fullPath(root: string | null, path: string): string {
+  // A path from a folder added to the workspace is already absolute and names
+  // itself (`R-J40`); joining a root onto it would produce a path that exists
+  // nowhere. The rule the daemon resolves by, applied to the tooltip.
+  if (path.startsWith("/")) return path;
   return root ? `${root.replace(/\/$/, "")}/${path}` : path;
 }
 

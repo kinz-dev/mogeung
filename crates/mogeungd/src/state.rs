@@ -1785,12 +1785,99 @@ impl AppState {
         Ok(PathBuf::from(root))
     }
 
+    /// The workspace of the session's repository: its own root, the folders
+    /// added by hand, and the ones that have gone missing. `R-J40`.
+    ///
+    /// **Keyed by the repository root**, so a workspace outlives the session
+    /// that built it and is shared by every session in the same checkout —
+    /// which is the whole reason it is worth persisting.
+    ///
+    /// Read from disk on each call rather than cached, the same choice
+    /// `runconfig` makes and for the same reason: the file is small, it is in
+    /// your home directory, and it is meant to be editable by hand. A cache
+    /// would make a hand edit take effect at a moment nobody could predict.
+    pub async fn workspace(&self, id: &str) -> Result<(String, Vec<String>, Vec<String>)> {
+        let root = self.session_root(id).await?.to_string_lossy().to_string();
+        let all = crate::workspace::load(&crate::workspace::store_path());
+        Ok((
+            root.clone(),
+            crate::workspace::live(&all, &root),
+            crate::workspace::missing(&all, &root),
+        ))
+    }
+
+    /// Add a folder to this session's workspace. `R-J40`.
+    ///
+    /// The refusals live in [`crate::workspace::admit`] — absolute, real, not
+    /// already inside the session's own root, not already listed — and the
+    /// path is canonicalised before it is stored, so the same directory
+    /// reached through a symlink cannot arrive twice (`R-J27`).
+    pub async fn add_workspace_dir(&self, id: &str, path: &str) -> Result<()> {
+        let root = self.session_root(id).await?.to_string_lossy().to_string();
+        let store = crate::workspace::store_path();
+        let mut all = crate::workspace::load(&store);
+        let existing = all.entry(root.clone()).or_default();
+        let full = crate::workspace::admit(&root, existing, path)?;
+        existing.push(full);
+        crate::workspace::save(&store, &all)
+    }
+
+    /// Drop a folder from this session's workspace.
+    ///
+    /// Matches what was stored **and** what the path resolves to, because the
+    /// client shows the resolved form and a user editing the file by hand may
+    /// have written either.
+    pub async fn remove_workspace_dir(&self, id: &str, path: &str) -> Result<()> {
+        let root = self.session_root(id).await?.to_string_lossy().to_string();
+        let store = crate::workspace::store_path();
+        let mut all = crate::workspace::load(&store);
+        let resolved = std::path::Path::new(path)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string());
+        if let Some(dirs) = all.get_mut(&root) {
+            dirs.retain(|d| d != path && d != &resolved);
+        }
+        // An empty workspace leaves no row behind: the file is meant to be
+        // read by a human, and a key with an empty list says nothing.
+        if all.get(&root).is_some_and(|d| d.is_empty()) {
+            all.remove(&root);
+        }
+        crate::workspace::save(&store, &all)
+    }
+
+    /// Every root this session may be read through: its own, then the folders
+    /// added to its workspace. `R-J40`.
+    ///
+    /// Order is load-bearing — the first is the session's own, which is what
+    /// a request naming no root means.
+    async fn session_roots(&self, id: &str) -> Result<Vec<PathBuf>> {
+        let root = self.session_root(id).await?;
+        let all = crate::workspace::load(&crate::workspace::store_path());
+        let mut out = vec![root.clone()];
+        out.extend(
+            crate::workspace::live(&all, &root.to_string_lossy())
+                .into_iter()
+                .map(PathBuf::from),
+        );
+        Ok(out)
+    }
+
+    /// Resolve a request's path against everything this session may read.
+    ///
+    /// **A client cannot name a directory this daemon has not been told
+    /// about.** That is the whole security property of adding a root at all:
+    /// the set is what you authorised through the UI, and anything outside it
+    /// is refused here rather than reaching the filesystem.
+    async fn resolve_for(&self, id: &str, rel: &str) -> Result<PathBuf> {
+        resolve_in_workspace(&self.session_roots(id).await?, rel)
+    }
+
     /// One directory of the session's worktree, dirs first then files.
     ///
     /// `rel` is relative to the session root; empty means the root itself.
     pub async fn list_dir(&self, id: &str, rel: &str) -> Result<Vec<mogeung_core::wire::DirEntry>> {
-        let root = self.session_root(id).await?;
-        let dir = resolve_inside(&root, rel)?;
+        let dir = self.resolve_for(id, rel).await?;
         let mut entries = Vec::new();
         for e in std::fs::read_dir(&dir)? {
             let e = e?;
@@ -1811,8 +1898,7 @@ impl AppState {
     pub async fn read_file(&self, id: &str, rel: &str) -> Result<(String, bool)> {
         /// Past this a "file viewer" is really a memory test for the renderer.
         const CAP: usize = 256 * 1024;
-        let root = self.session_root(id).await?;
-        let path = resolve_inside(&root, rel)?;
+        let path = self.resolve_for(id, rel).await?;
         let bytes = std::fs::read(&path)?;
         // A NUL this early means binary; sending it would render garbage and
         // pretend it is the file.
@@ -3789,6 +3875,42 @@ mod terminal_tests {
     }
 }
 
+/// Resolve a path against a session's whole workspace. `R-J40`.
+///
+/// **One grammar, two meanings, and the split is the point.** A *relative*
+/// path means what it has always meant — inside the session's own root, with
+/// `resolve_inside` refusing every way out of it. An *absolute* path names
+/// itself, and is served only if it falls inside one of the folders the user
+/// added. So the client needs no second field to say which root it meant, and
+/// nothing it stores — a file tab, a bookmark — can become ambiguous later by
+/// pointing at a root that has since moved in a list.
+///
+/// The whitelist is the security property. A path outside every root is
+/// refused here, before the filesystem is touched, which is the same fence
+/// `resolve_inside` puts around a single root — widened to exactly the set you
+/// authorised and no further.
+fn resolve_in_workspace(roots: &[PathBuf], rel: &str) -> Result<PathBuf> {
+    let first = roots
+        .first()
+        .ok_or_else(|| anyhow!("that session has no working directory"))?;
+    if !Path::new(rel).is_absolute() {
+        return resolve_inside(first, rel);
+    }
+    let full = Path::new(rel)
+        .canonicalize()
+        .map_err(|e| anyhow!("cannot open {rel}: {e}"))?;
+    for root in roots {
+        let root = match root.canonicalize() {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if full.starts_with(&root) {
+            return Ok(full);
+        }
+    }
+    Err(anyhow!("{rel} is not in this session's workspace"))
+}
+
 /// Resolve `rel` against `root` and refuse anything that escapes it.
 ///
 /// The daemon is unauthenticated on localhost, so this guard is what keeps
@@ -4046,6 +4168,37 @@ mod explorer_tests {
         assert!(resolve_inside(&dir, "src/../../etc").is_err(), "buried .. escapes");
         assert!(resolve_inside(&dir, "/etc/passwd").is_err(), "absolute escapes");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An absolute path is served only from inside the workspace. `R-J40`.
+    ///
+    /// The refusals are the point: a workspace widens what a daemon serves, so
+    /// the set of roots has to be a whitelist rather than a hint. `/etc` is
+    /// the obvious try; the *parent* of a root is the less obvious one, and it
+    /// is the one that would hand over the whole home directory.
+    #[test]
+    fn an_absolute_path_is_served_only_from_inside_the_workspace() {
+        let own = scratch("ws-own");
+        let added = scratch("ws-added");
+        let roots = vec![own.clone(), added.clone()];
+
+        // Relative still means the session's own root, exactly as before.
+        assert_eq!(
+            resolve_in_workspace(&roots, "src/lib.rs").unwrap(),
+            own.canonicalize().unwrap().join("src/lib.rs")
+        );
+        // Absolute, inside an added folder: served.
+        let there = added.join("src/lib.rs").to_string_lossy().to_string();
+        assert!(resolve_in_workspace(&roots, &there).is_ok());
+        // Absolute, outside every root: refused.
+        let err = resolve_in_workspace(&roots, "/etc/passwd").unwrap_err().to_string();
+        assert!(err.contains("not in this session's workspace"), "{err}");
+        // And the parent of a root is not a root.
+        let up = own.parent().unwrap().to_string_lossy().to_string();
+        assert!(resolve_in_workspace(&roots, &up).is_err());
+
+        let _ = std::fs::remove_dir_all(&own);
+        let _ = std::fs::remove_dir_all(&added);
     }
 
     /// A symlink pointing out of the tree is followed and then caught — the

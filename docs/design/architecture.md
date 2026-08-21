@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-20
+updated: 2026-08-21
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -108,6 +108,16 @@ canonicalises every path and refuses one that escapes the session root,
 symlinks included, because an unauthenticated localhost port must not become
 "read any file by asking politely". There is no write path — the roadmap's
 "an editor — explicitly not" is a property of the protocol, not just the UI.
+
+**A session can be read through more than one root since `R-J40`**, and the
+rule is unchanged rather than relaxed: the extra folders are ones the user
+added by hand, kept in `~/.mogeung/workspaces.json` under the session's
+*repository* so they outlive it, and a path is served only if it resolves
+inside one of them. A relative path still means the session's own root; an
+absolute one names itself and is checked against that whitelist. What a client
+may name is therefore exactly what somebody authorised through the UI —
+discovery from `/add-dir` or from what an agent has touched is `R-J39`, and
+deliberately not this.
 
 The workbench (`R-B25`) widened that surface, not the rule: the daemon also
 walks the whole tree (for go-to-file) and greps it (for content search), both

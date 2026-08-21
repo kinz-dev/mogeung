@@ -803,6 +803,12 @@ export type ClientMsg =
   | { cmd: "focus_terminal"; session_id: SessionId }
   /** Show the session's folder in the machine's file manager. `R-J34`. */
   | { cmd: "open_folder"; session_id: SessionId }
+  /** The folders added to this session's workspace by hand. `R-J40`. */
+  | { cmd: "fetch_workspace"; session_id: SessionId }
+  | { cmd: "add_workspace_dir"; session_id: SessionId; path: string }
+  | { cmd: "remove_workspace_dir"; session_id: SessionId; path: string }
+  /** `path` is relative to the session's own root, or **absolute** — in which
+   *  case it must be inside one of the folders the workspace holds. `R-J40`. */
   | { cmd: "list_dir"; session_id: SessionId; path: string }
   | { cmd: "fetch_file"; session_id: SessionId; path: string }
   | { cmd: "list_tree"; session_id: SessionId }
@@ -894,6 +900,9 @@ export type ServerMsg =
   | { ev: "blast_radius"; radius: BlastRadius }
   | { ev: "dir_listing"; session_id: SessionId; path: string; entries: DirEntry[] }
   | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean }
+  /** A session's own root, the folders added to it, and any that have gone
+   *  away — answered on request and after every add or remove. `R-J40`. */
+  | { ev: "workspace"; session_id: SessionId; root: string; dirs: string[]; missing: string[] }
   | { ev: "tree_listing"; session_id: SessionId; paths: string[]; truncated: boolean }
   | {
       ev: "content_matches";

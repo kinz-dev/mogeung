@@ -126,9 +126,21 @@ export interface ExplorerState {
   treePending: boolean;
   /** Bodies already asked for, so a render is not a request. */
   pendingFiles: string[];
+  /**
+   * Folders added to this session's workspace by hand, and any that have gone
+   * away since. `R-J40`.
+   *
+   * Absolute, and answered by the daemon rather than remembered here: the
+   * store is `~/.mogeung/workspaces.json`, keyed by the session's
+   * **repository**, so it outlives the session and every client sees the same
+   * one. `null` means nobody has asked yet — which is a different thing from
+   * *asked, and there are none*, and the tree draws them differently.
+   */
+  workspace: { dirs: string[]; missing: string[] } | null;
 }
 
 export const emptyExplorer = (): ExplorerState => ({
+  workspace: null,
   dirs: {},
   expanded: [],
   pending: [],
@@ -863,6 +875,17 @@ export const useStore = create<AppState>((set, get) => ({
         break;
 
       // -- explorer -------------------------------------------------------
+      case "workspace":
+        set((s) => {
+          const st = s.explorer[msg.session_id] ?? emptyExplorer();
+          return {
+            explorer: {
+              ...s.explorer,
+              [msg.session_id]: { ...st, workspace: { dirs: msg.dirs, missing: msg.missing } },
+            },
+          };
+        });
+        break;
       case "dir_listing":
         set((s) => {
           const st = s.explorer[msg.session_id] ?? emptyExplorer();

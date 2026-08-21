@@ -124,6 +124,31 @@ export async function chooseSavePath(suggested: string): Promise<string | null |
 }
 
 /**
+ * Ask for a folder. `R-J40`.
+ *
+ * The shell's own directory picker where there is a shell, and a typed path in
+ * a browser tab — which is honest rather than lazy: a browser cannot see the
+ * filesystem, and the daemon is going to canonicalise and check whatever
+ * arrives anyway, so a typed path is exactly as safe as a picked one and only
+ * less pleasant.
+ *
+ * `null` means you declined, and nothing should happen.
+ */
+export async function chooseFolder(): Promise<string | null> {
+  if (!isTauri()) {
+    const typed = window.prompt("Absolute path of the folder to add to this workspace");
+    return typed?.trim() ? typed.trim() : null;
+  }
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({ directory: true, multiple: false });
+    return typeof picked === "string" ? picked : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Write text to a file, and answer with the path it actually went to.
  *
  * `path` is what the picker returned. Without one the shell falls back to the

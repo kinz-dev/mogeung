@@ -64,8 +64,28 @@ pub enum ClientMsg {
     /// runs on the daemon's machine, like `FocusTerminal` and for the same
     /// reason — that is where the folder is.
     OpenFolder { session_id: SessionId },
+    /// The folders added to this session's workspace by hand. `R-J40`.
+    FetchWorkspace { session_id: SessionId },
+    /// Add a folder to this session's workspace, so the tree and the file
+    /// surface can see it. `R-J40`.
+    ///
+    /// **Gated with the repository writes**, and not because it writes a
+    /// repository — it does not. It widens what this daemon will *read out*,
+    /// and "an open socket must not be able to extend the read surface" is the
+    /// same rule [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md)
+    /// already applies to the verbs that reach beyond a session's own root.
+    AddWorkspaceDir { session_id: SessionId, path: String },
+    /// Drop a folder from this session's workspace. Gated for the same reason
+    /// — the pair has to live on the same side of the fence.
+    RemoveWorkspaceDir { session_id: SessionId, path: String },
     /// List one directory of the session's worktree. `path` is relative to the
     /// session root (repo root when known, else cwd); empty means the root.
+    ///
+    /// **A path may also be absolute** (`R-J40`), in which case it names
+    /// itself and is served only if it falls inside one of the folders this
+    /// session's workspace holds. That is one grammar rather than two: a
+    /// relative path means the session's own root, as it always has, and an
+    /// absolute one is checked against the whitelist the user built.
     ///
     /// Read-only, like everything here. The explorer (`R-B24`) is a viewer;
     /// the roadmap's "an editor — explicitly not" still stands.
@@ -727,6 +747,18 @@ pub enum ServerMsg {
         path: String,
         content: String,
         truncated: bool,
+    },
+    /// A session's workspace: its own root, the folders added to it, and the
+    /// ones that have since gone away. `R-J40`.
+    ///
+    /// `missing` is answered rather than quietly dropped — a folder you added
+    /// and then moved should say so, which is `R-J5`'s rule about empty states
+    /// applied to a root.
+    Workspace {
+        session_id: SessionId,
+        root: String,
+        dirs: Vec<String>,
+        missing: Vec<String>,
     },
     /// Every file of a session's worktree, sorted, `.git` never included and
     /// gitignore respected when the root is a repo. `truncated` means the walk

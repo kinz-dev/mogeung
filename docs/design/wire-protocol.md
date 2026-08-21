@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-19
+updated: 2026-08-21
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -32,8 +32,10 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchBlastRadius` | What else references the symbols a file's diff changed |
 | `FocusTerminal` | Bring the terminal *app* a live session runs in to the front — iTerm2, Terminal.app, the tmux client; not a mogeung pane |
 | `OpenFolder` | Show a session's `cwd` in the machine's file manager — Finder on macOS, `xdg-open`'s handler elsewhere (`R-J34`). A handoff, and it runs where the daemon is, because a path is not the same answer on two machines |
-| `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`) |
-| `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design |
+| `FetchWorkspace` | A session's own root, the folders added to it by hand, and any that have gone missing (`R-J40`) |
+| `AddWorkspaceDir` / `RemoveWorkspaceDir` | Add or drop a folder. **Gated with the repository writes** — not because they write one, but because they widen what this daemon will read out, which is ADR-0012's rule wearing a third hat |
+| `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`). A path is relative to the session's own root, **or absolute** — in which case it is served only from inside a folder the workspace holds (`R-J40`) |
+| `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design. Same path rule as `ListDir` |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
 | `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
 | `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path`/`pickaxe` filters — a set path switches `--follow` on (file history, `R-D12`), `pickaxe` is `-S` ("when did this string appear", `R-D13`); each commit carries refs, parents and a session-attribution hint |

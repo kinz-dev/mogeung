@@ -750,6 +750,12 @@ fn is_write(cmd: &ClientMsg) -> bool {
             // "an open socket must not be able to make this daemon talk to
             // someone else's server" is the same rule wearing a different hat.
             | ClientMsg::GitFetch { .. }
+            // Also not a repository write, and gated for the third version of
+            // the same rule: these change **what this daemon will read out**
+            // (`R-J40`). A window dialled in from another machine must not be
+            // able to extend the read surface of the daemon it is watching.
+            | ClientMsg::AddWorkspaceDir { .. }
+            | ClientMsg::RemoveWorkspaceDir { .. }
     )
 }
 
@@ -1057,6 +1063,47 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                     content,
                     truncated,
                 }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::FetchWorkspace { session_id } => match state.workspace(&session_id).await {
+            Ok((root, dirs, missing)) => state.broadcast(ServerMsg::Workspace {
+                session_id,
+                root,
+                dirs,
+                missing,
+            }),
+            Err(e) => err(e),
+        },
+        ClientMsg::AddWorkspaceDir { session_id, path } => {
+            match state.add_workspace_dir(&session_id, &path).await {
+                // Answered with the whole workspace rather than an
+                // acknowledgement: every client watching this session needs
+                // the new root, and one message that carries the truth beats
+                // two that have to agree.
+                Ok(()) => match state.workspace(&session_id).await {
+                    Ok((root, dirs, missing)) => state.broadcast(ServerMsg::Workspace {
+                        session_id,
+                        root,
+                        dirs,
+                        missing,
+                    }),
+                    Err(e) => err(e),
+                },
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::RemoveWorkspaceDir { session_id, path } => {
+            match state.remove_workspace_dir(&session_id, &path).await {
+                Ok(()) => match state.workspace(&session_id).await {
+                    Ok((root, dirs, missing)) => state.broadcast(ServerMsg::Workspace {
+                        session_id,
+                        root,
+                        dirs,
+                        missing,
+                    }),
+                    Err(e) => err(e),
+                },
                 Err(e) => err(e),
             }
         }
