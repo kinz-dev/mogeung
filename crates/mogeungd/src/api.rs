@@ -1067,12 +1067,7 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             }
         }
         ClientMsg::FetchWorkspace { session_id } => match state.workspace(&session_id).await {
-            Ok((root, dirs, missing)) => state.broadcast(ServerMsg::Workspace {
-                session_id,
-                root,
-                dirs,
-                missing,
-            }),
+            Ok(view) => state.broadcast(view.into_msg(session_id)),
             Err(e) => err(e),
         },
         ClientMsg::AddWorkspaceDir { session_id, path } => {
@@ -1082,12 +1077,7 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
                 // the new root, and one message that carries the truth beats
                 // two that have to agree.
                 Ok(()) => match state.workspace(&session_id).await {
-                    Ok((root, dirs, missing)) => state.broadcast(ServerMsg::Workspace {
-                        session_id,
-                        root,
-                        dirs,
-                        missing,
-                    }),
+                    Ok(view) => state.broadcast(view.into_msg(session_id)),
                     Err(e) => err(e),
                 },
                 Err(e) => err(e),
@@ -1096,12 +1086,7 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
         ClientMsg::RemoveWorkspaceDir { session_id, path } => {
             match state.remove_workspace_dir(&session_id, &path).await {
                 Ok(()) => match state.workspace(&session_id).await {
-                    Ok((root, dirs, missing)) => state.broadcast(ServerMsg::Workspace {
-                        session_id,
-                        root,
-                        dirs,
-                        missing,
-                    }),
+                    Ok(view) => state.broadcast(view.into_msg(session_id)),
                     Err(e) => err(e),
                 },
                 Err(e) => err(e),

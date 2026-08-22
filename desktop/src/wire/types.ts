@@ -571,6 +571,22 @@ export interface DocInventory {
 // wire.rs — the payload types
 // ---------------------------------------------------------------------------
 
+/**
+ * A folder mogeung noticed this session working in. `R-J39`.
+ *
+ * **A suggestion is not a permission.** Every channel behind one is
+ * retrospective — it can only say where the agent has already been — so it
+ * shortens the click you would make by hand and never makes it for you.
+ */
+export interface WorkspaceHint {
+  path: string;
+  /** `add-dir` when the CLI confirmed a `/add-dir`, `edits` when the session
+   *  wrote files there. */
+  source: string;
+  /** Files written inside it — `0` for an `add-dir` record. */
+  files: number;
+}
+
 export interface DirEntry {
   name: string;
   is_dir: boolean;
@@ -902,7 +918,16 @@ export type ServerMsg =
   | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean }
   /** A session's own root, the folders added to it, and any that have gone
    *  away — answered on request and after every add or remove. `R-J40`. */
-  | { ev: "workspace"; session_id: SessionId; root: string; dirs: string[]; missing: string[] }
+  | {
+      ev: "workspace";
+      session_id: SessionId;
+      root: string;
+      dirs: string[];
+      missing: string[];
+      /** Folders this session has been seen working in and the workspace does
+       *  not show — offered, never added. `R-J39`. */
+      hints: WorkspaceHint[];
+    }
   | { ev: "tree_listing"; session_id: SessionId; paths: string[]; truncated: boolean }
   | {
       ev: "content_matches";

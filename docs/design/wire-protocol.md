@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-21
+updated: 2026-08-22
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -32,7 +32,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchBlastRadius` | What else references the symbols a file's diff changed |
 | `FocusTerminal` | Bring the terminal *app* a live session runs in to the front — iTerm2, Terminal.app, the tmux client; not a mogeung pane |
 | `OpenFolder` | Show a session's `cwd` in the machine's file manager — Finder on macOS, `xdg-open`'s handler elsewhere (`R-J34`). A handoff, and it runs where the daemon is, because a path is not the same answer on two machines |
-| `FetchWorkspace` | A session's own root, the folders added to it by hand, and any that have gone missing (`R-J40`) |
+| `FetchWorkspace` | A session's own root, the folders added to it by hand, any that have gone missing (`R-J40`), and the folders mogeung has *noticed* it working in — `WorkspaceHint { path, source, files }`, offered and never added (`R-J39`) |
 | `AddWorkspaceDir` / `RemoveWorkspaceDir` | Add or drop a folder. **Gated with the repository writes** — not because they write one, but because they widen what this daemon will read out, which is ADR-0012's rule wearing a third hat |
 | `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`). A path is relative to the session's own root, **or absolute** — in which case it is served only from inside a folder the workspace holds (`R-J40`) |
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design. Same path rule as `ListDir` |

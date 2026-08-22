@@ -37,7 +37,17 @@ const session = (id: string, cwd: string) =>
 
 const sent: unknown[] = [];
 
-function setup(opts: { dirs?: string[]; missing?: string[]; expanded?: string[]; listings?: Record<string, unknown[]> } = {}) {
+type Hint = { path: string; source: string; files: number };
+
+function setup(
+  opts: {
+    dirs?: string[];
+    missing?: string[];
+    expanded?: string[];
+    listings?: Record<string, unknown[]>;
+    hints?: Hint[];
+  } = {},
+) {
   sent.length = 0;
   useStore.setState({
     prefs: defaultPrefs(),
@@ -47,7 +57,10 @@ function setup(opts: { dirs?: string[]; missing?: string[]; expanded?: string[];
     explorer: {
       s1: {
         ...emptyExplorer(),
-        workspace: opts.dirs || opts.missing ? { dirs: opts.dirs ?? [], missing: opts.missing ?? [] } : null,
+        workspace:
+          opts.dirs || opts.missing || opts.hints
+            ? { dirs: opts.dirs ?? [], missing: opts.missing ?? [], hints: opts.hints ?? [] }
+            : null,
         expanded: opts.expanded ?? [],
         dirs: { "": [], ...(opts.listings ?? {}) } as never,
       },
@@ -165,5 +178,73 @@ describe("the ancestors of a path in an added folder", () => {
 
   it("leaves a session-relative path exactly as it was", () => {
     expect(ancestors("src/ui/Thing.tsx")).toEqual(["src", "src/ui"]);
+  });
+});
+
+/**
+ * Folders mogeung noticed the session working in. `R-J39`.
+ *
+ * **Offered, never added.** Every channel behind a suggestion is
+ * retrospective — it can only say where the agent has already been — so the
+ * daemon's read boundary still widens exactly when you widen it. These fail
+ * against the tree as it stood, which had no way to say "you seem to work
+ * here too".
+ */
+describe("folders this session was noticed working in", () => {
+  it("offers one, saying why it is being offered", () => {
+    setup({ hints: [{ path: "/elsewhere/immix-common", source: "edits", files: 4 }] });
+    render(<FilesTool />);
+
+    expect(screen.getByText("immix-common")).toBeInTheDocument();
+    expect(screen.getByText("4 files edited here")).toBeInTheDocument();
+  });
+
+  /** The CLI agreeing rather than a file landing somewhere — and it can be
+   *  offered before a single file has been written. */
+  it("names /add-dir as the reason when that is what happened", () => {
+    setup({ hints: [{ path: "/elsewhere/sibling", source: "add-dir", files: 0 }] });
+    render(<FilesTool />);
+
+    expect(screen.getByText("added with /add-dir")).toBeInTheDocument();
+  });
+
+  it("adds one when you say so, and only then", () => {
+    setup({ hints: [{ path: "/elsewhere/immix-common", source: "edits", files: 4 }] });
+    render(<FilesTool />);
+
+    expect(sent.filter((m) => (m as { cmd: string }).cmd === "add_workspace_dir")).toEqual([]);
+    fireEvent.click(screen.getByLabelText("add immix-common to this workspace"));
+
+    expect(sent).toContainEqual({
+      cmd: "add_workspace_dir",
+      session_id: "s1",
+      path: "/elsewhere/immix-common",
+    });
+  });
+
+  /** Waving one away is a preference, not a fact about the session: it is kept
+   *  against the repository, the same key the workspace itself uses. */
+  it("stops offering one you waved away, and remembers which", () => {
+    setup({ hints: [{ path: "/elsewhere/immix-common", source: "edits", files: 4 }] });
+    const { rerender } = render(<FilesTool />);
+
+    fireEvent.click(screen.getByLabelText("stop offering immix-common"));
+    rerender(<FilesTool />);
+
+    expect(screen.queryByText("immix-common")).not.toBeInTheDocument();
+    expect(useStore.getState().prefs.dismissedDirs["/repo/own"]).toEqual([
+      "/elsewhere/immix-common",
+    ]);
+  });
+
+  /** A suggestion is not a folder you have. Answering the filter with one
+   *  would put a directory you cannot open into a list of files you can. */
+  it("keeps them out of the filter's answers", () => {
+    setup({ hints: [{ path: "/elsewhere/immix-common", source: "edits", files: 4 }] });
+    render(<FilesTool />);
+
+    fireEvent.change(screen.getByPlaceholderText(/filter/), { target: { value: "immix" } });
+
+    expect(screen.queryByText("4 files edited here")).not.toBeInTheDocument();
   });
 });

@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, ChevronRight, Crosshair, FolderPlus, RefreshCw, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Crosshair, FolderPlus, Plus, RefreshCw, X } from "lucide-react";
 import { FileIcon } from "@/ui/FileIcon";
 import { useStore } from "@/store";
 import { Dim, Empty, IconButton, Input, Loading } from "@/ui/primitives";
@@ -144,13 +144,26 @@ export function FilesTool() {
   // not which tab happens to be forward.
   const openPaths = st ? st.open.map((t) => t.path) : [];
 
+  /**
+   * Folders this session has been seen working in that the workspace does not
+   * show. `R-J39`.
+   *
+   * **Offered, never added.** Every channel behind a suggestion is
+   * retrospective — a `/add-dir` the CLI confirmed, or files this session
+   * wrote outside its own root — so it can shorten the click and must not make
+   * it. What the daemon reads still widens exactly when you widen it.
+   */
+  const dismissed = useStore((s) => s.prefs.dismissedDirs);
+  const root = session ? (session.repo_root ?? session.cwd) : "";
+  const hints = (st?.workspace?.hints ?? []).filter(
+    (h) => !(dismissed[root] ?? []).includes(h.path),
+  );
+
   if (!id || !session) {
     return (
       <Empty hint="a worktree belongs to one — pick a session in the queue">no session selected</Empty>
     );
   }
-
-  const root = session.repo_root ?? session.cwd;
 
   return (
     <>
@@ -345,6 +358,65 @@ export function FilesTool() {
           </div>
         )}
       </div>
+      )}
+
+      {/*
+        Under the tree rather than in it: a suggestion is not a folder you have,
+        and a row you could click into would be exactly that lie. It is also why
+        the filter hides this — a list of what you *might* add has no business
+        answering "where is `mod.rs`".
+      */}
+      {match.empty && hints.length > 0 && (
+        <div className="shrink-0 border-t border-[var(--border)] px-2 py-1">
+          <Dim className="block text-2xs">
+            worked in by this session — not in the workspace
+          </Dim>
+          {hints.map((h) => (
+            <div key={h.path} className="flex items-center gap-1 py-px text-sm" title={h.path}>
+              <FileIcon name={basename(h.path)} isDir className="shrink-0" />
+              <span className="truncate text-[var(--text)]">{basename(h.path)}</span>
+              {/* Why it is being offered, in the words of the thing that
+                  noticed: `/add-dir` is the CLI agreeing, and a file count is
+                  the weaker but far commoner signal. */}
+              <Dim className="shrink-0 text-2xs">
+                {h.source === "add-dir"
+                  ? "added with /add-dir"
+                  : `${h.files} file${h.files === 1 ? "" : "s"} edited here`}
+              </Dim>
+              <div className="ml-auto flex shrink-0 items-center">
+                <button
+                  type="button"
+                  title={`add ${h.path} to this workspace`}
+                  aria-label={`add ${basename(h.path)} to this workspace`}
+                  onClick={() => send({ cmd: "add_workspace_dir", session_id: id, path: h.path })}
+                  className="opacity-60 outline-none transition-opacity duration-[var(--dur-fast)] hover:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+                >
+                  <Plus size={12} />
+                </button>
+                {/* Dismissing is a preference, not a fact about the session:
+                    it says you do not want to be asked again on this machine,
+                    and it is keyed by the repository so it lasts as long as
+                    the workspace does. */}
+                <button
+                  type="button"
+                  title={`stop offering ${h.path}`}
+                  aria-label={`stop offering ${basename(h.path)}`}
+                  onClick={() =>
+                    setPrefs({
+                      dismissedDirs: {
+                        ...dismissed,
+                        [root]: [...(dismissed[root] ?? []), h.path],
+                      },
+                    })
+                  }
+                  className="ml-1 opacity-40 outline-none transition-opacity duration-[var(--dur-fast)] hover:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {st?.treeTruncated && (

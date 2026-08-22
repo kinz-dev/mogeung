@@ -124,6 +124,13 @@ pub struct AppState {
 /// mid-session is possible, just not worth a fork per tick to notice sooner.
 const REPO_RECHECK_TICKS: u32 = 40;
 
+/// Folders offered to a workspace at once. `R-J39`.
+///
+/// Small on purpose: the measurement says a session that works outside its own
+/// root works in **one** other folder (29 of 40) and never in more than four,
+/// so a list longer than this is a list that has gone wrong.
+const MAX_WORKSPACE_HINTS: usize = 8;
+
 
 /// A touched file, relative to the repository root — **tolerating two
 /// spellings of one place**. `R-J27`.
@@ -243,6 +250,7 @@ fn blank_session(
         verify_runs: Vec::new(),
         claims: Vec::new(),
         source,
+        announced_dirs: Vec::new(),
     }
 }
 
@@ -1216,6 +1224,15 @@ impl AppState {
                 s.recent_touches.drain(..excess);
             }
 
+            // Folders the CLI confirmed with `/add-dir`. Kept whole rather than
+            // windowed: it is a handful per session at most, and a folder
+            // authorised an hour ago is the same folder now. `R-J39`.
+            for d in p.announced_dirs {
+                if !s.announced_dirs.contains(&d) {
+                    s.announced_dirs.push(d);
+                }
+            }
+
             // Verification-shaped commands become evidence rows, paired with
             // their results below by tool_use id. `R-E1`.
             for (id, kind, cmd) in &p.verify_cmds {
@@ -1796,14 +1813,44 @@ impl AppState {
     /// `runconfig` makes and for the same reason: the file is small, it is in
     /// your home directory, and it is meant to be editable by hand. A cache
     /// would make a hand edit take effect at a moment nobody could predict.
-    pub async fn workspace(&self, id: &str) -> Result<(String, Vec<String>, Vec<String>)> {
+    pub async fn workspace(&self, id: &str) -> Result<crate::workspace::View> {
         let root = self.session_root(id).await?.to_string_lossy().to_string();
         let all = crate::workspace::load(&crate::workspace::store_path());
-        Ok((
-            root.clone(),
-            crate::workspace::live(&all, &root),
-            crate::workspace::missing(&all, &root),
-        ))
+        let dirs = crate::workspace::live(&all, &root);
+        let missing = crate::workspace::missing(&all, &root);
+
+        // What this session has been seen working in, offered and never added
+        // (`R-J39`). Both channels are already in the session — the `/add-dir`
+        // confirmations the CLI wrote, and the files this session edited, whose
+        // out-of-root ones `relative_to_root` leaves absolute. Nothing new is
+        // read from disk here except whether a folder is still there.
+        let session = self.get(id).await;
+        let hints = match &session {
+            Some(s) => {
+                let mut roots = vec![root.clone()];
+                roots.extend(dirs.iter().cloned());
+                let written: Vec<String> = s
+                    .touched_files
+                    .iter()
+                    .filter(|f| f.starts_with('/'))
+                    .cloned()
+                    .collect();
+                crate::workspace::suggest(
+                    &roots,
+                    &s.announced_dirs,
+                    &written,
+                    &crate::workspace::never_suggest(&self.claude_home),
+                    MAX_WORKSPACE_HINTS,
+                )
+            }
+            None => Vec::new(),
+        };
+        Ok(crate::workspace::View {
+            root,
+            dirs,
+            missing,
+            hints,
+        })
     }
 
     /// Add a folder to this session's workspace. `R-J40`.

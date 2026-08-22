@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-20
+updated: 2026-08-22
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -138,6 +138,42 @@ Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
 - `version` is **per line**, and reflects the release that wrote it. A fortnight
   of transcripts routinely spans a dozen releases, so version ordering must come
   from each line's own `timestamp`, never from the order files are scanned.
+
+### A slash command's output is written back as a user message
+
+`<local-command-stdout>…</local-command-stdout>`, as a `type: "user"` line whose
+`message.content` is a **plain string** — the shape that otherwise only a human
+prompt has. 134 of them across 77 of the 160 transcripts on the author's machine
+(2026-08-22); the commonest are the compaction banner, `/model`, and empty ones
+where the command printed nothing.
+
+**It was being counted as your turn.** `last_prompt` is what the queue shows for
+a session without a title, so a session that had just compacted reported
+*"Compacted (ctrl+o to see full summary)"* as the last thing you asked for, and
+its turn count included lines nobody typed. Now the wrapper is recognised and
+the line yields nothing — `LineClass::Barren` rather than a prompt. The command
+*echo* (`<command-name>`/`<command-args>`) is still a turn, because that half
+really is you.
+
+One of them carries something worth keeping: `/add-dir` writes
+
+```
+<local-command-stdout>Added \u001b[1m/home/me/other\u001b[22m as a working
+directory for this session \u001b[2m· /permissions to manage\u001b[22m</local-command-stdout>
+```
+
+read for `R-J39` as a folder to **offer** for the session's workspace. Two
+details are load-bearing: the path is wrapped in bold escapes, so the sentence
+has to be stripped of ANSI before it can be matched; and **the wrapper is the
+anchor, not the sentence** — a session working on this feature writes that same
+sentence in ordinary prose, and this repository's own transcripts contain
+several. Only the CLI writes the tag.
+
+The confirmation is preferred over the command echo for the same reason
+throughout: it is the CLI **agreeing**, written after the folder was accepted,
+where the echo carries whatever was typed. A session started with
+`claude --add-dir` leaves neither — no trace at all in this corpus — which is a
+limit to state rather than to work around.
 
 ### Size
 

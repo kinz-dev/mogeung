@@ -52,6 +52,7 @@ import type {
   TranscriptEvent,
   UsageReport,
   WorktreeInfo,
+  WorkspaceHint,
   ClientMsg,
 } from "@/wire/types";
 import {
@@ -136,7 +137,7 @@ export interface ExplorerState {
    * one. `null` means nobody has asked yet — which is a different thing from
    * *asked, and there are none*, and the tree draws them differently.
    */
-  workspace: { dirs: string[]; missing: string[] } | null;
+  workspace: { dirs: string[]; missing: string[]; hints: WorkspaceHint[] } | null;
 }
 
 export const emptyExplorer = (): ExplorerState => ({
@@ -881,7 +882,13 @@ export const useStore = create<AppState>((set, get) => ({
           return {
             explorer: {
               ...s.explorer,
-              [msg.session_id]: { ...st, workspace: { dirs: msg.dirs, missing: msg.missing } },
+              [msg.session_id]: {
+                ...st,
+                // `hints` defaults for a daemon older than `R-J39`: the field
+                // is `#[serde(default)]` on the wire, and an undefined array
+                // here would throw in the render rather than show one less row.
+                workspace: { dirs: msg.dirs, missing: msg.missing, hints: msg.hints ?? [] },
+              },
             },
           };
         });

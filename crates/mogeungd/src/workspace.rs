@@ -116,6 +116,18 @@ pub fn admit(root: &str, existing: &[String], candidate: &str) -> Result<String>
     if existing.iter().any(|e| e == &full_s) {
         return Err(anyhow!("{full_s} is already in this workspace"));
     }
+    // The same duplication from above: a folder that *contains* a root already
+    // served draws that subtree twice, and every file in it answers to two
+    // names. Refused with the one that has to go first, because "already
+    // inside" read backwards is not an instruction.
+    let mut served = vec![root_c];
+    served.extend(existing.iter().map(PathBuf::from));
+    if let Some(inner) = served.iter().find(|s| s.starts_with(&full)) {
+        return Err(anyhow!(
+            "{full_s} contains {}, which this workspace already shows — remove that first",
+            inner.to_string_lossy()
+        ));
+    }
     Ok(full_s)
 }
 
@@ -142,6 +154,164 @@ pub fn missing(all: &Workspaces, root: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// One session's workspace as a client sees it.
+///
+/// A struct rather than a tuple because it is built in one place and sent from
+/// three, and a fourth field arriving as `.3` is how the wrong list gets shown.
+pub struct View {
+    pub root: String,
+    pub dirs: Vec<String>,
+    pub missing: Vec<String>,
+    pub hints: Vec<mogeung_core::wire::WorkspaceHint>,
+}
+
+impl View {
+    pub fn into_msg(self, session_id: mogeung_core::session::SessionId) -> mogeung_core::wire::ServerMsg {
+        mogeung_core::wire::ServerMsg::Workspace {
+            session_id,
+            root: self.root,
+            dirs: self.dirs,
+            missing: self.missing,
+            hints: self.hints,
+        }
+    }
+}
+
+/// Folders it is never worth offering, however often a session writes in them.
+///
+/// One entry, and it earns its place: over the 160 transcripts on the author's
+/// machine (2026-08-22) the **single most written-to** folder outside any
+/// session's own root was `~/.claude/…/memory`, the agent's own notes. It is
+/// the harness's plumbing rather than anything you would browse, and mogeung's
+/// standing rule about `~/.claude` is that it reads it and never writes it —
+/// offering it as a workspace folder argues the other way.
+pub fn never_suggest(claude_home: &Path) -> Vec<PathBuf> {
+    vec![claude_home.to_path_buf()]
+}
+
+/// The repository a written file argues for.
+///
+/// **A repository, or nothing** — which is the whole noise filter, and it was
+/// measured rather than guessed. Ranked by files written outside the session's
+/// own root, every folder that was a repository was a real sibling project
+/// (`workspace_unity/immix-common`, `immix-sequencer`, …) and every folder that
+/// was not was the harness talking to itself: the agent's memory directory, a
+/// per-session scratchpad under `/tmp`, and one loose dotfile that rolled up to
+/// `$HOME`. Rolling up also makes eleven files into **one** suggestion, and
+/// names the unit you actually want — the project, not the directory the file
+/// happened to sit in.
+///
+/// The cost is real and accepted: a non-repository folder you genuinely work in
+/// (`~/perf-test`, twice in that corpus) is never inferred. `/add-dir` names one
+/// explicitly, and the `+` button has always been there.
+///
+/// `.git` is tested with `exists` rather than `is_dir` because a worktree and a
+/// submodule spell it as a file.
+fn repo_for(file: &Path) -> Option<PathBuf> {
+    let mut cur = file.parent();
+    while let Some(d) = cur {
+        if d.join(".git").exists() {
+            return Some(d.to_path_buf());
+        }
+        cur = d.parent();
+    }
+    None
+}
+
+/// A folder so wide that adding it would hand over everything below it.
+///
+/// The measurement produced exactly this: one session wrote a loose dotfile
+/// straight into `$HOME`, which rolls up to `$HOME` itself. Accepting that
+/// suggestion would put the whole home directory behind an unauthenticated
+/// localhost port in one click — the failure this feature must not make easy.
+fn too_broad(p: &Path, home: Option<&Path>) -> bool {
+    if p.parent().is_none() {
+        return true;
+    }
+    home.is_some_and(|h| h == p || h.starts_with(p))
+}
+
+/// What this session has been seen working in, that the workspace does not
+/// already show. `R-J39`.
+///
+/// **Offered, never added.** Every channel here is retrospective — it can only
+/// say where an agent has already been — so it cannot be a read boundary by
+/// itself; it is a shortcut for the click you would otherwise make by hand.
+///
+/// `announced` are `/add-dir` confirmations, which rank first because they are
+/// the CLI agreeing rather than a file landing somewhere, and which are taken
+/// as given — you named that folder, so it does not have to look like a
+/// project. `written` are the absolute paths of files this session wrote, which
+/// is the channel with the numbers behind it (23.7% of transcripts against
+/// 1.5%) and the one that has to be filtered: it is inferred, so it is only
+/// ever a repository. See [`repo_for`].
+pub fn suggest(
+    roots: &[String],
+    announced: &[String],
+    written: &[String],
+    never: &[PathBuf],
+    cap: usize,
+) -> Vec<mogeung_core::wire::WorkspaceHint> {
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let served: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+    // Insertion-ordered by first sight, then sorted below — a map keyed by the
+    // folder is what turns eleven files into one row.
+    let mut found: Vec<(PathBuf, bool, u32)> = Vec::new();
+    let mut note = |dir: PathBuf, from_add_dir: bool| {
+        if let Some(e) = found.iter_mut().find(|(p, _, _)| *p == dir) {
+            e.1 |= from_add_dir;
+            if !from_add_dir {
+                e.2 += 1;
+            }
+            return;
+        }
+        found.push((dir, from_add_dir, u32::from(!from_add_dir)));
+    };
+    for p in announced {
+        let dir = PathBuf::from(p);
+        if dir.is_absolute() {
+            note(dir, true);
+        }
+    }
+    for p in written {
+        let file = Path::new(p);
+        if !file.is_absolute() {
+            continue;
+        }
+        if let Some(dir) = repo_for(file) {
+            note(dir, false);
+        }
+    }
+
+    let mut out: Vec<mogeung_core::wire::WorkspaceHint> = found
+        .into_iter()
+        .filter(|(dir, _, _)| {
+            // Real, and still a directory — a folder that has since moved is a
+            // suggestion that could only fail.
+            dir.is_dir()
+                && !too_broad(dir, home.as_deref())
+                && !never.iter().any(|n| dir.starts_with(n))
+                // Already shown, or containing what is already shown: both draw
+                // the same subtree twice, which is what `admit` refuses anyway.
+                && !served.iter().any(|r| dir.starts_with(r) || r.starts_with(dir))
+        })
+        .map(|(dir, from_add_dir, files)| mogeung_core::wire::WorkspaceHint {
+            path: dir.to_string_lossy().to_string(),
+            source: if from_add_dir { "add-dir" } else { "edits" }.to_string(),
+            files,
+        })
+        .collect();
+    // The CLI's own confirmation first, then whoever was worked in hardest.
+    out.sort_by(|a, b| {
+        (a.source != "add-dir")
+            .cmp(&(b.source != "add-dir"))
+            .then(b.files.cmp(&a.files))
+            .then(a.path.cmp(&b.path))
+    });
+    out.truncate(cap);
+    out
 }
 
 #[cfg(test)]
@@ -218,6 +388,195 @@ mod tests {
         let _ = std::os::unix::fs::symlink(base.join("real"), &link);
         let stored = admit("/elsewhere", &[], &link.to_string_lossy()).unwrap();
         assert!(stored.ends_with("/real"), "{stored}");
+    }
+
+    /// The same duplication `admit` already refuses, from the other side: a
+    /// folder that *contains* the session's root draws that subtree twice, and
+    /// discovery will propose one — a file written into `~/projects/x` from a
+    /// session rooted at `~/projects/x/sub` rolls up to the parent.
+    #[test]
+    fn a_folder_that_contains_a_root_is_refused_and_says_which() {
+        let base = tmp().join("ancestor");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("repo/sub")).unwrap();
+        let base_s = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let root = format!("{base_s}/repo/sub");
+        // The parent of the session's own root.
+        let err = admit(&root, &[], &format!("{base_s}/repo")).unwrap_err();
+        assert!(err.to_string().contains("contains"), "{err}");
+        // …and the parent of a folder already added.
+        let err = admit("/elsewhere", &[format!("{base_s}/repo")], &base_s).unwrap_err();
+        assert!(err.to_string().contains("contains"), "{err}");
+    }
+
+    // -- Discovery. `R-J39`. -------------------------------------------------
+
+    /// Eleven files in one repository are **one** suggestion, and the folder it
+    /// names is the repository rather than the directory the file sat in.
+    #[test]
+    fn written_files_suggest_their_repository_once() {
+        let base = tmp().join("suggest");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("other/.git")).unwrap();
+        std::fs::create_dir_all(base.join("other/src/deep")).unwrap();
+        let base_s = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let hints = suggest(
+            &[format!("{base_s}/own")],
+            &[],
+            &[
+                format!("{base_s}/other/src/a.rs"),
+                format!("{base_s}/other/src/deep/b.rs"),
+            ],
+            &[],
+            8,
+        );
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert_eq!(hints[0].path, format!("{base_s}/other"));
+        assert_eq!(hints[0].source, "edits");
+        assert_eq!(hints[0].files, 2);
+    }
+
+    /// The measurement, applied. Ranked by files written outside their own
+    /// root, the folders that were **not** repositories were the harness
+    /// talking to itself: the agent's memory directory (the most written-to
+    /// folder in the whole corpus) and a per-session scratchpad. Neither is a
+    /// place you would browse, and a pass that offered them would bury the
+    /// sibling projects that were the point.
+    #[test]
+    fn a_folder_that_is_not_a_repository_is_never_inferred() {
+        let base = tmp().join("norepo");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("pad/scratchpad")).unwrap();
+        std::fs::create_dir_all(base.join("memory")).unwrap();
+        std::fs::create_dir_all(base.join("real/.git")).unwrap();
+        let base_s = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let hints = suggest(
+            &[format!("{base_s}/own")],
+            &[],
+            &[
+                format!("{base_s}/pad/scratchpad/probe.py"),
+                format!("{base_s}/memory/note.md"),
+                format!("{base_s}/real/main.rs"),
+            ],
+            &[],
+            8,
+        );
+        assert_eq!(
+            hints.iter().map(|h| h.path.as_str()).collect::<Vec<_>>(),
+            vec![format!("{base_s}/real")]
+        );
+    }
+
+    /// `~/.claude` is refused even through the channel that is otherwise taken
+    /// as given. You *can* `/add-dir` the agent's own home; mogeung reads that
+    /// directory and never writes it, and offering it as a workspace folder
+    /// argues the other way.
+    #[test]
+    fn the_agents_own_home_is_refused_even_when_it_was_announced() {
+        let base = tmp().join("claudehome");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("claude/projects")).unwrap();
+        let base_s = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let never = never_suggest(Path::new(&format!("{base_s}/claude")));
+        let hints = suggest(
+            &[format!("{base_s}/own")],
+            &[format!("{base_s}/claude/projects")],
+            &[],
+            &never,
+            8,
+        );
+        assert!(hints.is_empty(), "{hints:?}");
+    }
+
+    /// One session in the corpus wrote a loose dotfile straight into `$HOME`,
+    /// which rolls up to `$HOME` itself. Accepting that suggestion would put a
+    /// whole home directory behind an unauthenticated port in one click.
+    #[test]
+    fn a_folder_wide_enough_to_hold_everything_is_never_offered() {
+        let home = PathBuf::from("/home/someone");
+        assert!(too_broad(Path::new("/"), Some(&home)));
+        assert!(too_broad(&home, Some(&home)));
+        assert!(too_broad(Path::new("/home"), Some(&home)), "a parent of home");
+        assert!(!too_broad(Path::new("/home/someone/projects/x"), Some(&home)));
+    }
+
+    /// A suggestion for something the tree already draws is noise at best and,
+    /// when it is an *ancestor*, a duplicated subtree — the case `admit` would
+    /// refuse anyway, so it must never be offered.
+    #[test]
+    fn what_the_workspace_already_shows_is_not_offered_again() {
+        let base = tmp().join("shown");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("own/.git")).unwrap();
+        std::fs::create_dir_all(base.join("own/src")).unwrap();
+        std::fs::create_dir_all(base.join("added/.git")).unwrap();
+        std::fs::create_dir_all(base.join("added/lib")).unwrap();
+        // A repository with the session's root *inside* it — the parent a file
+        // written beside a checkout rolls up to.
+        std::fs::create_dir_all(base.join("outer/.git")).unwrap();
+        std::fs::create_dir_all(base.join("outer/inner")).unwrap();
+        let base_s = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let roots = vec![format!("{base_s}/own"), format!("{base_s}/added")];
+        let hints = suggest(
+            &roots,
+            &[],
+            &[
+                format!("{base_s}/own/src/a.rs"),
+                format!("{base_s}/added/lib/b.rs"),
+            ],
+            &[],
+            8,
+        );
+        assert!(hints.is_empty(), "{hints:?}");
+
+        let hints = suggest(
+            &[format!("{base_s}/outer/inner")],
+            &[],
+            &[format!("{base_s}/outer/loose.txt")],
+            &[],
+            8,
+        );
+        assert!(hints.is_empty(), "an ancestor of a root: {hints:?}");
+    }
+
+    /// `/add-dir` is the CLI agreeing rather than a file landing somewhere, so
+    /// it leads — and it can be offered before a single file has been written,
+    /// which is the only prospective thing about any of this.
+    #[test]
+    fn an_announced_folder_leads_and_needs_no_files() {
+        let base = tmp().join("rank");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("announced")).unwrap();
+        std::fs::create_dir_all(base.join("busy/.git")).unwrap();
+        let base_s = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let hints = suggest(
+            &[format!("{base_s}/own")],
+            &[format!("{base_s}/announced")],
+            &[
+                format!("{base_s}/busy/a.rs"),
+                format!("{base_s}/busy/b.rs"),
+                format!("{base_s}/busy/c.rs"),
+            ],
+            &[],
+            8,
+        );
+        assert_eq!(hints[0].path, format!("{base_s}/announced"));
+        assert_eq!(hints[0].source, "add-dir");
+        assert_eq!(hints[0].files, 0);
+        assert_eq!(hints[1].files, 3);
+    }
+
+    /// A folder that has since moved is a suggestion that could only fail.
+    #[test]
+    fn a_folder_that_is_no_longer_there_is_not_offered() {
+        let hints = suggest(
+            &["/own".into()],
+            &["/gone/for/ever".into()],
+            &["/gone/for/ever/file.rs".into()],
+            &[],
+            8,
+        );
+        assert!(hints.is_empty(), "{hints:?}");
     }
 
     #[test]

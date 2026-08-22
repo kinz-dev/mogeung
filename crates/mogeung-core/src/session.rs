@@ -205,6 +205,16 @@ pub struct Session {
     /// persisted before `R-I1` still loads as what it was.
     #[serde(default)]
     pub source: SessionSource,
+
+    /// Folders the CLI confirmed this session may work in, from `/add-dir`.
+    /// `R-J39`.
+    ///
+    /// The *CLI agreeing*, not the user asking: the confirmation line is
+    /// written after the directory was accepted, so a typo'd `/add-dir` leaves
+    /// nothing here. Only ever a **suggestion** — mogeung's own read boundary
+    /// still widens exactly when you widen it, in the UI.
+    #[serde(default)]
+    pub announced_dirs: Vec<String>,
 }
 
 impl Session {

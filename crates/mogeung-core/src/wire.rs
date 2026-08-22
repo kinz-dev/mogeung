@@ -408,6 +408,24 @@ pub enum ClientMsg {
     FetchKitDoc { path: String },
 }
 
+/// A folder this session has been seen working in, offered for the workspace
+/// and never added by itself. `R-J39`.
+///
+/// **A suggestion is not a permission.** The daemon widens what it will read
+/// only when you widen it, so this carries what was noticed and why, and stops
+/// there — the `+` is yours to press.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceHint {
+    /// The folder, absolute and real at the moment it was suggested.
+    pub path: String,
+    /// How it was noticed: `add-dir` when the CLI confirmed a `/add-dir`,
+    /// `edits` when the session wrote files there.
+    pub source: String,
+    /// Files this session wrote inside it — `0` for an `add-dir` record, which
+    /// can be offered before a single file has been touched.
+    pub files: u32,
+}
+
 /// One entry of a [`ClientMsg::ListDir`] answer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirEntry {
@@ -759,6 +777,10 @@ pub enum ServerMsg {
         root: String,
         dirs: Vec<String>,
         missing: Vec<String>,
+        /// Folders this session has been seen working in that are not in the
+        /// workspace yet. Offered, never added. `R-J39`.
+        #[serde(default)]
+        hints: Vec<WorkspaceHint>,
     },
     /// Every file of a session's worktree, sorted, `.git` never included and
     /// gitignore respected when the root is a repo. `truncated` means the walk

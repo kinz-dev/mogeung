@@ -126,6 +126,8 @@ pub struct Parsed {
     pub last_activity: Option<String>,
     /// Files this line shows the session touching.
     pub touched: Vec<String>,
+    /// Folders the CLI confirmed with `/add-dir` on this line. `R-J39`.
+    pub announced_dirs: Vec<String>,
     pub error: Option<String>,
     /// Emitted by a subagent rather than the main conversation.
     pub sidechain: bool,
@@ -343,6 +345,59 @@ fn extract_claims(text: &str, out: &mut Vec<(VerifyKind, String)>) {
     }
 }
 
+/// The body of a `<local-command-stdout>` wrapper, when the line is one.
+///
+/// The wrapper is the anchor, and deliberately so: a session *discussing*
+/// `/add-dir` writes the same sentence in ordinary prose, and this very
+/// repository's transcripts contain several. Only the CLI writes the tag.
+fn local_command_stdout(s: &str) -> Option<&str> {
+    let t = s.trim();
+    let inner = t.strip_prefix("<local-command-stdout>")?;
+    Some(inner.strip_suffix("</local-command-stdout>").unwrap_or(inner))
+}
+
+/// Drop ANSI colour so a sentence can be read.
+///
+/// The CLI bolds the path it is confirming, so the raw line reads `Added
+/// \u{1b}[1m/path\u{1b}[22m as a working directory` — the escape sits between
+/// the words this parser matches on.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI: `ESC [` … final byte in `@`..`~`. Anything else after ESC is a
+        // shape we have not seen, and dropping one character is the safe half.
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The folder from a `/add-dir` confirmation, if that is what this is.
+///
+/// `Added /home/me/other as a working directory for this session · /permissions
+/// to manage` — the CLI **agreeing**, which is why this is the better of the
+/// two records `/add-dir` leaves: the command echo carries what you typed, and
+/// a path that does not exist is typed just as easily as one that does.
+fn announced_dir(body: &str) -> Option<String> {
+    let plain = strip_ansi(body);
+    let rest = plain.trim().strip_prefix("Added ")?;
+    let (path, _) = rest.split_once(" as a working directory")?;
+    let path = path.trim();
+    // Absolute only: the daemon has no idea what the session's cwd was when
+    // the line was written, and guessing one would invent a folder.
+    path.starts_with('/').then(|| path.to_string())
+}
+
 /// Tools whose use means a file on disk changed.
 fn touched_path(name: &str, input: &Value) -> Option<String> {
     match name {
@@ -465,7 +520,19 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
         "user" => {
             let content = v.get("message").and_then(|m| m.get("content"))?;
             match content {
-                // A plain string is always a human prompt.
+                // A plain string is a human prompt — **unless it is the CLI
+                // answering a slash command**. `<local-command-stdout>` is
+                // written back into the transcript as a user message, and
+                // counting it as a prompt makes a session that just compacted
+                // report "Compacted (ctrl+o to see full summary)" as the last
+                // thing you said. 134 such lines across 77 of the 160
+                // transcripts on this machine, 2026-08-22 — the commonest are
+                // the compaction banner and `/model`.
+                Value::String(s) if local_command_stdout(s).is_some() => {
+                    if let Some(dir) = announced_dir(local_command_stdout(s).unwrap()) {
+                        out.announced_dirs.push(dir);
+                    }
+                }
                 Value::String(s) => {
                     if !s.trim().is_empty() {
                         out.is_turn = true;
@@ -628,6 +695,7 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
         && out.title.is_none()
         && out.last_prompt.is_none()
         && out.touched.is_empty()
+        && out.announced_dirs.is_empty()
         && out.error.is_none()
         && out.tokens_out == 0
         && !out.limit_hit
@@ -767,6 +835,50 @@ mod tests {
     fn detached_head_is_not_treated_as_a_branch() {
         let l = r#"{"type":"user","gitBranch":"HEAD","message":{"role":"user","content":"x"}}"#;
         assert!(parsed(l).git_branch.is_none());
+    }
+
+    /// The real corpus line, verbatim down to the bold escapes — `/add-dir`
+    /// leaves this and the command echo, and this is the one worth reading
+    /// because it is written *after* the CLI accepted the folder. `R-J39`.
+    #[test]
+    fn an_add_dir_confirmation_names_the_folder_it_confirmed() {
+        let l = r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Added \u001b[1m/home/kinz/projects/workspace_unity/immix-trading-v2\u001b[22m as a working directory for this session \u001b[2m· /permissions to manage\u001b[22m</local-command-stdout>"},"cwd":"/home/kinz/projects/immix-sequencer"}"#;
+        let p = parsed(l);
+        assert_eq!(
+            p.announced_dirs,
+            vec!["/home/kinz/projects/workspace_unity/immix-trading-v2"]
+        );
+    }
+
+    /// **The wrapper is the anchor, not the sentence.** A session working on
+    /// this very feature writes that sentence in prose, and every transcript in
+    /// this repository proves it — a parser that matched the words would offer
+    /// the folder mogeung's own docs happen to mention.
+    #[test]
+    fn talking_about_add_dir_announces_nothing() {
+        let l = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"a <local-command-stdout> confirming Added /home/other as a working directory for this session"}]}}"#;
+        assert!(parsed(l).announced_dirs.is_empty());
+        let user = r#"{"type":"user","message":{"role":"user","content":"Added /home/other as a working directory for this session"}}"#;
+        assert!(parsed(user).announced_dirs.is_empty());
+    }
+
+    /// A slash command's output is the CLI talking, and was being counted as
+    /// the human's turn — so a session that had just compacted reported the
+    /// compaction banner as the last thing you asked for. 134 such lines across
+    /// 77 of the 160 transcripts on this machine.
+    #[test]
+    fn a_local_commands_output_is_not_a_prompt() {
+        let l = r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>"}}"#;
+        // Barren, not parsed: the line carries nothing about the session,
+        // where before it carried a prompt nobody wrote.
+        assert_eq!(class(l), LineClass::Barren);
+    }
+
+    /// What you typed still counts: `/add-dir` is a turn, its *answer* is not.
+    #[test]
+    fn a_slash_command_you_typed_is_still_a_prompt() {
+        let l = r#"{"type":"user","message":{"role":"user","content":"<command-name>/add-dir</command-name>\n<command-args>/home/other</command-args>"}}"#;
+        assert!(parsed(l).is_turn);
     }
 
     #[test]

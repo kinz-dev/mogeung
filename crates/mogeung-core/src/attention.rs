@@ -268,6 +268,7 @@ mod tests {
             verify_runs: Vec::new(),
             claims: Vec::new(),
             source: Default::default(),
+            announced_dirs: vec![],
         }
     }
 

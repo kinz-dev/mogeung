@@ -131,6 +131,15 @@ export interface Prefs {
   infoOpen: boolean;
   /** The Files tree follows the file you are reading. `R-J25`. */
   filesFollow: boolean;
+  /**
+   * Suggested folders you have waved away, by repository root. `R-J39`.
+   *
+   * A preference and not a daemon fact: refusing a suggestion says nothing
+   * about the session, only that you do not want to be asked again on this
+   * machine. It is keyed by the same repository root the workspace itself is
+   * keyed by, so dismissing outlives the session exactly as adding does.
+   */
+  dismissedDirs: Record<string, string[]>;
   infoHeight: number;
   /** The Notes editor's share of the rail. */
   notesEditorHeight: number;
@@ -234,6 +243,7 @@ export const defaultPrefs = (): Prefs => ({
   dockHeight: 280,
   infoOpen: false,
   filesFollow: false,
+  dismissedDirs: {},
   infoHeight: 240,
   notesEditorHeight: 256,
   queueWidth: 380,

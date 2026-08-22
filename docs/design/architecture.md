@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-21
+updated: 2026-08-22
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -115,9 +115,26 @@ added by hand, kept in `~/.mogeung/workspaces.json` under the session's
 *repository* so they outlive it, and a path is served only if it resolves
 inside one of them. A relative path still means the session's own root; an
 absolute one names itself and is checked against that whitelist. What a client
-may name is therefore exactly what somebody authorised through the UI —
-discovery from `/add-dir` or from what an agent has touched is `R-J39`, and
-deliberately not this.
+may name is therefore exactly what somebody authorised through the UI.
+
+**`R-J39` closed the discovery half without moving that line.** A session's
+workspace answer also carries *hints*: folders mogeung has seen this session
+working in — a `/add-dir` the CLI confirmed, or a repository it wrote files
+into — each shown under the tree with a `+` and a `✕`. **Offered, never
+added**, and the wording is the design: every channel behind a hint is
+retrospective, so it can only say where an agent has already been, which makes
+it a shortcut for a click and not a basis for a read boundary. Nothing widens
+until somebody presses `+`, and dismissing one is a client preference (keyed by
+the same repository root) rather than a fact about the session.
+
+The inference is deliberately narrow, and the shape came from the corpus rather
+than from taste: of the folders sessions wrote into outside their own root,
+every one that was a **git repository** was a real sibling project and every one
+that was not was the harness talking to itself — the agent's own memory
+directory (the single most written-to folder on the machine), a per-session
+scratchpad, and one loose dotfile that rolled up to `$HOME`. So an edit only
+suggests a repository, `~/.claude` is refused through either channel, and a
+folder wide enough to contain your home directory is never offered at all.
 
 The workbench (`R-B25`) widened that surface, not the rule: the daemon also
 walks the whole tree (for go-to-file) and greps it (for content search), both
