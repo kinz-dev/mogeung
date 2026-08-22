@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-08-05
+updated: 2026-08-22
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -9,6 +9,12 @@ covers:
 # Attention ranking
 
 One queue across every session, answering "where do I look right now?".
+
+**What ranking does not read.** The session record has grown workspace and
+discovery fields (`R-J39`/`R-J40`) and none of them is an input here: a folder
+you added, or one you were offered, says nothing about whether a session needs
+you. Recorded because `attention.rs` is covered by this document, so every
+change to that file asks the question — and the answer has been "no" each time.
 
 ## Reasons
 

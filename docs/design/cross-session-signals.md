@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-21
+updated: 2026-08-22
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -25,7 +25,10 @@ covers:
 > guard around them — is a third resident of `state.rs` and belongs to
 > [architecture.md](architecture.md), where `R-J40`'s workspaces are described.
 > Checked when that landed rather than assumed: none of the signals here reads
-> a root. A collision is computed from what two transcripts *say* was touched,
+> a root. `R-J39`'s discovery pass, which suggests folders from what a session
+> has already written, reads `touched_files` — the same field collision
+> detection reads — and changes nothing about it: it only *offers* a folder,
+> and the two never meet. A collision is computed from what two transcripts *say* was touched,
 > so widening what the explorer may open changes nothing about who is editing
 > the same file as whom.
 

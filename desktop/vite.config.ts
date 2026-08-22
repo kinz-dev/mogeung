@@ -32,5 +32,12 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    // **Not because anything hangs.** A handful of these mount a terminal or
+    // an editor under jsdom and take ~4s of honest work each, which against
+    // the 5s default is a coin flip the moment the machine is also running the
+    // dev server — the suite went from green to three timeouts and back purely
+    // by adding a 57th test file. A timeout is meant to catch a test that has
+    // stopped, not to race the one that is working.
+    testTimeout: 20_000,
   },
 });

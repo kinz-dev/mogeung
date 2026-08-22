@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-07
+updated: 2026-08-22
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -31,6 +31,14 @@ to us.
 
 `Session::label()` falls back in descending usefulness: `ai-title` → last prompt
 → registry name → short id.
+
+**A prompt is something you typed.** Until `R-J39` it also included whatever a
+slash command printed: `<local-command-stdout>` arrives as a `user` line with a
+plain-string content, the same shape a human prompt has, so a session that had
+just compacted was labelled *"Compacted (ctrl+o to see full summary)"* in the
+queue. Those lines are barren now. The command **echo**
+(`<command-name>…</command-name>`) is still a turn, and still becomes a label —
+that half really is you, even if it reads oddly in a list.
 
 ## Persistence
 
@@ -181,6 +189,15 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
 - `source` — which CLI wrote the session (`claude_code` default,
   `codex`); the Codex scan maps `~/.codex`'s thread index into this same
   struct, which is A23's test (`R-I1`).
+
+## Session fields added 2026-08-22
+
+- `announced_dirs` — folders the CLI confirmed with `/add-dir`, read from the
+  transcript and used only to **offer** a workspace folder (`R-J39`). Also
+  `#[serde(default)]`, like everything above: the store keeps whole sessions as
+  JSON blobs, so a row written yesterday must still load. Nothing reads it as
+  permission — what the daemon will serve is still only what someone added
+  through the UI, which is `R-J40`'s file and not this field.
 
 The store also grew a `signals` table (per-repo signal command and its
 last run, `R-E2`) — a real table rather than a blob because it is keyed

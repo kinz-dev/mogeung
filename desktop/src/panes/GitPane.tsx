@@ -23,6 +23,10 @@ import { cn } from "@/lib/cn";
 
 type View = "log" | "local" | "refs" | "stashes" | "more";
 
+/** What narrows the log, as one value — there are four of them, and every bug
+ *  in this area has been a call site that carried three. */
+type Query = { grep: string; author: string; path: string; pickaxe: string };
+
 /** The lists that are one round-trip each and are asked for on demand. */
 const ON_DEMAND = {
   reflog: "git_reflog",
@@ -119,10 +123,34 @@ export function GitPane() {
     // you had to dismiss by hand. Not asking is the fix; making the answer
     // quieter is a separate one.
     if (!repoRoot) return;
-    if (!git?.commits.length) send({ cmd: "git_log", session_id: id, skip: 0, limit: 100 });
+    // **Because nobody has asked, not because the list is empty.** A filtered
+    // query empties the list on purpose (`askLog`), and reading that as "no
+    // log yet" fired a second, unfiltered query behind every filter — whose
+    // answer landed last and put the whole log back, which is exactly what
+    // "the filter doesn't work" looks like. Reload clears the flag.
+    if (!git?.logAsked) {
+      patchGit(id, { logAsked: true });
+      send({ cmd: "git_log", session_id: id, skip: 0, limit: 100 });
+    }
     if (!git?.status) send({ cmd: "git_status", session_id: id });
     if (!git?.refs) send({ cmd: "git_refs", session_id: id });
-  }, [id, repoRoot, git?.commits.length, git?.status, git?.refs, send]);
+  }, [id, repoRoot, git?.logAsked, git?.status, git?.refs, patchGit, send]);
+
+  // **The boxes start at what the list answers.** They are local state and the
+  // filters live per session in the store, so arriving at a session with a
+  // filter in force used to show three empty boxes above a filtered list —
+  // and, with the line below, an invitation to press Enter on nothing.
+  // Adjusted during the render for the session that changed, which is React's
+  // own answer to "state derived from a prop", rather than in an effect that
+  // would paint the wrong thing first.
+  const syncedFor = useRef<string | null>(null);
+  if (id && syncedFor.current !== id) {
+    syncedFor.current = id;
+    setGrep(git?.grep ?? "");
+    setAuthor(git?.author ?? "");
+    setPath(git?.path ?? "");
+    setPickaxe(git?.pickaxe ?? "");
+  }
 
   if (!s) return <Empty>select a session</Empty>;
   if (!s.repo_root) return <Empty hint="git needs a repository">this session is not in a git repo</Empty>;
@@ -146,21 +174,40 @@ export function GitPane() {
    * second call site would inevitably drop one of them and look like the
    * filter had been ignored.
    */
-  const askLog = (skip: number) => {
+  const askLog = (skip: number, over: Partial<Query> = {}) => {
     if (!id) return;
-    if (skip === 0) patchGit(id, { commits: [], grep, author, path, pickaxe });
+    // The overrides exist because a filter is cleared by a *button*, and
+    // `setGrep("")` has not landed by the time this reads it — a query built
+    // from the state here would ask for the filter you just dropped.
+    const q: Query = { grep, author, path, pickaxe, ...over };
+    if (skip === 0) patchGit(id, { commits: [], ...q, logAsked: true });
     send({
       cmd: "git_log",
       session_id: id,
       skip,
       limit: 100,
       rev: git?.rev ?? null,
-      grep: grep || null,
-      author: author || null,
-      path: path || null,
-      pickaxe: pickaxe || null,
+      grep: q.grep || null,
+      author: q.author || null,
+      path: q.path || null,
+      pickaxe: q.pickaxe || null,
     });
   };
+
+  // What the list on screen actually answers, which is not what is in the
+  // boxes until Enter has been pressed.
+  const applied = {
+    grep: git?.grep ?? "",
+    author: git?.author ?? "",
+    path: git?.path ?? "",
+    pickaxe: git?.pickaxe ?? "",
+  };
+  const unrun =
+    grep !== applied.grep ||
+    author !== applied.author ||
+    path !== applied.path ||
+    pickaxe !== applied.pickaxe;
+  const anyApplied = !!(applied.grep || applied.author || applied.path || applied.pickaxe);
 
   return (
     <div className="flex h-full min-h-0 bg-[var(--bg-panel)]">
@@ -190,7 +237,7 @@ export function GitPane() {
             title="reload"
             onClick={() => {
               if (!id) return;
-              patchGit(id, { commits: [], status: null, refs: null });
+              patchGit(id, { commits: [], status: null, refs: null, logAsked: false });
             }}
           >
             <RefreshCw size={13} />
@@ -251,6 +298,42 @@ export function GitPane() {
                   </Dim>
                 </div>
               )}
+              {/*
+                **What the list answers, said out loud.** Enter runs the query,
+                which is cheap to forget — and a filter that has been typed but
+                not run looks exactly like a filter that has been ignored. So a
+                box that differs from the list says so, and a filter that *is*
+                in force is named with the way out of it.
+              */}
+              {unrun ? (
+                <Dim className="mt-0.5 block text-2xs">press Enter to run this filter</Dim>
+              ) : anyApplied ? (
+                <div className="mt-1 flex items-center gap-1">
+                  <Chip color="var(--amber)">
+                    {[
+                      applied.grep && `message ~ ${applied.grep}`,
+                      applied.author && `author ~ ${applied.author}`,
+                      applied.path && applied.path,
+                      applied.pickaxe && `-S ${applied.pickaxe}`,
+                    ]
+                      .filter(Boolean)
+                      .join("  ·  ")}
+                  </Chip>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGrep("");
+                      setAuthor("");
+                      setPath("");
+                      setPickaxe("");
+                      askLog(0, { grep: "", author: "", path: "", pickaxe: "" });
+                    }}
+                    className="rounded-sm text-2xs text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+                  >
+                    clear
+                  </button>
+                </div>
+              ) : null}
               {git?.rev && (
                 <div className="mt-1 flex items-center gap-1">
                   <Chip color="var(--amber)">scoped to {git.rev}</Chip>
@@ -258,8 +341,12 @@ export function GitPane() {
                     type="button"
                     onClick={() => {
                       if (!id) return;
-                      patchGit(id, { rev: null, commits: [] });
-                      send({ cmd: "git_log", session_id: id, skip: 0, limit: 100, grep: grep || null });
+                      // Through `askLog`, like everything else: this used to
+                      // send its own query carrying `grep` alone, so clearing
+                      // the branch scope silently dropped the author, path and
+                      // pickaxe filters that were still on screen.
+                      patchGit(id, { rev: null });
+                      askLog(0);
                     }}
                     className="rounded-sm text-2xs text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
                   >
@@ -270,7 +357,16 @@ export function GitPane() {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {!git?.commits.length ? (
-                <Empty>reading the log…</Empty>
+                // Told apart, because they look identical from the outside and
+                // mean opposite things: a query still in flight, and a query
+                // that came back with nothing.
+                git?.done ? (
+                  <Empty hint="Enter runs the query — clear the box to see the whole log">
+                    no commit matches these filters
+                  </Empty>
+                ) : (
+                  <Empty>reading the log…</Empty>
+                )
               ) : (
                 git.commits.map((c) => (
                   <Row

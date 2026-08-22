@@ -156,6 +156,15 @@ export const emptyExplorer = (): ExplorerState => ({
 export interface GitState {
   commits: CommitInfo[];
   done: boolean;
+  /**
+   * A log has been asked for. `R-D12`.
+   *
+   * The pane used to read an **empty list** as "nobody has asked yet", which
+   * held right up until a filter could empty it on purpose: every filtered
+   * query fired a second, unfiltered one behind it, and the whole log came
+   * back. Emptiness is a result; this is the question.
+   */
+  logAsked: boolean;
   rev: string | null;
   grep: string;
   author: string;
@@ -187,6 +196,7 @@ export interface GitState {
 export const emptyGit = (): GitState => ({
   commits: [],
   done: false,
+  logAsked: false,
   rev: null,
   grep: "",
   author: "",
@@ -981,8 +991,20 @@ export const useStore = create<AppState>((set, get) => ({
         set((s) => {
           const st = s.git[msg.session_id] ?? emptyGit();
           // A page for filters we have since changed is a stray. The daemon
-          // echoes the scope back precisely so it can be dropped.
+          // echoes the scope back precisely so it can be dropped — **all of
+          // it**, and not only the branch scope: checking `rev` alone let an
+          // unfiltered page overwrite the filtered one it raced, which is what
+          // "the filter does nothing" looked like from the outside.
           if ((st.rev ?? null) !== (msg.rev ?? null)) return {};
+          const echoed = (v: string | null | undefined, want: string) => (v ?? "") === want;
+          if (
+            !echoed(msg.grep, st.grep) ||
+            !echoed(msg.author, st.author) ||
+            !echoed(msg.path, st.path) ||
+            !echoed(msg.pickaxe, st.pickaxe)
+          ) {
+            return {};
+          }
           return {
             git: {
               ...s.git,
