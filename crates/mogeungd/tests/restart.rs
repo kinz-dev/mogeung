@@ -180,3 +180,28 @@ async fn the_repair_rebuilds_a_database_that_was_re_ingested() {
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// A label written before `R-J42` still holds the CLI's markup, and the rows
+/// you are looking at are the ones already in the database — a parser fix that
+/// only touches lines read *from now on* leaves them wrong for as long as they
+/// live. Repaired on the way in.
+#[tokio::test]
+async fn a_stored_label_full_of_command_markup_is_repaired_on_load() {
+    let home = fake_home("markup");
+    let state = boot(&home).await;
+
+    // A row as an older build would have written it.
+    let mut s = state.sessions.read().await.get(SESSION).cloned().unwrap();
+    s.last_prompt = Some(
+        "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>"
+            .into(),
+    );
+    state.store.save_session(&s).unwrap();
+    drop(state);
+
+    let state = boot(&home).await;
+    let after = state.sessions.read().await.get(SESSION).cloned().unwrap();
+    // The queue reads the command, not the markup around it — and `label()`
+    // is what a session without a title falls back to.
+    assert_eq!(after.last_prompt.as_deref(), Some("/clear"));
+}

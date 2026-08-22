@@ -37,8 +37,12 @@ slash command printed: `<local-command-stdout>` arrives as a `user` line with a
 plain-string content, the same shape a human prompt has, so a session that had
 just compacted was labelled *"Compacted (ctrl+o to see full summary)"* in the
 queue. Those lines are barren now. The command **echo**
-(`<command-name>…</command-name>`) is still a turn, and still becomes a label —
-that half really is you, even if it reads oddly in a list.
+(`<command-name>…</command-name>`) is still a turn and still becomes a label —
+that half really is you — but it is rewritten to the command you typed rather
+than the markup around it (`R-J42`): `/clear`, `/add-dir /home/me/other`. A
+label stored before that fix is repaired when the daemon loads it, because the
+rows you are looking at are the ones already in the database. The event log is
+left as it was written.
 
 ## Persistence
 

@@ -175,6 +175,31 @@ where the echo carries whatever was typed. A session started with
 `claude --add-dir` leaves neither — no trace at all in this corpus — which is a
 limit to state rather than to work around.
 
+### The command echo is markup, and is read as a command
+
+The other half of a slash command, also a `user` line with a plain-string
+content, and this one **is** your turn:
+
+```text
+<command-name>/add-dir</command-name>
+<command-message>add-dir</command-message>
+<command-args>/home/me/other</command-args>
+```
+
+46 `/clear` echoes and 29 `/compact` ones in the corpus on this machine, and
+until `R-J42` every one of them became a queue row reading
+`<command-name>/clear</command-name> <command-message>…`, because `last_prompt`
+is what a session without a title is labelled with. It is now rewritten to what
+you typed — `/clear`, `/add-dir /home/me/other` — for the queue and the
+transcript alike, from one place. `<command-message>` is dropped: it is the
+name again without the slash. `<command-args>` is kept, because for
+`/add-dir` and `/applyPatch` it is the only part that differs.
+
+Some echoes carry `<command-name>` and `<command-args>` only, so neither the
+message tag nor the newlines between them can be relied on. Prose that merely
+mentions a tag is left exactly as written — the rewrite needs a real
+`<command-name>…</command-name>` pair.
+
 ### Size
 
 The largest transcript in the corpus is 11.2 MB. Files over

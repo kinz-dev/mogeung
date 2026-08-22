@@ -306,6 +306,14 @@ impl AppState {
             // a persisted "alive".
             s.alive = false;
             s.live_status = None;
+            // A label written before `R-J42` still holds the CLI's markup, and
+            // a fix that only applies to lines read *from now on* leaves the
+            // rows you are looking at wrong for as long as they live. Repaired
+            // on the way in — it is a derived label, not the event log, which
+            // is left exactly as it was written.
+            if let Some(p) = s.last_prompt.take() {
+                s.last_prompt = Some(crate::adapter::readable_prompt(&p));
+            }
             // The pid is KEPT, for the reason the death path states in place:
             // a dead session still holding its pid is the only evidence that
             // `/clear` moved that pid to a fresh session id, and the clients'

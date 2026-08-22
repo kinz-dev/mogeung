@@ -398,6 +398,52 @@ fn announced_dir(body: &str) -> Option<String> {
     path.starts_with('/').then(|| path.to_string())
 }
 
+/// The text between `<name>` and `</name>`, trimmed.
+fn tag<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let start = s.find(&open)? + open.len();
+    let rest = &s[start..];
+    let end = rest.find(&close)?;
+    Some(rest[..end].trim())
+}
+
+/// A slash command you typed, as you typed it. `R-J42`.
+///
+/// The CLI writes the echo as a `user` line whose content is markup:
+///
+/// ```text
+/// <command-name>/add-dir</command-name>
+/// <command-message>add-dir</command-message>
+/// <command-args>/home/me/other</command-args>
+/// ```
+///
+/// It **is** your turn — unlike the `<local-command-stdout>` answer, which is
+/// the CLI's — so it stays a prompt and keeps labelling the session. What it
+/// must not do is label it with the markup: 46 `/clear` echoes and 29
+/// `/compact` ones in the corpus on this machine, every one of them a queue row
+/// reading `<command-name>/clear</command-name> <command-message>…`.
+///
+/// `<command-message>` is dropped: it is the name again without the slash. The
+/// args are kept because they are the half that differs — `/add-dir <path>` and
+/// `/applyPatch <file>` say nothing without them.
+fn slash_command(s: &str) -> Option<String> {
+    let name = tag(s, "command-name")?;
+    if name.is_empty() {
+        return None;
+    }
+    match tag(s, "command-args").unwrap_or("") {
+        "" => Some(name.to_string()),
+        args => Some(format!("{name} {args}")),
+    }
+}
+
+/// One prompt as it should read, whether it arrives now or was stored before
+/// [`slash_command`] existed. `R-J42`.
+pub fn readable_prompt(text: &str) -> String {
+    slash_command(text).unwrap_or_else(|| text.to_string())
+}
+
 /// Tools whose use means a file on disk changed.
 fn touched_path(name: &str, input: &Value) -> Option<String> {
     match name {
@@ -534,11 +580,14 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
                     }
                 }
                 Value::String(s) => {
-                    if !s.trim().is_empty() {
+                    // A slash command reads as the command, not as the markup
+                    // the CLI wrapped it in. Everything else is what you typed.
+                    let text = readable_prompt(s);
+                    if !text.trim().is_empty() {
                         out.is_turn = true;
-                        out.last_prompt = Some(truncate(s, 400));
+                        out.last_prompt = Some(truncate(&text, 400));
                         out.events.push(EventKind::UserPrompt {
-                            text: truncate(s, 4000),
+                            text: truncate(&text, 4000),
                         });
                     }
                 }
@@ -875,10 +924,40 @@ mod tests {
     }
 
     /// What you typed still counts: `/add-dir` is a turn, its *answer* is not.
+    /// And it reads as the command rather than as the markup around it —
+    /// `R-J42`, from a queue full of `<command-name>/clear</command-name>`.
     #[test]
     fn a_slash_command_you_typed_is_still_a_prompt() {
         let l = r#"{"type":"user","message":{"role":"user","content":"<command-name>/add-dir</command-name>\n<command-args>/home/other</command-args>"}}"#;
-        assert!(parsed(l).is_turn);
+        let p = parsed(l);
+        assert!(p.is_turn);
+        assert_eq!(p.last_prompt.as_deref(), Some("/add-dir /home/other"));
+    }
+
+    /// The corpus's commonest echo, verbatim: three tags, and the message tag
+    /// is the name again without its slash.
+    #[test]
+    fn a_command_with_no_arguments_is_just_its_name() {
+        let l = r#"{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>"}}"#;
+        let p = parsed(l);
+        assert_eq!(p.last_prompt.as_deref(), Some("/clear"));
+        // The transcript reads the same way as the queue — one rewrite, not
+        // two, because a prompt shown two ways is a prompt somebody edits once.
+        assert!(matches!(
+            &p.events[0],
+            EventKind::UserPrompt { text } if text == "/clear"
+        ));
+    }
+
+    /// Prose that merely mentions the tags is not an echo, and a line with no
+    /// name is left exactly as it was found.
+    #[test]
+    fn text_that_only_mentions_the_markup_is_left_alone() {
+        let l = r#"{"type":"user","message":{"role":"user","content":"the queue shows <command-name> tags, which is the bug"}}"#;
+        assert_eq!(
+            parsed(l).last_prompt.as_deref(),
+            Some("the queue shows <command-name> tags, which is the bug")
+        );
     }
 
     #[test]
