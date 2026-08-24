@@ -1,7 +1,7 @@
 ---
 title: How this project's documentation works
 status: active
-updated: 2026-07-25
+updated: 2026-08-24
 ---
 
 # The doc system
@@ -31,6 +31,7 @@ nobody said where to put things, so everyone defaults to `PLAN.md` at the root.
 | `design/` | How the system works **today** | Rewritten freely; no history |
 | `features/` | Work in flight: spec, plan, notes | Archived on ship |
 | `guide/` | User documentation | Follows released behaviour |
+| `agents/` | How agent skills should read this repo | Edited when the tooling changes |
 | `archive/` | Superseded docs | Never deleted, never read by default |
 | `_templates/` | Skeletons to fill in | — |
 

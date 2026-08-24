@@ -115,6 +115,23 @@ so cargo alone no longer tests the client at all.
 
 ## Testing
 
+## Agent skills
+
+### Issue tracker
+
+Work is tracked in `docs/product/roadmap.md` and `docs/features/`, not GitHub
+Issues. See [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+The five canonical role names, written as a `triage:` frontmatter key. See
+[`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context; ADRs live in `docs/decisions/`. See
+[`docs/agents/domain.md`](docs/agents/domain.md).
+
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 
