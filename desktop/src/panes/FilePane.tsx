@@ -35,6 +35,7 @@ import { forgetCursor, noteCursor, toggleMark } from "@/lib/marks";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
 import { explorerFetch, forgetFileBodies, languageOf } from "@/lib/explorer";
 import { base } from "@/lib/format";
+import { cn } from "@/lib/cn";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
 import { outline, symbolGlyph } from "@/lib/symbols";
 import { Input } from "@/ui/primitives";
@@ -70,10 +71,28 @@ function MarkdownPreview({
   onEditSource,
   theme,
   zoom,
+  wrap,
 }: {
   content: string;
   onEditSource: (line: number) => void;
   theme: ThemeMode;
+  /**
+   * The header's wrap toggle, which used to stop at Monaco. `R-J52`.
+   *
+   * Reported 2026-08-25: *"the file editor wrap long line doesn't work when
+   * view it as md file"*. It did not, and the cause is that this preview is
+   * not an editor — `wordWrap` is a Monaco option, so pressing the button
+   * while reading a `.md` fed a setting to a component that was not on screen.
+   * Prose wrapped anyway, so what stayed stubbornly on one line was exactly
+   * what the button is for: a fenced block, which is `white-space: pre` and
+   * scrolls sideways.
+   *
+   * **The same state as the editor's**, keyed by path, rather than a second
+   * toggle for the preview — one control, two renderings. A file you have
+   * asked to wrap is wrapped whichever way you are reading it, and the button
+   * stops being a control that works in one mode and lies in the other.
+   */
+  wrap: boolean;
   /**
    * Ctrl+wheel, applied here rather than by `ZoomPane`. `R-J26`.
    *
@@ -202,7 +221,10 @@ function MarkdownPreview({
         className="min-h-0 flex-1 overflow-auto px-3 py-2"
         style={zoom === 1 ? undefined : { zoom }}
       >
-        <div className="prose-mogeung">
+        {/* Off by default, because horizontal scroll is the right answer for
+            code you are reading as code — indentation survives it. `wrap-code`
+            is what the button turns on. */}
+        <div className={cn("prose-mogeung", wrap && "wrap-code")}>
           {/* **Only the fence is intercepted.** `code` fires for inline spans
               too, and an inline `mermaid` is a word rather than a diagram —
               the `language-mermaid` class is what tells them apart, and
@@ -507,7 +529,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
             <ListTree size={12} />
           </IconButton>
           <IconButton
-            title="wrap long lines — per file, because wrap is a property of prose"
+            title="wrap long lines — per file, because wrap is a property of prose. In a markdown preview it wraps the code fences, which are the only thing there that does not wrap already"
             active={wrap}
             onClick={() =>
               setScoped({
@@ -527,6 +549,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
           content={tab.content}
           theme={theme}
           zoom={zoom}
+          wrap={wrap}
           // A hit's whole point is that you can go and change it, so this both
           // leaves the rendering and asks the editor for that line. `gotoLine`
           // is the same channel a search hit and a diff row already use, and

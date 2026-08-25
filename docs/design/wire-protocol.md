@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-22
+updated: 2026-08-25
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -24,7 +24,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `RefreshChange` | Recompute a session's diff |
 | `FetchEvents` | Replay stored transcript events from `since` |
 | `ForgetSession` | Stop tracking; drop review state |
-| `LaunchTerminal` | Open a real interactive `claude`, optionally in a new worktree |
+| `LaunchTerminal` | Open a real interactive agent CLI, optionally in a new worktree. `source` picks which one (`R-J51`) and is `#[serde(default)]` — a client built before the choice existed omits it and gets Claude Code, which is the answer it was already getting. A source the daemon has no recipe for (Codex) is an error in words, never a different agent started quietly |
 | `Rescan` | Scan now instead of waiting for the next poll |
 | `FetchHealth` | Ask what mogeung can and cannot currently see |
 | `Snooze` | Silence a session for N minutes; 0 clears it |

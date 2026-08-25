@@ -137,3 +137,47 @@ describe("finding in the rendered preview", () => {
     expect(screen.queryByLabelText("find in the preview")).toBeNull();
   });
 });
+
+/**
+ * The wrap button, in the preview. `R-J52`.
+ *
+ * Reported 2026-08-25: pressing it while reading a `.md` did nothing. It fed
+ * `wordWrap` to Monaco, which is not what is on screen in preview mode — and
+ * prose wraps anyway, so the only thing left visibly refusing to wrap was a
+ * fenced block. These pin the join rather than the CSS: that the same per-file
+ * state reaches both renderings, and that it survives the round trip to
+ * source and back.
+ */
+describe("wrapping long lines in the preview", () => {
+  const body = ["# Doc", "", "```", "x".repeat(400), "```"].join("\n");
+  const prose = () => document.querySelector(".prose-mogeung") as HTMLElement;
+
+  const openPreview = () => {
+    openMarkdown(body);
+    renderPane();
+    fireEvent.click(screen.getByTitle(/read it as markdown/i));
+  };
+
+  it("does not wrap until asked — code scrolls sideways by default", () => {
+    openPreview();
+    expect(prose().className).not.toContain("wrap-code");
+  });
+
+  it("wraps the rendering when the header's wrap is on", () => {
+    openPreview();
+    fireEvent.click(screen.getByTitle(/^wrap long lines/));
+    expect(prose().className).toContain("wrap-code");
+  });
+
+  /** One control, two renderings: the state is the editor's own, per file. */
+  it("is the same setting the source view uses", () => {
+    openPreview();
+    fireEvent.click(screen.getByTitle(/^wrap long lines/));
+    expect(useStore.getState().scoped().editorWrap).toEqual(["notes.md"]);
+
+    // Back to source and into the preview again — still wrapped.
+    fireEvent.click(screen.getByTitle(/read it as markdown/i));
+    fireEvent.click(screen.getByTitle(/read it as markdown/i));
+    expect(prose().className).toContain("wrap-code");
+  });
+});

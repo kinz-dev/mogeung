@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-22
+updated: 2026-08-25
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -158,6 +158,43 @@ Exiting **zero** immediately is also success and deliberately distinguished:
 symlink to whichever one the user chose, and the flag that carries a command
 differs between them — `-e` takes argv for xterm and a single string for
 terminator. It is resolved to its real target so the row matches the program.
+
+### Which CLI it starts (`R-J51`)
+
+The caller's choice since 2026-08-25, and the shape of that choice is
+[ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)'s rule
+applied to the one place mogeung starts anything: `agent_command` is an
+exhaustive `match` on `SessionSource`, so the next CLI added is a compile error
+here rather than a session quietly started as Claude. There is no default arm.
+
+Three consequences worth stating, because each is a mistake the obvious version
+makes:
+
+**A source with no recipe is an error, not a fallback.** There is no way to
+start Codex from here, and the answer says so. Starting a *different* agent
+than the one asked for is the worst answer available — worse than refusing,
+because the refusal is visible and the substitution is not.
+
+**It is refused before the worktree is cut.** `worktree: true` creates a branch
+and a checkout; doing that first and discovering the recipe afterwards would
+leave both behind for a session that was never going to exist.
+
+**The flag belongs to the CLI, not to mogeung.** `--dangerously-skip-permissions`
+is Claude's and `--approval-mode yolo` is Qwen's; the daemon passes whichever
+the source names, which is still not wrapping the conversation
+([ADR-0003](../decisions/0003-observe-do-not-spawn.md)). Both are the ones
+`yolomo` and `qwenmo` use, so the three move together. Qwen's mode is `yolo`
+rather than `auto` for a reason particular to it: Qwen writes nothing to disk
+when a tool blocks on approval, so under `auto` a session waiting for a human
+reads as one busily working — the blind spot feature 0036 records, avoided by
+not creating the prompt in the first place.
+
+The tmux session name carries the CLI for everything that is not Claude
+(`mogeung-qwen-<place>-<stamp>`), which is `qwenmo`'s convention: two agents
+started in one directory are then tellable apart in `tmux ls`. Claude keeps the
+bare `mogeung-<place>-<stamp>` it has always had — a name already written into
+`tmux attach` lines should not move for a feature that did not touch it.
+Nothing in mogeung parses either; panes are matched by process ancestry.
 
 ### Handing a folder to the desktop (`R-J34`)
 

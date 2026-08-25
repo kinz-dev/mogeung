@@ -555,6 +555,26 @@ textarea {
   white-space: pre;
 }
 
+/* The file pane's wrap toggle, reaching the markdown preview. `R-J52`.
+ *
+ * Everything else in a rendering wraps already — the root sets
+ * `overflow-wrap: anywhere` — so a fence is the only thing the button has left
+ * to do here, and before this it did nothing at all in preview mode because
+ * `wordWrap` is a Monaco option and the preview is not Monaco.
+ *
+ * `anywhere` and not `break-word`: the lines that send you looking for this
+ * button are a minified bundle, a base64 blob or a 300-character URL, none of
+ * which contain a break opportunity for `break-word` to find.
+ *
+ * A **table** is deliberately untouched and still scrolls: wrapping cells
+ * turns a wide table into a tall unreadable one, and the column you were
+ * following stops being a column. */
+.prose-mogeung.wrap-code pre,
+.prose-mogeung.wrap-code pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .prose-mogeung blockquote {
   border-left: 2px solid var(--border-hover);
   padding-left: 0.7em;
