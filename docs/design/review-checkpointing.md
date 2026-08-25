@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-08-17
+updated: 2026-08-26
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
@@ -12,6 +12,24 @@ covers:
 # Review checkpointing and risk ordering
 
 The product's most distinctive feature: **never read the same code twice**.
+
+## When a diff is recomputed, and what travels
+
+Since `R-J53` the scan loop does not recompute a diff just because a
+transcript grew: each session rests ten seconds between looks, a look is a
+worktree fingerprint (`git.rs::worktree_fingerprint` — `HEAD`, `status
+--porcelain -z`, and each dirty path's size and mtime, so a repeat edit to an
+already-modified file still registers), and only a moved or unreadable
+fingerprint pays for `compute_change`. A session's exit and every explicit
+request bypass the gate.
+
+What the scan loop broadcasts when a diff moved is a `ChangeSummary`
+(`change.rs`) — per-file counts, paths and review tallies, never hunk bodies.
+The full `Change` travels on the request path (`RefreshChange`, answered per
+connection from the cache) and on the review verbs, whose broadcasts must
+move the hunks every window holds. None of this touches a read mark: anchors
+are content hashes, and the summary's `reviewed_hunks` is derived from the
+same hunks the full change carries.
 
 ## Hunk anchors
 

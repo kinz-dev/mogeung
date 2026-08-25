@@ -619,7 +619,7 @@ async fn get_events(
     AxPath(id): AxPath<String>,
     Query(q): Query<SinceQuery>,
 ) -> impl IntoResponse {
-    match state.store.load_events(&id, q.since) {
+    match state.store.load_recent_events(&id, q.since, EVENT_REPLAY_CAP) {
         Ok(evs) => Json(serde_json::to_value(evs).unwrap_or_default()),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -665,6 +665,17 @@ async fn review_hunk(
     Json(serde_json::json!({ "ok": true }))
 }
 
+/// Newest events served per replay. Matches the window's own retention cap
+/// (`EVENTS_CAP` in the client store) — serving more builds a Vec and a wire
+/// frame the receiver immediately trims.
+const EVENT_REPLAY_CAP: u64 = 5000;
+
+/// Replies a connection may have queued while its sink is slow. The broadcast
+/// lane sheds a lagging client (`Lagged` → reconnect); the reply lane bounds
+/// instead — a full lane drops the reply with a warning, and the client's own
+/// retry (reconnect, re-select) asks again.
+const REPLY_LANE_DEPTH: usize = 256;
+
 async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| ws_conn(socket, state))
 }
@@ -679,7 +690,7 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
     // down this lane instead of to every window. Broadcasting those meant one
     // window selecting a long session made every other window parse and store
     // that session's entire history.
-    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel::<ServerMsg>();
+    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel::<ServerMsg>(REPLY_LANE_DEPTH);
 
     // Push the full snapshot immediately so a client is useful before it sends
     // anything, and so reconnects self-heal.
@@ -691,6 +702,12 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
 
     let send_task = tokio::spawn(async move {
         loop {
+            // Unbiased select, so neither lane can starve the other. The two
+            // lanes carry no ordering promise between them — a reply computed
+            // after a broadcast may still be delivered first. Everything on
+            // the wire converges regardless (summaries derive from the same
+            // cached change a reply carries; session rows re-flush), but a
+            // handler that ever *depends* on cross-lane order is a bug.
             let msg = tokio::select! {
                 m = reply_rx.recv() => match m {
                     Some(m) => Ok(m),
@@ -727,14 +744,26 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
         match serde_json::from_str::<ClientMsg>(&txt) {
             Ok(cmd) => handle(&state, cmd, &reply_tx).await,
             Err(e) => {
-                let _ = reply_tx.send(ServerMsg::Error {
-                    message: format!("bad command: {e}"),
-                });
+                send_reply(
+                    &reply_tx,
+                    ServerMsg::Error {
+                        message: format!("bad command: {e}"),
+                    },
+                );
             }
         }
     }
 
     send_task.abort();
+}
+
+/// Queue one message on a connection's reply lane, shedding on overflow: a
+/// client whose lane is full is one whose sink has stalled, and its own
+/// reconnect or re-ask is the recovery — the daemon must not hold the memory.
+fn send_reply(reply: &tokio::sync::mpsc::Sender<ServerMsg>, msg: ServerMsg) {
+    if let Err(e) = reply.try_send(msg) {
+        tracing::warn!("reply lane full or closed, dropping a reply: {e}");
+    }
 }
 
 /// Whether a command changes the repository. `R-D19`.
@@ -820,14 +849,17 @@ async fn after_ref_change(state: &Arc<AppState>, session_id: String) {
 async fn handle(
     state: &Arc<AppState>,
     cmd: ClientMsg,
-    reply: &tokio::sync::mpsc::UnboundedSender<ServerMsg>,
+    reply: &tokio::sync::mpsc::Sender<ServerMsg>,
 ) {
     // Your mistake is your toast: an error provoked by one window's command
     // used to be broadcast, so every other window raised it too.
     let err = |e: anyhow::Error| {
-        let _ = reply.send(ServerMsg::Error {
-            message: e.to_string(),
-        });
+        send_reply(
+            reply,
+            ServerMsg::Error {
+                message: e.to_string(),
+            },
+        );
     };
 
     // One gate, before dispatch, for every verb that can change a repository.
@@ -848,7 +880,7 @@ async fn handle(
             // re-ingest the full board whenever any window reconnected —
             // which after a laptop sleep is all of them, at once.
             let snap = state.snapshot().await;
-            let _ = reply.send(snap);
+            send_reply(reply, snap);
         }
         ClientMsg::SetHunkReviewed {
             session_id,
@@ -858,16 +890,22 @@ async fn handle(
         ClientMsg::ReviewAll { session_id } => state.review_all(&session_id).await,
         ClientMsg::RefreshChange { session_id, force } => {
             if let Some(change) = state.change_for_request(&session_id, force).await {
-                let _ = reply.send(ServerMsg::ChangeUpdated { session_id, change });
+                send_reply(reply, ServerMsg::ChangeUpdated { session_id, change });
             }
         }
         ClientMsg::FetchEvents { session_id, since } => {
             // Direct: a history replay can run to tens of thousands of
             // events, and every open window used to receive — and keep —
             // every other window's replays.
-            match state.store.load_events(&session_id, since) {
+            // Newest window only: an unbounded replay of a months-old session
+            // built a Vec of everything and one giant frame, which the client
+            // trimmed to its own cap on arrival anyway.
+            match state
+                .store
+                .load_recent_events(&session_id, since, EVENT_REPLAY_CAP)
+            {
                 Ok(events) if !events.is_empty() => {
-                    let _ = reply.send(ServerMsg::Events { events });
+                    send_reply(reply, ServerMsg::Events { events });
                 }
                 Ok(_) => {}
                 Err(e) => err(anyhow::anyhow!(e)),
@@ -910,13 +948,14 @@ async fn handle(
             {
                 Ok(_) => {}
                 // A refusal is not a crash and reads as one if it arrives as a
-                // bare error, so ADR-0025's own wording travels intact.
-                Err(why) => state.broadcast(ServerMsg::Error { message: why }),
+                // bare error, so ADR-0025's own wording travels intact — to
+                // the window that asked, not to every window.
+                Err(why) => send_reply(reply, ServerMsg::Error { message: why }),
             }
         }
         ClientMsg::RunStop { run_id } => {
             if let Err(why) = state.runs.stop(&run_id).await {
-                state.broadcast(ServerMsg::Error { message: why });
+                send_reply(reply, ServerMsg::Error { message: why });
             }
         }
         ClientMsg::RevealRunEnv {
@@ -941,17 +980,24 @@ async fn handle(
             .ok()
             .flatten();
             match value {
-                Some(value) => state.broadcast(ServerMsg::RunEnvValue {
-                    config_id,
-                    key,
-                    value,
-                }),
+                // To the asker alone — this is a *revealed secret* (`R-N6`),
+                // and broadcasting it put the value in front of every
+                // connected window, asked or not.
+                Some(value) => send_reply(
+                    reply,
+                    ServerMsg::RunEnvValue {
+                        config_id,
+                        key,
+                        value,
+                    },
+                ),
                 None => err(anyhow::anyhow!("no `{key}` in that configuration")),
             }
         }
         ClientMsg::FetchRunOutput { run_id } => {
+            // A history replay is the asker's alone, same as `FetchEvents`.
             let lines = state.runs.lines(&run_id).await;
-            state.broadcast(ServerMsg::RunOutputHistory { run_id, lines });
+            send_reply(reply, ServerMsg::RunOutputHistory { run_id, lines });
         }
         ClientMsg::LaunchTerminal {
             dir,
@@ -1048,9 +1094,12 @@ async fn handle(
         },
         ClientMsg::FetchHealth => {
             let health = state.health().await;
-            let _ = reply.send(ServerMsg::Health {
-                health: Box::new(health),
-            });
+            send_reply(
+                reply,
+                ServerMsg::Health {
+                    health: Box::new(health),
+                },
+            );
         }
         ClientMsg::Snooze {
             session_id,

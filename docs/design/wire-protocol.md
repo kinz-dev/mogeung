@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-25
+updated: 2026-08-26
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -91,13 +91,19 @@ the wire. The full `ChangeUpdated` still exists on two paths: as the reply to
 `RefreshChange`, and broadcast by the review verbs, whose marks must move the
 hunks every window holds and which arrive at human rate.
 
-**Four answers go to the asker alone.** `R-J59`. Each connection has a reply
-lane multiplexed into the one event stream: `Subscribe`'s snapshot (broadcast,
-it made every window re-ingest the board whenever any window reconnected),
-`FetchEvents`' replay (every window kept every other window's history),
-`RefreshChange`'s hunks, `FetchHealth`, and the `Error` your own malformed or
-failed command earns. The contract is unchanged — commands still have no
-replies to await; answers still arrive on the stream.
+**Answers that only the asker can use go to the asker.** `R-J59`. Each
+connection has a **bounded** reply lane (256 deep — a full lane is a stalled
+sink, and the client's own retry is the recovery) multiplexed into the one
+event stream: `Subscribe`'s snapshot (broadcast, it made every window
+re-ingest the board whenever any window reconnected), `FetchEvents`' replay
+(served as the newest 5000 events, matching the client's own retention cap),
+`RefreshChange`'s hunks, `FetchHealth`, `RunOutputHistory`, `RunEnvValue` —
+a revealed secret, which was going to every window — the run verbs' refusals,
+and the `Error` a malformed or failed command earns through the `err` path.
+The git write verbs' error arms still broadcast (`R-J60` holds the sweep).
+The two lanes carry **no cross-ordering promise**; every message on the wire
+converges regardless. The contract is otherwise unchanged — commands still
+have no replies to await; answers still arrive on the stream.
 
 **`SessionUpdated` coasts when only counters moved.** `R-J54`. A fold that
 changed nothing but token totals, tool tallies or the activity line updates

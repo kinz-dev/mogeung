@@ -46,6 +46,19 @@ function ambientCssZoom(): number {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
+/**
+ * Closes still in flight, by pty id.
+ *
+ * `ptyClose` and `ptyOpen` are separate async commands on a multithreaded
+ * runtime, so a hide's close can land *after* the reveal's open for the same
+ * id — killing the fresh pty and leaving a visible pane dead until the next
+ * flap. Rare on unmount; `R-J58` made the sequence as common as a tab
+ * switch, and dockview can flap visibility during layout restore. Module
+ * scope, because a StrictMode remount replaces the component instance and a
+ * ref would forget the close it still has to wait for.
+ */
+const ptyClosing = new Map<string, Promise<unknown>>();
+
 /** mogeung's palette, as xterm wants it. */
 function themeFor(dark: boolean) {
   const v = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -250,6 +263,15 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
 
     void (async () => {
       try {
+        // A close for this id may still be in flight from the hide (or
+        // unmount) that preceded this open; opening before it lands lets it
+        // kill the pty we are about to create. Wait it out first.
+        const prior = ptyClosing.get(id);
+        if (prior) {
+          await prior;
+          ptyClosing.delete(id);
+        }
+        if (disposed) return;
         // Every `await` here is a window in which the cleanup below may already
         // have run — React's StrictMode mounts, unmounts and remounts an effect
         // in development, and the unmount happens while these promises are
@@ -286,7 +308,7 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
         lastSize.current = { cols: term.cols, rows: term.rows };
         // Opened after the teardown: close it, or the pty and its reader thread
         // outlive the pane that asked for them.
-        if (disposed) void ptyClose(id).catch(() => {});
+        if (disposed) ptyClosing.set(id, ptyClose(id).catch(() => {}));
       } catch (e) {
         pushError(`could not open the terminal: ${String(e)}`);
       }
@@ -372,7 +394,8 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
       unlistenData?.();
       unlistenClosed?.();
       // Detaches. tmux keeps the session; this only drops our view of it.
-      void ptyClose(id).catch(() => {});
+      // Tracked, so the next open of this id waits for it to land.
+      ptyClosing.set(id, ptyClose(id).catch(() => {}));
       term.dispose();
       termRef.current = null;
     };

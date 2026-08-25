@@ -784,11 +784,24 @@ export const useStore = create<AppState>((set, get) => ({
         const sessions: Record<SessionId, Session> = {};
         for (const s of msg.sessions) sessions[s.id] = s;
         const prev = get();
+        // A reconnect replaces the board, and the per-session maps must not
+        // outlive it: a session pruned while the laptop slept sent its
+        // `session_removed` to nobody, and entries keyed by it would sit in
+        // this heap for the life of the window.
+        const keep = <T>(m: Record<SessionId, T>): Record<SessionId, T> => {
+          const out: Record<SessionId, T> = {};
+          for (const [id, v] of Object.entries(m)) if (sessions[id]) out[id] = v;
+          return out;
+        };
         set({
           sessions,
           queue: msg.queue,
           daemon: msg.daemon ?? null,
           firstSnapshot: true,
+          events: keep(prev.events),
+          changes: keep(prev.changes),
+          changeSummaries: keep(prev.changeSummaries),
+          explorer: keep(prev.explorer),
         });
         // Notes are not part of the snapshot — they have to be asked for. On
         // every snapshot rather than once, because a reconnect is a new
@@ -825,11 +838,14 @@ export const useStore = create<AppState>((set, get) => ({
           delete changes[msg.session_id];
           const changeSummaries = { ...s.changeSummaries };
           delete changeSummaries[msg.session_id];
+          const explorer = { ...s.explorer };
+          delete explorer[msg.session_id];
           return {
             sessions,
             events,
             changes,
             changeSummaries,
+            explorer,
             selected: s.selected === msg.session_id ? null : s.selected,
           };
         });

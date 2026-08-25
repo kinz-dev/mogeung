@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-25
+updated: 2026-08-26
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs

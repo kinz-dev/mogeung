@@ -1584,18 +1584,27 @@ impl AppState {
         // goes out immediately. The cost is honest and bounded: a hard crash
         // loses at most that window of *counters* (the events themselves were
         // already persisted per tick by `emit`). `R-J54`.
-        if significant_change(&before, &s) {
-            self.quiet_sessions.lock().await.remove(id);
+        self.put_or_coast(&before, s).await;
+        self.emit(id, events, last_ts).await;
+    }
+
+    /// Persist-and-broadcast, or coast: the significant/quiet split every
+    /// scan pass ends its folds with. `R-J54`. One method rather than three
+    /// inlined copies, because the Codex and Qwen passes shipped without it
+    /// and paid the fat per-tick `SessionUpdated` the split exists to remove.
+    async fn put_or_coast(&self, before: &Session, s: Session) {
+        if significant_change(before, &s) {
+            self.quiet_sessions.lock().await.remove(&s.id);
             self.put(s).await;
-        } else if s != before {
-            self.sessions.write().await.insert(s.id.clone(), s);
+        } else if s != *before {
+            let id = s.id.clone();
+            self.sessions.write().await.insert(id.clone(), s);
             self.quiet_sessions
                 .lock()
                 .await
-                .entry(id.to_string())
+                .entry(id)
                 .or_insert_with(std::time::Instant::now);
         }
-        self.emit(id, events, last_ts).await;
     }
 
     /// The repo root and pinned diff base for a session's cwd, or `None` when
@@ -1673,11 +1682,12 @@ impl AppState {
                     .values()
                     .any(|s| s.source == SessionSource::Codex && s.alive)
             };
-            let mut seen = self.codex_index_seen.lock().await;
+            let seen = self.codex_index_seen.lock().await;
             if !any_alive && stamp.is_some() && *seen == stamp {
                 return;
             }
-            *seen = stamp;
+            // Recorded only after the read below succeeds — a stamp written
+            // here would mark a panicked read as "seen" and skip the retry.
         }
         let cache = self.codex_cache.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -1714,6 +1724,7 @@ impl AppState {
         let Ok((index_error, details)) = result else {
             return;
         };
+        *self.codex_index_seen.lock().await = stamp;
 
         // The Codex canary: unknown rollout kinds, merged across threads and
         // replaced wholesale. The per-thread counts are cumulative (the cache
@@ -1830,9 +1841,7 @@ impl AppState {
                 }
             }
 
-            if s != before {
-                self.put(s).await;
-            }
+            self.put_or_coast(&before, s).await;
         }
     }
 
@@ -2092,9 +2101,7 @@ impl AppState {
         // pass can from an explicit approval request. A trailing tool call
         // reads as `Working`; `qwen::derive_status` documents what that costs.
 
-        if s != before {
-            self.put(s).await;
-        }
+        self.put_or_coast(&before, s).await;
     }
 
     // -----------------------------------------------------------------------
@@ -4050,11 +4057,23 @@ fn significant_change(before: &Session, after: &Session) -> bool {
 }
 
 /// Equal, ignoring the fields that move every scan by construction. `R-J55`.
+///
+/// The line counters are masked with the scan clock: any session writing its
+/// transcript moves them every tick, so leaving them in reopened the per-tick
+/// broadcast whenever the machine was actually in use — the exact case the
+/// gate was built for. Nothing acted on is lost: `alerts` carries the counts
+/// a human reads (unknown types, malformed lines, skipped history) and still
+/// breaks the gate the moment one of those moves; the raw totals catch up on
+/// the heartbeat.
 fn health_equivalent(a: &Health, b: &Health) -> bool {
     let mask = |h: &Health| {
         let mut h = h.clone();
         h.last_scan = None;
         h.scans = 0;
+        h.lines_seen = 0;
+        h.lines_parsed = 0;
+        h.lines_ignored = 0;
+        h.lines_barren = 0;
         h
     };
     mask(a) == mask(b)
@@ -5583,6 +5602,14 @@ mod perf_gate_tests {
         b.last_scan = Some(Utc::now() + chrono::Duration::seconds(2));
         b.scans = 42;
         assert!(health_equivalent(&a, &b));
+
+        // Ordinary work moves the line counters every tick; they must not
+        // reopen the gate — the alerts carry anything a human acts on.
+        let mut busy = b.clone();
+        busy.lines_seen += 40;
+        busy.lines_parsed += 38;
+        busy.lines_ignored += 2;
+        assert!(health_equivalent(&a, &busy));
 
         // ...while anything a human could read off the window still counts.
         let mut c = b.clone();

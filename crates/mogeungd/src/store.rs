@@ -324,6 +324,37 @@ impl Store {
         Ok(())
     }
 
+    /// The newest `limit` events past `since`, ascending. The replay path's
+    /// loader: a session alive for months holds an unbounded event log, and
+    /// `load_events` materialises all of it into one Vec and one giant wire
+    /// frame — which the client then trims to its own cap anyway. Serving the
+    /// newest window from the start keeps the daemon's memory and the frame
+    /// proportional to what will actually be kept.
+    pub fn load_recent_events(
+        &self,
+        run_id: &str,
+        since: u64,
+        limit: u64,
+    ) -> Result<Vec<TranscriptEvent>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare(
+            "SELECT json FROM events WHERE run_id = ?1 AND seq > ?2 \
+             ORDER BY seq DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![run_id, since, limit as i64], |r| {
+            r.get::<_, String>(0)
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Ok(ev) = serde_json::from_str(&r?) {
+                out.push(ev);
+            }
+        }
+        // Newest-first from the query; ascending is the wire order.
+        out.reverse();
+        Ok(out)
+    }
+
     pub fn load_events(&self, run_id: &str, since: u64) -> Result<Vec<TranscriptEvent>> {
         let c = self.conn.lock().unwrap();
         let mut stmt =
@@ -453,6 +484,32 @@ mod tests {
         let ids = s.noted_session_ids().unwrap();
         assert_eq!(ids.len(), 1);
         assert!(ids.contains("sess-a"));
+    }
+
+    /// The replay loader must serve the *newest* window in ascending order —
+    /// a cap that kept the oldest events would replay the part of the
+    /// conversation furthest from what anyone is reading.
+    #[test]
+    fn recent_events_are_the_newest_window_in_order() {
+        let s = store("recent");
+        for seq in 1..=10u64 {
+            s.append_event(&TranscriptEvent {
+                session_id: "a".into(),
+                seq,
+                ts: chrono::Utc::now(),
+                kind: mogeung_core::EventKind::AssistantText {
+                    text: format!("t{seq}"),
+                },
+            })
+            .unwrap();
+        }
+        let got = s.load_recent_events("a", 0, 4).unwrap();
+        let seqs: Vec<u64> = got.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![7, 8, 9, 10]);
+        // `since` still means "past this", inside the window.
+        let got = s.load_recent_events("a", 8, 4).unwrap();
+        let seqs: Vec<u64> = got.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![9, 10]);
     }
 
     /// The WAL must actually shrink at checkpoint time — `journal_size_limit`

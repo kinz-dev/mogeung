@@ -213,9 +213,19 @@ fn the_worktree_fingerprint_moves_only_with_the_worktree() {
     let edited = git::worktree_fingerprint(&dir).unwrap();
     assert_ne!(a, edited, "a tracked edit must move the fingerprint");
 
+    // The case the first version missed: editing a file that is *already*
+    // modified leaves `status --porcelain` byte-identical, and an agent
+    // spends most of its life doing exactly this.
+    std::fs::write(dir.join("kept.txt"), "one\nedited twice\n").unwrap();
+    let edited_again = git::worktree_fingerprint(&dir).unwrap();
+    assert_ne!(
+        edited, edited_again,
+        "re-editing an already-dirty file must move the fingerprint"
+    );
+
     std::fs::write(dir.join("fresh.txt"), "new\n").unwrap();
     let untracked = git::worktree_fingerprint(&dir).unwrap();
-    assert_ne!(edited, untracked, "an untracked file must move the fingerprint");
+    assert_ne!(edited_again, untracked, "an untracked file must move the fingerprint");
 
     assert!(git_in(&dir, &["add", "."]).status.success());
     assert!(git_in(&dir, &["commit", "-q", "-m", "work"]).status.success());

@@ -932,13 +932,42 @@ fn parse_unified(diff: &str, reviewed: &HashSet<String>) -> Vec<FileChange> {
 /// `None` means "could not ask" (not a repo, git failed) and callers must
 /// treat it as *changed* — a gate that fails closed would silently freeze a
 /// session's diff forever.
+///
+/// **Status alone is not enough.** `status --porcelain` names the dirty set
+/// but says nothing about its contents: an agent's second, third, nth edit to
+/// a file it already modified leaves ` M path` byte-identical, and the first
+/// version of this gate froze the live diff for exactly that — the dominant
+/// pattern of a working session, caught by the re-review before it shipped.
+/// So every named path is also stat'ed and its size + mtime folded in: still
+/// N stats for N dirty files and no blob reads, and a repeat edit moves the
+/// mtime. (A same-second, same-size edit on a filesystem without sub-second
+/// mtimes could still slip one probe interval; ext4 and APFS both carry
+/// nanoseconds.)
 pub fn worktree_fingerprint(cwd: &Path) -> Option<u64> {
     use std::hash::{Hash, Hasher};
     let head = run_git(cwd, &["rev-parse", "HEAD"]).ok()?;
-    let status = run_git(cwd, &["status", "--porcelain"]).ok()?;
+    // `-z`: NUL-separated and unquoted, so odd filenames neither wrap nor
+    // escape their way into two spellings of one entry.
+    let status = run_git(cwd, &["status", "--porcelain", "-z"]).ok()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     head.hash(&mut h);
     status.hash(&mut h);
+    for entry in status.split('\0') {
+        // "XY path"; a rename's old-path chunk has no marker and simply
+        // fails the stat below, which is fine — both spellings are already
+        // hashed in the raw status text. `get`, not a slice: that chunk can
+        // start mid-codepoint.
+        let Some(path) = entry.get(3..) else { continue };
+        if path.is_empty() {
+            continue;
+        }
+        if let Ok(m) = std::fs::metadata(cwd.join(path)) {
+            m.len().hash(&mut h);
+            if let Ok(t) = m.modified() {
+                t.hash(&mut h);
+            }
+        }
+    }
     Some(h.finish())
 }
 

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-25
+updated: 2026-08-26
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs

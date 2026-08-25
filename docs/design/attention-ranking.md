@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-08-22
+updated: 2026-08-26
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -9,6 +9,12 @@ covers:
 # Attention ranking
 
 One queue across every session, answering "where do I look right now?".
+
+**How ranking is called.** `rank` is generic over `Borrow<Session>` since
+`R-J57`: the scan loop ranks borrowed sessions under its read lock instead of
+cloning the whole board once per tick. Nothing about the ordering changed —
+the genericity is a calling convention, and `&[Session]` callers (the HTTP
+queue, the snapshot, every test) compile as before.
 
 **What ranking does not read.** The session record has grown workspace and
 discovery fields (`R-J39`/`R-J40`) and none of them is an input here: a folder
