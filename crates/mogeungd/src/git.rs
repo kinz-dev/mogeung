@@ -915,6 +915,33 @@ fn parse_unified(diff: &str, reviewed: &HashSet<String>) -> Vec<FileChange> {
     files
 }
 
+/// A cheap signature of "has this worktree moved since the last look".
+///
+/// `HEAD` plus `git status --porcelain` — commits, staged and unstaged edits,
+/// and untracked files all move it; a transcript growing because the agent is
+/// *thinking* does not. That distinction is the point: the scan loop used to
+/// take "the transcript grew" as reason to re-run [`compute_change`], which is
+/// a full-text diff of the whole worktree against a base pinned at session
+/// start — the most expensive thing the loop does, re-done every tick a busy
+/// agent breathed, whether or not it had touched a file.
+///
+/// `status --porcelain` still forks git and walks the index, but it reads no
+/// blob contents; on the repos this runs against it is one to two orders of
+/// magnitude cheaper than the diff it gates.
+///
+/// `None` means "could not ask" (not a repo, git failed) and callers must
+/// treat it as *changed* — a gate that fails closed would silently freeze a
+/// session's diff forever.
+pub fn worktree_fingerprint(cwd: &Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let head = run_git(cwd, &["rev-parse", "HEAD"]).ok()?;
+    let status = run_git(cwd, &["status", "--porcelain"]).ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    head.hash(&mut h);
+    status.hash(&mut h);
+    Some(h.finish())
+}
+
 /// Compute the net change a run produced, ordered for reading.
 ///
 /// Covers three sources: committed work since `base_sha`, uncommitted edits,

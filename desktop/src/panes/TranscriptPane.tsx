@@ -9,8 +9,10 @@
  * Virtualised, which quietly deletes a wart: the egui client capped the drawn
  * events and grew a "show earlier" button, because markdown was parsed per
  * visible event per frame and an unbounded transcript tied the frame rate to
- * how long the session had been running. A windowed list has no such cap, so
- * the whole conversation is here.
+ * how long the session had been running. A windowed list has no *drawing*
+ * cap. The store does cap what it retains per session (`EVENTS_CAP`, for
+ * memory, not frame rate), so the outlier session shows its newest few
+ * thousand turns rather than every one.
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";

@@ -192,3 +192,57 @@ impl Change {
         self.reviewed_hunks() as f32 / total as f32
     }
 }
+
+/// One file of a [`ChangeSummary`]: enough to draw a list row and to know
+/// which held files are stale, without carrying a single diff line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileSummary {
+    pub path: String,
+    pub status: FileStatus,
+    pub insertions: u32,
+    pub deletions: u32,
+    pub hunks: u32,
+    pub reviewed_hunks: u32,
+    pub score: i32,
+}
+
+/// A [`Change`] with the hunk bodies left out.
+///
+/// The scan loop recomputes a busy session's diff for as long as the session
+/// lives, and the diff only grows — the base is pinned at session start. It
+/// used to broadcast the whole `Change` (every hunk, every line) to every
+/// client on every move, which made the payload the fastest-growing thing on
+/// the wire. Clients that are actually looking at the hunks fetch them with
+/// [`crate::ClientMsg::RefreshChange`], which the daemon answers from its
+/// cache; everyone else gets this.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ChangeSummary {
+    pub files: Vec<FileSummary>,
+    pub insertions: u32,
+    pub deletions: u32,
+    /// Set when the diff could not be computed (repo gone, base commit missing).
+    pub error: Option<String>,
+}
+
+impl From<&Change> for ChangeSummary {
+    fn from(c: &Change) -> Self {
+        ChangeSummary {
+            files: c
+                .files
+                .iter()
+                .map(|f| FileSummary {
+                    path: f.path.clone(),
+                    status: f.status,
+                    insertions: f.insertions,
+                    deletions: f.deletions,
+                    hunks: f.hunks.len() as u32,
+                    reviewed_hunks: f.reviewed_hunks() as u32,
+                    score: f.score,
+                })
+                .collect(),
+            insertions: c.insertions,
+            deletions: c.deletions,
+            error: c.error.clone(),
+        }
+    }
+}

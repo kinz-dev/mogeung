@@ -435,8 +435,23 @@ export const FileDiff = React.memo(function FileDiff({ file, sessionId }: { file
   const risk = riskFromScore(file.score);
   const readCount = file.hunks.filter((h) => h.reviewed).length;
 
+  // Layout and paint are skipped while the section is off screen —
+  // `content-visibility` is the windowing this list gets. A real virtualiser
+  // would fight the collapsible sections and per-hunk review marks for
+  // little extra: the rows are memoized, so what remains off screen was
+  // costing layout, and now costs an estimate. The estimate only shapes the
+  // scrollbar before first paint; degrades to nothing on engines without it.
+  const estimate = 40 + file.hunks.reduce((n, h) => n + 28 + h.lines.length * 20, 0);
   return (
-    <div className="border-b border-[var(--border)]">
+    <div
+      className="border-b border-[var(--border)]"
+      style={
+        {
+          contentVisibility: "auto",
+          containIntrinsicSize: `auto ${Math.min(estimate, 20_000)}px`,
+        } as React.CSSProperties
+      }
+    >
       <div
         onClick={() => setOpen(!open)}
         className="flex cursor-default items-center gap-2 bg-[var(--bg-raised)] px-2 py-1 hover:bg-[var(--bg-faint)]"

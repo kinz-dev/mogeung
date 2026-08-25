@@ -57,6 +57,34 @@ const LOOP_REPEATS: usize = 4;
 /// Cap on remembered touches, so a long session cannot grow without bound.
 const MAX_RECENT_TOUCHES: usize = 200;
 
+/// How long a session's diff probe rests between looks. `R-J53`.
+///
+/// The full worktree diff is the most expensive thing the scan loop does, and
+/// its trigger used to be "the transcript grew" — true every tick for every
+/// busy agent, whether or not a file moved. Each session now rests this long,
+/// then pays a fingerprint, and only a moved fingerprint pays the diff. Exits
+/// and explicit refreshes bypass the rest entirely.
+const CHANGE_PROBE_SECS: u64 = 10;
+
+/// How long a counters-only session update may coast in memory before it is
+/// saved and broadcast. `R-J54`. Anything a decision hangs off — a permission
+/// prompt, a failure, a status flip — never waits; see `significant_change`.
+const QUIET_FLUSH_SECS: u64 = 5;
+
+/// Unchanged health is still re-sent this often, so the health window's
+/// "last scan" line stays honest to within a heartbeat. `R-J55`.
+const HEALTH_HEARTBEAT_SECS: u64 = 30;
+
+/// Sessions idle longer than this are pruned — store row, events, review
+/// marks, tail offset — unless a note anchors to them. `R-J57`. Twice the
+/// transcript window (`HISTORY_DAYS`), so nothing still being tailed can be
+/// touched, and old boards stop paying rent in every per-tick pass.
+const RETENTION_DAYS: i64 = 30;
+
+/// How often the retention pass runs on a live daemon. The first scan after
+/// start runs it immediately.
+const RETENTION_EVERY_SECS: u64 = 24 * 60 * 60;
+
 pub struct AppState {
     pub store: Store,
     pub sessions: RwLock<HashMap<SessionId, Session>>,
@@ -122,7 +150,32 @@ pub struct AppState {
     /// next probe. Probing forks `git rev-parse`; without this a session
     /// whose cwd is not a repo pays that fork every tick, forever.
     non_repo_cwds: Mutex<HashMap<String, u32>>,
+    /// The scan path's per-session diff gate: when each worktree was last
+    /// probed, and what it looked like. `R-J53`.
+    change_probes: Mutex<HashMap<SessionId, ChangeProbe>>,
+    /// Sessions whose only news since their last broadcast is counters, and
+    /// when they went quiet-dirty. Flushed together by the scan loop. `R-J54`.
+    quiet_sessions: Mutex<HashMap<SessionId, std::time::Instant>>,
+    /// The health snapshot as last broadcast, and when. `R-J55`.
+    last_health: Mutex<Option<(Health, std::time::Instant)>>,
+    /// When the retention pass last ran. `R-J57`.
+    last_retention: Mutex<Option<std::time::Instant>>,
+    /// The Codex index files (db path, db mtime, wal mtime) as last read, so
+    /// an unmoved index costs a stat instead of a full-table read. `R-J56`.
+    codex_index_seen: Mutex<Option<CodexIndexStamp>>,
 }
+
+/// One session's last worktree probe. `fp` is `None` when the fingerprint
+/// could not be read, which callers must treat as "moved".
+#[derive(Clone, Copy)]
+struct ChangeProbe {
+    at: std::time::Instant,
+    fp: Option<u64>,
+}
+
+/// The Codex index as last seen: which db file, and the mtimes of it and its
+/// WAL sidecar. A changed path (migration bump) reads as changed, correctly.
+type CodexIndexStamp = (PathBuf, Option<std::time::SystemTime>, Option<std::time::SystemTime>);
 
 /// Where every non-Claude agent CLI keeps its state.
 ///
@@ -409,6 +462,11 @@ impl AppState {
             codex_cache: Arc::new(std::sync::Mutex::new(crate::codex::ScanCache::default())),
             qwen_cache: Arc::new(std::sync::Mutex::new(crate::qwen::ScanCache::default())),
             non_repo_cwds: Mutex::new(HashMap::new()),
+            change_probes: Mutex::new(HashMap::new()),
+            quiet_sessions: Mutex::new(HashMap::new()),
+            last_health: Mutex::new(None),
+            last_retention: Mutex::new(None),
+            codex_index_seen: Mutex::new(None),
         }))
     }
 
@@ -662,8 +720,39 @@ impl AppState {
         Ok(())
     }
 
+    /// Broadcast health only when it says something new. `R-J55`.
+    ///
+    /// `finish_scan` stamps `last_scan` every pass, so the snapshot always
+    /// *differs* — which had every client parsing and re-rendering a Health
+    /// per tick of a machine where nothing was happening. Volatile fields are
+    /// masked for the comparison, and an unchanged snapshot still goes out
+    /// every [`HEALTH_HEARTBEAT_SECS`] so "last scan" stays honest to within
+    /// a heartbeat.
     async fn publish_health(&self) {
         let health = self.health().await;
+        {
+            let mut last = self.last_health.lock().await;
+            if let Some((sent, at)) = last.as_ref() {
+                let fresh =
+                    at.elapsed() < std::time::Duration::from_secs(HEALTH_HEARTBEAT_SECS);
+                if fresh && health_equivalent(sent, &health) {
+                    return;
+                }
+            }
+            *last = Some((health.clone(), std::time::Instant::now()));
+        }
+        self.broadcast(ServerMsg::Health {
+            health: Box::new(health),
+        });
+    }
+
+    /// Announce health as it stands, gate bypassed — for the request paths,
+    /// which owe an answer even when it is the same answer. The same rule
+    /// `republish_queue` states for the queue: only the periodic loop may
+    /// stay silent.
+    pub async fn republish_health(&self) {
+        let health = self.health().await;
+        *self.last_health.lock().await = Some((health.clone(), std::time::Instant::now()));
         self.broadcast(ServerMsg::Health {
             health: Box::new(health),
         });
@@ -731,9 +820,19 @@ impl AppState {
     }
 
     pub async fn publish_queue(&self) {
-        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
-        let queue = rank(&sessions, Utc::now(), &self.attention);
-        self.notify_for(&queue, &sessions).await;
+        // Ranked over borrows under the read lock: the full-map clone this
+        // replaces copied every session on the board once per tick, and the
+        // board only grows. Labels for the notifier are the one owned thing
+        // actually needed.
+        let (queue, labels) = {
+            let sessions = self.sessions.read().await;
+            let refs: Vec<&Session> = sessions.values().collect();
+            let queue = rank(&refs, Utc::now(), &self.attention);
+            let labels: HashMap<String, String> =
+                sessions.values().map(|s| (s.id.clone(), s.label())).collect();
+            (queue, labels)
+        };
+        self.notify_for(&queue, &labels).await;
         // Notifications diff on their own state above; the broadcast is gated
         // separately, so an unchanged queue costs the clients nothing. New
         // clients are unaffected — they get the queue with their snapshot.
@@ -750,8 +849,11 @@ impl AppState {
     /// a client that explicitly asked to rescan is owed the answer even when
     /// it is the same answer, and only the periodic loop may stay silent.
     pub async fn republish_queue(&self) {
-        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
-        let queue = rank(&sessions, Utc::now(), &self.attention);
+        let queue = {
+            let sessions = self.sessions.read().await;
+            let refs: Vec<&Session> = sessions.values().collect();
+            rank(&refs, Utc::now(), &self.attention)
+        };
         self.last_queue.lock().await.clone_from(&queue);
         self.broadcast(ServerMsg::Queue { queue });
     }
@@ -760,13 +862,11 @@ impl AppState {
     ///
     /// Delivery is spawned rather than awaited: `osascript` and `curl` are
     /// external processes, and the scan loop must not be held up by either.
-    async fn notify_for(&self, queue: &[AttentionItem], sessions: &[Session]) {
+    async fn notify_for(&self, queue: &[AttentionItem], labels: &HashMap<String, String>) {
         let mut notifier = self.notifier.lock().await;
         if !notifier.config().enabled() {
             return;
         }
-        let labels: HashMap<&str, String> =
-            sessions.iter().map(|s| (s.id.as_str(), s.label())).collect();
         let pending = notifier.diff(queue, |id| {
             labels.get(id).cloned().unwrap_or_else(|| id.to_string())
         });
@@ -875,88 +975,117 @@ impl AppState {
         // Apply liveness to every known session, not just the ones that moved:
         // a session going from busy to idle produces no transcript line, and
         // that transition is the single most important signal we have.
-        let ids: Vec<SessionId> = self.sessions.read().await.keys().cloned().collect();
-        // Resolved once for the whole pass rather than per session. Both are
-        // empty when tmux is absent, which makes the lookup below a no-op
-        // instead of a special case. On the blocking pool because each is a
-        // forked process whose whole lifetime would otherwise sit on a
-        // runtime thread the API server needs.
-        let (panes, parents) = tokio::task::spawn_blocking(|| {
-            let panes = tmux_panes();
-            let parents = if panes.is_empty() {
-                HashMap::new()
-            } else {
-                process_parents()
-            };
-            (panes, parents)
-        })
-        .await
-        .unwrap_or_default();
-        for id in ids {
-            let Some(mut s) = self.get(&id).await else {
-                continue;
-            };
-            // Sessions from another CLI have no entry in Claude Code's live
-            // registry; their liveness belongs to their own scan. Left here
-            // they would be marked dead every pass.
-            if !s.source.in_claude_live_registry() {
-                continue;
-            }
-            let before = (s.alive, s.live_status, s.tmux_target.clone());
-            match live_by_id.get(&id) {
-                Some(e) => {
-                    s.alive = true;
-                    s.pid = Some(e.pid);
-                    s.live_status = Some(e.status);
-                    s.tmux_target = tmux_target_in(e.pid, &panes, &parents);
-                    s.status_since = e.status_since.or(s.status_since);
-                    if s.name.is_none() {
-                        s.name = e.name.clone();
+        //
+        // Resolved once for the whole pass rather than per session — and not
+        // at all when nothing is alive: the Qwen pass has always skipped both
+        // forks in that case, and this pass paid `tmux` + `ps` every tick of
+        // an idle machine. On the blocking pool because each is a forked
+        // process whose whole lifetime would otherwise sit on a runtime
+        // thread the API server needs.
+        let (panes, parents) = if live_by_id.is_empty() {
+            (Vec::new(), HashMap::new())
+        } else {
+            tokio::task::spawn_blocking(|| {
+                let panes = tmux_panes();
+                let parents = if panes.is_empty() {
+                    HashMap::new()
+                } else {
+                    process_parents()
+                };
+                (panes, parents)
+            })
+            .await
+            .unwrap_or_default()
+        };
+        // In place, under one write lock. The loop this replaces cloned the
+        // id list, cloned each session out, and `put` a copy back — three
+        // copies of a board that only grows, every tick. Only what actually
+        // changed is cloned now, for the store write and the broadcast.
+        let mut changed: Vec<Session> = Vec::new();
+        let mut exited: Vec<SessionId> = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in sessions.values_mut() {
+                // Sessions from another CLI have no entry in Claude Code's
+                // live registry; their liveness belongs to their own scan.
+                // Left here they would be marked dead every pass.
+                if !s.source.in_claude_live_registry() {
+                    continue;
+                }
+                let before = (s.alive, s.live_status, s.tmux_target.clone());
+                match live_by_id.get(&s.id) {
+                    Some(e) => {
+                        s.alive = true;
+                        s.pid = Some(e.pid);
+                        s.live_status = Some(e.status);
+                        s.tmux_target = tmux_target_in(e.pid, &panes, &parents);
+                        s.status_since = e.status_since.or(s.status_since);
+                        if s.name.is_none() {
+                            s.name = e.name.clone();
+                        }
+                        if s.version.is_none() {
+                            s.version = e.version.clone();
+                        }
+                        if let Some(st) = e.started_at {
+                            s.started_at = st;
+                        }
+                        if s.cwd.is_empty() {
+                            s.cwd = e.cwd.clone();
+                        }
                     }
-                    if s.version.is_none() {
-                        s.version = e.version.clone();
-                    }
-                    if let Some(st) = e.started_at {
-                        s.started_at = st;
-                    }
-                    if s.cwd.is_empty() {
-                        s.cwd = e.cwd.clone();
+                    None => {
+                        s.alive = false;
+                        // The pid is deliberately KEPT. The live registry is
+                        // per-pid, so `/clear` moves the pid to a fresh session
+                        // id — and a dead session still holding it is the only
+                        // evidence of that succession. The client's label/pin
+                        // migration matches on exactly this; wiping it here is
+                        // what silently broke the first version of that fix.
+                        // Consumers that need a *live* pid already gate on
+                        // `alive` (focus_terminal does).
+                        s.live_status = None;
+                        // A dead session has no pane. Leaving a stale target
+                        // would offer a terminal tab that attaches to nothing.
+                        s.tmux_target = None;
                     }
                 }
-                None => {
-                    s.alive = false;
-                    // The pid is deliberately KEPT. The live registry is
-                    // per-pid, so `/clear` moves the pid to a fresh session
-                    // id — and a dead session still holding it is the only
-                    // evidence of that succession. The client's label/pin
-                    // migration matches on exactly this; wiping it here is
-                    // what silently broke the first version of that fix.
-                    // Consumers that need a *live* pid already gate on
-                    // `alive` (focus_terminal does).
-                    s.live_status = None;
-                    // A dead session has no pane. Leaving a stale target would
-                    // offer a terminal tab that attaches to nothing.
-                    s.tmux_target = None;
-                }
-            }
-            if before != (s.alive, s.live_status, s.tmux_target.clone()) {
-                // A session that just exited is newly reviewable.
-                let just_exited = before.0 && !s.alive;
-                self.put(s).await;
-                if just_exited {
-                    self.recompute_change_scan(&id).await;
+                if before != (s.alive, s.live_status, s.tmux_target.clone()) {
+                    // A session that just exited is newly reviewable.
+                    if before.0 && !s.alive {
+                        exited.push(s.id.clone());
+                    }
+                    changed.push(s.clone());
                 }
             }
         }
-
-        for id in touched_ids {
-            // Keep diffs current for sessions that are actively changing files.
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.quiet_sessions.lock().await.remove(&s.id);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
+        for id in exited {
+            // Bypasses the probe gate on purpose: an exit is rare, and it is
+            // the moment the diff is most wanted — the session just became
+            // reviewable.
             self.recompute_change_scan(&id).await;
+        }
+
+        // Keep diffs current for sessions that are actively changing files —
+        // but "the transcript grew" is not "the worktree moved". Each session
+        // rests between looks, and a look is a cheap fingerprint (shared per
+        // repo within the pass, since siblings share a worktree) before it is
+        // ever the full diff. `R-J53`.
+        let mut pass_fps: HashMap<String, Option<u64>> = HashMap::new();
+        for id in touched_ids {
+            self.maybe_recompute_change(&id, &mut pass_fps).await;
         }
 
         self.scan_codex().await;
         self.scan_qwen().await;
         self.refresh_collisions().await;
+        self.flush_quiet_sessions().await;
 
         {
             let sessions = self.sessions.read().await;
@@ -968,6 +1097,7 @@ impl AppState {
         }
         self.publish_queue().await;
         self.publish_health().await;
+        self.maybe_run_retention().await;
     }
 
     // -----------------------------------------------------------------------
@@ -1078,19 +1208,38 @@ impl AppState {
     /// warning is worse than none.
     async fn refresh_collisions(&self) {
         let now = Utc::now();
-        let all: Vec<Session> = self.sessions.read().await.values().cloned().collect();
-        let found = detect_collisions(&all, now);
+        // Only what detection needs, computed once per live session: id,
+        // label, and the recent-touch window. This replaces a clone of the
+        // whole session map per tick — and, inside detection, a recompute of
+        // each side's touch set per *pair*.
+        let live: Vec<CollisionSide> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.alive)
+                .map(|s| {
+                    let files: std::collections::BTreeSet<String> = s
+                        .files_touched_since(now, COLLISION_WINDOW_SECS)
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect();
+                    (s.id.clone(), s.label(), files)
+                })
+                .collect()
+        };
+        let found = detect_collisions(&live);
 
+        // Every session is still visited, not just the live ones: a collision
+        // also *ends* — one side exits, the window lapses — and a stale
+        // warning is worse than none.
         let mut changed = Vec::new();
         {
             let mut sessions = self.sessions.write().await;
-            for s in all {
+            for s in sessions.values_mut() {
                 let next = found.get(&s.id).cloned().unwrap_or_default();
                 if next != s.collisions {
-                    if let Some(live) = sessions.get_mut(&s.id) {
-                        live.collisions = next;
-                        changed.push(live.clone());
-                    }
+                    s.collisions = next;
+                    changed.push(s.clone());
                 }
             }
         }
@@ -1208,6 +1357,8 @@ impl AppState {
         let Some(mut s) = self.get(id).await else {
             return;
         };
+        // For the quiet/significant split at the end of the fold. `R-J54`.
+        let before = s.clone();
         let mut events = Vec::new();
         let mut last_ts = None;
 
@@ -1423,7 +1574,27 @@ impl AppState {
             s.transcript_path = path.to_string_lossy().to_string();
         }
 
-        self.put(s).await;
+        // A busy agent grows its transcript every tick, and most folds move
+        // nothing anyone is deciding by — counters, the activity line, the
+        // touch history. Broadcasting (and re-writing) the fat session row
+        // for each of those had every client parsing tens of KB per busy
+        // session per tick. Counter-only updates coast in memory and flush
+        // together within `QUIET_FLUSH_SECS`; anything a decision hangs off —
+        // a permission prompt opening, a failure, a prompt, a claim — still
+        // goes out immediately. The cost is honest and bounded: a hard crash
+        // loses at most that window of *counters* (the events themselves were
+        // already persisted per tick by `emit`). `R-J54`.
+        if significant_change(&before, &s) {
+            self.quiet_sessions.lock().await.remove(id);
+            self.put(s).await;
+        } else if s != before {
+            self.sessions.write().await.insert(s.id.clone(), s);
+            self.quiet_sessions
+                .lock()
+                .await
+                .entry(id.to_string())
+                .or_insert_with(std::time::Instant::now);
+        }
         self.emit(id, events, last_ts).await;
     }
 
@@ -1484,14 +1655,48 @@ impl AppState {
         let Some(install) = CodexInstall::discover(&self.codex_home) else {
             return;
         };
+        // The index is read only when its files moved. `R-J56`. A busy Codex
+        // writes it constantly; an idle or absent one should cost two stats,
+        // not a full `threads` read plus a rollout stat per thread per tick.
+        // The gate stays open while any Codex session is still marked alive,
+        // because "alive" here is a recency heuristic that must be free to
+        // decay to dead without the file changing under it.
+        let stamp = install.state_db().map(|db| {
+            let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            let wal = db.with_extension("sqlite-wal");
+            (db.clone(), mtime(&db), mtime(&wal))
+        });
+        {
+            let any_alive = {
+                let sessions = self.sessions.read().await;
+                sessions
+                    .values()
+                    .any(|s| s.source == SessionSource::Codex && s.alive)
+            };
+            let mut seen = self.codex_index_seen.lock().await;
+            if !any_alive && stamp.is_some() && *seen == stamp {
+                return;
+            }
+            *seen = stamp;
+        }
         let cache = self.codex_cache.clone();
         let result = tokio::task::spawn_blocking(move || {
             let mut cache = cache.lock().expect("codex scan cache poisoned");
             let index = install.list_threads();
+            let now = Utc::now();
             let details: Vec<_> = index
                 .threads
                 .iter()
                 .filter(|t| !t.archived)
+                // The same window the Claude corpus gets: a thread idle for
+                // longer stops being re-stat'd and re-absorbed every pass.
+                // Its session row, if one exists, simply stops being updated
+                // — which is also what happens to an aged-out transcript.
+                .filter(|t| {
+                    t.recency()
+                        .map(|r| (now - r).num_days() <= HISTORY_DAYS)
+                        .unwrap_or(true)
+                })
                 .map(|t| {
                     // Incremental: only bytes appended since the last pass
                     // are read and parsed. The whole-file re-read this
@@ -1556,7 +1761,10 @@ impl AppState {
                 )
             });
 
-            let before = serde_json::to_string(&s).unwrap_or_default();
+            // A straight comparison since `Session: PartialEq` — this used to
+            // serialise the whole session to JSON twice per thread per tick
+            // just to ask "did anything move".
+            let before = s.clone();
             s.source = SessionSource::Codex;
             s.title = t.title.clone().or(t.name.clone()).or(s.title);
             s.last_prompt = t
@@ -1622,7 +1830,7 @@ impl AppState {
                 }
             }
 
-            if serde_json::to_string(&s).unwrap_or_default() != before {
+            if s != before {
                 self.put(s).await;
             }
         }
@@ -1801,7 +2009,9 @@ impl AppState {
         let mut s = existing.unwrap_or_else(|| {
             blank_session(id.clone(), SessionSource::QwenCode, started, last_event)
         });
-        let before = serde_json::to_string(&s).unwrap_or_default();
+        // `Session: PartialEq` — see the Codex pass for why this is no longer
+        // two JSON serialisations per session per tick.
+        let before = s.clone();
         s.source = SessionSource::QwenCode;
 
         // Liveness is the OS's answer, exactly as for Claude: `scan_live` has
@@ -1882,7 +2092,7 @@ impl AppState {
         // pass can from an explicit approval request. A trailing tool call
         // reads as `Working`; `qwen::derive_status` documents what that costs.
 
-        if serde_json::to_string(&s).unwrap_or_default() != before {
+        if s != before {
             self.put(s).await;
         }
     }
@@ -1891,22 +2101,114 @@ impl AppState {
     // Diffs and review
     // -----------------------------------------------------------------------
 
-    /// Recompute and always announce, even when the diff is identical. The
-    /// request paths use this: a client that just asked for a refresh needs
-    /// the answer whether or not the diff moved since last time.
+    /// Recompute and announce the **full** diff to every client. The review
+    /// paths use this: a mark set in one window must move the hunks every
+    /// window holds, and marks arrive at human rate — the one caller for whom
+    /// the fat broadcast is still the right shape.
     pub async fn recompute_change(&self, id: &str) -> Option<Change> {
-        self.recompute_change_inner(id, true).await
+        let (change, _) = self.recompute_change_inner(id).await?;
+        self.broadcast(ServerMsg::ChangeUpdated {
+            session_id: id.to_string(),
+            change: change.clone(),
+        });
+        Some(change)
     }
 
-    /// The scan loop's variant: recompute, but stay silent when nothing
-    /// changed. A busy agent grows its transcript every tick, and before this
-    /// gate every tick re-sent the full diff — all hunks, all lines — to every
-    /// client, whether or not the worktree moved.
+    /// The scan loop's variant: recompute, and when the diff moved announce a
+    /// **summary** — counts and paths, no hunk bodies. The full broadcast
+    /// grew with the diff (the base is pinned at session start) and was the
+    /// largest recurring payload on the wire; a client actually showing the
+    /// hunks fetches them per connection with `RefreshChange`, answered from
+    /// the cache this just filled.
     pub async fn recompute_change_scan(&self, id: &str) -> Option<Change> {
-        self.recompute_change_inner(id, false).await
+        let (change, moved) = self.recompute_change_inner(id).await?;
+        if moved {
+            self.broadcast(ServerMsg::ChangeSummary {
+                session_id: id.to_string(),
+                summary: (&change).into(),
+            });
+        }
+        Some(change)
     }
 
-    async fn recompute_change_inner(&self, id: &str, always_announce: bool) -> Option<Change> {
+    /// The request path's variant: the cached diff when there is one, a fresh
+    /// compute when there is not — or when the caller insists (`force`, the
+    /// pane's refresh button). Announces nothing itself beyond a summary when
+    /// a fresh compute moved the diff; the caller replies on its own socket.
+    pub async fn change_for_request(&self, id: &str, force: bool) -> Option<Change> {
+        if !force {
+            if let Some(c) = self.changes.read().await.get(id).cloned() {
+                return Some(c);
+            }
+        }
+        let (change, moved) = self.recompute_change_inner(id).await?;
+        if moved {
+            self.broadcast(ServerMsg::ChangeSummary {
+                session_id: id.to_string(),
+                summary: (&change).into(),
+            });
+        }
+        Some(change)
+    }
+
+    /// The scan path's gate in front of [`Self::recompute_change_scan`]:
+    /// cheap before expensive, and nothing at all most ticks. `R-J53`.
+    async fn maybe_recompute_change(
+        &self,
+        id: &str,
+        pass_fps: &mut HashMap<String, Option<u64>>,
+    ) {
+        let (cwd, key) = {
+            let sessions = self.sessions.read().await;
+            let Some(s) = sessions.get(id) else { return };
+            // Mirrors `recompute_change_inner`'s own refusals, so a session
+            // that would compute nothing does not pay the probe either.
+            if s.cwd.is_empty() || s.transcript_path.is_empty() {
+                return;
+            }
+            (
+                s.cwd.clone(),
+                s.repo_root.clone().unwrap_or_else(|| s.cwd.clone()),
+            )
+        };
+        let last = self.change_probes.lock().await.get(id).copied();
+        if let Some(probe) = &last {
+            if probe.at.elapsed() < std::time::Duration::from_secs(CHANGE_PROBE_SECS) {
+                return;
+            }
+        }
+        let fp = match pass_fps.get(&key) {
+            Some(fp) => *fp,
+            None => {
+                let dir = cwd.clone();
+                let fp = tokio::task::spawn_blocking(move || {
+                    git::worktree_fingerprint(Path::new(&dir))
+                })
+                .await
+                .unwrap_or(None);
+                pass_fps.insert(key, fp);
+                fp
+            }
+        };
+        // An unreadable fingerprint counts as moved: a gate that failed
+        // closed would freeze this session's diff silently and forever.
+        let unmoved = matches!((last.and_then(|p| p.fp), fp), (Some(a), Some(b)) if a == b);
+        if !unmoved {
+            self.recompute_change_scan(id).await;
+        }
+        self.change_probes.lock().await.insert(
+            id.to_string(),
+            ChangeProbe {
+                at: std::time::Instant::now(),
+                fp,
+            },
+        );
+    }
+
+    /// Recompute one session's diff and store it. Returns the change and
+    /// whether it differs from what was cached; announces nothing — which
+    /// message that becomes, full or summary, is the caller's decision.
+    async fn recompute_change_inner(&self, id: &str) -> Option<(Change, bool)> {
         let session = self.get(id).await?;
         if session.cwd.is_empty() {
             return None;
@@ -1981,13 +2283,7 @@ impl AppState {
         let unchanged = changes.get(id) == Some(&change);
         changes.insert(id.to_string(), change.clone());
         drop(changes);
-        if always_announce || !unchanged {
-            self.broadcast(ServerMsg::ChangeUpdated {
-                session_id: id.to_string(),
-                change: change.clone(),
-            });
-        }
-        Some(change)
+        Some((change, !unchanged))
     }
 
     // -----------------------------------------------------------------------
@@ -2771,6 +3067,127 @@ impl AppState {
         self.publish_queue().await;
     }
 
+    /// Flush sessions whose counter-only updates have coasted long enough.
+    /// Runs every scan; each flush is an ordinary `put`, so the store row,
+    /// the broadcast and every client catch up together. `R-J54`.
+    async fn flush_quiet_sessions(&self) {
+        self.flush_quiet_older_than(std::time::Duration::from_secs(QUIET_FLUSH_SECS))
+            .await;
+    }
+
+    /// Flush every coasting session immediately, age regardless. The shutdown
+    /// path owes this: counters coast on the promise that they are persisted
+    /// within a breath, and a clean exit must keep that promise rather than
+    /// convert it into loss.
+    pub async fn flush_all_quiet(&self) {
+        self.flush_quiet_older_than(std::time::Duration::ZERO).await;
+    }
+
+    async fn flush_quiet_older_than(&self, min_age: std::time::Duration) {
+        let due: Vec<SessionId> = {
+            let mut quiet = self.quiet_sessions.lock().await;
+            let due: Vec<SessionId> = quiet
+                .iter()
+                .filter(|(_, at)| at.elapsed() >= min_age)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &due {
+                quiet.remove(id);
+            }
+            due
+        };
+        for id in due {
+            if let Some(s) = self.get(&id).await {
+                self.put(s).await;
+            }
+        }
+    }
+
+    /// Run the retention pass when it is due — immediately on the first scan
+    /// after start, then daily. `R-J57`.
+    async fn maybe_run_retention(&self) {
+        {
+            let last = self.last_retention.lock().await;
+            if let Some(at) = *last {
+                if at.elapsed() < std::time::Duration::from_secs(RETENTION_EVERY_SECS) {
+                    return;
+                }
+            }
+        }
+        *self.last_retention.lock().await = Some(std::time::Instant::now());
+        self.prune_stale_sessions().await;
+    }
+
+    /// Drop sessions nobody can act on any more, then give SQLite its WAL
+    /// back. `R-J57`.
+    ///
+    /// Everything the store holds for a session is derived from `~/.claude`
+    /// and git; deleting a row loses nothing that cannot be re-derived while
+    /// the transcript exists, and the transcript stopped being tailed at
+    /// `HISTORY_DAYS` anyway. What is *not* derived is the user's own writing,
+    /// so a session a note anchors to is never pruned — the note survives a
+    /// forget by design (ADR-0015), but a note pointing at a silently deleted
+    /// transcript would be a broken promise. Live sessions are never touched,
+    /// whatever their timestamps claim.
+    ///
+    /// This is what stops "fine at first, slow later": every per-tick pass —
+    /// liveness, ranking, collisions — is O(board), and before this the board
+    /// only ever grew. On this machine it held 261 sessions of which 84 were
+    /// inside the transcript window.
+    pub async fn prune_stale_sessions(&self) {
+        let cutoff = Utc::now() - chrono::Duration::days(RETENTION_DAYS);
+        let noted = self.store.noted_session_ids().unwrap_or_default();
+        // A transcript whose *file* is still inside the scan window will be
+        // re-adopted — and re-read from byte 0 — on the very next pass, so
+        // pruning its session would be a churn loop, not a cleanup. The scan
+        // filters on mtime; retention must respect the same clock.
+        let still_watched = |path: &str| {
+            std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .map(|m| {
+                    m.elapsed()
+                        .map(|age| age.as_secs() < (HISTORY_DAYS as u64) * 24 * 60 * 60)
+                        .unwrap_or(true)
+                })
+                .unwrap_or(false)
+        };
+        let stale: Vec<(SessionId, String)> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| !s.alive && s.last_event_at < cutoff && !noted.contains(&s.id))
+                .filter(|s| !still_watched(&s.transcript_path))
+                .map(|s| (s.id.clone(), s.transcript_path.clone()))
+                .collect()
+        };
+        let n = stale.len();
+        for (id, path) in stale {
+            {
+                let mut t = self.tailer.lock().await;
+                t.forget(Path::new(&path));
+            }
+            let _ = self.store.delete_tail_offset(&path);
+            let _ = self.store.delete_session(&id);
+            self.sessions.write().await.remove(&id);
+            self.changes.write().await.remove(&id);
+            self.seqs.lock().await.remove(&id);
+            self.change_probes.lock().await.remove(&id);
+            self.quiet_sessions.lock().await.remove(&id);
+            self.broadcast(ServerMsg::SessionRemoved { session_id: id });
+        }
+        if n > 0 {
+            tracing::info!(
+                "retention: pruned {n} session(s) idle for over {RETENTION_DAYS} days"
+            );
+            self.publish_queue().await;
+        }
+        // Checkpoint here, on retention cadence: per-tick checkpointing would
+        // stall every reader behind the single connection for no benefit.
+        if let Err(e) = self.store.checkpoint_truncate() {
+            tracing::warn!("wal checkpoint failed: {e}");
+        }
+    }
+
     pub async fn forget(&self, id: &str) -> Result<()> {
         if let Some(s) = self.get(id).await {
             let mut t = self.tailer.lock().await;
@@ -2783,6 +3200,9 @@ impl AppState {
         self.store.delete_session(id)?;
         self.sessions.write().await.remove(id);
         self.changes.write().await.remove(id);
+        self.seqs.lock().await.remove(id);
+        self.change_probes.lock().await.remove(id);
+        self.quiet_sessions.lock().await.remove(id);
         self.broadcast(ServerMsg::SessionRemoved {
             session_id: id.to_string(),
         });
@@ -3602,6 +4022,44 @@ fn window_for(chain: &[u32], windows: &[(u32, String)]) -> Option<String> {
     })
 }
 
+/// The session with the fields that merely tick along blanked out. `R-J54`.
+///
+/// What survives the blanking is what a broadcast must not sit on: liveness
+/// and status, open tools (a permission prompt is the top of the queue),
+/// errors and rate limits, prompts, titles, claims, verify runs, the loop
+/// signal, diff counters and repo pinning. Everything blanked is a counter or
+/// a rolling window that changes on virtually every fold of a busy session
+/// and that nobody acts on within seconds.
+fn quiet_view(s: &Session) -> Session {
+    let mut q = s.clone();
+    q.turns = 0;
+    q.tool_calls = 0;
+    q.tokens_in = 0;
+    q.tokens_out = 0;
+    q.last_activity = None;
+    q.last_event_at = chrono::DateTime::<Utc>::MIN_UTC;
+    q.recent_tools = Vec::new();
+    q.recent_touches = Vec::new();
+    q.touched_files = Vec::new();
+    q
+}
+
+/// Did this fold change anything a client should hear about *now*?
+fn significant_change(before: &Session, after: &Session) -> bool {
+    quiet_view(before) != quiet_view(after)
+}
+
+/// Equal, ignoring the fields that move every scan by construction. `R-J55`.
+fn health_equivalent(a: &Health, b: &Health) -> bool {
+    let mask = |h: &Health| {
+        let mut h = h.clone();
+        h.last_scan = None;
+        h.scans = 0;
+        h
+    };
+    mask(a) == mask(b)
+}
+
 /// Is this session repeating itself rather than making progress?
 ///
 /// Deliberately crude: the same tool against the same target, several times,
@@ -3630,32 +4088,39 @@ fn detect_loop(recent: &[String]) -> Option<String> {
     Some(format!("repeated {n}× in the last {LOOP_HISTORY} calls — {what}"))
 }
 
+/// One live session as collision detection sees it: id, label, and the files
+/// it touched inside the window. A `BTreeSet` so the paths iterate in a
+/// stable order — the result is compared against what a session already
+/// holds, and an order that shuffled between ticks would re-broadcast
+/// identical collisions forever.
+type CollisionSide = (SessionId, String, std::collections::BTreeSet<String>);
+
 /// Which live sessions are editing the same file at the same time.
 ///
 /// Only the observer can see this — it needs a view across sessions that no
 /// individual agent has. Both sides get the warning, because either one might
 /// be the one you want to stop. `R-B3`.
-fn detect_collisions(sessions: &[Session], now: chrono::DateTime<Utc>) -> HashMap<SessionId, Vec<Collision>> {
+///
+/// Takes precomputed sides rather than sessions: the touch window used to be
+/// recomputed per *pair*, and the whole board used to be cloned to get here.
+fn detect_collisions(live: &[CollisionSide]) -> HashMap<SessionId, Vec<Collision>> {
     let mut out: HashMap<SessionId, Vec<Collision>> = HashMap::new();
-    let live: Vec<&Session> = sessions.iter().filter(|s| s.alive).collect();
 
-    for (i, a) in live.iter().enumerate() {
-        for b in live.iter().skip(i + 1) {
-            let a_files = a.files_touched_since(now, COLLISION_WINDOW_SECS);
-            if a_files.is_empty() {
-                continue;
-            }
-            let b_files = b.files_touched_since(now, COLLISION_WINDOW_SECS);
-            for path in a_files.iter().filter(|p| b_files.contains(p)) {
-                out.entry(a.id.clone()).or_default().push(Collision {
-                    other: b.id.clone(),
-                    other_label: b.label(),
-                    path: path.to_string(),
+    for (i, (a_id, a_label, a_files)) in live.iter().enumerate() {
+        if a_files.is_empty() {
+            continue;
+        }
+        for (b_id, b_label, b_files) in live.iter().skip(i + 1) {
+            for path in a_files.iter().filter(|p| b_files.contains(*p)) {
+                out.entry(a_id.clone()).or_default().push(Collision {
+                    other: b_id.clone(),
+                    other_label: b_label.clone(),
+                    path: path.clone(),
                 });
-                out.entry(b.id.clone()).or_default().push(Collision {
-                    other: a.id.clone(),
-                    other_label: a.label(),
-                    path: path.to_string(),
+                out.entry(b_id.clone()).or_default().push(Collision {
+                    other: a_id.clone(),
+                    other_label: a_label.clone(),
+                    path: path.clone(),
                 });
             }
         }
@@ -5043,5 +5508,85 @@ mod write_containment_tests {
         ] {
             assert!(refuse_escape(good).is_ok(), "{good:?} is an ordinary path");
         }
+    }
+}
+
+#[cfg(test)]
+mod perf_gate_tests {
+    use super::*;
+
+    fn sess() -> Session {
+        blank_session("s1".into(), SessionSource::ClaudeCode, Utc::now(), Utc::now())
+    }
+
+    /// Counters and rolling windows must be able to coast: they change on
+    /// virtually every fold of a busy session, and each used to cost every
+    /// client a fat `SessionUpdated` per tick. `R-J54`.
+    #[test]
+    fn counter_only_folds_are_not_significant() {
+        let before = sess();
+        let mut after = before.clone();
+        after.turns += 3;
+        after.tool_calls += 7;
+        after.tokens_in += 10_000;
+        after.tokens_out += 2_000;
+        after.last_activity = Some("editing state.rs".into());
+        after.last_event_at = Utc::now();
+        after.recent_tools.push("Edit\u{1}src/state.rs".into());
+        after.recent_touches.push(Touch {
+            path: "src/state.rs".into(),
+            at: Utc::now(),
+        });
+        after.touched_files.push("src/state.rs".into());
+        assert!(!significant_change(&before, &after));
+    }
+
+    /// Anything a decision hangs off must broadcast immediately — a coasted
+    /// permission prompt would sit invisible for the whole flush window,
+    /// which is exactly the delay the queue exists to remove.
+    #[test]
+    fn decisions_are_significant() {
+        let before = sess();
+
+        let mut open_tool = before.clone();
+        open_tool.open_tools.push(OpenTool {
+            id: "t1".into(),
+            name: "Bash".into(),
+            summary: "rm -rf".into(),
+            at: Utc::now(),
+        });
+        assert!(significant_change(&before, &open_tool));
+
+        let mut failed = before.clone();
+        failed.error = Some("exploded".into());
+        assert!(significant_change(&before, &failed));
+
+        let mut prompted = before.clone();
+        prompted.last_prompt = Some("please fix".into());
+        assert!(significant_change(&before, &prompted));
+
+        let mut limited = before.clone();
+        limited.limit_hit_at = Some(Utc::now());
+        assert!(significant_change(&before, &limited));
+    }
+
+    /// `finish_scan` stamps `last_scan` and bumps `scans` every pass, so a
+    /// comparison that saw them would call every snapshot new — which is the
+    /// bug this mask exists to close: a Health per tick, forever, to every
+    /// client of an idle daemon. `R-J55`.
+    #[test]
+    fn health_that_only_ticked_is_equivalent() {
+        let mut a = Health::default();
+        a.last_scan = Some(Utc::now());
+        a.scans = 41;
+        let mut b = a.clone();
+        b.last_scan = Some(Utc::now() + chrono::Duration::seconds(2));
+        b.scans = 42;
+        assert!(health_equivalent(&a, &b));
+
+        // ...while anything a human could read off the window still counts.
+        let mut c = b.clone();
+        c.sessions_live = 3;
+        assert!(!health_equivalent(&a, &c));
     }
 }

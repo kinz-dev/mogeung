@@ -23,13 +23,41 @@ import { createContext, useContext, type ReactNode } from "react";
  */
 const PaneIdContext = createContext<string | null>(null);
 
+/**
+ * Whether the tile is actually on screen. `true` by default, so everything
+ * outside the dockview tree — the terminal panel, the dock tools, overlays —
+ * keeps behaving as if this context did not exist.
+ *
+ * What reads it: `TerminalView`, which detaches its pty while hidden. A
+ * background Agent tab is a live `tmux attach` whose TUI redraws its spinner
+ * continuously; xterm parsed that stream at full rate behind the tab.
+ * `R-J58`.
+ */
+const PaneVisibleContext = createContext<boolean>(true);
+
 /** Wraps one tile, naming it, so what is inside can be bound elsewhere. */
-export function PaneScope({ id, children }: { id: string; children: ReactNode }) {
-  return <PaneIdContext.Provider value={id}>{children}</PaneIdContext.Provider>;
+export function PaneScope({
+  id,
+  visible = true,
+  children,
+}: {
+  id: string;
+  visible?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <PaneIdContext.Provider value={id}>
+      <PaneVisibleContext.Provider value={visible}>{children}</PaneVisibleContext.Provider>
+    </PaneIdContext.Provider>
+  );
 }
 
 export function usePaneId(): string | null {
   return useContext(PaneIdContext);
+}
+
+export function usePaneVisible(): boolean {
+  return useContext(PaneVisibleContext);
 }
 
 /**

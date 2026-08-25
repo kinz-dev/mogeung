@@ -205,27 +205,55 @@ Then every `--poll-ms` (default 1500):
    will move.
 5. Apply liveness to **every** known session, not only ones that moved — a
    session going busy→idle produces no transcript line, and that transition is
-   the most important signal we have. The same pass resolves each live session's
-   tmux pane (`R-B18`), using one `tmux list-panes` and one `ps` for the whole
-   scan rather than a subprocess per session — both on the blocking pool, like
-   every subprocess and git call the scan makes, so the API stays answerable
-   mid-pass.
-6. Recompute diffs for sessions that changed, and for any that just exited.
+   the most important signal we have. In place, under one write lock: the
+   pass used to clone the whole board out and back, three copies per tick
+   (`R-J57`). The same pass resolves each live session's tmux pane (`R-B18`),
+   using one `tmux list-panes` and one `ps` for the whole scan rather than a
+   subprocess per session — skipped entirely when nothing is alive — both on
+   the blocking pool, like every subprocess and git call the scan makes, so
+   the API stays answerable mid-pass.
+6. Recompute diffs — **gated on the worktree actually moving** (`R-J53`). A
+   growing transcript is the trigger to *look*, not to diff: each session
+   rests `CHANGE_PROBE_SECS` between looks, a look is a fingerprint
+   (`rev-parse HEAD` + `status --porcelain`, cached per repo within the
+   pass), and only a moved or unreadable fingerprint pays for
+   `compute_change` — which is a full-worktree diff against the pinned base
+   and grows for the life of the session. A session that just exited
+   bypasses the gate: it is newly reviewable and the diff is wanted now.
    Untracked files are rendered in-process rather than via `git diff
    --no-index` per file, which used to fork up to 200 short-lived processes
    per tick while an agent worked.
-7. Rank the queue and broadcast it — **only if it differs** from the last
-   announcement, and the same gate applies to each recomputed diff
-   (`ChangeUpdated`). Health is broadcast every pass, deliberately ungated:
-   it is small and doubles as the daemon's heartbeat.
+7. Flush sessions whose counter-only updates have coasted long enough
+   (`R-J54`): a fold that moved nothing but tallies updates memory and is
+   saved-and-broadcast here, together, rather than per tick; anything a
+   decision hangs off broadcast the moment it was folded.
+8. Rank the queue — over borrows, under the read lock — and broadcast it
+   **only if it differs** from the last announcement. A moved diff is
+   announced as a `ChangeSummary` (counts and paths; hunks are served per
+   connection on request). Health is broadcast when it says something new,
+   plus a slow heartbeat (`R-J55`) — see
+   [wire-protocol.md](wire-protocol.md).
+9. Daily, and on the first pass after start: retention (`R-J57`). Sessions
+   dead past `RETENTION_DAYS` lose their rows, events, marks and offsets —
+   unless a note anchors to them, or their transcript file is still inside
+   the scan window and would only be re-adopted. The same pass checkpoints
+   and truncates the WAL.
 
 One scan runs at a time: the interval, a websocket `rescan` and the HTTP
 rescan collapse into whichever pass is already underway rather than stacking
 subprocess storms.
 
-Polling rather than filesystem events: a few dozen files every 1.5 s costs
-nothing, and it avoids every rename and atomic-write edge case that makes
-FSEvents miserable.
+Polling rather than filesystem events: *stat-ing* a few dozen files every
+1.5 s costs nothing, and it avoids every rename and atomic-write edge case
+that makes FSEvents miserable. What the poll must never do is treat "the
+transcript grew" as "everything downstream is stale" — that is how the tick
+rate became a full-worktree diff rate (`R-J53`), and the gates in steps 6–9
+are the boundary between polling for *evidence* and repeating *work*.
+
+The Codex pass follows the same rule one directory over (`R-J56`): its
+`threads` index is read only when the index file's mtime moved, except while
+a Codex session is marked alive — Codex liveness is a recency heuristic and
+must be free to decay to dead without the file changing.
 
 ## Who runs the daemon
 

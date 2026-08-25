@@ -14,6 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
 import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
+import { usePaneVisible } from "@/lib/paneScope";
 import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
 
 import { useStore } from "@/store";
@@ -103,8 +104,18 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appZoom]);
 
+  // A hidden pane holds no pty. `R-J58`. A background Agent tab is a live
+  // `tmux attach`, and a busy TUI redraws continuously — every frame crossed
+  // the pty, the batching emitter and the IPC bridge to be parsed by an xterm
+  // nobody could see, per hidden pane, for as long as the tab stayed behind.
+  // Hiding tears the attach down (tmux keeps the session — ADR-0010's rule,
+  // same as unmounting); revealing re-attaches and tmux redraws the screen
+  // whole. What the trade costs is this view's own scrollback across a
+  // hide/reveal — tmux copy-mode still holds the real history.
+  const visible = usePaneVisible();
+
   useEffect(() => {
-    if (!command || !hostRef.current || !isTauri()) return;
+    if (!command || !visible || !hostRef.current || !isTauri()) return;
     setExited(false);
 
     const dark =
@@ -374,7 +385,7 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
     // change one throws away the session in order to restyle the window. Both
     // are applied to the live terminal below instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, command?.join(" "), cwd]);
+  }, [id, command?.join(" "), cwd, visible]);
 
   // Font and theme, changed in place. A resync follows because the column count
   // is a function of the cell size — a bigger font is fewer columns, and the

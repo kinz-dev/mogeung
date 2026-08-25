@@ -123,7 +123,7 @@ pub fn human_bytes(n: u64) -> String {
 }
 
 /// A snapshot of how well mogeung is reading the world.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Health {
     pub last_scan: Option<DateTime<Utc>>,
     pub scans: u64,
@@ -192,7 +192,7 @@ pub struct Health {
 /// One of these per non-Claude source. The Claude Code figures stay in
 /// `Health`'s own fields: it is not "another agent" to a product whose whole
 /// corpus, canary and version tracking were built around it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentHealth {
     /// The wire name of the `SessionSource` — `codex`, `qwen`.
     pub source: String,

@@ -225,6 +225,29 @@ export interface Change {
   error: string | null;
 }
 
+/** One file of a `ChangeSummary` — a list row, never a diff line. */
+export interface FileSummary {
+  path: string;
+  status: FileStatus;
+  insertions: number;
+  deletions: number;
+  hunks: number;
+  reviewed_hunks: number;
+  score: number;
+}
+
+/**
+ * A `Change` with the hunk bodies left out. What the scan loop broadcasts
+ * when a diff moves; the hunks themselves are fetched per connection with
+ * `refresh_change`, and only by whoever is actually drawing them.
+ */
+export interface ChangeSummary {
+  files: FileSummary[];
+  insertions: number;
+  deletions: number;
+  error: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // transcript.rs
 // ---------------------------------------------------------------------------
@@ -844,7 +867,7 @@ export type ClientMsg =
   | { cmd: "subscribe" }
   | { cmd: "set_hunk_reviewed"; session_id: SessionId; anchor: string; reviewed: boolean }
   | { cmd: "review_all"; session_id: SessionId }
-  | { cmd: "refresh_change"; session_id: SessionId }
+  | { cmd: "refresh_change"; session_id: SessionId; force?: boolean }
   | { cmd: "fetch_events"; session_id: SessionId; since: number }
   | { cmd: "forget_session"; session_id: SessionId }
   | { cmd: "fetch_run_configs"; session_id: SessionId }
@@ -957,6 +980,7 @@ export type ServerMsg =
   | { ev: "events"; events: TranscriptEvent[] }
   | { ev: "queue"; queue: AttentionItem[] }
   | { ev: "change_updated"; session_id: SessionId; change: Change }
+  | { ev: "change_summary"; session_id: SessionId; summary: ChangeSummary }
   | { ev: "health"; health: Health }
   | { ev: "review_debt"; debt: ReviewDebt }
   | { ev: "blast_radius"; radius: BlastRadius }

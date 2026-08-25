@@ -136,6 +136,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::RefreshChange {
             session_id: ghost.clone(),
+            force: true,
         },
     )
     .await;

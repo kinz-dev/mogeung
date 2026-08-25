@@ -26,8 +26,16 @@ pub enum ClientMsg {
     },
     /// Mark every hunk currently in the diff as read.
     ReviewAll { session_id: SessionId },
-    /// Recompute the diff for a session from disk.
-    RefreshChange { session_id: SessionId },
+    /// The full diff for a session, hunks included, answered on the asking
+    /// socket only. Served from the daemon's cache unless `force` asks for a
+    /// recompute from disk — selection changes and summary-driven refreshes
+    /// want the current answer cheaply; the pane's refresh button wants git
+    /// consulted again.
+    RefreshChange {
+        session_id: SessionId,
+        #[serde(default)]
+        force: bool,
+    },
     /// Replay stored transcript events so a fresh client can fill in history.
     FetchEvents { session_id: SessionId, since: u64 },
     /// Stop tracking a session and forget its review state.
@@ -755,6 +763,15 @@ pub enum ServerMsg {
         session_id: SessionId,
         change: Change,
     },
+    /// The scan loop's word that a session's diff moved: counts and paths,
+    /// never hunk bodies. A client showing the hunks asks for them with
+    /// [`ClientMsg::RefreshChange`]; everyone else needed only this. The full
+    /// broadcast grew with the diff — the base is pinned at session start —
+    /// and was the largest recurring payload on the wire.
+    ChangeSummary {
+        session_id: SessionId,
+        summary: crate::change::ChangeSummary,
+    },
     /// Sent after every scan. A client should never have to ask whether the
     /// board it is showing is complete — the daemon volunteers it.
     Health { health: Box<Health> },
@@ -1137,5 +1154,75 @@ mod identity_tests {
             }
             other => panic!("expected a snapshot, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use crate::change::{ChangeSummary, FileChange, FileStatus, Hunk};
+
+    /// A client built before `force` existed sends `refresh_change` without
+    /// it, and must keep meaning what it always meant: serve the current
+    /// answer. Only a client that asks gets the recompute.
+    #[test]
+    fn refresh_change_without_force_still_parses() {
+        let msg: ClientMsg =
+            serde_json::from_str(r#"{"cmd":"refresh_change","session_id":"s"}"#).unwrap();
+        match msg {
+            ClientMsg::RefreshChange { session_id, force } => {
+                assert_eq!(session_id, "s");
+                assert!(!force);
+            }
+            other => panic!("parsed as {other:?}"),
+        }
+    }
+
+    /// The summary must agree with the change it summarises — the client
+    /// draws counts from it and decides staleness by its paths, so a drifted
+    /// tally would mislabel what the user has and has not read.
+    #[test]
+    fn a_summary_carries_the_changes_tallies_without_its_lines() {
+        let hunk = |reviewed| Hunk {
+            anchor: "a".into(),
+            header: "@@ -1 +1 @@".into(),
+            lines: vec!["+x".into(); 500],
+            insertions: 1,
+            deletions: 0,
+            flags: vec![],
+            score: 3,
+            reviewed,
+        };
+        let change = Change {
+            files: vec![FileChange {
+                path: "src/a.rs".into(),
+                old_path: None,
+                status: FileStatus::Modified,
+                insertions: 2,
+                deletions: 1,
+                hunks: vec![hunk(true), hunk(false)],
+                flags: vec![],
+                score: 3,
+                truncated: false,
+            }],
+            insertions: 2,
+            deletions: 1,
+            error: None,
+        };
+        let summary = ChangeSummary::from(&change);
+        assert_eq!(summary.insertions, 2);
+        assert_eq!(summary.deletions, 1);
+        assert_eq!(summary.files.len(), 1);
+        let f = &summary.files[0];
+        assert_eq!((f.hunks, f.reviewed_hunks), (2, 1));
+        assert_eq!(f.path, "src/a.rs");
+        // The point of the type: no hunk body survives into the wire shape.
+        let wire = serde_json::to_string(&ServerMsg::ChangeSummary {
+            session_id: "s".into(),
+            summary,
+        })
+        .unwrap();
+        assert!(!wire.contains("+x"), "summaries must not carry diff lines");
+        assert!(wire.len() < 500, "a summary is small whatever the diff was");
     }
 }

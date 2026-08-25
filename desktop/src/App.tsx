@@ -76,13 +76,24 @@ const pane =
     Body: React.FunctionComponent,
     opts: { scale?: boolean } = {},
   ): React.FunctionComponent<IDockviewPanelProps> =>
-  (props) => (
-    <PaneScope id={props.api.id}>
-      <ZoomPane name={kind} scale={opts.scale}>
-        <Body />
-      </ZoomPane>
-    </PaneScope>
-  );
+  (props) => {
+    // Dockview keeps background tabs mounted — which is right, their state
+    // must survive — so visibility has to travel as data for the panes whose
+    // *cost* does not stop at the tab edge. The Agent pane's pty is the case
+    // in point: see `PaneVisibleContext`. `R-J58`.
+    const [visible, setVisible] = React.useState(props.api.isVisible);
+    React.useEffect(() => {
+      const d = props.api.onDidVisibilityChange((e) => setVisible(e.isVisible));
+      return () => d.dispose();
+    }, [props.api]);
+    return (
+      <PaneScope id={props.api.id} visible={visible}>
+        <ZoomPane name={kind} scale={opts.scale}>
+          <Body />
+        </ZoomPane>
+      </PaneScope>
+    );
+  };
 
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
   // A terminal is scaled by its font, never by CSS — same reason as Monaco

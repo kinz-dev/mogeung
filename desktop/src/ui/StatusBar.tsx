@@ -13,11 +13,14 @@ import { repoName, sessionLabel } from "@/wire/types";
 export function StatusBar() {
   const s = useSelectedSession();
   const health = useStore((st) => st.health);
-  const change = useStore((st) => (st.selected ? st.changes[st.selected] : null));
+  // The summary, not the full change: the full diff is only fetched when the
+  // Changes pane is drawing it, and this row must count unread hunks whether
+  // or not that pane is open.
+  const summary = useStore((st) => (st.selected ? st.changeSummaries[st.selected] : null));
 
   const unread =
-    change && change.files.length > 0
-      ? change.files.reduce((n, f) => n + f.hunks.filter((h) => !h.reviewed).length, 0)
+    summary && summary.files.length > 0
+      ? summary.files.reduce((n, f) => n + (f.hunks - f.reviewed_hunks), 0)
       : 0;
 
   return (

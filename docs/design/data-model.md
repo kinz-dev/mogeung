@@ -19,6 +19,7 @@ Deliberately small. Everything in the UI is a view over these.
 | `LiveStatus` | `Busy` / `Idle` / `Unknown`, from the live registry |
 | `TranscriptEvent` | One typed event with a per-session monotonic `seq` |
 | `Change` | A session's diff: ordered `FileChange`s |
+| `ChangeSummary` | A `Change` with the hunk bodies left out — per-file counts, paths, review tallies. What the scan loop broadcasts when a diff moves (`R-J53`); the hunks travel per connection, on request |
 | `FileChange` | Path, status, stats, risk flags and score, `Hunk`s |
 | `Hunk` | Content anchor, header, lines, flags, score, `reviewed` |
 | `AttentionItem` | A session's queue position with reason, score, and explanation |
@@ -76,6 +77,21 @@ refusing to start.
 
 **`alive` and `live_status` are never trusted from storage.** Both are
 re-derived from the OS on the first scan after startup.
+
+**Rows are rent, and retention collects it** (`R-J57`). A session dead past
+`RETENTION_DAYS` (30) is deleted — row, events, review marks, tail offset —
+daily and on the first scan after start. Two kinds of row are never pruned: a
+session a `notes` row anchors to (the note survives a forget by design, and a
+note pointing at a silently deleted transcript would be a broken promise),
+and one whose transcript *file* is still inside the scan's mtime window,
+because the next pass would only re-adopt and re-read it whole. Everything
+deleted is derived and re-derivable while its transcript exists; what cannot
+be recomputed — the writing — is exactly what the guard protects.
+
+The database opens with `journal_size_limit` set and the retention pass runs
+`wal_checkpoint(TRUNCATE)`: without both, SQLite reuses the WAL but never
+shrinks it, and the per-tick write pattern had left it at 80% of the
+database's own size.
 
 **`pid` is kept, and is not a liveness claim.** A dead session holding its last
 pid is the only evidence that `/clear` moved that pid to a fresh session id,

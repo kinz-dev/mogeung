@@ -253,9 +253,16 @@ where
         None
     };
 
-    axum::serve(listener, api::router_with_token(state, opts.token.clone()))
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    axum::serve(
+        listener,
+        api::router_with_token(state.clone(), opts.token.clone()),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
+    // Counter-only session updates coast in memory between quiet flushes
+    // (`R-J54`); a clean exit persists whatever is still coasting so the
+    // deferral never becomes loss.
+    state.flush_all_quiet().await;
     Ok(())
 }
 

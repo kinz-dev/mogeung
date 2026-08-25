@@ -34,6 +34,11 @@ impl Store {
             r#"
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
+            -- Without a limit SQLite reuses the WAL file but never shrinks it,
+            -- and the busy-session write pattern here (a fat session row per
+            -- flush, an event row per transcript line) had it sitting at 80%
+            -- of the database's own size. Truncated back at checkpoint time.
+            PRAGMA journal_size_limit = 4194304;
 
             CREATE TABLE IF NOT EXISTS sessions (
                 id         TEXT PRIMARY KEY,
@@ -100,6 +105,31 @@ impl Store {
         Ok(Store {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// Checkpoint the WAL and truncate it. Called from the retention pass —
+    /// low-frequency by design; per-tick checkpointing would stall every
+    /// reader behind the single connection for no benefit.
+    pub fn checkpoint_truncate(&self) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    /// Session ids that a note is anchored to. The retention pass must not
+    /// prune a session the user wrote something about: the note survives by
+    /// design (ADR-0015), but a note pointing at a transcript that was
+    /// silently deleted is a broken promise.
+    pub fn noted_session_ids(&self) -> Result<HashSet<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt =
+            c.prepare("SELECT DISTINCT session_id FROM notes WHERE session_id IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = HashSet::new();
+        for r in rows {
+            out.insert(r?);
+        }
+        Ok(out)
     }
 
     pub fn save_session(&self, run: &Session) -> Result<()> {
@@ -389,5 +419,55 @@ impl Store {
         )
         .ok()
         .flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(tag: &str) -> Store {
+        let dir = std::env::temp_dir().join(format!("mogeung-store-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Store::open(&dir.join("t.db")).unwrap()
+    }
+
+    /// The retention pass keeps every session a note anchors to, so this list
+    /// must contain exactly the anchored ids — a free-floating scratchpad note
+    /// (no `session_id`) protects nothing. `R-J57`.
+    #[test]
+    fn noted_session_ids_are_the_anchored_ones_only() {
+        let s = store("noted");
+        let note = |id: &str, sid: Option<&str>| Note {
+            id: id.into(),
+            body: "b".into(),
+            created: 1,
+            updated: 1,
+            session_id: sid.map(String::from),
+            seq: None,
+            repo: None,
+        };
+        s.save_note(&note("n1", Some("sess-a"))).unwrap();
+        s.save_note(&note("n2", Some("sess-a"))).unwrap();
+        s.save_note(&note("n3", None)).unwrap();
+        let ids = s.noted_session_ids().unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains("sess-a"));
+    }
+
+    /// The WAL must actually shrink at checkpoint time — `journal_size_limit`
+    /// is set at open, and this is the call the retention pass makes. On the
+    /// machine this was written on the WAL had grown to 80% of the database.
+    #[test]
+    fn checkpointing_truncates_the_wal() {
+        let s = store("wal");
+        for i in 0..50 {
+            s.save_tail_offset(&format!("/t/{i}.jsonl"), i).unwrap();
+        }
+        s.checkpoint_truncate().unwrap();
+        // The path the store was opened with, next to its -wal sidecar.
+        let dir = std::env::temp_dir().join(format!("mogeung-store-wal-{}", std::process::id()));
+        let wal = std::fs::metadata(dir.join("t.db-wal")).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(wal, 0, "a truncated WAL is empty until the next write");
     }
 }

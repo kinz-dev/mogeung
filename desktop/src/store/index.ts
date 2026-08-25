@@ -12,6 +12,7 @@
  */
 
 import { create } from "zustand";
+import { summarize } from "@/store/changes";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
@@ -23,6 +24,7 @@ import type {
   BlameLine,
   BlastRadius,
   Change,
+  ChangeSummary,
   CommitDetail,
   CommitInfo,
   ContentMatch,
@@ -320,6 +322,16 @@ export interface Notice {
 
 let noticeSeq = 0;
 
+/**
+ * Most transcript events one session keeps in this window.
+ *
+ * The store held 52k events / 22 MB of JSON on the machine this was tuned
+ * on, all of it live for the life of the window. Five thousand covers all
+ * but the outlier sessions whole; past it the oldest turns drop off the
+ * top, which is the same deal `runOutput` has always offered.
+ */
+const EVENTS_CAP = 5000;
+
 export interface AppState {
   // -- connection ---------------------------------------------------------
   conn: ConnState;
@@ -332,7 +344,12 @@ export interface AppState {
   sessions: Record<SessionId, Session>;
   queue: AttentionItem[];
   events: Record<SessionId, TranscriptEvent[]>;
+  /** Full diffs, hunks included — held only for sessions someone asked about
+   *  (`refresh_change`); the scan loop stopped broadcasting these. */
   changes: Record<SessionId, Change>;
+  /** Every session's diff as counts and paths, kept current by broadcast.
+   *  What the status bar and staleness checks read; never hunk bodies. */
+  changeSummaries: Record<SessionId, ChangeSummary>;
   health: Health | null;
   debt: ReviewDebt | null;
   radius: BlastRadius | null;
@@ -596,6 +613,7 @@ export const useStore = create<AppState>((set, get) => ({
   queue: [],
   events: {},
   changes: {},
+  changeSummaries: {},
   health: null,
   debt: null,
   radius: null,
@@ -799,8 +817,19 @@ export const useStore = create<AppState>((set, get) => ({
         set((s) => {
           const sessions = { ...s.sessions };
           delete sessions[msg.session_id];
+          // Its events and diffs go with it — a session the daemon pruned
+          // must not keep paying rent in this window's heap either.
+          const events = { ...s.events };
+          delete events[msg.session_id];
+          const changes = { ...s.changes };
+          delete changes[msg.session_id];
+          const changeSummaries = { ...s.changeSummaries };
+          delete changeSummaries[msg.session_id];
           return {
             sessions,
+            events,
+            changes,
+            changeSummaries,
             selected: s.selected === msg.session_id ? null : s.selected,
           };
         });
@@ -835,6 +864,16 @@ export const useStore = create<AppState>((set, get) => ({
               else list.splice(at, 0, ev);
             }
           }
+          // Bounded, like `runOutput` below and for the same reason: the
+          // live tail of every session arrives here whether or not this
+          // window ever looks at it, and an uncapped array is a memory leak
+          // with a scrollbar. The cap is generous — a session past it is the
+          // outlier — and it is the *newest* events that are kept, which is
+          // the end every pane reads from. `R-J54`.
+          for (const sid of touched) {
+            const list = next[sid];
+            if (list.length > EVENTS_CAP) next[sid] = list.slice(-EVENTS_CAP);
+          }
           return { events: next };
         });
         break;
@@ -855,9 +894,16 @@ export const useStore = create<AppState>((set, get) => ({
           const st = s.explorer[msg.session_id];
           const stale = (t: FileTab) => t.rev === null && t.content !== null && paths.has(t.path);
           const changes = { ...s.changes, [msg.session_id]: msg.change };
-          if (!st || !st.open.some(stale)) return { changes };
+          // The summary map stays in step whichever message carried the news,
+          // so its readers never have to know which arrived.
+          const changeSummaries = {
+            ...s.changeSummaries,
+            [msg.session_id]: summarize(msg.change),
+          };
+          if (!st || !st.open.some(stale)) return { changes, changeSummaries };
           return {
             changes,
+            changeSummaries,
             explorer: {
               ...s.explorer,
               [msg.session_id]: {
@@ -871,9 +917,39 @@ export const useStore = create<AppState>((set, get) => ({
           };
         });
         break;
+      case "change_summary":
+        // The scan loop's word that a diff moved: counts and paths, no hunk
+        // bodies. The full diff is fetched only by whoever is drawing it —
+        // see `ChangesPane`, which compares this against what it holds.
+        set((s) => {
+          const changeSummaries = {
+            ...s.changeSummaries,
+            [msg.session_id]: msg.summary,
+          };
+          // A changed file is a stale file — `R-J38`'s rule, driven by the
+          // summary's paths exactly as the full message drives it above.
+          const paths = new Set(msg.summary.files.map((f) => f.path));
+          const st = s.explorer[msg.session_id];
+          const stale = (t: FileTab) => t.rev === null && t.content !== null && paths.has(t.path);
+          if (!st || !st.open.some(stale)) return { changeSummaries };
+          return {
+            changeSummaries,
+            explorer: {
+              ...s.explorer,
+              [msg.session_id]: {
+                ...st,
+                open: st.open.map((t) => (stale(t) ? { ...t, reload: true } : t)),
+                pendingFiles: st.pendingFiles.filter((k) => !paths.has(k)),
+              },
+            },
+          };
+        });
+        break;
       case "health":
-        // The daemon sends this after every scan, which makes it the honest
-        // signal that a rescan finished.
+        // The daemon sends this after every scan — though since `R-J55` only
+        // when it changed, or on the slow heartbeat. The request paths
+        // republish it unconditionally, which is what keeps this the honest
+        // signal that an explicit rescan finished.
         set({ health: msg.health, rescanning: false });
         break;
       case "run_configs":

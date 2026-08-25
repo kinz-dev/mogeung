@@ -121,7 +121,7 @@ pub struct Collision {
 /// Everything here is derived from files Claude Code writes for its own
 /// purposes. mogeung never starts, steers or stops a session — that is what
 /// made v0.1 feel like a worse terminal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
 

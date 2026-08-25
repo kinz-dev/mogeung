@@ -145,13 +145,17 @@ async fn the_repair_rebuilds_a_database_that_was_re_ingested() {
     let clean = tally(&first).await;
     drop(first);
 
-    // Reproduce the old behaviour: forget where we had read to, twice.
+    // Reproduce the old behaviour: forget where we had read to, twice. The
+    // builds that wrote these databases persisted every fold eagerly; today's
+    // counters coast until a quiet flush (`R-J54`), so the flush a shutdown
+    // performs is what lands the double-fold in the store here.
     for _ in 0..2 {
         let store = Store::open(&db(&home)).unwrap();
         store.delete_tail_offset(&path.to_string_lossy()).unwrap();
         store.set_schema_version(0).unwrap();
         drop(store);
         let state = boot(&home).await;
+        state.flush_all_quiet().await;
         drop(state);
     }
 

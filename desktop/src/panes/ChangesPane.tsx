@@ -9,12 +9,14 @@
 import { useEffect } from "react";
 import { CheckCheck, Columns2, EyeOff, Palette, RefreshCw, TextCursorInput } from "lucide-react";
 import { useStore } from "@/store";
+import { summaryDisagrees } from "@/store/changes";
 import { Checkbox, Dim, Empty, IconButton, PaneHeader } from "@/ui/primitives";
 import { DiffList } from "@/ui/DiffView";
 
 export function ChangesPane() {
   const id = useStore((s) => s.selected);
   const change = useStore((s) => (s.selected ? s.changes[s.selected] : undefined));
+  const summary = useStore((s) => (s.selected ? s.changeSummaries[s.selected] : undefined));
   const send = useStore((s) => s.send);
   // Field-by-field, never the whole prefs object: this pane sits above every
   // line of the diff, and an unrelated pref write (terminal font, pane zoom)
@@ -26,9 +28,16 @@ export function ChangesPane() {
   const syntax = useStore((s) => s.prefs.syntax);
   const setPrefs = useStore((s) => s.setPrefs);
 
+  // This pane is the only reader of hunk bodies, so it is the one that pulls
+  // them: on first sight of a session, and whenever the broadcast summary
+  // says the diff moved past what it holds. Un-forced, so the daemon answers
+  // from its cache — the recompute already happened on the scan path.
   useEffect(() => {
-    if (id && !change) send({ cmd: "refresh_change", session_id: id });
-  }, [id, change, send]);
+    if (!id) return;
+    if (!change || (summary && summaryDisagrees(summary, change))) {
+      send({ cmd: "refresh_change", session_id: id });
+    }
+  }, [id, change, summary, send]);
 
   if (!id) return <Empty>select a session</Empty>;
   if (!change) return <Empty>computing the diff…</Empty>;
@@ -79,7 +88,10 @@ export function ChangesPane() {
         <IconButton title="mark every hunk read" onClick={() => send({ cmd: "review_all", session_id: id })}>
           <CheckCheck size={13} />
         </IconButton>
-        <IconButton title="recompute from disk" onClick={() => send({ cmd: "refresh_change", session_id: id })}>
+        <IconButton
+          title="recompute from disk"
+          onClick={() => send({ cmd: "refresh_change", session_id: id, force: true })}
+        >
           <RefreshCw size={13} />
         </IconButton>
       </PaneHeader>

@@ -203,8 +203,15 @@ pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> Atten
     }
 }
 
-pub fn rank(sessions: &[Session], now: DateTime<Utc>, cfg: &AttentionConfig) -> Vec<AttentionItem> {
-    let mut items: Vec<AttentionItem> = sessions.iter().map(|s| classify(s, now, cfg)).collect();
+/// Generic over `Borrow` so the scan loop can rank borrowed sessions under its
+/// read lock instead of cloning the whole map once per tick.
+pub fn rank<S: std::borrow::Borrow<Session>>(
+    sessions: &[S],
+    now: DateTime<Utc>,
+    cfg: &AttentionConfig,
+) -> Vec<AttentionItem> {
+    let mut items: Vec<AttentionItem> =
+        sessions.iter().map(|s| classify(s.borrow(), now, cfg)).collect();
     items.sort_by(|a, b| {
         b.score
             .cmp(&a.score)

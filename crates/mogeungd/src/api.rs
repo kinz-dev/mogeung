@@ -629,10 +629,7 @@ async fn get_change(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    if let Some(c) = state.changes.read().await.get(&id).cloned() {
-        return Json(serde_json::to_value(c).unwrap_or_default());
-    }
-    match state.recompute_change(&id).await {
+    match state.change_for_request(&id, false).await {
         Some(c) => Json(serde_json::to_value(c).unwrap_or_default()),
         None => Json(serde_json::json!({ "error": "no such session, or it has no working directory" })),
     }
@@ -675,6 +672,14 @@ async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
 async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
     let (mut sink, mut stream) = socket.split();
     let mut rx = state.tx.subscribe();
+    // The connection's own lane. `R-J59`. The daemon still *volunteers* state
+    // on the broadcast — the client contract is unchanged, answers arrive on
+    // the one event stream — but a request whose answer only the asker can use
+    // (history replay, a diff's hunks, a snapshot, an error you caused) goes
+    // down this lane instead of to every window. Broadcasting those meant one
+    // window selecting a long session made every other window parse and store
+    // that session's entire history.
+    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::unbounded_channel::<ServerMsg>();
 
     // Push the full snapshot immediately so a client is useful before it sends
     // anything, and so reconnects self-heal.
@@ -686,7 +691,15 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
 
     let send_task = tokio::spawn(async move {
         loop {
-            match rx.recv().await {
+            let msg = tokio::select! {
+                m = reply_rx.recv() => match m {
+                    Some(m) => Ok(m),
+                    // The request side hung up; the broadcast task ends with it.
+                    None => break,
+                },
+                m = rx.recv() => m,
+            };
+            match msg {
                 Ok(msg) => {
                     let Ok(txt) = serde_json::to_string(&msg) else {
                         continue;
@@ -712,10 +725,12 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
     while let Some(Ok(msg)) = stream.next().await {
         let Message::Text(txt) = msg else { continue };
         match serde_json::from_str::<ClientMsg>(&txt) {
-            Ok(cmd) => handle(&state, cmd).await,
-            Err(e) => state.broadcast(ServerMsg::Error {
-                message: format!("bad command: {e}"),
-            }),
+            Ok(cmd) => handle(&state, cmd, &reply_tx).await,
+            Err(e) => {
+                let _ = reply_tx.send(ServerMsg::Error {
+                    message: format!("bad command: {e}"),
+                });
+            }
         }
     }
 
@@ -802,11 +817,17 @@ async fn after_ref_change(state: &Arc<AppState>, session_id: String) {
     rebroadcast_status(state, session_id).await
 }
 
-async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
+async fn handle(
+    state: &Arc<AppState>,
+    cmd: ClientMsg,
+    reply: &tokio::sync::mpsc::UnboundedSender<ServerMsg>,
+) {
+    // Your mistake is your toast: an error provoked by one window's command
+    // used to be broadcast, so every other window raised it too.
     let err = |e: anyhow::Error| {
-        state.broadcast(ServerMsg::Error {
+        let _ = reply.send(ServerMsg::Error {
             message: e.to_string(),
-        })
+        });
     };
 
     // One gate, before dispatch, for every verb that can change a repository.
@@ -823,8 +844,11 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
 
     match cmd {
         ClientMsg::Subscribe => {
+            // Direct, not broadcast: this used to make every *other* window
+            // re-ingest the full board whenever any window reconnected —
+            // which after a laptop sleep is all of them, at once.
             let snap = state.snapshot().await;
-            state.broadcast(snap);
+            let _ = reply.send(snap);
         }
         ClientMsg::SetHunkReviewed {
             session_id,
@@ -832,12 +856,19 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             reviewed,
         } => state.set_hunk_reviewed(&session_id, &anchor, reviewed).await,
         ClientMsg::ReviewAll { session_id } => state.review_all(&session_id).await,
-        ClientMsg::RefreshChange { session_id } => {
-            state.recompute_change(&session_id).await;
+        ClientMsg::RefreshChange { session_id, force } => {
+            if let Some(change) = state.change_for_request(&session_id, force).await {
+                let _ = reply.send(ServerMsg::ChangeUpdated { session_id, change });
+            }
         }
         ClientMsg::FetchEvents { session_id, since } => {
+            // Direct: a history replay can run to tens of thousands of
+            // events, and every open window used to receive — and keep —
+            // every other window's replays.
             match state.store.load_events(&session_id, since) {
-                Ok(events) if !events.is_empty() => state.broadcast(ServerMsg::Events { events }),
+                Ok(events) if !events.is_empty() => {
+                    let _ = reply.send(ServerMsg::Events { events });
+                }
                 Ok(_) => {}
                 Err(e) => err(anyhow::anyhow!(e)),
             }
@@ -933,9 +964,11 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
         }
         ClientMsg::Rescan => {
             state.scan().await;
-            // The scan's own queue publish is gated on change; the client
-            // that asked still gets the queue back, changed or not.
+            // The scan's own queue and health publishes are gated on change;
+            // the client that asked still gets both back, changed or not —
+            // its "rescanning…" spinner clears on the health message.
             state.republish_queue().await;
+            state.republish_health().await;
         }
         ClientMsg::FetchUsage => {
             let report = state.usage_report().await;
@@ -1015,7 +1048,7 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
         },
         ClientMsg::FetchHealth => {
             let health = state.health().await;
-            state.broadcast(ServerMsg::Health {
+            let _ = reply.send(ServerMsg::Health {
                 health: Box::new(health),
             });
         }
@@ -1539,7 +1572,7 @@ mod write_guard_tests {
             ClientMsg::GitStatus { session_id: id() },
             ClientMsg::GitRefs { session_id: id() },
             ClientMsg::GitStashes { session_id: id() },
-            ClientMsg::RefreshChange { session_id: id() },
+            ClientMsg::RefreshChange { session_id: id(), force: true },
             ClientMsg::ReviewAll { session_id: id() },
             ClientMsg::Subscribe,
         ] {

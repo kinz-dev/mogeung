@@ -62,4 +62,28 @@ describe("the events reducer", () => {
     expect(seqs("a")).toEqual([1, 2]);
     expect(seqs("b")).toEqual([3, 4]);
   });
+
+  /**
+   * The cap (`EVENTS_CAP`, 5000): every session's live tail lands in this
+   * store whether or not the window ever looks at it, and before the cap a
+   * long-lived window held 52k events / 22 MB of JSON with no way down. The
+   * newest events survive — the end every pane reads from — and bystander
+   * sessions keep their identity, so the cap costs nothing when it does not
+   * bind.
+   */
+  it("caps a session's events at 5000, keeping the newest", () => {
+    const batch = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ev("a", from + i));
+    ingest(batch(1, 4000));
+    ingest([ev("b", 1)]);
+    const bystander = useStore.getState().events.b;
+    ingest(batch(4001, 2000));
+
+    const held = seqs("a");
+    expect(held.length).toBe(5000);
+    expect(held[0]).toBe(1001);
+    expect(held[held.length - 1]).toBe(6000);
+    // A session the message did not push past the cap is untouched.
+    expect(useStore.getState().events.b).toBe(bystander);
+  });
 });

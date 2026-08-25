@@ -21,7 +21,7 @@ available as plain REST so the daemon is curl-able without a UI.
 | `Subscribe` | Re-send the full snapshot |
 | `SetHunkReviewed` | Mark or unmark one hunk |
 | `ReviewAll` | Mark every hunk in the current diff |
-| `RefreshChange` | Recompute a session's diff |
+| `RefreshChange` | The full diff — hunks included — answered **on the asking socket only** (`R-J59`). Served from the daemon's cache unless `force` (serde-defaulted, so older clients keep their meaning) insists on git being consulted again; selection changes and summary-driven refreshes want the current answer cheaply, the pane's *recompute from disk* button wants a recompute |
 | `FetchEvents` | Replay stored transcript events from `since` |
 | `ForgetSession` | Stop tracking; drop review state |
 | `LaunchTerminal` | Open a real interactive agent CLI, optionally in a new worktree. `source` picks which one (`R-J51`) and is `#[serde(default)]` — a client built before the choice existed omits it and gets Claude Code, which is the answer it was already getting. A source the daemon has no recipe for (Codex) is an error in words, never a different agent started quietly |
@@ -67,22 +67,43 @@ client builds the text and puts it on your clipboard, and you paste it
 ## Events (`ServerMsg`)
 
 `Snapshot` · `SessionUpdated` · `SessionRemoved` · `Events` · `Queue` ·
-`ChangeUpdated` · `Health` · `ReviewDebt` · `BlastRadius` · `DirListing` ·
+`ChangeUpdated` · `ChangeSummary` · `Health` · `ReviewDebt` · `BlastRadius` · `DirListing` ·
 `FileContent` · `TreeListing` · `ContentMatches` · `GitCommits` ·
 `GitCommitDiff` · `GitLocalChanges` · `GitFileDiff` · `GitAnnotation` ·
 `GitRefsInfo` · `GitStashList` · `GitStashDiff` · `GitSubmoduleList` ·
 `GitRangeDiff` · `GitFileAtRevContent` · `GitReflogList` ·
 `GitWorktreeList` · `GitConflictStages` · `Error`
 
-**The periodic scan is change-gated; a request never is.** `Queue` and
-`ChangeUpdated` from the scan loop are sent only when their content differs
-from what was last broadcast — before the gate, every 1.5 s tick re-sent the
-full diff of every actively-writing session to every client, unchanged or
-not. A client that *asks* (`Rescan`, `RefreshChange`, the review verbs) is
-always answered, even with an identical payload: the echo is its
-confirmation. `Health` alone stays per-tick, as the heartbeat. New clients
-lose nothing to the gate — the snapshot carries the queue, and a session's
-diff is fetched on selection.
+**The periodic scan is change-gated; a request never is.** `Queue`, `Health`
+and the diff messages from the scan loop are sent only when their content
+differs from what was last broadcast — before the gates, every 1.5 s tick
+re-sent the full diff of every actively-writing session, and a fresh `Health`,
+to every client, unchanged or not. A client that *asks* (`Rescan`,
+`RefreshChange`, the review verbs) is always answered, even with an identical
+payload: the echo is its confirmation. New clients lose nothing to the gates —
+the snapshot carries the queue, and a session's diff is fetched on selection.
+
+**A moved diff travels as a summary; hunks travel on request.** `R-J53`. The
+scan loop announces `ChangeSummary` — per-file counts, paths, review tallies,
+no hunk bodies — because the full `Change` grows for the life of the session
+(the base is pinned at session start) and was the largest recurring payload on
+the wire. The full `ChangeUpdated` still exists on two paths: as the reply to
+`RefreshChange`, and broadcast by the review verbs, whose marks must move the
+hunks every window holds and which arrive at human rate.
+
+**Four answers go to the asker alone.** `R-J59`. Each connection has a reply
+lane multiplexed into the one event stream: `Subscribe`'s snapshot (broadcast,
+it made every window re-ingest the board whenever any window reconnected),
+`FetchEvents`' replay (every window kept every other window's history),
+`RefreshChange`'s hunks, `FetchHealth`, and the `Error` your own malformed or
+failed command earns. The contract is unchanged — commands still have no
+replies to await; answers still arrive on the stream.
+
+**`SessionUpdated` coasts when only counters moved.** `R-J54`. A fold that
+changed nothing but token totals, tool tallies or the activity line updates
+the daemon's memory and flushes — store row and broadcast together — within a
+few seconds; a permission prompt opening, a failure, a prompt or a status flip
+still broadcasts immediately. A clean shutdown flushes whatever is coasting.
 
 `GitCommitDiff` hunks carry R-D8's read marks (`R-D17`): the daemon feeds
 `parse_unified` the union of the repo's reviewed anchors, so a hunk a
@@ -239,7 +260,13 @@ unreadable file answers nothing. `ContentMatches` echoes the query so a client
 can drop the answer to a search the user has since replaced — the stray-session
 rule, applied to superseded queries.
 
-`Health` is pushed after **every** scan, unsolicited. A client should never have
+`Health` is pushed unsolicited — after any scan that changed what it says, and
+on a slow heartbeat (`HEALTH_HEARTBEAT_SECS`) regardless, so the health
+window's *"last scan"* line stays honest without every idle tick re-sending an
+identical snapshot (`R-J55`; `last_scan`/`scans` are masked from the
+comparison because they move by construction). The request paths republish it
+unconditionally — `Rescan`'s answer is queue *and* health, and the client's
+"rescanning…" spinner clears on the health message. A client still never has
 to ask whether the board it is showing is complete — see
 [health-and-canary.md](health-and-canary.md).
 
