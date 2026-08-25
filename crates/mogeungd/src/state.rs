@@ -16,7 +16,7 @@ use chrono::Utc;
 use mogeung_core::attention::{rank, AttentionConfig, AttentionItem};
 use mogeung_core::health::Health;
 use mogeung_core::review::{BlastRadius, DebtFile, ReviewDebt};
-use mogeung_core::session::{Collision, OpenTool, Session, SessionId, Touch};
+use mogeung_core::session::{Collision, OpenTool, Session, SessionId, SessionSource, Touch};
 use mogeung_core::verify::{Claim, VerifyRun};
 use mogeung_core::{Change, EventKind, ServerMsg, TranscriptEvent};
 use std::collections::HashMap;
@@ -95,6 +95,8 @@ pub struct AppState {
     /// Root of the Codex CLI state directory, watched the same read-only way
     /// when it exists. `R-I1`.
     pub codex_home: PathBuf,
+    /// Root of the Qwen Code state directory, likewise. `R-I15`.
+    pub qwen_home: PathBuf,
     pub attention: AttentionConfig,
     /// What we have and have not managed to read. See `health.rs`.
     health: Mutex<HealthTracker>,
@@ -114,10 +116,69 @@ pub struct AppState {
     /// Incremental Codex rollout state. `Arc` + std mutex because the scan
     /// closure that advances it runs on the blocking pool.
     codex_cache: Arc<std::sync::Mutex<crate::codex::ScanCache>>,
+    /// Incremental Qwen transcript state, same arrangement and same reason.
+    qwen_cache: Arc<std::sync::Mutex<crate::qwen::ScanCache>>,
     /// Cwds that turned out not to be git repos, with a countdown until the
     /// next probe. Probing forks `git rev-parse`; without this a session
     /// whose cwd is not a repo pays that fork every tick, forever.
     non_repo_cwds: Mutex<HashMap<String, u32>>,
+}
+
+/// Where every non-Claude agent CLI keeps its state.
+///
+/// A struct rather than more positional parameters on `with_homes`: the arity
+/// grew by one per CLI, and a call site passing three same-typed `PathBuf`s in
+/// the wrong order would compile and then watch the wrong directories.
+#[derive(Debug, Clone)]
+pub struct AgentHomes {
+    pub codex: PathBuf,
+    pub qwen: PathBuf,
+}
+
+impl AgentHomes {
+    /// **Each home is the sibling of the Claude one, not the machine's.**
+    /// `R-J27`, and now `R-I15`.
+    ///
+    /// Codex's used to be `codex::default_home()`, which reads `$HOME/.codex`
+    /// whatever home was injected — so every caller handing this a *fake*
+    /// `.claude` still scanned the real Codex installation beside it. Harmless
+    /// while `~/.codex` was empty, and not harmless once it was not: the canary
+    /// tests began reporting seven unclassified Codex event types out of the
+    /// developer's own sessions, which is a true finding arriving through a
+    /// test that had no business seeing it.
+    ///
+    /// Deriving the sibling keeps production identical — `$HOME/.claude`,
+    /// `$HOME/.codex` and `$HOME/.qwen` are siblings by construction — while a
+    /// test that builds a fake home gets the fake siblings beside it, which is
+    /// what [ADR-0006](../../../docs/decisions/0006-inject-the-watch-root.md)
+    /// means by injecting the root. The explicit environment variable still
+    /// wins where it is set, because a chosen root outranks an inferred one.
+    ///
+    /// This matters more for Qwen than it did for Codex: `~/.qwen` on a
+    /// developer's machine has real sessions in it from the first day, so a
+    /// test that reached the true home would not fail loudly — it would pass
+    /// while quietly asserting against someone's actual work.
+    pub fn beside(claude_home: &Path) -> Self {
+        AgentHomes {
+            codex: sibling_home(claude_home, "CODEX_HOME", ".codex", crate::codex::default_home),
+            qwen: sibling_home(claude_home, "QWEN_HOME", ".qwen", crate::qwen::default_home),
+        }
+    }
+}
+
+fn sibling_home(
+    claude_home: &Path,
+    env: &str,
+    dir: &str,
+    fallback: fn() -> PathBuf,
+) -> PathBuf {
+    if let Ok(p) = std::env::var(env) {
+        return PathBuf::from(p);
+    }
+    match claude_home.parent() {
+        Some(parent) => parent.join(dir),
+        None => fallback(),
+    }
 }
 
 /// How many negative repo probes to skip before asking again — `git init`
@@ -277,21 +338,19 @@ impl AppState {
     /// by injecting the root. `CODEX_HOME` still wins where it is set, because
     /// an explicitly chosen root outranks an inferred one.
     pub fn with_home(store: Store, claude_home: PathBuf) -> Result<Arc<Self>> {
-        let codex = match std::env::var("CODEX_HOME") {
-            Ok(p) => PathBuf::from(p),
-            Err(_) => match claude_home.parent() {
-                Some(parent) => parent.join(".codex"),
-                None => crate::codex::default_home(),
-            },
-        };
-        Self::with_homes(store, claude_home, codex)
+        let homes = AgentHomes::beside(&claude_home);
+        Self::with_homes(store, claude_home, homes)
     }
 
     pub fn with_homes(
         store: Store,
         claude_home: PathBuf,
-        codex_home: PathBuf,
+        homes: AgentHomes,
     ) -> Result<Arc<Self>> {
+        let AgentHomes {
+            codex: codex_home,
+            qwen: qwen_home,
+        } = homes;
         let loaded = store.load_sessions()?;
         let mut sessions = HashMap::new();
         let mut seqs = HashMap::new();
@@ -339,6 +398,7 @@ impl AppState {
             writes_allowed: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
+            qwen_home,
             attention: AttentionConfig::default(),
             health: Mutex::new(HealthTracker::new(MAX_TRANSCRIPT_BYTES)),
             notifier: Mutex::new(Notifier::default()),
@@ -347,6 +407,7 @@ impl AppState {
             last_queue: Mutex::new(Vec::new()),
             scan_running: Mutex::new(()),
             codex_cache: Arc::new(std::sync::Mutex::new(crate::codex::ScanCache::default())),
+            qwen_cache: Arc::new(std::sync::Mutex::new(crate::qwen::ScanCache::default())),
             non_repo_cwds: Mutex::new(HashMap::new()),
         }))
     }
@@ -835,10 +896,10 @@ impl AppState {
             let Some(mut s) = self.get(&id).await else {
                 continue;
             };
-            // Codex sessions have no entry in Claude Code's live registry;
-            // their liveness belongs to `scan_codex`. Left here they would be
-            // marked dead every pass.
-            if s.source == mogeung_core::session::SessionSource::Codex {
+            // Sessions from another CLI have no entry in Claude Code's live
+            // registry; their liveness belongs to their own scan. Left here
+            // they would be marked dead every pass.
+            if !s.source.in_claude_live_registry() {
                 continue;
             }
             let before = (s.alive, s.live_status, s.tmux_target.clone());
@@ -894,6 +955,7 @@ impl AppState {
         }
 
         self.scan_codex().await;
+        self.scan_qwen().await;
         self.refresh_collisions().await;
 
         {
@@ -935,10 +997,10 @@ impl AppState {
         let (mut rebuilt, mut deduped, mut dropped) = (0usize, 0usize, 0usize);
 
         for s in sessions {
-            // Codex threads are re-read whole every scan and never went
-            // through this path; folding a rollout through the Claude Code
-            // adapter would invent history rather than repair it.
-            if s.source == mogeung_core::session::SessionSource::Codex {
+            // Other CLIs' transcripts never went through this path; folding
+            // one through the Claude Code adapter would invent history rather
+            // than repair it.
+            if !s.source.has_claude_event_history() {
                 continue;
             }
             let path = PathBuf::from(&s.transcript_path);
@@ -1460,7 +1522,8 @@ impl AppState {
                 }
             }
         }
-        self.health.lock().await.set_codex(
+        self.health.lock().await.set_agent(
+            SessionSource::Codex.label(),
             true,
             details.len() as u32,
             index_error,
@@ -1562,6 +1625,265 @@ impl AppState {
             if serde_json::to_string(&s).unwrap_or_default() != before {
                 self.put(s).await;
             }
+        }
+    }
+
+    /// Fold Qwen Code's sessions into the queue. `R-I15`.
+    ///
+    /// Structurally this is the Claude pass, not the Codex one: a live registry
+    /// keyed by pid, plus per-session transcripts tailed by byte offset. The
+    /// difference that matters is that Qwen's registry carries no busy/idle
+    /// field, so status is inferred from the transcript tail — see
+    /// `qwen::derive_status`, which documents what that inference cannot tell
+    /// apart.
+    async fn scan_qwen(&self) {
+        use crate::qwen::QwenInstall;
+        use mogeung_core::session::SessionSource;
+
+        let Some(install) = QwenInstall::discover(&self.qwen_home) else {
+            return;
+        };
+        let cache = self.qwen_cache.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut cache = cache.lock().expect("qwen scan cache poisoned");
+            let live = crate::qwen::scan_live(&install.home);
+            let files = install.transcripts(HISTORY_DAYS);
+            let threads: Vec<_> = files
+                .iter()
+                .map(|t| {
+                    // Incremental: only bytes appended since the last pass are
+                    // read and parsed.
+                    let thread = cache.update(t);
+                    (t.clone(), thread)
+                })
+                .collect();
+            let keep: std::collections::HashSet<String> =
+                threads.iter().map(|(t, _)| t.session_id.clone()).collect();
+            cache.retain(&keep);
+            (live, threads)
+        })
+        .await;
+        let Ok((live, threads)) = result else {
+            return;
+        };
+
+        // The Qwen canary: unknown record types and unknown `system` subtypes,
+        // merged across sessions and replaced wholesale. Per-session counts are
+        // cumulative in the cache, so the merge equals what a full re-read
+        // would have counted.
+        let mut unknown: std::collections::BTreeMap<String, u64> = Default::default();
+        for (_, thread) in &threads {
+            for (kind, n) in &thread.counts.unknown_kinds {
+                *unknown.entry(kind.clone()).or_insert(0) += n;
+            }
+        }
+        self.health.lock().await.set_agent(
+            SessionSource::QwenCode.label(),
+            true,
+            threads.len() as u32,
+            None,
+            unknown.into_iter().collect(),
+        );
+
+        let live_by_id: HashMap<String, &crate::qwen::QwenLiveEntry> =
+            live.iter().map(|e| (e.session_id.clone(), e)).collect();
+
+        // Which tmux pane, if any, each live pid is sitting in — the thing that
+        // lets the Agent pane *host* a session rather than only point at it
+        // (ADR-0010). Resolved here rather than in the Claude liveness pass,
+        // which this source deliberately skips: without it, wrapping `qwen` in
+        // tmux with `scripts/qwenmo` produced a session that looked correct in
+        // every field and still could not be attached to.
+        //
+        // Skipped entirely when nothing is alive, because both halves fork a
+        // process and a scan that finds no Qwen session should cost nothing.
+        let (panes, parents) = if live.is_empty() {
+            (Vec::new(), HashMap::new())
+        } else {
+            tokio::task::spawn_blocking(|| {
+                let panes = tmux_panes();
+                let parents = if panes.is_empty() {
+                    HashMap::new()
+                } else {
+                    process_parents()
+                };
+                (panes, parents)
+            })
+            .await
+            .unwrap_or_default()
+        };
+
+        let now = Utc::now();
+        // Transcripts first, then any registered session that has not written
+        // one yet — a session you just started has a pid before it has a line,
+        // and waiting for the first line to show it in the queue is the
+        // `R-J30` mistake one directory over.
+        let mut seen: std::collections::HashSet<String> = Default::default();
+        for (t, thread) in &threads {
+            seen.insert(t.session_id.clone());
+            let entry = live_by_id.get(&t.session_id).copied();
+            self.absorb_qwen(
+                t.session_id.clone(),
+                Some((t, thread)),
+                entry,
+                &panes,
+                &parents,
+                now,
+            )
+            .await;
+        }
+        for e in &live {
+            if seen.contains(&e.session_id) {
+                continue;
+            }
+            seen.insert(e.session_id.clone());
+            self.absorb_qwen(e.session_id.clone(), None, Some(e), &panes, &parents, now)
+                .await;
+        }
+
+        // **Anything we know about and did not just visit is not running.**
+        //
+        // The Claude pass walks every known id and marks the ones missing from
+        // its registry dead. This one walks what it *found* — the transcripts on
+        // disk and the registry — so a session that falls out of both is never
+        // revisited, and keeps whatever `alive` it was last given. Forever.
+        //
+        // That is not hypothetical: the transcript ages out of `HISTORY_DAYS`,
+        // or is archived, or the project directory is removed, and a session
+        // that was alive at the time stays alive in the queue — reported busy,
+        // then STALLED when it inevitably falls silent, which is exactly how it
+        // was noticed.
+        let stale: Vec<String> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.source == SessionSource::QwenCode && s.alive)
+                .map(|s| s.id.clone())
+                .filter(|id| !seen.contains(id))
+                .collect()
+        };
+        for id in stale {
+            let Some(mut s) = self.get(&id).await else { continue };
+            s.alive = false;
+            s.live_status = None;
+            // A dead session has no pane; a stale target offers a terminal tab
+            // that attaches to nothing.
+            s.tmux_target = None;
+            s.status_since = Some(now);
+            self.put(s).await;
+        }
+    }
+
+    /// One Qwen session, from whichever of its two sources exist.
+    async fn absorb_qwen(
+        &self,
+        id: String,
+        transcript: Option<(&crate::qwen::QwenTranscript, &crate::qwen::QwenThread)>,
+        live: Option<&crate::qwen::QwenLiveEntry>,
+        panes: &[(u32, String)],
+        parents: &HashMap<u32, u32>,
+        now: chrono::DateTime<Utc>,
+    ) {
+        use mogeung_core::session::SessionSource;
+
+        let thread = transcript.map(|(_, th)| th);
+        let started = live
+            .and_then(|e| e.started_at)
+            .or_else(|| transcript.map(|(t, _)| t.modified))
+            .unwrap_or(now);
+        let last_event = thread
+            .and_then(|th| th.last_ts)
+            .or_else(|| transcript.map(|(t, _)| t.modified))
+            .or_else(|| live.and_then(|e| e.started_at))
+            .unwrap_or(now);
+
+        let existing = self.get(&id).await;
+        let mut s = existing.unwrap_or_else(|| {
+            blank_session(id.clone(), SessionSource::QwenCode, started, last_event)
+        });
+        let before = serde_json::to_string(&s).unwrap_or_default();
+        s.source = SessionSource::QwenCode;
+
+        // Liveness is the OS's answer, exactly as for Claude: `scan_live` has
+        // already dropped every registry record whose pid is gone. No registry
+        // record means the process is not running — Qwen unlinks the file on a
+        // clean exit — so this is real liveness, not Codex's recency guess.
+        s.alive = live.is_some();
+        s.pid = live.map(|e| e.pid).or(s.pid);
+
+        // A dead session has no pane; leaving a stale target would offer a
+        // terminal tab that attaches to nothing. A live one is looked up by
+        // walking its process ancestry to a tmux pane, so `qwen` started under
+        // `scripts/qwenmo` — or by hand inside any tmux session — becomes
+        // hostable, and one started in a bare terminal stays `None` and is
+        // merely pointed at.
+        s.tmux_target = match live {
+            Some(e) => tmux_target_in(e.pid, panes, parents),
+            None => None,
+        };
+
+        let status = thread.map(|th| th.status());
+        let live_status = match (s.alive, status) {
+            (true, Some(st)) => Some(st.live_status()),
+            // Alive with nothing written yet: it is starting up, which is
+            // working, not waiting on you.
+            (true, None) => Some(mogeung_core::LiveStatus::Busy),
+            (false, _) => None,
+        };
+        if s.live_status != live_status {
+            s.status_since = Some(now);
+        }
+        s.live_status = live_status;
+
+        if let Some(e) = live {
+            if !e.cwd.is_empty() {
+                s.cwd = e.cwd.clone();
+            }
+            s.name = e.name.clone().or(s.name);
+            s.version = e.version.clone().or(s.version);
+        }
+        if let Some(th) = thread {
+            if let Some(cwd) = &th.cwd {
+                if !cwd.is_empty() && s.cwd.is_empty() {
+                    s.cwd = cwd.clone();
+                }
+            }
+            s.title = th.title.clone().or(s.title);
+            s.last_prompt = th.first_prompt.clone().or(s.last_prompt);
+            s.git_branch = th.git_branch.clone().or(s.git_branch);
+            s.version = th.cli_version.clone().or(s.version);
+            s.last_activity = th.last_activity.clone().or(s.last_activity);
+            s.turns = th.turns;
+            s.tool_calls = th.tool_calls;
+            // Per-call figures, folded cumulatively by the tailer — so adopt
+            // the running total rather than adding to it a second time.
+            s.tokens_in = th.tokens_in;
+            s.tokens_out = th.tokens_out;
+            s.last_event_at = last_event;
+        }
+        if let Some((t, _)) = transcript {
+            s.transcript_path = t.path.to_string_lossy().to_string();
+        }
+
+        // Pin the diff base exactly like a Claude session — the git observer
+        // generalises for free, which is most of A23's answer.
+        if s.repo_root.is_none() && !s.cwd.is_empty() {
+            if let Some((root, base)) = self.probe_repo(&s.cwd, s.started_at).await {
+                s.repo_root = Some(root);
+                if s.base_sha.is_none() {
+                    s.base_sha = base;
+                }
+            }
+        }
+
+        // Note what is deliberately absent: `open_tools` is never populated
+        // here. Qwen writes nothing when a tool blocks on approval, so mogeung
+        // has no evidence one is open and must not invent it the way the Codex
+        // pass can from an explicit approval request. A trailing tool call
+        // reads as `Working`; `qwen::derive_status` documents what that costs.
+
+        if serde_json::to_string(&s).unwrap_or_default() != before {
+            self.put(s).await;
         }
     }
 
@@ -2561,17 +2883,33 @@ impl AppState {
         }
     }
 
-    /// Open a terminal running interactive `claude` in `dir`.
+    /// Open a terminal running an interactive agent CLI in `dir`.
     ///
     /// This is the one thing mogeung starts, and note what it starts: the real
     /// CLI, in your terminal, with nothing wrapped. It exists because the other
     /// half of v0.1's failure was that reaching three or four parallel sessions
     /// was awkward.
     ///
+    /// **Which CLI is the caller's choice since `R-J51`**, asked 2026-08-25
+    /// once the window watched three of them. The recipe per source lives in
+    /// [`agent_command`], which `match`es exhaustively — so the fourth CLI is a
+    /// compile error here rather than a session quietly started as Claude,
+    /// which is [ADR-0029](../../../docs/decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)'s
+    /// rule about asking named questions instead of comparing variants.
+    ///
     /// macOS drives Terminal.app over AppleScript; Linux walks the candidate
     /// table in [`linux_terminal_attempts`], preferring a session under tmux
     /// (ADR-0010) so what it starts is hostable, not merely visible. `R-I3`.
-    pub async fn launch_terminal(&self, dir: &str, worktree: bool) -> Result<()> {
+    pub async fn launch_terminal(
+        &self,
+        dir: &str,
+        worktree: bool,
+        source: SessionSource,
+    ) -> Result<()> {
+        // Refused **before** the worktree is cut: a source with no recipe would
+        // otherwise leave a branch and a checkout behind for a session that was
+        // never going to start.
+        let agent = agent_command(source)?;
         let dir = PathBuf::from(shellexpand(dir));
         if !dir.exists() {
             return Err(anyhow!("path does not exist: {}", dir.display()));
@@ -2591,9 +2929,9 @@ impl AppState {
 
         // Runtime-selected, like `focus_terminal`, so both compile everywhere.
         if cfg!(target_os = "macos") {
-            launch_terminal_macos(&target)
+            launch_terminal_macos(&target, &agent)
         } else {
-            launch_terminal_linux(&target)
+            launch_terminal_linux(&target, source, &agent)
         }
     }
 }
@@ -2615,9 +2953,18 @@ fn file_manager_command(dir: &str, macos: bool) -> (String, Vec<String>) {
 /// The macOS launch path, byte-for-byte the original: `open -a Terminal`
 /// cannot carry a command, so drive Terminal.app directly. Failing that, fall
 /// back to just opening the directory.
-fn launch_terminal_macos(target: &Path) -> Result<()> {
+fn launch_terminal_macos(target: &Path, agent: &[String]) -> Result<()> {
+    // The agent's argv, quoted a word at a time: this string is read by a
+    // shell, and a binary resolved to `/Users/me/my tools/claude` would
+    // otherwise become two commands. `--dangerously-skip-permissions` and
+    // `--approval-mode yolo` survive quoting unchanged.
+    let cmd = agent
+        .iter()
+        .map(|a| shell_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ");
     let script = format!(
-        "tell application \"Terminal\"\n activate\n do script \"cd {} && claude\"\nend tell",
+        "tell application \"Terminal\"\n activate\n do script \"cd {} && {cmd}\"\nend tell",
         shell_quote(&target.to_string_lossy())
     );
     let status = std::process::Command::new("osascript")
@@ -2639,7 +2986,7 @@ fn launch_terminal_macos(target: &Path) -> Result<()> {
 
 /// The Linux launch path: first terminal emulator that spawns wins, each
 /// handed the same argv — no shell ever sees an interpolated string.
-fn launch_terminal_linux(target: &Path) -> Result<()> {
+fn launch_terminal_linux(target: &Path, source: SessionSource, agent: &[String]) -> Result<()> {
     let dir = target.to_string_lossy();
     // tmux preference is decided here, at runtime, and passed into the pure
     // composition so tests can pin both shapes on any machine.
@@ -2649,7 +2996,7 @@ fn launch_terminal_linux(target: &Path) -> Result<()> {
         .map(|o| o.status.success())
         .unwrap_or(false);
     let stamp = Utc::now().format("%m%d-%H%M%S").to_string();
-    let cmd = in_terminal_command(&dir, tmux, &stamp);
+    let cmd = in_terminal_command(&dir, tmux, &stamp, source, agent);
 
     let mut tried: Vec<String> = Vec::new();
     let mut refused: Vec<String> = Vec::new();
@@ -2739,7 +3086,15 @@ type LaunchAttempt = (String, Vec<String>, Option<String>);
 /// visible but not hostable. The stamp keeps names unique without probing the
 /// server, and the name is sanitised the way `yolomo` does it — `:` and `.`
 /// are tmux target separators, so a raw directory name could be unaddressable.
-/// The tmux session name for a launch: `mogeung-<place>-<stamp>`.
+/// The tmux session name for a launch: `mogeung-<place>-<stamp>`, or
+/// `mogeung-<cli>-<place>-<stamp>` for anything that is not Claude Code.
+///
+/// The infix is `qwenmo`'s convention, not a new one: *"so a Claude session and
+/// a Qwen session in the same directory are tellable apart in `tmux ls`"*.
+/// Claude keeps the bare shape because names already written into muscle memory
+/// and into `tmux attach` lines should not move for a feature that did not
+/// touch them. Nothing in mogeung parses either — panes are matched by process
+/// ancestry — so this is for you.
 ///
 /// `<place>` is the directory's own name, except when that *is* the stamp —
 /// which is exactly what an isolated worktree looks like, since
@@ -2752,7 +3107,7 @@ type LaunchAttempt = (String, Vec<String>, Option<String>);
 /// layout is the repository — giving `mogeung-<repo>-<stamp>`, the name you
 /// would have written yourself. Nothing else changes: an ordinary directory
 /// still names itself.
-fn session_name(dir: &str, stamp: &str) -> String {
+fn session_name(dir: &str, stamp: &str, source: SessionSource) -> String {
     let clean = |s: &str| -> String {
         s.chars()
             .map(|c| {
@@ -2780,10 +3135,17 @@ fn session_name(dir: &str, stamp: &str) -> String {
     } else {
         own
     };
+    // Exhaustive rather than `if source != ClaudeCode`, per ADR-0029: the next
+    // CLI has to be given an answer here rather than inheriting Claude's.
+    let cli = match source {
+        SessionSource::ClaudeCode => "",
+        SessionSource::Codex => "codex-",
+        SessionSource::QwenCode => "qwen-",
+    };
     if place.is_empty() {
-        format!("mogeung-{stamp}")
+        format!("mogeung-{cli}{stamp}")
     } else {
-        format!("mogeung-{place}-{stamp}")
+        format!("mogeung-{cli}{place}-{stamp}")
     }
 }
 
@@ -2829,6 +3191,71 @@ fn claude_binary() -> String {
     "claude".to_string()
 }
 
+/// Where Qwen Code's binary is, by the same walk as [`claude_binary`] and for a
+/// reason that bites harder here.
+///
+/// `qwen`'s installer puts it in `~/.local/bin`, which is on *your* shell's
+/// `PATH` because your profile put it there — and a daemon started from a
+/// desktop launcher never read that profile. `yolomo` never had to think about
+/// this because `claude` installs itself somewhere already on `PATH`;
+/// `qwenmo` did, and this is the same list it walks, kept deliberately in
+/// sync with it.
+fn qwen_binary() -> String {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("qwen");
+            if cand.is_file() {
+                return cand.to_string_lossy().into_owned();
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for cand in [
+        format!("{home}/.local/bin/qwen"),
+        format!("{home}/.qwen/bin/qwen"),
+        "/usr/local/bin/qwen".to_string(),
+        "/opt/homebrew/bin/qwen".to_string(),
+    ] {
+        if Path::new(&cand).is_file() {
+            return cand;
+        }
+    }
+    "qwen".to_string()
+}
+
+/// The argv that starts one agent CLI, approve-everything and all. `R-J51`.
+///
+/// **Exhaustive on purpose**, which is the whole reason this is a function and
+/// not a ternary at the call site: ADR-0029 asks that a question about a source
+/// be a `match` the compiler checks, so the next CLI added is an error here
+/// rather than a session silently started as Claude.
+///
+/// **Codex is an error, not a fallback.** There is no `codexmo` and no known
+/// flag mapping, and a request to start one has to say so — starting a
+/// different agent than the one asked for is the worst answer available.
+///
+/// Both recipes are the ones the scripts already use, and they must move
+/// together: `--dangerously-skip-permissions` is `yolomo`'s, `--approval-mode
+/// yolo` is `qwenmo`'s. Qwen's buys something extra, which is why it is the
+/// mode chosen here rather than `auto`: Qwen writes nothing to disk when a tool
+/// blocks on approval, so mogeung cannot tell a session waiting for your yes
+/// from one busily working (feature 0036). Under `yolo` there are no approval
+/// prompts, so that blind spot cannot be hit.
+fn agent_command(source: SessionSource) -> Result<Vec<String>> {
+    match source {
+        SessionSource::ClaudeCode => Ok(vec![claude_binary(), SKIP_PERMISSIONS.to_string()]),
+        SessionSource::QwenCode => Ok(vec![
+            qwen_binary(),
+            "--approval-mode".to_string(),
+            "yolo".to_string(),
+        ]),
+        SessionSource::Codex => Err(anyhow!(
+            "mogeung has no recipe for starting codex — start it yourself and it will \
+             appear in the queue like any other session"
+        )),
+    }
+}
+
 /// What `yolomo` adds, and the whole of what "yolo mode" means here:
 /// `claude` stops asking before it runs a tool.
 ///
@@ -2838,21 +3265,26 @@ fn claude_binary() -> String {
 /// than leaving it to be discovered.
 const SKIP_PERMISSIONS: &str = "--dangerously-skip-permissions";
 
-fn in_terminal_command(dir: &str, tmux_available: bool, stamp: &str) -> Vec<String> {
-    let claude = claude_binary();
+fn in_terminal_command(
+    dir: &str,
+    tmux_available: bool,
+    stamp: &str,
+    source: SessionSource,
+    agent: &[String],
+) -> Vec<String> {
     if !tmux_available {
-        return vec![claude, SKIP_PERMISSIONS.to_string()];
+        return agent.to_vec();
     }
-    vec![
+    let mut cmd = vec![
         "tmux".to_string(),
         "new-session".to_string(),
         "-s".to_string(),
-        session_name(dir, stamp),
+        session_name(dir, stamp, source),
         "-c".to_string(),
         dir.to_string(),
-        claude,
-        SKIP_PERMISSIONS.to_string(),
-    ]
+    ];
+    cmd.extend(agent.iter().cloned());
+    cmd
 }
 
 /// What `x-terminal-emulator` actually is on this machine.
@@ -3492,17 +3924,17 @@ mod terminal_tests {
     fn a_worktrees_session_is_named_after_its_repo_not_the_stamp_twice() {
         let stamp = "0802-013329";
         assert_eq!(
-            session_name("/home/k/.mogeung/worktrees/mogeung/0802-013329", stamp),
+            session_name("/home/k/.mogeung/worktrees/mogeung/0802-013329", stamp, SessionSource::ClaudeCode),
             "mogeung-mogeung-0802-013329"
         );
         // An ordinary directory is unaffected, including an awkward one.
         assert_eq!(
-            session_name("/home/me/my proj.v2", "0729-101500"),
+            session_name("/home/me/my proj.v2", "0729-101500", SessionSource::ClaudeCode),
             "mogeung-my-proj-v2-0729-101500"
         );
         // Degenerate paths still produce something unique and typeable.
-        assert_eq!(session_name("/", stamp), format!("mogeung-{stamp}"));
-        assert_eq!(session_name(stamp, stamp), format!("mogeung-{stamp}"));
+        assert_eq!(session_name("/", stamp, SessionSource::ClaudeCode), format!("mogeung-{stamp}"));
+        assert_eq!(session_name(stamp, stamp, SessionSource::ClaudeCode), format!("mogeung-{stamp}"));
         // And nothing anywhere carries the stamp twice.
         for dir in [
             "/home/k/.mogeung/worktrees/mogeung/0802-013329",
@@ -3510,7 +3942,7 @@ mod terminal_tests {
             "/",
             "0802-013329",
         ] {
-            let name = session_name(dir, stamp);
+            let name = session_name(dir, stamp, SessionSource::ClaudeCode);
             assert_eq!(
                 name.matches(stamp).count(),
                 1,
@@ -3533,7 +3965,8 @@ mod terminal_tests {
     /// which does have a usable `PATH`.
     #[test]
     fn the_launch_command_names_claude_by_absolute_path() {
-        let cmd = in_terminal_command("/some/repo", true, "0102-030405");
+        let claude = agent_command(SessionSource::ClaudeCode).expect("claude launches");
+        let cmd = in_terminal_command("/some/repo", true, "0102-030405", SessionSource::ClaudeCode, &claude);
         let last = &cmd[cmd.len() - 2];
         // On a machine that has it, this is absolute. On one that does not,
         // the bare name survives on purpose, so the terminal's own "command
@@ -3546,7 +3979,7 @@ mod terminal_tests {
             assert!(last.ends_with("claude"), "{last}");
         }
         // And the no-tmux path agrees with the tmux path about what to run.
-        let bare = in_terminal_command("/some/repo", false, "0102-030405");
+        let bare = in_terminal_command("/some/repo", false, "0102-030405", SessionSource::ClaudeCode, &claude);
         assert_eq!(bare, vec![last.clone(), SKIP_PERMISSIONS.to_string()]);
     }
 
@@ -3773,7 +4206,8 @@ mod terminal_tests {
     /// safely (`:` and `.` are tmux target separators) and started in `dir`.
     #[test]
     fn launch_prefers_tmux_when_available() {
-        let cmd = in_terminal_command("/home/me/my proj.v2", true, "0729-101500");
+        let claude = agent_command(SessionSource::ClaudeCode).expect("claude launches");
+        let cmd = in_terminal_command("/home/me/my proj.v2", true, "0729-101500", SessionSource::ClaudeCode, &claude);
         assert_eq!(cmd[0], "tmux");
         assert_eq!(cmd[1], "new-session");
         let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
@@ -3789,9 +4223,43 @@ mod terminal_tests {
 
         // Without tmux: the agent and its flag, and the same one either way.
         assert_eq!(
-            in_terminal_command("/x", false, "s"),
+            in_terminal_command("/x", false, "s", SessionSource::ClaudeCode, &claude),
             vec![agent.clone(), SKIP_PERMISSIONS.to_string()]
         );
+    }
+
+    /// Which CLI a launch starts is the caller's choice. `R-J51`.
+    ///
+    /// Three things, and the third is the one that would go wrong quietly.
+    /// Qwen gets `qwenmo`'s flag rather than Claude's — the two CLIs do not
+    /// share a spelling for *stop asking* — its tmux session carries the CLI in
+    /// its name so two agents in one directory are tellable apart in `tmux ls`,
+    /// and **Codex is refused**: there is no recipe, and starting a different
+    /// agent than the one asked for is the worst answer available.
+    #[test]
+    fn a_launch_starts_the_cli_you_asked_for() {
+        let qwen = agent_command(SessionSource::QwenCode).expect("qwen launches");
+        assert!(qwen[0].ends_with("qwen"), "{}", qwen[0]);
+        assert_eq!(&qwen[1..], &["--approval-mode".to_string(), "yolo".to_string()]);
+        assert!(
+            !qwen.contains(&SKIP_PERMISSIONS.to_string()),
+            "that flag is Claude's, and qwen would refuse it"
+        );
+
+        let cmd = in_terminal_command("/home/me/api", true, "0729-101500", SessionSource::QwenCode, &qwen);
+        let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
+        assert_eq!(name, "mogeung-qwen-api-0729-101500");
+        assert_eq!(&cmd[cmd.len() - 3..], &qwen[..]);
+
+        // Claude's name is unchanged — it is written into muscle memory and
+        // into `tmux attach` lines, and this feature did not touch it.
+        let claude = agent_command(SessionSource::ClaudeCode).expect("claude launches");
+        let cmd = in_terminal_command("/home/me/api", true, "0729-101500", SessionSource::ClaudeCode, &claude);
+        let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
+        assert_eq!(name, "mogeung-api-0729-101500");
+
+        let refused = agent_command(SessionSource::Codex).expect_err("codex has no recipe");
+        assert!(refused.to_string().contains("codex"), "{refused}");
     }
 
     /// The spec's words: on Wayland the answer is an honest refusal that says

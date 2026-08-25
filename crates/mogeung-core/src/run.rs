@@ -293,7 +293,16 @@ pub struct RunLine {
 /// to call `claude` walks straight past this. ADR-0025 says so in terms and
 /// says what to do if it happens in practice — write a successor, not a quiet
 /// widening of the check.
-pub const AGENTS: &[&str] = &["claude", "codex", "gemini", "aider", "cursor-agent", "amp"];
+pub const AGENTS: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "qwen",
+    "qwen-code",
+    "aider",
+    "cursor-agent",
+    "amp",
+];
 
 /// Would starting this be starting an agent? ADR-0025 clause 2.
 ///
@@ -360,6 +369,9 @@ mod tests {
         assert!(is_agent("/usr/local/bin/claude"));
         assert!(is_agent("claude.exe"));
         assert!(is_agent("CODEX"));
+        // Qwen Code installs its CLI as `qwen`, and is named `qwen-code`.
+        assert!(is_agent("qwen"));
+        assert!(is_agent("qwen-code"));
         assert!(!is_agent("cargo"));
         assert!(!is_agent("npm"));
         // Not a substring match: a project of one's own must not be refused.

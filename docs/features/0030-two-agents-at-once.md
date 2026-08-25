@@ -1,8 +1,8 @@
 ---
 title: Two agents at once
 status: shipped
-updated: 2026-08-20
-roadmap: [R-B49, R-J31, R-J35]
+updated: 2026-08-24
+roadmap: [R-B49, R-J31, R-J35, R-J44]
 depends_on: [A30, A14, A11]
 ---
 
@@ -148,6 +148,10 @@ ripple into the queue, the dock and the rail.
 | `desktop/src/lib/revealSession.test.tsx` | `R-J31` — new, the four cases below |
 | `desktop/src/lib/panes.ts` | 2026-08-19 — `closeAgentPane` no longer refuses slot 1 |
 | `desktop/src/ui/PaneChrome.tsx` | 2026-08-19 — the × is on every Agent pane, not only the extra ones |
+| `desktop/src/lib/panes.ts` | `R-J44` — `splitAgent` is `addAgentPane`, and adds within the active group rather than beside it |
+| `desktop/src/ui/PaneChrome.tsx` | `R-J44` — the columns icon becomes a plus, since the button no longer makes a column |
+| `desktop/src/lib/keymap.ts` | `R-J44` — the label; the action **id** deliberately unchanged |
+| `desktop/src/lib/panes.test.tsx` | `R-J44` — the pane lands in the active group with no `direction` |
 
 ### Risks and unknowns
 
@@ -392,3 +396,30 @@ to watch actually wants. It does not survive a restart, which is the one rough
 edge left: close every Agent pane, reopen the window, and slot 1 is back.
 Leaving that alone was deliberate, since the alternative is a window that can
 open with nothing in the centre at all.
+
+### The split became a tab, and that reverses this feature's own default
+
+`R-J44`, 2026-08-24. `R-J35` is quoted above making the opposite case, and it
+was right at the time: the ask was two agents *side by side*, and a pane added
+as a second tab answers that by hiding one of them. `direction: "right"` is
+what made the ordinary gesture produce the arrangement the feature exists for.
+
+What moved is the **frequency**, not the argument. With `R-J45` putting the
+start of a session inside the window, panes are opened far more often than
+they are compared — and every open narrowed the two agents already on screen
+to make room for a third nobody had yet asked to see. The gesture that was
+free when it happened twice a day is a re-layout when it happens ten times.
+
+So it is a tab now, from all three doors: the button in the pane header,
+`Alt+Shift+a`, and `revealSession`'s case 3. Side by side has not gone
+anywhere — it is one drag of a tab to an edge, the same gesture the file panes
+of [feature 0032](0032-a-pane-per-file.md) have always used. The trade, stated
+so it can be judged: one drag when you want the split, against no drag and no
+re-widening when you do not.
+
+Two things were left alone on purpose. The **anchor** still comes with the new
+pane, because that argument was never about where the pane goes. And the
+keymap action **id** is still `pane.agent.split` although nothing about it
+splits: `prefs.keymap` is keyed by action id, so renaming it would silently
+drop the binding of anyone who had rebound this one — a real cost paid to fix
+a word that only ever appears in the source.

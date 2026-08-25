@@ -15,15 +15,15 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, Columns2, Folder, FolderOpen, GitBranch, X } from "lucide-react";
+import { Anchor, FolderOpen, GitBranch, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
-import { closeAgentPane, parseFilePaneId, splitAgent } from "@/lib/panes";
+import { addAgentPane, closeAgentPane, parseFilePaneId } from "@/lib/panes";
 import { sessionLabel } from "@/wire/types";
-import { dirTail } from "@/lib/format";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { hostLabel, reachFor } from "@/lib/tmux";
 import { closeFile, revealInFiles } from "@/lib/explorer";
+import { closeAllTabs, closeOtherTabs, closeTab } from "@/lib/closeTabs";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { writeClipboard } from "@/lib/clipboard";
 
@@ -170,25 +170,42 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
     </div>
   );
 
-  // **Only a file gets a menu.** `R-J24`. The other tabs have nothing to copy
-  // — an Agent pane's "path" is a tmux target and a dock tool has none at all
-  // — and a menu that opens with one greyed item is worse than no menu.
-  if (!file) return tab;
-
+  // **Every tab gets a menu since `R-J47`**, and only a file gets the top half
+  // of it. `R-J24` gave the menu to files alone because the other tabs had
+  // nothing to copy — an Agent pane's "path" is a tmux target and a dock tool
+  // has none at all — but closing is something every tab in the centre can do,
+  // and a gesture that works on one tab and not the one beside it is the kind
+  // of asymmetry that reads as a bug.
   return (
     <ContextMenu trigger={tab}>
-      <MenuLabel>{file.name}</MenuLabel>
-      <MenuItem onSelect={() => void copyPath(fullPath(root, file.path), "full path")}>
-        Copy full path
-      </MenuItem>
-      <MenuItem onSelect={() => void copyPath(file.path, "path")}>Copy path in the repo</MenuItem>
-      <MenuItem onSelect={() => void copyPath(file.name, "file name")}>Copy file name</MenuItem>
-      <MenuSeparator />
-      {/* The other half of `R-J25`: the tree can follow you continuously, and
-          this is the same gesture for someone who does not want it to. */}
-      <MenuItem onSelect={() => revealInFiles(file.session, file.path)}>Reveal in Files</MenuItem>
-      <MenuSeparator />
-      <MenuItem onSelect={() => closeFile(file.session, file.path, file.rev)}>Close</MenuItem>
+      <MenuLabel>{file ? file.name : text}</MenuLabel>
+      {file && (
+        <>
+          <MenuItem onSelect={() => void copyPath(fullPath(root, file.path), "full path")}>
+            Copy full path
+          </MenuItem>
+          <MenuItem onSelect={() => void copyPath(file.path, "path")}>Copy path in the repo</MenuItem>
+          <MenuItem onSelect={() => void copyPath(file.name, "file name")}>Copy file name</MenuItem>
+          <MenuSeparator />
+          {/* The other half of `R-J25`: the tree can follow you continuously, and
+              this is the same gesture for someone who does not want it to. */}
+          <MenuItem onSelect={() => revealInFiles(file.session, file.path)}>Reveal in Files</MenuItem>
+          <MenuSeparator />
+        </>
+      )}
+      {/*
+        Closing, in the order every editor puts it: the narrow act first, then
+        the two wide ones together behind it, so the item your hand goes to
+        without reading is the one that costs least to get wrong.
+
+        **The group, not the window.** Two Agent panes split side by side are
+        two groups; a "close all" that crossed the sash would take away the
+        arrangement you built rather than the tabs you are looking at. See
+        `groupPanes`.
+      */}
+      <MenuItem onSelect={() => closeTab(props.api.id)}>Close</MenuItem>
+      <MenuItem onSelect={() => closeOtherTabs(props.api.id)}>Close all others</MenuItem>
+      <MenuItem onSelect={() => closeAllTabs(props.api.id)}>Close all</MenuItem>
     </ContextMenu>
   );
 }
@@ -223,36 +240,6 @@ function usePaneSession(paneId: string | null) {
   const id = held ?? selected;
   const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
   return { held, selected, id, session };
-}
-
-/**
- * The directory the session was started in, on the left of the pane header.
- * Asked for 2026-08-07, left-aligned by name.
- *
- * `cwd`, not `repo_root`: the question is where you ran `claude`, and the two
- * differ whenever a session was started in a subdirectory — which is exactly
- * the case where you want to be told.
- *
- * Shortened from the front, because the tail of a path is the part that
- * identifies it, with the whole thing on hover. Dockview renders this container
- * immediately after the tabs, so it costs the pane no vertical room and sits
- * where reading starts.
- */
-export function PaneCwd(props: IDockviewHeaderActionsProps) {
-  const paneId = props.activePanel?.id ?? null;
-  const { session } = usePaneSession(paneId);
-  if (!paneId || paneKind(paneId) !== "agent" || !session?.cwd) return null;
-  return (
-    <div className="flex h-full min-w-0 items-center pl-1.5">
-      <Dim
-        className="flex min-w-0 items-center gap-1 font-mono text-2xs"
-        title={`started in ${session.cwd}`}
-      >
-        <Folder className="h-3 w-3 shrink-0" />
-        <span className="max-w-[20rem] truncate">{dirTail(session.cwd)}</span>
-      </Dim>
-    </div>
-  );
 }
 
 /**
@@ -351,9 +338,12 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         cost the old limit named is real and is now yours to see — each pane is
         a live `tmux attach` and a pty — but a number here applied the same
         limit to a laptop and to a 49-inch screen.
+
+        **A tab rather than a split since `R-J44`**, so the icon says *add*
+        and not *columns*. Beside is still one drag away, on the tab you just got.
       */}
-      <IconButton title="another Agent pane, beside this one — it arrives anchored" onClick={() => splitAgent()}>
-        <Columns2 className="h-3.5 w-3.5" />
+      <IconButton title="another Agent pane, as a tab here — it arrives anchored" onClick={() => addAgentPane()}>
+        <SquarePlus className="h-3.5 w-3.5" />
       </IconButton>
       {session && (
         <button

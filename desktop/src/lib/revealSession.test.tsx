@@ -45,6 +45,40 @@ function fakeDock(initial: string[]) {
   return { api, addPanel, activated, panels };
 }
 
+/**
+ * A dock whose panels know which tab is forward in their group. `R-J50`.
+ *
+ * Kept separate from `fakeDock` above rather than folded into it: those tests
+ * are about *how many* panes exist afterwards and say nothing about groups, and
+ * giving every one of them a group would be four rewrites to test one thing.
+ */
+function groupedDock(groups: { forward: string; tabs: string[] }[]) {
+  const activated: string[] = [];
+  const state = groups.map((g) => ({ ...g }));
+  const api = {
+    getPanel: (id: string) => {
+      const group = state.find((g) => g.tabs.includes(id));
+      if (!group) return undefined;
+      return {
+        id,
+        group: { activePanel: { id: group.forward } },
+        api: {
+          setActive: vi.fn(() => {
+            activated.push(id);
+            group.forward = id;
+          }),
+        },
+      };
+    },
+    addPanel: vi.fn(),
+    activeGroup: undefined,
+    get panels() {
+      return state.flatMap((g) => g.tabs.map((id) => ({ id })));
+    },
+  } as unknown as DockviewApi;
+  return { api, activated };
+}
+
 /** Holds are machine-scoped, and no daemon has identified itself in a test. */
 function holds(paneHold: Record<string, string>) {
   useStore.setState({
@@ -112,6 +146,50 @@ describe("putting a session on screen", () => {
 
     expect(addPanel).not.toHaveBeenCalled();
     expect(useStore.getState().selected).toBe("s3");
+  });
+
+  /**
+   * The ask, 2026-08-25: with a file tab forward in the same group, selecting
+   * moved everything *except* the part being looked at. `R-J31`'s complaint one
+   * layer down.
+   */
+  it("brings the pane forward when a file tab is covering it", () => {
+    const { api, activated } = groupedDock([
+      { forward: "file:s1::a.rs", tabs: ["agent", "file:s1::a.rs"] },
+    ]);
+    setDock(api);
+
+    revealSession("s2");
+
+    expect(activated).toEqual(["agent"]);
+    expect(useStore.getState().selected).toBe("s2");
+  });
+
+  /**
+   * Raising is not free — `setActive` takes the keyboard with it. A pane that
+   * is already the forward tab of its group has nothing to be brought up from.
+   */
+  it("leaves the keyboard alone when the pane is already showing", () => {
+    const { api, activated } = groupedDock([
+      { forward: "agent", tabs: ["agent", "file:s1::a.rs"] },
+      { forward: "file:s1::b.rs", tabs: ["file:s1::b.rs"] },
+    ]);
+    setDock(api);
+
+    revealSession("s2");
+
+    expect(activated).toEqual([]);
+  });
+
+  /** With every Agent pane closed — which `R-J47` made one gesture — the click
+   *  has to build one rather than land nowhere. */
+  it("opens a pane when the centre has none left", () => {
+    const { api, addPanel } = fakeDock([]);
+    setDock(api);
+
+    revealSession("s2");
+
+    expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "agent", component: "agent" }));
   });
 
   /**

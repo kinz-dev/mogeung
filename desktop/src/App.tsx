@@ -28,7 +28,7 @@ import {
 } from "dockview";
 import "dockview/dist/styles/dockview.css";
 import { TooltipProvider } from "@/ui/primitives";
-import { useStore } from "@/store";
+import { onSessionsEnded, useStore } from "@/store";
 import { TopBar } from "@/ui/TopBar";
 import { StatusBar } from "@/ui/StatusBar";
 import { QueuePanel } from "@/ui/QueuePanel";
@@ -51,9 +51,9 @@ import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
-import { dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
+import { closePanesFor, dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
 import { PaneScope, paneKind } from "@/lib/paneScope";
-import { PaneActions, PaneCwd, PaneTab } from "@/ui/PaneChrome";
+import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
 import { useReloadFilesOnFocus } from "@/lib/explorer";
 
@@ -190,6 +190,12 @@ export default function App() {
   const onReady = (event: DockviewReadyEvent) => {
     dockRef.current = event.api;
     setDock(event.api);
+
+    // When a session ends, its Agent pane goes with it — anchored or not.
+    // Registered here rather than imported by the store, so the dependency
+    // stays one-way: `panes` knows about the store, and the store knows only
+    // that *something* wants telling. See `onSessionsEnded`.
+    onSessionsEnded(closePanesFor);
     const saved = localStorage.getItem(LAYOUT_KEY);
     let restored = false;
     if (saved) {
@@ -289,11 +295,9 @@ export default function App() {
                 // two groups and get one set of controls each, and tabbed
                 // together they are one group showing the active tab's.
                 rightHeaderActionsComponent={PaneActions}
-                // Left actions are drawn straight after the tabs, so the
-                // directory reads as part of the tab rather than as another
-                // control — which is the whole point of putting it here and not
-                // beside the branch.
-                leftHeaderActionsComponent={PaneCwd}
+                // No left actions since `R-J48`: the folder that sat there
+                // moved to the status bar, where a path competes with nothing
+                // for the width it needs. See `StatusBar`.
                 onReady={onReady}
                 className="dockview-theme-mogeung h-full"
               />

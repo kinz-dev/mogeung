@@ -2,7 +2,7 @@ use crate::attention::AttentionItem;
 use crate::change::Change;
 use crate::health::Health;
 use crate::review::{BlastRadius, ReviewDebt};
-use crate::session::{Session, SessionId};
+use crate::session::{Session, SessionId, SessionSource};
 use crate::transcript::TranscriptEvent;
 use crate::usage::UsageReport;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub enum ClientMsg {
     FetchEvents { session_id: SessionId, since: u64 },
     /// Stop tracking a session and forget its review state.
     ForgetSession { session_id: SessionId },
-    /// Open a terminal running a real interactive `claude` in `dir`.
+    /// Open a terminal running a real interactive agent CLI in `dir`.
     ///
     /// This is how mogeung helps you reach three or four parallel sessions
     /// without owning the conversation loop.
@@ -40,6 +40,15 @@ pub enum ClientMsg {
         dir: String,
         /// Create a fresh git worktree first, so the new session is isolated.
         worktree: bool,
+        /// Which CLI to start. Defaults to Claude Code, so a client built
+        /// before there was a choice keeps working unchanged — and because
+        /// that is the answer it was giving anyway.
+        ///
+        /// Not every variant can be started: [`SessionSource::Codex`] has no
+        /// launch recipe here and the daemon says so rather than starting
+        /// something else. See `State::launch_terminal`.
+        #[serde(default)]
+        source: SessionSource,
     },
     /// Rescan for sessions immediately instead of waiting for the next poll.
     Rescan,

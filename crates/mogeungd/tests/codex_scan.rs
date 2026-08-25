@@ -37,7 +37,13 @@ fn homes(tag: &str) -> (PathBuf, PathBuf) {
 
 async fn boot(claude: PathBuf, codex: PathBuf) -> Arc<AppState> {
     let store = Store::open(&claude.join("mogeung.db")).unwrap();
-    let state = AppState::with_homes(store, claude.clone(), codex).unwrap();
+    // The Qwen home is pointed at a sibling that does not exist, so this test
+    // stays about Codex and never reaches the developer's real `~/.qwen`.
+    let homes = mogeungd::state::AgentHomes {
+        codex,
+        qwen: claude.parent().unwrap().join("qwen"),
+    };
+    let state = AppState::with_homes(store, claude.clone(), homes).unwrap();
     state.scan().await;
     state
 }

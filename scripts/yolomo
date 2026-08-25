@@ -85,7 +85,13 @@ tmux new-session -d -s "$name" -c "$dir" \
 # The default is `smallest`, which would let a narrow mogeung pane shrink a
 # full-screen terminal attached to the same session — silent, and baffling
 # when it happens to you.
-tmux set-option -t "=${name}" window-size latest >/dev/null
+# `-w` and the trailing `:` are both load-bearing. `window-size` is a *window*
+# option, so without `-w` tmux 3.6 answers "no such window: =mogeung-…" and the
+# option is never set — silently, on stderr, after the session has already
+# started. Carried unnoticed here since the option was added, and found 2026-08-25
+# while writing `qwenmo`, which copied it: the failure mode is not a crash but
+# the absence of the protection the comment above describes.
+tmux set-option -w -t "=${name}:" window-size latest >/dev/null
 
 if [ "$detach" -eq 1 ]; then
   # The name on stdout so scripts can capture it; the human note on stderr.

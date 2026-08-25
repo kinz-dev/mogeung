@@ -54,6 +54,11 @@ npm install                # once
 npm run tauri build        # frontend, then the native shell, then the bundles
 ```
 
+To build *and install it here* — the daemon too, and the `.deb` through `dpkg`
+— use [`../scripts/install.sh`](../scripts/install.sh) instead; it wraps this
+command and defaults to `--bundles deb`, which is the only one an install on
+this machine needs. What follows is the bundler itself.
+
 One command does all three stages: `beforeBuildCommand` runs `tsc --noEmit &&
 vite build` into `dist/`, cargo builds the shell in release, and Tauri packages
 the result. On this machine that produces, under

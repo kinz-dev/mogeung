@@ -216,12 +216,12 @@ describe("clicking an Agent pane", () => {
     localStorage.removeItem("mogeung.layout");
 
     const { default: App } = await import("@/App");
-    const { splitAgent, getDock } = await import("@/lib/panes");
+    const { addAgentPane, getDock } = await import("@/lib/panes");
     useStore.setState({ selected: "s1", sessions: { s1: session("s1"), s2: session("s2") } });
     render(<App />);
 
     await act(async () => {
-      splitAgent();
+      addAgentPane();
     });
     // The second pane, held on s2, while the queue still points at s1.
     await act(async () => {
@@ -265,11 +265,11 @@ describe("the saved layout", () => {
     localStorage.removeItem("mogeung.layout");
 
     const { default: App } = await import("@/App");
-    const { splitAgent } = await import("@/lib/panes");
+    const { addAgentPane } = await import("@/lib/panes");
     render(<App />);
 
     await act(async () => {
-      splitAgent();
+      addAgentPane();
     });
 
     const { getDock } = await import("@/lib/panes");

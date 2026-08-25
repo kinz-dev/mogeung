@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-08-11
+updated: 2026-08-25
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -141,8 +141,37 @@ wholesale each scan. Rollouts are read **incrementally** (2026-08-05:
 `codex::ScanCache` tails appended bytes rather than re-reading every file
 per pass), so the per-thread counts the replacement is built from are
 cumulative in the cache — the merged totals equal what a full re-read
-would have counted, without the full re-read. `codex_present` with zero
+would have counted, without the full re-read. A present install with zero
 threads is reported as exactly that: present, watched, empty.
+
+## A third corpus, and a list instead of a slot (2026-08-25)
+
+`R-I15` added Qwen Code, and the shape the Codex work left behind did not
+survive it. `HealthTracker` held **one** `Option<(bool, u32, …)>` and `Health`
+carried **four flat `codex_*` fields**, so a third CLI's canary had nowhere to
+report — and a canary with nowhere to report is indistinguishable from a format
+that has not drifted, which is the exact failure this whole file exists to
+prevent.
+
+So the tracker keys a `BTreeMap` by source name and `Health` carries
+`agents: Vec<AgentHealth>` — `{source, present, threads, error, unknown}` per
+CLI. Alerts are prefixed by that source, so `qwen/system/telepathy` and
+`codex/thought` sit in one list and stay tellable apart. The four `codex_*`
+fields are **still populated**: a snapshot is a wire type, dropping a field is a
+break, and a client built before this change keeps working. They are marked
+superseded, and `desktop/src/lib/agentHealth.ts` reads the list when it is
+present and reconstructs a single Codex slot from the old fields when it is
+not — falling back on *absent*, never on *empty*, because an empty list from a
+new daemon is a real answer and reading the old fields over it would resurrect
+a chip the daemon just said not to show.
+
+Qwen's taxonomy descends one level, like Codex's but for a different reason:
+its `system` records are roughly three lines in five and their real
+discriminator is `subtype`, so an unclassified one is reported as
+`system/<subtype>` and drift there is exactly as loud as drift at the top.
+`--bin sweep` now walks three corpora and folds their unknown counts rather
+than summing two hand-written terms — that sum would have been a silent zero
+for the third, and so a clean bill of health for a format nobody swept.
 
 **Nothing unobserved sits in `HANDLED`.** A guessed structured
 rate-limit type did for a day — `R-G1` was written believing the CLI

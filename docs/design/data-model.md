@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-22
+updated: 2026-08-25
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -135,10 +135,13 @@ than by guessing:
   same prompt twice on one timestamp, and this collapses that pair. It is the
   last resort, it repairs a log and can do nothing for a counter, and a record
   left visibly odd is better than one divided by an invented number.
-- **It is a Codex thread.** Skipped entirely. Codex rollouts are re-read whole
-  on every scan and never went through the offset path, so they were never
-  duplicated; folding one through the Claude Code adapter would invent history
-  rather than repair it.
+- **It is not a Claude Code session.** Skipped entirely. Codex rollouts and
+  Qwen transcripts are folded by their own scans and never went through this
+  offset path, so they were never duplicated; folding one through the Claude
+  Code adapter would invent history rather than repair it. Asked as
+  `source.has_claude_event_history()` rather than `source == Codex`, which is
+  what it used to say and *meant* "not Claude" — a sentence that stopped being
+  true the moment a third CLI existed.
 
 The pass ends with `VACUUM` when it dropped anything. Deleting rows frees pages
 inside the file and returns nothing to the disk, so a database bloated by this
@@ -190,9 +193,15 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
   paired to their `tool_result` by id; `claims` — "tests pass"-shaped
   prose bound to that evidence, `contradicted` when the run said
   otherwise (`R-E1`/`R-E3`). Both capped.
-- `source` — which CLI wrote the session (`claude_code` default,
-  `codex`); the Codex scan maps `~/.codex`'s thread index into this same
-  struct, which is A23's test (`R-I1`).
+- `source` — which CLI wrote the session (`claude_code` default, `codex`,
+  `qwen_code`); each CLI's scan maps its own on-disk state into this same
+  struct, which is A23's test (`R-I1`, `R-I15`). **Absorbing the third one
+  added no field here**, which is most of what that assumption was asking.
+  Two questions are asked of a `SessionSource` as named methods rather than
+  as equality — `in_claude_live_registry()` and `has_claude_event_history()` —
+  so each `match` is exhaustive and a fourth CLI is a compile error at every
+  site that has to think about it. See
+  [ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md).
 
 ## Session fields added 2026-08-22
 

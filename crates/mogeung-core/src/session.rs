@@ -7,13 +7,15 @@ use serde::{Deserialize, Serialize};
 pub type SessionId = String;
 
 /// Which agent CLI a session belongs to. `R-I1` — the test of whether the
-/// Session model generalises (A23).
+/// Session model generalises (A23) — and `R-I15`, which is the first source to
+/// put real sessions through it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionSource {
     #[default]
     ClaudeCode,
     Codex,
+    QwenCode,
 }
 
 impl SessionSource {
@@ -21,6 +23,37 @@ impl SessionSource {
         match self {
             SessionSource::ClaudeCode => "claude",
             SessionSource::Codex => "codex",
+            SessionSource::QwenCode => "qwen",
+        }
+    }
+
+    /// Does this source's liveness come from Claude Code's `sessions/<pid>.json`
+    /// registry?
+    ///
+    /// Named for the property rather than for the variant. The scan loop used
+    /// to ask `source == Codex`, which *meant* "not Claude" — a comparison that
+    /// silently gives the wrong answer the moment a third source exists, and
+    /// gives it by marking every one of that source's sessions dead on every
+    /// pass. Qwen Code has a registry of its own, in its own directory with its
+    /// own key names, so the answer is still no.
+    pub fn in_claude_live_registry(&self) -> bool {
+        match self {
+            SessionSource::ClaudeCode => true,
+            SessionSource::Codex | SessionSource::QwenCode => false,
+        }
+    }
+
+    /// Is this source's history built by incrementally folding lines through
+    /// `adapter::parse_line`?
+    ///
+    /// Only Claude sessions are, which is why only they can carry the
+    /// re-ingestion damage `repair_reingested_history` exists to undo. Folding
+    /// another source's transcript through the Claude adapter would invent
+    /// history rather than repair it.
+    pub fn has_claude_event_history(&self) -> bool {
+        match self {
+            SessionSource::ClaudeCode => true,
+            SessionSource::Codex | SessionSource::QwenCode => false,
         }
     }
 }

@@ -25,6 +25,7 @@ import { revealSession } from "@/lib/panes";
 // reach it without importing a component module.
 export { matchesFilter };
 import { InfoDock } from "@/ui/InfoDock";
+import { SourceMark } from "@/ui/SourceMark";
 import { QUEUE_LIST_ID } from "@/lib/keymap";
 import { fmtDur, secsSince } from "@/lib/format";
 import {
@@ -305,7 +306,25 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
             )}
             <Dim className="ml-auto shrink-0">{fmtDur(secsSince(session.last_event_at, now))} ago</Dim>
           </div>
-          <div className="mt-0.5 truncate text-xs text-[var(--dim)]">{item.detail}</div>
+          {/*
+            The detail, and — bottom right, under the elapsed time — **which
+            CLI this is**. `R-J49`, asked 2026-08-25.
+
+            Placed on this line rather than up beside the badge on purpose: the
+            first line is where the row says what needs *you*, and a permanent
+            fact about the session competing there would push the title, which
+            is the thing you actually read, further into its ellipsis. Down here
+            it sits in the corner the eye reaches last, in the column the "4m
+            ago" already owns.
+
+            `min-w-0` on the detail is what keeps the mark from being pushed off
+            the row by a long one — without it the truncation never engages and
+            the flex line simply overflows.
+          */}
+          <div className="mt-0.5 flex items-center gap-2 text-xs">
+            <span className="min-w-0 flex-1 truncate text-[var(--dim)]">{item.detail}</span>
+            <SourceMark source={session.source} />
+          </div>
           {perm && (
             <div className="mt-1 truncate rounded-sm border border-[var(--urgent)] px-1 py-px text-2xs text-[var(--urgent)]">
               {perm.name}

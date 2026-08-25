@@ -62,7 +62,7 @@ export function nextAgentSlot(api: DockviewApi | null): string | null {
   for (let n = 1; ; n++) {
     const id = n === 1 ? "agent" : `agent:${n}`;
     // Gaps are filled rather than skipped: close the middle pane of three and
-    // the next split reuses that number instead of climbing past it.
+    // the next pane reuses that number instead of climbing past it.
     if (!api.getPanel(id)) return id;
   }
 }
@@ -173,30 +173,66 @@ export function filePanes(api: DockviewApi | null): string[] {
 }
 
 /**
- * Put another Agent pane beside this one, **anchored on the session it opens
- * with**. `R-J35`.
+ * The tabs sitting in the same group as this one, in tab order, itself
+ * included. `R-J47`.
  *
- * Beside, not on top of: the ask was two agents *side by side*, and a split
- * that opened as a second tab in the same group would answer it by hiding one
- * of them. `direction: "right"` against the active group is what makes the
- * default gesture produce the arrangement the feature exists for.
+ * **Ids, not panels, and read in one go.** Closing a tab mutates the group's
+ * own array, so a caller that iterated the live list would skip every second
+ * pane — the classic remove-while-iterating bug, and here it would look like
+ * "close all" leaving half the tabs behind rather than like a crash.
  *
- * **The anchor is the default since 2026-08-20**, asked for directly. A split
- * used to arrive unheld, which meant two panes both following the queue: the
- * next click moved *both* of them and the arrangement you had just built
+ * The **group** and not the whole tree, which is the line every editor draws:
+ * two Agent panes split side by side are two groups, and a gesture on one of
+ * them must not reach across the sash into the arrangement you deliberately
+ * built beside it.
+ */
+export function groupPanes(id: string): string[] {
+  const panel = dock?.getPanel(id);
+  if (!panel) return [];
+  // `group` is non-optional in dockview's types and absent in the hand-built
+  // panels the tests use; a pane with no group is a group of one.
+  return panel.group?.panels?.map((p) => p.id) ?? [id];
+}
+
+/**
+ * Another Agent pane, **as a tab in the group you are in** and anchored on the
+ * session it opens with. `R-J35`, `R-J44`.
+ *
+ * **A tab, not a split, since 2026-08-24** — asked for directly, and it
+ * reverses what this function was built to do. `R-J35` opened beside, because
+ * the ask then was two agents *side by side* and a second tab would answer it
+ * by hiding one of them. That reasoning was right and is no longer the common
+ * case: with sessions started from the window rather than from a terminal
+ * (`R-J45`), panes are opened far more often than they are compared, and every
+ * `direction: "right"` narrowed the two agents already on screen to make room
+ * for a third nobody had asked to see yet.
+ *
+ * Side by side is not gone, it has moved to where it is chosen: dockview drags
+ * a tab out to any edge, which is the same gesture the file panes have always
+ * used. The trade is one drag when you want the split, against no drag — and
+ * no re-widening — when you do not.
+ *
+ * Omitting `direction` is what says *within*: dockview reads
+ * `position.direction || "within"`, so `{ referenceGroup }` alone is the tab.
+ * With no active group there is no `position` at all and the panel lands
+ * wherever dockview puts a first one, which is unchanged.
+ *
+ * **The anchor is the default since 2026-08-20**, asked for directly. A new
+ * pane used to arrive unheld, which meant two panes both following the queue:
+ * the next click moved *both* of them and the arrangement you had just built
  * collapsed back into two views of one session. So the second pane was only
  * ever one manual click away from being useful, and everybody made that click
  * every time.
  *
- * **The pane you split *from* is untouched**, and that is what keeps the queue
+ * **The pane you opened *from* is untouched**, and that is what keeps the queue
  * working. A window whose every pane was moored would answer a queue click by
- * splitting again (see `revealSession`), so the one pane that came back with
+ * opening another (see `revealSession`), so the one pane that came back with
  * the layout stays free to follow the selection unless you moor it yourself.
  *
  * Nothing is written when there is no selection: an anchor needs a session, and
  * holding a pane on "nothing" is not a state — it is the absence of a hold.
  */
-export function splitAgent(): string | null {
+export function addAgentPane(): string | null {
   if (!dock) return null;
   const id = nextAgentSlot(dock);
   if (!id) return null;
@@ -205,7 +241,7 @@ export function splitAgent(): string | null {
     id,
     component: "agent",
     title: "Agent",
-    position: active ? { referenceGroup: active, direction: "right" } : undefined,
+    position: active ? { referenceGroup: active } : undefined,
   });
   const { selected, scoped, setScoped } = useStore.getState();
   if (selected) setScoped({ paneHold: { ...scoped().paneHold, [id]: selected } });
@@ -229,13 +265,14 @@ export function splitAgent(): string | null {
  *    a session with a home, and a second pane for it would be two views of one
  *    agent, which is what `R-B49` exists *not* to make.
  * 2. **Some pane is unheld.** It follows the selection, so selecting is the
- *    whole job. Splitting here would grow the layout on every click, which is
- *    how you end up at the ceiling by lunchtime.
- * 3. **Every pane is held and none of them holds this one.** Split. The new
- *    pane arrives held on this session, because `select` has already run and
- *    an anchor is what a new pane comes with since `R-J35` — which is also
- *    what it wanted before, by a longer route: it used to arrive unheld and
- *    follow the selection into place.
+ *    whole job. Opening another here would grow the layout on every click,
+ *    which is how you end up with a strip of tabs by lunchtime.
+ 3. **Every pane is held and none of them holds this one.** Open another —
+ *    a tab beside the one you are on since `R-J44`, not a split. It arrives
+ *    held on this session, because `select` has already run and an anchor is
+ *    what a new pane comes with since `R-J35` — which is also what it wanted
+ *    before, by a longer route: it used to arrive unheld and follow the
+ *    selection into place.
  *
  * Case 3 no longer has a ceiling to hit (`R-J35`), so the only way it answers
  * nothing is a window with no dockview — which is case 0, above.
@@ -262,27 +299,63 @@ export function revealSession(sessionId: string): void {
   }
 
   select(sessionId);
-  if (slots.some((id) => !hold[id])) return;
+  const free = slots.filter((id) => !hold[id]);
+  if (free.length > 0) {
+    // **Raise it, too.** `R-J50`, asked 2026-08-25: *"even all tab is opened,
+    // when someone click on the ATTENTION's session, bring the selected panel
+    // up"*. This case answered the click by selecting and stopping there, on
+    // the reasoning that an unheld pane follows the selection and therefore
+    // needs no help — true of what the pane *shows*, and silent about whether
+    // you can see it. With a file tab forward in the same group, the pane that
+    // just changed session is behind it, so the click moved the dock, the rail
+    // and the status bar and left the centre showing a file. That is `R-J31`'s
+    // complaint again, one layer down, and it got commoner with every tab
+    // `R-B53` and `R-J44` made it easy to open.
+    raiseTab(api, free);
+    return;
+  }
 
-  if (!splitAgent()) {
+  if (!addAgentPane()) {
     pushNotice("there is nowhere to put this session — the window has no panes yet");
   }
+}
+
+/**
+ * Bring one of these tabs forward, unless one of them already is. `R-J50`.
+ *
+ * **Unless**, because raising a tab is not free: `setActive` activates the
+ * group as well, which moves the keyboard, and a queue click that yanked focus
+ * out of the file you were reading — to show you a pane that was already in
+ * front of you — would be a worse answer than doing nothing. So a pane that is
+ * the forward tab of its own group is taken as *shown*, split off in its own
+ * group or not, and the click is already answered.
+ *
+ * A panel with no group is left alone for the same reason: not knowing whether
+ * it is visible is not a reason to steal focus.
+ */
+function raiseTab(api: DockviewApi, ids: readonly string[]): void {
+  const forward = (id: string) => {
+    const group = api.getPanel(id)?.group;
+    return !group || group.activePanel?.id === id;
+  };
+  if (ids.some(forward)) return;
+  api.getPanel(ids[0])?.api.setActive();
 }
 
 /**
  * Send an Agent pane away, and let go of whatever it was holding.
  *
  * The hold has to go with it or the entry outlives the pane that could clear
- * it: split again into the same slot number and the new pane would arrive
- * already held on a session you chose last week, which looks like the split
+ * it: open into the same slot number again and the new pane would arrive
+ * already held on a session you chose last week, which looks like the gesture
  * ignoring your selection.
  *
  * **Every Agent pane closes, slot 1 included.** It did not until 2026-08-19,
  * on the reasoning that a window with no Agent pane is one you can only
  * recover from with a shortcut you have to remember — but the price of that
- * was worse and was being paid every day: split, decide the *first* pane is
- * the one you are done with, and the only way to be left with one agent again
- * is to close the other and re-aim it. A pane that is special for a reason you
+ * was worse and was being paid every day: open a second, decide the *first*
+ * pane is the one you are done with, and the only way to be left with one
+ * agent again is to close the other and re-aim it. A pane that is special for a reason you
  * cannot see reads as a bug, and it was reported as one.
  *
  * What made it safe is that the shortcut is no longer the only way back:
@@ -295,6 +368,37 @@ export function closeAgentPane(id: string): void {
   if (!dock) return;
   dropHold(id);
   dock.getPanel(id)?.api.close();
+}
+
+/**
+ * Close the Agent panes anchored to sessions that have just ended.
+ *
+ * **The anchor does not protect the pane, and that is the point.** A held pane
+ * whose session ends used to stay exactly where it was, showing *"that session
+ * has ended — drop the anchor to follow the queue again"*, and the only way out
+ * was to drop the anchor by hand and then close it. Asked for directly: the
+ * agent is gone, so the pane should go with it, anchored or not.
+ *
+ * Only **held** panes. An unheld pane is not bound to anything — it shows the
+ * selection, so it has already moved on and closing it would take away a view
+ * you never pointed at this session in the first place.
+ *
+ * Two things this deliberately does not do. It does not close a pane you
+ * anchored to a session that was *already* finished: the caller reports
+ * transitions, so reading a session you deliberately opened is undisturbed. And
+ * it does not spare slot 1 — a pane that is special for a reason you cannot see
+ * reads as a bug (see [`closeAgentPane`]), and there are four ways back to an
+ * Agent pane.
+ */
+export function closePanesFor(sessionIds: readonly string[]): void {
+  if (!dock || sessionIds.length === 0) return;
+  const ended = new Set(sessionIds);
+  const hold = useStore.getState().scoped().paneHold;
+  for (const [paneId, sessionId] of Object.entries(hold)) {
+    if (!ended.has(sessionId)) continue;
+    if (paneKind(paneId) !== "agent") continue;
+    closeAgentPane(paneId);
+  }
 }
 
 /** Let go of one pane's session, if it was holding one. */

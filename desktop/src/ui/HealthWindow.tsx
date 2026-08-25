@@ -12,6 +12,7 @@ import { useStore } from "@/store";
 import { Chip, Dim, Empty, Loading } from "@/ui/primitives";
 import { Dialog } from "@/ui/Dialog";
 import { humanBytes, type Alert } from "@/wire/types";
+import { agentColor, agentSlots } from "@/lib/agentHealth";
 import { num, stamp } from "@/lib/format";
 
 function alertMessage(a: Alert): string {
@@ -137,9 +138,14 @@ export function HealthWindow() {
 
         <div className="flex flex-wrap items-center gap-2">
           {health.current_version && <Chip color="var(--graph-0)">CLI {health.current_version}</Chip>}
-          {health.codex_present && (
-            <Chip color="var(--purple)">codex · {num(health.codex_threads ?? 0)} threads</Chip>
-          )}
+          {agentSlots(health)
+            .filter((a) => a.present)
+            .map((a) => (
+              <Chip key={a.source} color={agentColor(a.source)}>
+                {a.source} · {num(a.threads)} session{a.threads === 1 ? "" : "s"}
+                {a.error && " · unreadable"}
+              </Chip>
+            ))}
           {health.history_skipped_bytes > 0 && (
             <Chip color="var(--amber)">{humanBytes(health.history_skipped_bytes)} of history skipped</Chip>
           )}

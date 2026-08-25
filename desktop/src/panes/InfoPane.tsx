@@ -5,7 +5,7 @@
 import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, Mono, PaneHeader } from "@/ui/primitives";
 import { compact, fmtDur, num, secsSince, stamp } from "@/lib/format";
-import { repoName, sessionLabel, unverified } from "@/wire/types";
+import { repoName, sessionLabel, sourceColor, sourceLabel, unverified } from "@/wire/types";
 import { SignalRunner } from "@/ui/SignalRunner";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -31,7 +31,7 @@ export function InfoPane() {
         <Field label="label">{sessionLabel(s)}</Field>
         <Field label="id"><Mono className="text-xs">{s.id}</Mono></Field>
         <Field label="source">
-          <Chip color={s.source === "codex" ? "var(--purple)" : "var(--blue)"}>{s.source}</Chip>
+          <Chip color={sourceColor(s.source)}>{sourceLabel(s.source)}</Chip>
         </Field>
         <Field label="state">
           {s.alive ? (s.live_status ?? "live") : "ended"}

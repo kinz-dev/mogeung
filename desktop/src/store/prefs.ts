@@ -9,7 +9,7 @@
  * about the sessions themselves.
  */
 
-import type { SessionId } from "@/wire/types";
+import type { SessionId, SessionSource } from "@/wire/types";
 import type { Mark } from "@/lib/marks";
 
 export type Scope = "needs_you" | "live" | "all";
@@ -73,6 +73,13 @@ export interface ScopedPrefs {
   tags: Record<SessionId, string>;
   /** The panel's shells: `[tmux session name, worktree root]`. `R-B33`. */
   shells: [string, string][];
+  /**
+   * Folders you keep in the New session window, in the order you added them.
+   * `R-J45`. See [`lib/favourites.ts`](../lib/favourites.ts), which carries the
+   * argument for why a path belongs on this side of the split rather than
+   * beside the view preferences.
+   */
+  favouriteDirs: string[];
   /**
    * Panes held on a session rather than following the selection, by pane id.
    * `R-B49`.
@@ -143,6 +150,16 @@ export interface Prefs {
   infoHeight: number;
   /** The Notes editor's share of the rail. */
   notesEditorHeight: number;
+  /**
+   * Which CLI the New session window starts. `R-J51`.
+   *
+   * A preference rather than a per-machine one: it says which agent *you*
+   * reach for, and that does not change when you walk to another desk. It is
+   * remembered because this window is the front door since `R-J45` — picking
+   * the same CLI every morning is the sort of click you stop noticing and
+   * never stop paying.
+   */
+  launchSource: SessionSource;
   queueWidth: number;
   /**
    * The Git pane's list of commits and paths. Its own setting rather than a
@@ -215,6 +232,7 @@ export const emptyScoped = (): ScopedPrefs => ({
   bookmarks: [],
   tags: {},
   shells: [],
+  favouriteDirs: [],
   paneHold: {},
 });
 
@@ -246,6 +264,7 @@ export const defaultPrefs = (): Prefs => ({
   dismissedDirs: {},
   infoHeight: 240,
   notesEditorHeight: 256,
+  launchSource: "claude_code",
   queueWidth: 380,
   gitSidebarWidth: 340,
   groupByRepo: false,

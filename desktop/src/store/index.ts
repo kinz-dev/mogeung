@@ -521,6 +521,59 @@ function succeed(get: () => AppState): void {
   if (follow) st.select(follow);
 }
 
+/**
+ * Sessions this window has watched being alive, so that an ending is a
+ * **transition** rather than a state.
+ *
+ * The distinction is the whole safety of [`reap`]. On `alive: false` alone, a
+ * pane anchored to a session you deliberately opened to *read* — a finished one,
+ * which is a place you asked to be — would close under you the moment the
+ * daemon breathed. Worse, sessions load from the store with `alive: false` and
+ * have their liveness re-derived on the first scan, so a window restored beside
+ * a running agent would reap the pane a second before being told it was live.
+ *
+ * Module state for the same reason as [`hopped`]: it is not a fact about the
+ * sessions, it is a record of what this window has already noticed about them,
+ * and nothing renders from it.
+ */
+const seenAlive = new Set<SessionId>();
+
+/** What to do about sessions that have just ended. See [`onSessionsEnded`]. */
+type EndedHandler = (ids: SessionId[]) => void;
+let endedHandler: EndedHandler | null = null;
+
+/**
+ * Register the reaction to a session ending. `App` wires this to the panes.
+ *
+ * A registration rather than an import, because the answer lives in
+ * `lib/panes.ts` and that module already imports this one. Calling it directly
+ * from here would close the loop, and the comment at the top of `panes.ts` is
+ * about exactly that: the store must not reach back into the things built on
+ * top of it.
+ */
+export function onSessionsEnded(fn: EndedHandler | null): void {
+  endedHandler = fn;
+}
+
+/**
+ * Notice the sessions that have just stopped running.
+ *
+ * **Runs after [`succeed`], and the order is load-bearing.** `/clear` ends a
+ * session and starts its successor on the same pid, and succession's whole job
+ * is to move the held panes forward onto the heir. Reaping first would close
+ * the very panes it is about to re-aim — which is `R-J15` again, the "terminal
+ * went blank after /clear" bug, with the pane gone instead of blank. Running
+ * second, the hold already names the heir and there is nothing here to do.
+ */
+function reap(get: () => AppState): void {
+  const ended: SessionId[] = [];
+  for (const s of Object.values(get().sessions)) {
+    if (s.alive) seenAlive.add(s.id);
+    else if (seenAlive.delete(s.id)) ended.push(s.id);
+  }
+  if (ended.length > 0) endedHandler?.(ended);
+}
+
 /** First index in `list` (sorted by seq) whose seq is >= `seq`. */
 function lowerBound(list: TranscriptEvent[], seq: number): number {
   let lo = 0;
@@ -692,6 +745,7 @@ export const useStore = create<AppState>((set, get) => ({
     // Everything below is about the old machine. Session ids do not survive
     // the move, and a stale board is worse than an empty one.
     hopped.clear();
+    seenAlive.clear();
     set({
       url,
       sessions: {},
@@ -729,13 +783,19 @@ export const useStore = create<AppState>((set, get) => ({
           get().select(msg.queue[0].session_id);
         }
         succeed(get);
+        reap(get);
         break;
       }
       case "session_updated":
         set((s) => ({ sessions: { ...s.sessions, [msg.session.id]: msg.session } }));
         succeed(get);
+        reap(get);
         break;
       case "session_removed":
+        // Pruned outright. If this window ever saw it running, that is an
+        // ending like any other — and unlike the `alive` transition there will
+        // be no later message to notice it in, because the session is gone.
+        if (seenAlive.delete(msg.session_id)) endedHandler?.([msg.session_id]);
         set((s) => {
           const sessions = { ...s.sessions };
           delete sessions[msg.session_id];

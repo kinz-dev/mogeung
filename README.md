@@ -24,7 +24,20 @@ worse. That was the fatal flaw of the first version — see
 **Status: v0.2.** Working and tested; the core premise is still unproven. See
 [docs/product/assumptions.md](docs/product/assumptions.md).
 
-## Run it
+## Install it
+
+```sh
+./scripts/install.sh
+```
+
+Builds the release daemon and the window, installs `mogeungd`, `yolomo` and
+`qwenmo` (the tmux launchers for `claude` and `qwen`) into
+`~/.local/bin`, and installs the window's `.deb` with `dpkg -i` — after which
+**mogeung is an application in the launcher** like any other. It asks for `sudo`
+once, at the dpkg step and nowhere else. `--no-desktop` stops after the daemon;
+`--no-build` installs what is already built.
+
+To build without installing anything:
 
 ```sh
 cd desktop && npm install && npm run tauri build

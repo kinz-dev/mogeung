@@ -14,7 +14,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import type { DockviewApi } from "dockview";
-import { closeAgentPane, filePaneId, jumpToTurn, setDock, showPane, splitAgent } from "@/lib/panes";
+import { addAgentPane, closeAgentPane, filePaneId, jumpToTurn, setDock, showPane } from "@/lib/panes";
 import { openFile } from "@/lib/explorer";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
@@ -222,22 +222,22 @@ describe("a file gets a pane of its own", () => {
  * gone — these pin that it went, and that the hold went with the pane.
  */
 /**
- * Splitting, and what the new pane arrives holding. `R-J35`, asked for
- * 2026-08-20: *"by default please set the anchore = true when openning a new
- * panel"*.
+ * Where a new Agent pane lands, and what it arrives holding. `R-J35`, asked
+ * for 2026-08-20: *"by default please set the anchore = true when openning a
+ * new panel"*; `R-J44` for the tab.
  *
- * Both of these fail against the split as it stood: it added a pane and wrote
- * no hold at all, so two panes followed the queue and the next click collapsed
+ * The hold ones fail against the pane as it first stood: it was added with no
+ * hold at all, so two panes followed the queue and the next click collapsed
  * the arrangement you had just made into two views of one session.
  */
-describe("splitting an Agent pane", () => {
-  function dockWithSplit(existing: string[]) {
+describe("opening another Agent pane", () => {
+  function dockWithSplit(existing: string[], activeGroup?: unknown) {
     const panels = [...existing];
     const addPanel = vi.fn((opts: { id: string }) => panels.push(opts.id));
     const api = {
       getPanel: (id: string) => (panels.includes(id) ? { api: { setActive: vi.fn() } } : undefined),
       addPanel,
-      activeGroup: undefined,
+      activeGroup,
       get panels() {
         return panels.map((id) => ({ id }));
       },
@@ -245,30 +245,62 @@ describe("splitting an Agent pane", () => {
     return { api, addPanel };
   }
 
+  /**
+   * **A tab, not a split.** `R-J44`, and this is the one that fails against
+   * `R-J35`'s pane: it passed `direction: "right"`, which dockview reads as
+   * *beside* and which narrowed whatever was already on screen.
+   *
+   * Asserted as the *absence* of a direction rather than as `"within"`,
+   * because that is what the call actually says — dockview supplies the
+   * default itself (`position.direction || "within"`), and a test naming a
+   * string the source never writes would pass with the source deleted.
+   */
+  it("adds the pane to the active group rather than beside it", () => {
+    const group = { id: "group-1" };
+    const { api, addPanel } = dockWithSplit(["agent"], group);
+    setDock(api);
+
+    addAgentPane();
+
+    const opts = addPanel.mock.calls[0][0] as { position?: { referenceGroup?: unknown; direction?: string } };
+    expect(opts.position?.referenceGroup).toBe(group);
+    expect(opts.position?.direction).toBeUndefined();
+  });
+
+  /** No group to be relative to, so no `position` — dockview places the first. */
+  it("passes no position when there is no active group", () => {
+    const { api, addPanel } = dockWithSplit([]);
+    setDock(api);
+
+    addAgentPane();
+
+    expect((addPanel.mock.calls[0][0] as { position?: unknown }).position).toBeUndefined();
+  });
+
   beforeEach(() => {
     useStore.setState({ prefs: defaultPrefs(), selected: null });
   });
 
-  it("moors the new pane on the session you split from", () => {
+  it("moors the new pane on the session you opened it from", () => {
     const { api } = dockWithSplit(["agent"]);
     setDock(api);
     useStore.setState({ selected: "s1" });
 
-    expect(splitAgent()).toBe("agent:2");
+    expect(addAgentPane()).toBe("agent:2");
     expect(useStore.getState().scoped().paneHold["agent:2"]).toBe("s1");
   });
 
   /**
-   * The pane you split *from* keeps following the queue, and that is what
+   * The pane you opened *from* keeps following the queue, and that is what
    * keeps the queue working: with every pane moored, a click on a new session
-   * has to split again to land anywhere.
+   * has to open another to land anywhere.
    */
-  it("leaves the pane it split from following the selection", () => {
+  it("leaves the pane it opened from following the selection", () => {
     const { api } = dockWithSplit(["agent"]);
     setDock(api);
     useStore.setState({ selected: "s1" });
 
-    splitAgent();
+    addAgentPane();
 
     expect(useStore.getState().scoped().paneHold["agent"]).toBeUndefined();
   });
@@ -278,7 +310,7 @@ describe("splitting an Agent pane", () => {
     const { api } = dockWithSplit(["agent"]);
     setDock(api);
 
-    splitAgent();
+    addAgentPane();
 
     expect(useStore.getState().scoped().paneHold).toEqual({});
   });

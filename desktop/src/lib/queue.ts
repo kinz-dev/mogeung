@@ -1,4 +1,4 @@
-import { needsHuman, repoName, sessionLabel, type AttentionItem, type Session } from "@/wire/types";
+import { needsHuman, repoName, sessionLabel, sourceLabel, type AttentionItem, type Session } from "@/wire/types";
 import { compareByTagThenLabel } from "@/lib/tags";
 import type { Scope, ScopedPrefs } from "@/store/prefs";
 
@@ -17,7 +17,7 @@ import type { Scope, ScopedPrefs } from "@/store/prefs";
  * importing a component module is how a cycle starts.
  */
 /**
- * Field filters — `repo:`, `branch:`, `file:`, `label:` — with bare words
+ * Field filters — `repo:`, `branch:`, `file:`, `label:`, `tag:`, `source:` — with bare words
  * falling through to a substring match over the label. A port of `filter.rs`.
  */
 export function matchesFilter(
@@ -51,6 +51,14 @@ export function matchesFilter(
       // rather than a scroll. `tag:none` asks the opposite question.
       case "tag":
         hay = (tag ?? "none").toLowerCase();
+        break;
+      // Which CLI the session belongs to. Worth a term of its own since
+      // `R-I15`: with three agent CLIs in one queue, "just the qwen ones" is a
+      // question that could not be asked at all, and the raw wire value
+      // (`qwen_code`) is not what anyone would type.
+      case "source":
+      case "agent":
+        hay = `${sourceLabel(s.source)} ${s.source}`.toLowerCase();
         break;
       default:
         hay = `${sessionLabel(s)} ${repoName(s)} ${label ?? ""}`.toLowerCase();

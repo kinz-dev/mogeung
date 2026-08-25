@@ -28,8 +28,34 @@ export type Timestamp = string;
 // session.rs
 // ---------------------------------------------------------------------------
 
-export type SessionSource = "claude_code" | "codex";
+export type SessionSource = "claude_code" | "codex" | "qwen_code";
 export type LiveStatus = "busy" | "idle" | "unknown";
+
+/// How each agent CLI is named and coloured. One table rather than a ternary
+/// per surface: with two sources a `=== "codex" ? … : …` was merely terse, and
+/// with three it silently paints the new one as Claude.
+export const SOURCE_LABEL: Record<SessionSource, string> = {
+  claude_code: "claude",
+  codex: "codex",
+  qwen_code: "qwen",
+};
+
+export const SOURCE_COLOR: Record<SessionSource, string> = {
+  claude_code: "var(--blue)",
+  codex: "var(--purple)",
+  qwen_code: "var(--graph-2)",
+};
+
+/// Falls back rather than throwing: the daemon may be newer than this client,
+/// and an unknown variant must never take the window down. See the header note
+/// on unknown variants.
+export function sourceLabel(s: SessionSource): string {
+  return SOURCE_LABEL[s] ?? s;
+}
+
+export function sourceColor(s: SessionSource): string {
+  return SOURCE_COLOR[s] ?? "var(--fg-dim)";
+}
 
 export interface OpenTool {
   id: string;
@@ -257,10 +283,27 @@ export interface Health {
   history_skipped_bytes: number;
   max_transcript_bytes: number;
   alerts: Alert[];
+  /// Every non-Claude agent CLI being watched, one entry each. Replaced the
+  /// four flat `codex_*` fields, which could describe exactly one other agent.
+  agents?: AgentHealth[];
+  /// @deprecated Superseded by `agents`. Still sent, so an older client keeps
+  /// working; read `agents` instead and get every CLI, not just the second one.
   codex_present?: boolean;
   codex_threads?: number;
   codex_error?: string | null;
   codex_unknown?: [string, number][];
+}
+
+/// What mogeung can see of one other agent CLI's install.
+export interface AgentHealth {
+  /// The wire name of the `SessionSource` — `codex`, `qwen`.
+  source: string;
+  present: boolean;
+  /// Sessions seen there. Zero with `present` is itself information:
+  /// present, watched, empty.
+  threads: number;
+  error: string | null;
+  unknown: [string, number][];
 }
 
 // ---------------------------------------------------------------------------
@@ -810,7 +853,10 @@ export type ClientMsg =
   | { cmd: "run_stop"; run_id: string }
   | { cmd: "fetch_run_output"; run_id: string }
   | { cmd: "reveal_run_env"; session_id: SessionId; config_id: string; key: string }
-  | { cmd: "launch_terminal"; dir: string; worktree: boolean }
+  /** Start a CLI in a real terminal. `source` chooses which one (`R-J51`);
+   *  the daemon defaults it to Claude Code when a client omits it, and refuses
+   *  a source it has no recipe for rather than starting something else. */
+  | { cmd: "launch_terminal"; dir: string; worktree: boolean; source: SessionSource }
   | { cmd: "rescan" }
   | { cmd: "fetch_health" }
   | { cmd: "snooze"; session_id: SessionId; minutes: number }

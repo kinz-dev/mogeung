@@ -304,7 +304,11 @@ export function Segmented<T extends string>({
   className,
 }: {
   value: T;
-  options: readonly { value: T; label: string; title?: string }[];
+  // `ReactNode` and not `string` since `R-J51`: the New session window's CLI
+  // picker puts each agent's own mark beside its name, and a segmented control
+  // is exactly the right shape for that choice — a picker that could only hold
+  // text would have meant a second one built beside this.
+  options: readonly { value: T; label: React.ReactNode; title?: string }[];
   onChange: (v: T) => void;
   className?: string;
 }) {

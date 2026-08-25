@@ -21,7 +21,7 @@ import { toggleRail } from "@/lib/rail";
 import { cursorIn, markFor, setMnemonic, MNEMONICS } from "@/lib/marks";
 import { openFile } from "@/lib/explorer";
 import { exportText } from "@/lib/tauri";
-import { focusPane, movePane, parseFilePaneId, resetLayout, showFilePane, splitAgent } from "@/lib/panes";
+import { addAgentPane, focusPane, movePane, parseFilePaneId, resetLayout, showFilePane } from "@/lib/panes";
 import { closeFile } from "@/lib/explorer";
 import { fullPath } from "@/ui/PaneChrome";
 import { writeClipboard } from "@/lib/clipboard";
@@ -242,7 +242,7 @@ export const ACTIONS: Action[] = [
     },
   },
 
-  // Two agents at once. `R-B49`.
+  // Two agents at once. `R-B49`, arriving as a tab since `R-J44`.
   //
   // `Alt+Shift+…` on both, beside `Alt+A`, because these are things you do
   // *to* the Agent pane rather than places you go. The hold has no bare-letter
@@ -251,11 +251,15 @@ export const ACTIONS: Action[] = [
   // failure this feature has to avoid — a pane that has quietly stopped
   // following the queue.
   {
+    // **The id stays `…split` although the pane is a tab now** (`R-J44`).
+    // `prefs.keymap` is keyed by action id, so renaming it here would silently
+    // drop the binding of anyone who had rebound this one — a cost paid by the
+    // few users who customised, to fix a word only the source ever shows.
     id: "pane.agent.split",
-    label: "Another Agent pane, beside this one",
+    label: "Another Agent pane, as a tab here",
     group: "Panes",
     keys: ["Alt+Shift+a"],
-    run: () => splitAgent(),
+    run: () => addAgentPane(),
   },
   {
     id: "pane.agent.hold",

@@ -9,7 +9,7 @@
 //! stateful by accident.
 
 use chrono::{DateTime, Utc};
-use mogeung_core::health::{Alert, Health, LineClass};
+use mogeung_core::health::{AgentHealth, Alert, Health, LineClass};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Running totals across every scan since the daemon started.
@@ -56,12 +56,16 @@ pub struct HealthTracker {
 
     max_transcript_bytes: u64,
 
-    /// Codex watch state, replaced wholesale each scan. The per-thread
-    /// counts feeding it are cumulative in `codex::ScanCache` (rollouts are
-    /// tailed incrementally since 2026-08-05), so the replacement equals
-    /// what a full re-read would count without accumulating here — the
-    /// skipped-history trap this file already documents. `R-I1`.
-    codex: Option<(bool, u32, Option<String>, Vec<(String, u64)>)>,
+    /// Per-CLI watch state, keyed by source name and replaced wholesale each
+    /// scan. The per-thread counts feeding it are cumulative in each source's
+    /// `ScanCache` (transcripts are tailed incrementally), so the replacement
+    /// equals what a full re-read would count without accumulating here — the
+    /// skipped-history trap this file already documents. `R-I1`, `R-I15`.
+    ///
+    /// A map rather than the single `Option` this replaced: with one slot, a
+    /// third CLI's canary had nowhere to report and its drift would have been
+    /// invisible, which is the exact failure the canary exists to prevent.
+    agents: BTreeMap<String, AgentHealth>,
 }
 
 impl HealthTracker {
@@ -133,14 +137,26 @@ impl HealthTracker {
     }
 
     /// One scan's view of the Codex install. `R-I1`.
-    pub fn set_codex(
+    /// Record what one non-Claude CLI's scan just saw. `source` is the wire
+    /// name of its [`SessionSource`](mogeung_core::session::SessionSource).
+    pub fn set_agent(
         &mut self,
+        source: &str,
         present: bool,
         threads: u32,
         error: Option<String>,
         unknown: Vec<(String, u64)>,
     ) {
-        self.codex = Some((present, threads, error, unknown));
+        self.agents.insert(
+            source.to_string(),
+            AgentHealth {
+                source: source.to_string(),
+                present,
+                threads,
+                error,
+                unknown,
+            },
+        );
     }
 
     /// Record that a transcript was too large to read whole.
@@ -219,18 +235,19 @@ impl HealthTracker {
             });
         }
 
-        // Codex drift is the same canary one directory over; the prefix keeps
-        // the two corpora tellable-apart in one alert list. `R-I1`.
-        if let Some((_, _, error, unknown)) = &self.codex {
-            for (kind, count) in unknown {
+        // Another CLI's drift is the same canary one directory over; the
+        // prefix keeps the corpora tellable-apart in one alert list. `R-I1`,
+        // `R-I15`.
+        for agent in self.agents.values() {
+            for (kind, count) in &agent.unknown {
                 alerts.push(Alert::UnknownEventType {
-                    event_type: format!("codex/{kind}"),
+                    event_type: format!("{}/{kind}", agent.source),
                     count: *count,
                 });
             }
-            // An unreadable index travels in `codex_error`, not as a fake
-            // line-count alert — the field is the honest shape for it.
-            let _ = error;
+            // An unreadable index travels in the agent's `error` field, not as
+            // a fake line-count alert — the field is the honest shape for it.
+            let _ = &agent.error;
         }
 
         Health {
@@ -251,10 +268,16 @@ impl HealthTracker {
             history_skipped_bytes: self.skipped.values().sum(),
             max_transcript_bytes: self.max_transcript_bytes,
             alerts,
-            codex_present: self.codex.as_ref().map(|c| c.0).unwrap_or(false),
-            codex_threads: self.codex.as_ref().map(|c| c.1).unwrap_or(0),
-            codex_error: self.codex.as_ref().and_then(|c| c.2.clone()),
-            codex_unknown: self.codex.as_ref().map(|c| c.3.clone()).unwrap_or_default(),
+            agents: self.agents.values().cloned().collect(),
+            // The pre-`R-I15` shape, still filled for clients that read it.
+            codex_present: self.agents.get("codex").map(|a| a.present).unwrap_or(false),
+            codex_threads: self.agents.get("codex").map(|a| a.threads).unwrap_or(0),
+            codex_error: self.agents.get("codex").and_then(|a| a.error.clone()),
+            codex_unknown: self
+                .agents
+                .get("codex")
+                .map(|a| a.unknown.clone())
+                .unwrap_or_default(),
         }
     }
 }

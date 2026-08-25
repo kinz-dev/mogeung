@@ -157,8 +157,21 @@ pub struct Health {
 
     pub alerts: Vec<Alert>,
 
+    /// Every non-Claude agent CLI being watched, one entry each. `R-I15`.
+    ///
+    /// Replaced the four flat `codex_*` fields below, which could describe
+    /// exactly one other agent. Those are still populated, and will be until
+    /// no client reads them, because a snapshot is a wire type and dropping a
+    /// field is a break.
+    #[serde(default)]
+    pub agents: Vec<AgentHealth>,
+
     // -- Codex (R-I1). Defaulted so an older daemon's snapshot still parses.
     /// A `~/.codex` install exists and is being watched.
+    ///
+    /// **Superseded by `agents`.** Kept so a client built before `R-I15` keeps
+    /// working; new readers should use `agents` and get every CLI, not just
+    /// the second one.
     #[serde(default)]
     pub codex_present: bool,
     /// Unarchived Codex threads seen in its index. Zero with `codex_present`
@@ -172,6 +185,27 @@ pub struct Health {
     /// same philosophy as `unknown_types`. Replaced wholesale each scan.
     #[serde(default)]
     pub codex_unknown: Vec<(String, u64)>,
+}
+
+/// What mogeung can see of one other agent CLI's install.
+///
+/// One of these per non-Claude source. The Claude Code figures stay in
+/// `Health`'s own fields: it is not "another agent" to a product whose whole
+/// corpus, canary and version tracking were built around it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentHealth {
+    /// The wire name of the `SessionSource` — `codex`, `qwen`.
+    pub source: String,
+    /// Its home directory exists and is being watched.
+    pub present: bool,
+    /// Sessions seen there. Zero with `present` is itself information:
+    /// present, watched, empty.
+    pub threads: u32,
+    /// Its index or home could not be read; the string says why.
+    pub error: Option<String>,
+    /// Line kinds this CLI's parser did not recognise — its canary, same
+    /// philosophy as `unknown_types`. Replaced wholesale each scan.
+    pub unknown: Vec<(String, u64)>,
 }
 
 impl Health {

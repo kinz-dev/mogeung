@@ -10,7 +10,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PaneScope } from "@/lib/paneScope";
-import { PaneActions, PaneCwd, usePaneTitle } from "@/ui/PaneChrome";
+import { PaneActions, usePaneTitle } from "@/ui/PaneChrome";
 import { AgentPane } from "@/panes/AgentPane";
 import { useStore } from "@/store";
 import { filePaneId } from "@/lib/panes";
@@ -239,63 +239,6 @@ describe("showing a session's folder", () => {
     header();
 
     expect(screen.getByTitle(/no folder to show/)).toBeDisabled();
-  });
-});
-
-/**
- * The directory a session was started in, on the left of the same header.
- * Asked for 2026-08-07.
- */
-describe("the folder path on the pane header", () => {
-  const cwdHeader = (paneId = "agent") =>
-    render(
-      <PaneCwd
-        activePanel={{ id: paneId } as never}
-        containerApi={{ getPanel: () => undefined } as never}
-        api={{} as never}
-        group={{} as never}
-        panels={[]}
-        isGroupActive
-      />,
-    );
-
-  it("names the directory the session was started in", () => {
-    useStore.setState({ selected: "s1", sessions: { s1: session("s1", { cwd: "/home/kinz/projects/mogeung" }) } });
-    cwdHeader();
-    expect(screen.getByTitle("started in /home/kinz/projects/mogeung")).toBeInTheDocument();
-  });
-
-  /**
-   * `cwd`, not `repo_root`. They differ exactly when a session was started in a
-   * subdirectory, which is the case where being told is worth the width.
-   */
-  it("shows where claude was run, not the repository it found", () => {
-    useStore.setState({
-      selected: "s1",
-      sessions: { s1: session("s1", { cwd: "/repo/crates/daemon", repo_root: "/repo" }) },
-    });
-    cwdHeader();
-    expect(screen.getByTitle("started in /repo/crates/daemon")).toBeInTheDocument();
-  });
-
-  /** A held pane names *its* session's directory, as its branch and tab do. */
-  it("follows the pane's own session when the pane is held", () => {
-    useStore.setState({
-      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), paneHold: { agent: "s2" } } } },
-      selected: "s1",
-      sessions: {
-        s1: session("s1", { cwd: "/one" }),
-        s2: session("s2", { cwd: "/the/held/one" }),
-      },
-    });
-    cwdHeader();
-    expect(screen.getByTitle("started in /the/held/one")).toBeInTheDocument();
-  });
-
-  /** Every group gets this container; only an Agent pane has a directory. */
-  it("says nothing on a pane that is not an agent", () => {
-    cwdHeader("changes");
-    expect(screen.queryByTitle(/started in/)).toBeNull();
   });
 });
 

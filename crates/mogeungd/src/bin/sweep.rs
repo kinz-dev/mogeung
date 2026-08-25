@@ -35,8 +35,14 @@
 //! `codex::KNOWN_IGNORED` and `codex::KNOWN_ITEMS`, because a sweep with its
 //! own copy of those lists would eventually disagree with the parser and
 //! report a clean bill of health for a daemon that is dropping lines.
+//!
+//! Three corpora since `R-I15`: Claude Code, Codex and Qwen Code. Qwen's is the
+//! one most worth re-running, because it is the youngest — seven of its
+//! nineteen `system` subtypes had ever been *seen* when its parser was written,
+//! so the other twelve are classified from the writer's source and have never
+//! met a real byte.
 
-use mogeungd::{adapter, codex, watcher};
+use mogeungd::{adapter, codex, qwen, watcher};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -87,14 +93,22 @@ fn main() {
 
     let claude_home = watcher::default_home();
     let codex_home = codex::default_home();
+    let qwen_home = qwen::default_home();
 
-    let claude = sweep_claude(&claude_home.join("projects"));
-    let cdx = sweep_codex(&codex_home.join("sessions"));
+    // A list rather than a variable per CLI: the unknown count below used to be
+    // a hand-written sum of exactly two terms, which is a silent zero for the
+    // third corpus and so a clean bill of health for a format nobody swept.
+    let corpora = [
+        ("Claude Code", claude_home.clone(), sweep_claude(&claude_home.join("projects"))),
+        ("Codex", codex_home.clone(), sweep_codex(&codex_home.join("sessions"))),
+        ("Qwen Code", qwen_home.clone(), sweep_qwen(&qwen_home.join("projects"))),
+    ];
 
-    report("Claude Code", &claude_home, &claude, quiet);
-    report("Codex", &codex_home, &cdx, quiet);
+    for (name, home, tally) in &corpora {
+        report(name, home, tally, quiet);
+    }
 
-    let unknown = claude.unknown.len() + cdx.unknown.len();
+    let unknown: usize = corpora.iter().map(|(_, _, t)| t.unknown.len()).sum();
     if unknown == 0 {
         println!("\nEverything on this machine is classified. Re-run after a CLI upgrade.");
         return;
@@ -214,6 +228,87 @@ fn sweep_codex(sessions: &Path) -> Tally {
                         codex::HANDLED.contains(&ty) || codex::KNOWN_IGNORED.contains(&ty);
                     t.hit(known, ty.to_string(), line);
                 }
+            }
+        }
+    }
+    t
+}
+
+fn sweep_qwen(projects: &Path) -> Tally {
+    let mut t = Tally::default();
+    for path in jsonl(projects) {
+        // The `chats/` directory holds sidecars beside the transcripts, and
+        // one of them (`.ledger.jsonl`) is also JSONL with a shape of its own.
+        // Sweeping it would report every one of its lines as unclassified.
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.ends_with(".ledger.jsonl") || name.starts_with("agent-") {
+            continue;
+        }
+        t.files += 1;
+        let Ok(body) = std::fs::read_to_string(&path) else { continue };
+        for line in body.lines().filter(|l| !l.trim().is_empty()) {
+            t.lines += 1;
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                t.malformed += 1;
+                continue;
+            };
+            let Some(ty) = v.get("type").and_then(|x| x.as_str()) else {
+                t.malformed += 1;
+                continue;
+            };
+
+            // A `system` record's real discriminator is one level down, and
+            // roughly three lines in five are `system` — so drift there is
+            // where drift will mostly be, and it is named `system/<subtype>`,
+            // the same compound the parser reports.
+            match (ty, v.get("subtype").and_then(|x| x.as_str())) {
+                ("system", Some(sub)) => {
+                    let known = qwen::HANDLED_SUBTYPES.contains(&sub)
+                        || qwen::KNOWN_IGNORED_SUBTYPES.contains(&sub);
+                    t.hit(known, format!("system/{sub}"), line);
+                }
+                _ => {
+                    let known =
+                        qwen::HANDLED.contains(&ty) || qwen::KNOWN_IGNORED.contains(&ty);
+                    t.hit(known, ty.to_string(), line);
+                }
+            }
+
+            // Below the type. `provenance` is inventoried rather than judged
+            // for the reason the group name says — but it is the field that
+            // separates a human turn from the CLI's own synthetic one, so a
+            // new value appearing there matters more than most.
+            if let Some(p) = v.get("provenance").and_then(|x| x.as_str()) {
+                t.note("provenance", p);
+            }
+            if let Some(model) = v.get("model").and_then(|x| x.as_str()) {
+                t.note("models (configured alias)", model);
+            }
+            if let Some(usage) = v.get("usageMetadata").and_then(|u| u.as_object()) {
+                for k in usage.keys() {
+                    t.note("usage keys", k.clone());
+                }
+            }
+            if let Some(parts) = v
+                .get("message")
+                .and_then(|m| m.get("parts"))
+                .and_then(|p| p.as_array())
+            {
+                for part in parts {
+                    if let Some(o) = part.as_object() {
+                        for k in o.keys() {
+                            t.note("content parts", k.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(ev) = v
+                .get("systemPayload")
+                .and_then(|s| s.get("uiEvent"))
+                .and_then(|e| e.get("event.name"))
+                .and_then(|x| x.as_str())
+            {
+                t.note("telemetry events", ev);
             }
         }
     }

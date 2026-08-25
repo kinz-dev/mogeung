@@ -1,8 +1,8 @@
 ---
 title: Sharpen triage, reach and review
 status: shipped
-updated: 2026-07-30
-roadmap: [R-B1, R-B2, R-B3, R-B4, R-B5, R-B6, R-B7, R-B8, R-B9, R-C1, R-C2, R-C3, R-C4, R-C5, R-D1, R-D2, R-D3, R-D4, R-D5, R-D6, R-D7, R-D8, R-D9]
+updated: 2026-08-24
+roadmap: [R-B1, R-B2, R-B3, R-B4, R-B5, R-B6, R-B7, R-B8, R-B9, R-C1, R-C2, R-C3, R-C4, R-C5, R-D1, R-D2, R-D3, R-D4, R-D5, R-D6, R-D7, R-D8, R-D9, R-J45]
 depends_on: [A1, A3, A6, A8]
 ---
 
@@ -194,3 +194,39 @@ Against the author's real corpus, live:
 - Web client served at `/`, 10.5 KB, self-contained.
 
 91 tests → 102, all free and offline.
+
+### `R-B2` became the front door, so it grew a list you keep
+
+2026-08-24, `R-J45`, and the ask carried its own reason:
+
+> It is more mature and I seldom need to open a new claude session from a
+> terminal.
+
+That is a statement about this feature's *place*, not about a missing control.
+`R-B2` was built as a shortcut for the occasional case — the everyday route to
+a new session was a terminal you already had open — so **recent repos**, drawn
+from every `repo_root` the daemon can see a session for, was a fair answer. It
+costs nothing to maintain and it is right often enough.
+
+Used as the front door it is the wrong shape, because it is a **log** rather
+than a list. It grows with every repository touched in the last fortnight, it
+reorders itself as sessions start and end, and the two projects actually opened
+each morning sit somewhere inside it wherever the alphabet put them. A
+favourite is the other kind of collection: short, hand-made, and it changes
+only when you change it.
+
+Both are kept, favourites above. Nothing is taken away — an unkept folder is
+still one click from starting and two from being kept — and a kept folder
+leaves the recents rather than appearing in both, since the copy you would
+click is the one with the ✕ beside it.
+
+**Two decisions worth the ink.** The list is **machine-scoped**
+(`ScopedPrefs`), for the reason that put `shells` there: the value is a
+filesystem path, and `~/projects/mogeung` means different files on the laptop
+than on the dev box. Here the key is right twice over — `launch_terminal` opens
+a terminal on **the daemon's** machine, which is the same machine the
+preferences are filed under. And **`~` is never expanded in the client**:
+`shellexpand` runs in the daemon against the daemon's home, so expanding here
+would write this machine's `/home/me` into a path meant for another's. It would
+work perfectly until the window was pointed at a remote daemon, which is the
+worst kind of bug this codebase can write.

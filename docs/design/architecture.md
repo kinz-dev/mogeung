@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-22
+updated: 2026-08-25
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -13,6 +13,7 @@ covers:
   - crates/mogeungd/src/insight.rs
   - crates/mogeungd/src/docscan.rs
   - crates/mogeungd/src/codex.rs
+  - crates/mogeungd/src/qwen.rs
   - crates/mogeung-tray/src/main.rs
 ---
 
@@ -501,7 +502,15 @@ so `pricing.rs` in the core crate can put a dollar figure on them per
 deliberate executor, click-only), `insight.rs` (cross-session search /
 digest / analytics engines), `docscan.rs` (markdown inventory,
 staleness, GC proposals), `codex.rs` (the `~/.codex` adapter; its scan
-pass maps threads into the same `Session`). A fourth binary,
+pass maps threads into the same `Session`), `qwen.rs` (the `~/.qwen`
+adapter, `R-I15`; a live registry plus per-session JSONL, so structurally
+it is `watcher.rs` rather than `codex.rs`, and its records are Gemini's
+rather than Anthropic's). The three readers share only `LineClass` —
+[ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)
+records why that stays a variant-and-a-module rather than becoming a
+trait, and why every "is this Claude?" question is now a named method on
+`SessionSource` instead of an equality test that silently meant "not
+Claude". A fourth binary,
 `mogeung-tray`, subscribes to the queue over the wire and shows the
 WAITING count — a client like every other, no local authority. It names
 the machine that count is for (`R-I11`), from the same `DaemonIdentity`,

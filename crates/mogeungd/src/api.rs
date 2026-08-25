@@ -922,8 +922,12 @@ async fn handle(state: &Arc<AppState>, cmd: ClientMsg) {
             let lines = state.runs.lines(&run_id).await;
             state.broadcast(ServerMsg::RunOutputHistory { run_id, lines });
         }
-        ClientMsg::LaunchTerminal { dir, worktree } => {
-            if let Err(e) = state.launch_terminal(&dir, worktree).await {
+        ClientMsg::LaunchTerminal {
+            dir,
+            worktree,
+            source,
+        } => {
+            if let Err(e) = state.launch_terminal(&dir, worktree, source).await {
                 err(e);
             }
         }
