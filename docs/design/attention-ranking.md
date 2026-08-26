@@ -91,8 +91,16 @@ silence, not a stuck agent.
 ## Transparency
 
 Every item carries a `detail` string stating why it ranks where it does
-(`waiting for you — 4m12s`, `busy but silent for 8m30s`). The ranking must never
-be a black box.
+(`waiting for you`, `22 file(s), +4110 -213 unread`). The ranking must never be
+a black box.
+
+Since `R-J65` that string is **static**, and the clock travels beside it as
+`since` — the instant the row's wait began, which is the same anchor
+`waiting_secs` measures from. The window renders `detail — fmtDur(now - since)`
+and gets the sentence it always showed. Rows with no clock (`Running`,
+`NeedsReview`, `Failed`, `RateLimited`) carry no anchor; snoozed rows carry none
+either, because their countdown runs to a *deadline* the window already holds as
+`snoozed_until`.
 
 ## RateLimited (2026-07-29)
 
@@ -113,10 +121,24 @@ when it differs from the last one sent** (`R-J8`).
 
 Two consequences worth stating, because both are easy to break:
 
-- **Every field of an item is part of the comparison**, including `detail` —
-  and `detail` carries a live duration (`busy but silent for 8m30s`). A queue
-  whose only change is a clock tick therefore still counts as changed, which is
-  correct: that string is on screen.
+- **Every field of an item is part of the comparison**, including `detail`.
+  That derive is what makes the gate honest, and for a year it is also what
+  made the gate useless: `detail` carried a rendered duration, so any waiting,
+  stalled or snoozed row differed from its own previous value **by
+  construction** and the gate could never hold. Measured on 2026-08-26 against
+  the running daemon: two consecutive payloads differed in **2 rows of 223, in
+  the seconds of a duration string**, with score, reason and order unchanged —
+  and all 28.5 KB went to every window, 0.69 times a second, 1.07 MB/min. The
+  reasoning that used to sit here ("which is correct: that string is on
+  screen") was the mistake: the string being on screen argues for the *window*
+  keeping a clock, not for the daemon re-sending one. `R-J65` moved it.
+- **Silence is still not the goal, and cannot be reached.** `score` carries
+  `(waited / 30).clamp(0, 99)` so that within a tier the longest wait sorts
+  first — so a board with anything waiting genuinely re-ranks every 30 s and
+  genuinely should be re-sent then. The honest figure is ~40 broadcasts a
+  minute falling to a handful, not to none. Two tests hold both halves: one
+  tick apart an unchanged board must rank identically, and a minute apart the
+  tiebreak must still move.
 - **Gating applies to the broadcast, never to a request.** A `Rescan` or an
   explicit fetch is always answered, unchanged or not. A request that returns
   silence because the answer happens to match the last one is indistinguishable

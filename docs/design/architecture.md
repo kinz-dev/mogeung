@@ -531,6 +531,48 @@ candidates falls back to the whole worktree diff, the answer a session with no
 touches already got. A scratchpad alongside real edits changes nothing: the
 out-of-repo path is dropped, not the filter.
 
+## One process table per scan pass (2026-08-26)
+
+`R-J64`. Two passes need to know which tmux pane a live session's process sits
+in — the Claude liveness update and `scan_qwen` — and each resolved it for
+itself, forking `tmux list-panes` and `ps -axo pid=,ppid=` on the blocking
+pool. On a machine running both CLIs that was two of each every 1.5 s, and
+`ps` was measured at **18.5 ms** against 680 processes: about 2.4% of a core
+spent re-deriving a table that changes when a pane moves and at no other time.
+
+`AppState::process_table` resolves it once and hands both callers the same
+`Arc`s — `Arc` rather than a clone because the ancestry map has one entry per
+process on the machine, and copying it per caller would trade the fork for a
+memcpy. Two gates, cheapest first:
+
+- The whole table is reused inside `PROC_TABLE_TTL_MS` (500 ms), which is what
+  makes one scan resolve it once however many callers ask, while still
+  resolving afresh on the next tick.
+- Past that, the cheap half is re-read every pass and the expensive half is
+  re-forked only when it could have moved: the pane list changed, a caller
+  asked (a live session with no `tmux_target` yet has no answer to keep), or
+  `PROC_PARENTS_BACKSTOP_SECS` elapsed. The backstop exists because an
+  unchanged pane list is a *signal* that nothing moved, not a proof — a process
+  can be re-parented inside a pane that kept its identity.
+
+If the blocking pool refuses, the last known table is served rather than an
+empty one: a spurious "no panes" unhosts every Agent pane for a tick.
+
+## What a fold compares (2026-08-26)
+
+`R-J66`. `significant_change` decides whether a fold is worth announcing now or
+may coast under `R-J54`. It used to build a masked clone of each side and
+compare those, which had one property worth keeping — a field added to
+`Session` was compared by default, so the gate could not silently stop watching
+something — and one worth losing: it deep-cloned both sessions including
+`recent_tools`, `recent_touches` and `touched_files`, which are 70% of a
+session's bytes and are precisely the fields it was about to blank.
+
+It binds every field by name instead. Adding a field to `Session` is now a
+**compile error** in that function until someone decides which side of the mask
+it belongs on — the same guarantee, with no allocation. The nine masked fields
+are the counters and the histories that move whenever a transcript grows.
+
 ## Modules added 2026-07-29
 
 The daemon grew five read-side modules, each behind the existing scan or

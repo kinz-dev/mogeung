@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { visibleQueue } from "@/lib/queue";
+import { queueDetail, visibleQueue } from "@/lib/queue";
 import { emptyScoped, type ScopedPrefs } from "@/store/prefs";
 import type { AttentionItem, Session } from "@/wire/types";
 
@@ -132,5 +132,47 @@ describe("what the queue is showing", () => {
         scope: "live",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("the queue row's clock", () => {
+  /**
+   * `R-J65`. The daemon used to render the duration into `detail`, which made
+   * every waiting row differ from its own previous value on every tick and
+   * defeated the gate in front of the queue broadcast. The text is static now
+   * and the window appends the clock — so the rendering must still read the
+   * way it always did.
+   */
+  const now = Date.parse("2026-08-26T12:00:00Z");
+
+  it("appends the elapsed time to a row that carries an anchor", () => {
+    const it0 = {
+      ...item("a", "awaiting_input"),
+      detail: "waiting for you",
+      since: "2026-08-26T11:54:55Z",
+    };
+    expect(queueDetail(it0, session("a"), now)).toBe("waiting for you — 5m05s");
+  });
+
+  it("counts a snoozed row down to its deadline, not up from an anchor", () => {
+    const it0 = { ...item("a"), detail: "snoozed" };
+    const s = session("a", { snoozed_until: "2026-08-26T12:04:00Z" } as Partial<Session>);
+    expect(queueDetail(it0, s, now)).toBe("snoozed — 4m00s left");
+  });
+
+  it("leaves a row with no clock exactly as the daemon wrote it", () => {
+    const it0 = { ...item("a", "needs_review"), detail: "22 file(s), +4110 -213 unread" };
+    expect(queueDetail(it0, session("a"), now)).toBe("22 file(s), +4110 -213 unread");
+  });
+
+  /** A snooze that has lapsed is not a snooze; the anchor takes over again. */
+  it("ignores a snooze deadline that has already passed", () => {
+    const it0 = {
+      ...item("a", "awaiting_input"),
+      detail: "waiting for you",
+      since: "2026-08-26T11:59:30Z",
+    };
+    const s = session("a", { snoozed_until: "2026-08-26T11:00:00Z" } as Partial<Session>);
+    expect(queueDetail(it0, s, now)).toBe("waiting for you — 30s");
   });
 });

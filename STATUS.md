@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 492 passing |
-| Rust | 34684 lines |
-| Docs | 93 files, 29 ADRs |
+| Tests | 500 passing |
+| Rust | 35195 lines |
+| Docs | 96 files, 29 ADRs |
 
 ## Assumptions
 
@@ -57,4 +57,5 @@ Untested: **12** · At risk: **6** · Supported: 18 · Refuted: 2
 | [Mermaid in the file pane, then the Transcript](docs/features/0034-mermaid-in-the-file-pane.md) | `shipped` | [A6] |
 | [Run and Debug](docs/features/0035-run-and-debug.md) | `active` | [A4, A32, A33, A34] |
 | [Qwen Code adapter](docs/features/0036-qwen-code-adapter.md) | `in-progress` | [A4, A23] |
+| [Performance pass 3 — the chatter, not the disk](docs/features/0037-performance-pass-3.md) | `draft` | [A4] |
 

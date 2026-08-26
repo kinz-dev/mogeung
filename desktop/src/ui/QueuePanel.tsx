@@ -15,7 +15,7 @@ import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
-import { matchesFilter, visibleQueue } from "@/lib/queue";
+import { matchesFilter, queueDetail, visibleQueue } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
 import { revealSession } from "@/lib/panes";
@@ -322,7 +322,7 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
             the flex line simply overflows.
           */}
           <div className="mt-0.5 flex items-center gap-2 text-xs">
-            <span className="min-w-0 flex-1 truncate text-[var(--dim)]">{item.detail}</span>
+            <span className="min-w-0 flex-1 truncate text-[var(--dim)]">{queueDetail(item, session, now)}</span>
             <SourceMark source={session.source} />
           </div>
           {perm && (

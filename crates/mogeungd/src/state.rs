@@ -57,6 +57,20 @@ const LOOP_REPEATS: usize = 4;
 /// Cap on remembered touches, so a long session cannot grow without bound.
 const MAX_RECENT_TOUCHES: usize = 200;
 
+/// How long a resolved process table stays good enough to reuse. `R-J64`.
+///
+/// Sized so the two passes inside one scan — Claude liveness and `scan_qwen` —
+/// share one answer, and the next scan resolves afresh. Anything longer would
+/// make a pane move take more than a tick to show up.
+const PROC_TABLE_TTL_MS: u64 = 500;
+
+/// A backstop re-fork of `ps` even when the pane list looks unchanged. `R-J64`.
+///
+/// The pane list is the *signal* that a mapping moved, not a proof that it did
+/// not: a process can be re-parented inside a pane that kept its identity. This
+/// bounds how long a stale ancestry can survive that case.
+const PROC_PARENTS_BACKSTOP_SECS: u64 = 30;
+
 /// How long a session's diff probe rests between looks. `R-J53`.
 ///
 /// The full worktree diff is the most expensive thing the scan loop does, and
@@ -163,6 +177,24 @@ pub struct AppState {
     /// The Codex index files (db path, db mtime, wal mtime) as last read, so
     /// an unmoved index costs a stat instead of a full-table read. `R-J56`.
     codex_index_seen: Mutex<Option<CodexIndexStamp>>,
+    /// The tmux pane list and process ancestry as last resolved, shared by
+    /// every pass in a scan instead of forked once per pass. `R-J64`.
+    proc_table: Mutex<Option<ProcTable>>,
+}
+
+/// One resolution of "which pane is which process in". `R-J64`.
+///
+/// `panes` and `parents` age separately on purpose: the pane list is cheap
+/// (~2 ms) and is what changes when a pane moves, so it is re-read every pass;
+/// `ps -axo` costs ~18 ms against a few hundred processes and is re-forked only
+/// when the pane list moved, when a caller says it must, or on the backstop.
+struct ProcTable {
+    panes: std::sync::Arc<Vec<(u32, String)>>,
+    parents: std::sync::Arc<HashMap<u32, u32>>,
+    /// When this table was resolved — the TTL that makes one scan share it.
+    at: std::time::Instant,
+    /// When `parents` itself was last forked, for the backstop.
+    parents_at: std::time::Instant,
 }
 
 /// One session's last worktree probe. `fp` is `None` when the fingerprint
@@ -467,6 +499,7 @@ impl AppState {
             last_health: Mutex::new(None),
             last_retention: Mutex::new(None),
             codex_index_seen: Mutex::new(None),
+            proc_table: Mutex::new(None),
         }))
     }
 
@@ -901,15 +934,15 @@ impl AppState {
         }
         let mut evs = Vec::with_capacity(kinds.len());
         for kind in kinds {
-            let ev = TranscriptEvent {
+            evs.push(TranscriptEvent {
                 session_id: id.to_string(),
                 seq: self.next_seq(id).await,
                 ts: ts.unwrap_or_else(Utc::now),
                 kind,
-            };
-            let _ = self.store.append_event(&ev);
-            evs.push(ev);
+            });
         }
+        // One transaction for the run, not one per event. `R-J66`.
+        let _ = self.store.append_events(&evs);
         self.broadcast(ServerMsg::Events { events: evs });
     }
 
@@ -919,6 +952,96 @@ impl AppState {
 
     /// One pass: refresh liveness from the registry, then tail every transcript
     /// that has grown.
+    /// The tmux pane list and process ancestry, resolved **once per scan pass**
+    /// and shared by everyone who needs it. `R-J64`.
+    ///
+    /// Two passes wanted this independently — the Claude liveness update and
+    /// `scan_qwen` — and each forked its own pair, so a machine running both
+    /// CLIs paid `tmux list-panes` *and* `ps -axo pid=,ppid=` twice every
+    /// 1.5 s. `ps` was measured at 18.5 ms against 680 processes; the pair
+    /// alone was about 2.4% of a core spent re-deriving a table that changes
+    /// when a pane moves and at no other time.
+    ///
+    /// Two gates, in order of cost. The whole table is reused inside
+    /// [`PROC_TABLE_TTL_MS`], which is what makes one scan resolve it once
+    /// however many callers ask. Past that the cheap half is re-read and the
+    /// expensive half is re-forked only when it could have changed: a moved
+    /// pane list, a caller that says so (`force_parents` — a live session with
+    /// no `tmux_target` yet has nothing to lose and an answer to gain), or
+    /// [`PROC_PARENTS_BACKSTOP_SECS`] having passed.
+    ///
+    /// Returns `Arc`s because the ancestry map has one entry per process on
+    /// the machine, and handing every caller its own copy would trade the
+    /// fork for a memcpy.
+    async fn process_table(
+        &self,
+        force_parents: bool,
+    ) -> (
+        std::sync::Arc<Vec<(u32, String)>>,
+        std::sync::Arc<HashMap<u32, u32>>,
+    ) {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let mut slot = self.proc_table.lock().await;
+        if let Some(t) = slot.as_ref() {
+            if t.at.elapsed() < Duration::from_millis(PROC_TABLE_TTL_MS) && !force_parents {
+                return (t.panes.clone(), t.parents.clone());
+            }
+        }
+
+        let prev = slot.as_ref().map(|t| {
+            (
+                t.panes.clone(),
+                t.parents.clone(),
+                t.parents_at.elapsed() >= Duration::from_secs(PROC_PARENTS_BACKSTOP_SECS),
+            )
+        });
+
+        // On the blocking pool: both halves are forked processes whose whole
+        // lifetime would otherwise sit on a runtime thread the API server needs.
+        let resolved = tokio::task::spawn_blocking(move || {
+            let panes = Arc::new(tmux_panes());
+            // No panes, no ancestry to walk — and `tmux_target_in` answers
+            // `None` on an empty pane list without consulting parents at all.
+            if panes.is_empty() {
+                return (panes, Arc::new(HashMap::new()), true);
+            }
+            if !force_parents {
+                if let Some((prev_panes, prev_parents, stale)) = prev {
+                    if !stale && !prev_parents.is_empty() && *prev_panes == *panes {
+                        return (panes, prev_parents, false);
+                    }
+                }
+            }
+            (panes, Arc::new(process_parents()), true)
+        })
+        .await;
+
+        let Ok((panes, parents, forked)) = resolved else {
+            // The pool refused. Serve whatever was last known rather than
+            // telling every caller the machine has no panes — a spurious
+            // `None` here unhosts every Agent pane for a tick.
+            return match slot.as_ref() {
+                Some(t) => (t.panes.clone(), t.parents.clone()),
+                None => (Arc::new(Vec::new()), Arc::new(HashMap::new())),
+            };
+        };
+
+        let now = Instant::now();
+        let parents_at = match (forked, slot.as_ref()) {
+            (false, Some(t)) => t.parents_at,
+            _ => now,
+        };
+        *slot = Some(ProcTable {
+            panes: panes.clone(),
+            parents: parents.clone(),
+            at: now,
+            parents_at,
+        });
+        (panes, parents)
+    }
+
     pub async fn scan(&self) {
         // One pass at a time. The interval, a websocket `rescan` and the HTTP
         // rescan can all ask at once; overlapping passes double every
@@ -979,23 +1102,28 @@ impl AppState {
         // Resolved once for the whole pass rather than per session — and not
         // at all when nothing is alive: the Qwen pass has always skipped both
         // forks in that case, and this pass paid `tmux` + `ps` every tick of
-        // an idle machine. On the blocking pool because each is a forked
-        // process whose whole lifetime would otherwise sit on a runtime
-        // thread the API server needs.
+        // an idle machine.
+        //
+        // Since `R-J64` the resolution is shared with `scan_qwen` rather than
+        // forked again there, and `ps` is re-forked only when it could have
+        // moved. A live session still missing its `tmux_target` forces the
+        // expensive half: it has no answer to keep, so a stale table costs it
+        // a whole tick of not being hostable.
         let (panes, parents) = if live_by_id.is_empty() {
-            (Vec::new(), HashMap::new())
+            (
+                std::sync::Arc::new(Vec::new()),
+                std::sync::Arc::new(HashMap::new()),
+            )
         } else {
-            tokio::task::spawn_blocking(|| {
-                let panes = tmux_panes();
-                let parents = if panes.is_empty() {
-                    HashMap::new()
-                } else {
-                    process_parents()
-                };
-                (panes, parents)
-            })
-            .await
-            .unwrap_or_default()
+            let unplaced = {
+                let sessions = self.sessions.read().await;
+                live_by_id.keys().any(|id| {
+                    sessions
+                        .get(id)
+                        .is_some_and(|s| s.alive && s.tmux_target.is_none())
+                })
+            };
+            self.process_table(unplaced).await
         };
         // In place, under one write lock. The loop this replaces cloned the
         // id list, cloned each session out, and `put` a copy back — three
@@ -1914,20 +2042,18 @@ impl AppState {
         //
         // Skipped entirely when nothing is alive, because both halves fork a
         // process and a scan that finds no Qwen session should cost nothing.
+        //
+        // When something *is* alive this no longer forks: `R-J64` resolves the
+        // table once per pass and the Claude liveness update has almost always
+        // asked for it already, so this is a cache read. On a machine running
+        // both CLIs that removed a second `ps -axo` — 18.5 ms — from every tick.
         let (panes, parents) = if live.is_empty() {
-            (Vec::new(), HashMap::new())
+            (
+                std::sync::Arc::new(Vec::new()),
+                std::sync::Arc::new(HashMap::new()),
+            )
         } else {
-            tokio::task::spawn_blocking(|| {
-                let panes = tmux_panes();
-                let parents = if panes.is_empty() {
-                    HashMap::new()
-                } else {
-                    process_parents()
-                };
-                (panes, parents)
-            })
-            .await
-            .unwrap_or_default()
+            self.process_table(false).await
         };
 
         let now = Utc::now();
@@ -4129,31 +4255,70 @@ fn window_for(chain: &[u32], windows: &[(u32, String)]) -> Option<String> {
     })
 }
 
-/// The session with the fields that merely tick along blanked out. `R-J54`.
+/// Did this fold change anything a client should hear about *now*? `R-J54`.
 ///
-/// What survives the blanking is what a broadcast must not sit on: liveness
-/// and status, open tools (a permission prompt is the top of the queue),
-/// errors and rate limits, prompts, titles, claims, verify runs, the loop
-/// signal, diff counters and repo pinning. Everything blanked is a counter or
-/// a rolling window that changes on virtually every fold of a busy session
-/// and that nobody acts on within seconds.
-fn quiet_view(s: &Session) -> Session {
-    let mut q = s.clone();
-    q.turns = 0;
-    q.tool_calls = 0;
-    q.tokens_in = 0;
-    q.tokens_out = 0;
-    q.last_activity = None;
-    q.last_event_at = chrono::DateTime::<Utc>::MIN_UTC;
-    q.recent_tools = Vec::new();
-    q.recent_touches = Vec::new();
-    q.touched_files = Vec::new();
-    q
-}
-
-/// Did this fold change anything a client should hear about *now*?
+/// **Destructured, not field-listed.** The version this replaces built a masked
+/// clone of each side and compared those, which had one property worth keeping:
+/// a field added to `Session` was compared by default, so the gate could not
+/// silently stop watching something. It also had one worth losing — it deep-cloned
+/// both sessions, including `recent_tools`, `recent_touches` and `touched_files`,
+/// which are 70% of a session's bytes and are precisely the fields it was about
+/// to throw away. Two clones and several hundred string allocations per touched
+/// session per tick, to answer a question that allocates nothing.
+///
+/// Binding every field by name keeps the first property without the second: add
+/// a field to `Session` and this stops compiling until someone decides which
+/// side of the mask it belongs on. `R-J66`.
 fn significant_change(before: &Session, after: &Session) -> bool {
-    quiet_view(before) != quiet_view(after)
+    // The `_` bindings are what `R-J54` coasts on: the counters, and the
+    // histories that move whenever a transcript grows.
+    #[rustfmt::skip]
+    let Session {
+        turns: _, tool_calls: _, tokens_in: _,
+        tokens_out: _, last_activity: _, last_event_at: _,
+        recent_tools: _, recent_touches: _, touched_files: _,
+
+        id, title, name, last_prompt,
+        cwd, repo_root, git_branch, pid,
+        alive, live_status, version, started_at,
+        status_since, base_sha, files_changed, insertions,
+        deletions, error, transcript_path, reviewed,
+        open_tools, snoozed_until, collisions, loop_signal,
+        tmux_target, limit_hit_at, limit_resets, verify_runs,
+        claims, source, announced_dirs,
+    } = after;
+
+    *id != before.id
+        || *title != before.title
+        || *name != before.name
+        || *last_prompt != before.last_prompt
+        || *cwd != before.cwd
+        || *repo_root != before.repo_root
+        || *git_branch != before.git_branch
+        || *pid != before.pid
+        || *alive != before.alive
+        || *live_status != before.live_status
+        || *version != before.version
+        || *started_at != before.started_at
+        || *status_since != before.status_since
+        || *base_sha != before.base_sha
+        || *files_changed != before.files_changed
+        || *insertions != before.insertions
+        || *deletions != before.deletions
+        || *error != before.error
+        || *transcript_path != before.transcript_path
+        || *reviewed != before.reviewed
+        || *open_tools != before.open_tools
+        || *snoozed_until != before.snoozed_until
+        || *collisions != before.collisions
+        || *loop_signal != before.loop_signal
+        || *tmux_target != before.tmux_target
+        || *limit_hit_at != before.limit_hit_at
+        || *limit_resets != before.limit_resets
+        || *verify_runs != before.verify_runs
+        || *claims != before.claims
+        || *source != before.source
+        || *announced_dirs != before.announced_dirs
 }
 
 /// Equal, ignoring the fields that move every scan by construction. `R-J55`.
@@ -5750,4 +5915,111 @@ mod perf_gate_tests {
         c.sessions_live = 3;
         assert!(!health_equivalent(&a, &c));
     }
+    /// The masked comparison must agree with the clone-based one it replaced,
+    /// field for field — including the fields nobody thinks about. `R-J66`
+    /// swapped two deep clones per call for a destructure, and a destructure
+    /// that quietly dropped a field would be a gate that stopped watching it.
+    ///
+    /// Every field is moved in turn: the nine masked ones must stay invisible,
+    /// the other thirty-one must break the gate.
+    #[test]
+    fn every_field_lands_on_the_side_of_the_mask_it_should() {
+        let base = sess();
+
+        // Masked: counters and the histories that move whenever a transcript
+        // grows. Each is exercised on its own, so one leaking is one failure.
+        let masked: Vec<(&str, fn(&mut Session))> = vec![
+            ("turns", |s| s.turns += 1),
+            ("tool_calls", |s| s.tool_calls += 1),
+            ("tokens_in", |s| s.tokens_in += 1),
+            ("tokens_out", |s| s.tokens_out += 1),
+            ("last_activity", |s| s.last_activity = Some("x".into())),
+            ("last_event_at", |s| s.last_event_at = Utc::now() + chrono::Duration::seconds(5)),
+            ("recent_tools", |s| s.recent_tools.push("Edit\u{1}a".into())),
+            ("recent_touches", |s| s.recent_touches.push(Touch { path: "a".into(), at: Utc::now() })),
+            ("touched_files", |s| s.touched_files.push("a".into())),
+        ];
+        for (name, mutate) in masked {
+            let mut after = base.clone();
+            mutate(&mut after);
+            assert!(
+                !significant_change(&base, &after),
+                "`{name}` must coast, not broadcast"
+            );
+        }
+
+        // Everything else is news. Not exhaustive by construction — that is
+        // what the destructure is for — but it covers the ones a fold moves.
+        let loud: Vec<(&str, fn(&mut Session))> = vec![
+            ("alive", |s| s.alive = !s.alive),
+            ("live_status", |s| s.live_status = Some(mogeung_core::session::LiveStatus::Idle)),
+            ("status_since", |s| s.status_since = Some(Utc::now())),
+            ("error", |s| s.error = Some("boom".into())),
+            ("files_changed", |s| s.files_changed += 1),
+            ("insertions", |s| s.insertions += 1),
+            ("deletions", |s| s.deletions += 1),
+            ("reviewed", |s| s.reviewed = !s.reviewed),
+            ("tmux_target", |s| s.tmux_target = Some("m:0.0".into())),
+            ("collisions", |s| {
+                s.collisions.push(mogeung_core::session::Collision {
+                    other: "other".into(),
+                    other_label: "other".into(),
+                    path: "a".into(),
+                })
+            }),
+            ("snoozed_until", |s| s.snoozed_until = Some(Utc::now())),
+            ("title", |s| s.title = Some("t".into())),
+            ("cwd", |s| s.cwd = "/elsewhere".into()),
+            ("base_sha", |s| s.base_sha = Some("deadbeef".into())),
+            ("verify_runs", |s| {
+                s.verify_runs.push(mogeung_core::verify::VerifyRun {
+                    kind: mogeung_core::verify::VerifyKind::Test,
+                    command: "cargo test".into(),
+                    at: Utc::now(),
+                    ok: None,
+                    tool_use_id: "t1".into(),
+                })
+            }),
+            ("announced_dirs", |s| s.announced_dirs.push("/d".into())),
+        ];
+        for (name, mutate) in loud {
+            let mut after = base.clone();
+            mutate(&mut after);
+            assert!(
+                significant_change(&base, &after),
+                "`{name}` must break the gate"
+            );
+        }
+    }
+
+    /// One scan pass must resolve the process table **once**. Two passes
+    /// wanted it independently and each forked `tmux` + `ps`; on a machine
+    /// running both CLIs that was two `ps -axo` every 1.5 s, ~18.5 ms each.
+    /// `R-J64`.
+    ///
+    /// Asserted by pointer identity rather than by counting forks, because a
+    /// test machine has no tmux server and the honest answer there is an empty
+    /// pane list — which must still be *shared* rather than re-derived.
+    #[tokio::test]
+    async fn one_pass_resolves_the_process_table_once() {
+        let home = std::env::temp_dir().join(format!("mogeung-proc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let store = crate::store::Store::open(&home.join("t.db")).unwrap();
+        let state = AppState::with_home(store, home.clone()).unwrap();
+
+        let (panes_a, parents_a) = state.process_table(false).await;
+        let (panes_b, parents_b) = state.process_table(false).await;
+
+        assert!(
+            std::sync::Arc::ptr_eq(&panes_a, &panes_b),
+            "the second caller in a pass must be handed the first's answer"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&parents_a, &parents_b),
+            "and must not re-fork `ps` to get it"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
 }

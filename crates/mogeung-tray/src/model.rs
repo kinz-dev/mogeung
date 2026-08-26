@@ -154,6 +154,7 @@ mod tests {
             reason,
             score: reason.base_score(),
             detail: String::new(),
+            since: None,
         }
     }
 

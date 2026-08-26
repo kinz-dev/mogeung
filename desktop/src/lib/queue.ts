@@ -2,6 +2,30 @@ import { needsHuman, repoName, sessionLabel, sourceLabel, type AttentionItem, ty
 import { compareByTagThenLabel } from "@/lib/tags";
 import type { Scope, ScopedPrefs } from "@/store/prefs";
 
+import { fmtDur, secsSince } from "@/lib/format";
+
+/**
+ * The queue row's explanation, with its clock. `R-J65`.
+ *
+ * The daemon used to render the duration into `detail` itself, which made
+ * every waiting row differ from its own previous value on every tick — so the
+ * "has anything changed" gate in front of the queue broadcast could never
+ * hold, and 28.5 KB went to every window at the poll rate to move two rows by
+ * two seconds. `detail` is static text now and the anchor travels beside it.
+ *
+ * Rendered here rather than in the panel because the keymap and the panel must
+ * agree about what a row says, for the same reason `visibleQueue` exists.
+ *
+ * Snoozed rows are the exception the daemon cannot serve: their countdown runs
+ * to a *deadline*, not from an anchor, and the window already holds it.
+ */
+export function queueDetail(item: AttentionItem, session: Session | undefined, now = Date.now()): string {
+  const until = session?.snoozed_until ? Date.parse(session.snoozed_until) : 0;
+  if (until > now) return `${item.detail} — ${fmtDur((until - now) / 1000)} left`;
+  if (item.since) return `${item.detail} — ${fmtDur(secsSince(item.since, now))}`;
+  return item.detail;
+}
+
 /**
  * Which sessions the queue is actually showing, and in what order. `R-J13`.
  *

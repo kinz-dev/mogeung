@@ -186,6 +186,7 @@ mod tests {
             reason,
             score: reason.base_score(),
             detail: "because".into(),
+            since: None,
         }
     }
 

@@ -168,7 +168,14 @@ export interface AttentionItem {
   session_id: SessionId;
   reason: AttentionReason;
   score: number;
+  /** Static text only — the clock lives in `since`. `R-J65`. */
   detail: string;
+  /**
+   * When the clock this row refers to started, for the reasons that have one.
+   * Absent on the rest, and on snoozed rows — those count down to a deadline
+   * the session already carries as `snoozed_until`. `R-J65`.
+   */
+  since?: string | null;
 }
 
 // ---------------------------------------------------------------------------

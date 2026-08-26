@@ -316,11 +316,41 @@ impl Store {
     }
 
     pub fn append_event(&self, ev: &TranscriptEvent) -> Result<()> {
-        let c = self.conn.lock().unwrap();
-        c.execute(
-            "INSERT OR REPLACE INTO events (run_id, seq, json) VALUES (?1, ?2, ?3)",
-            params![ev.session_id.clone(), ev.seq, serde_json::to_string(ev)?],
-        )?;
+        self.append_events(std::slice::from_ref(ev))
+    }
+
+    /// Append a batch of events in **one** transaction. `R-J66`.
+    ///
+    /// The per-event version this wraps took the connection mutex, opened an
+    /// autocommit transaction and ran its own `serde_json::to_string` for
+    /// every event — and a fold emits events in runs, so a busy tick was a
+    /// stream of tiny transactions. That is what the measured 230 write
+    /// syscalls per tick were.
+    ///
+    /// The durability trade is real and small: a crash mid-pass now loses that
+    /// pass's events rather than none. `R-A6` already tolerates exactly this —
+    /// a transcript's tail offset is recorded only *after* the lines it covers
+    /// are folded, so an interrupted pass re-reads its batch rather than
+    /// skipping it, and the re-read rebuilds what was lost.
+    pub fn append_events(&self, evs: &[TranscriptEvent]) -> Result<()> {
+        if evs.is_empty() {
+            return Ok(());
+        }
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR REPLACE INTO events (run_id, seq, json) VALUES (?1, ?2, ?3)",
+            )?;
+            for ev in evs {
+                stmt.execute(params![
+                    ev.session_id.as_str(),
+                    ev.seq,
+                    serde_json::to_string(ev)?
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -527,4 +557,42 @@ mod tests {
         let wal = std::fs::metadata(dir.join("t.db-wal")).map(|m| m.len()).unwrap_or(0);
         assert_eq!(wal, 0, "a truncated WAL is empty until the next write");
     }
+    /// A batch must land exactly as the per-event loop landed it — same rows,
+    /// same order, same `seq`s. `R-J66` swapped N autocommit transactions for
+    /// one, and the whole justification is that only the transaction boundary
+    /// moved.
+    #[test]
+    fn a_batched_append_stores_what_the_per_event_one_did() {
+        let s = store("batch");
+        let ev = |sid: &str, seq: u64| TranscriptEvent {
+            session_id: sid.into(),
+            seq,
+            ts: chrono::Utc::now(),
+            kind: mogeung_core::transcript::EventKind::UserPrompt {
+                text: format!("p{seq}"),
+            },
+        };
+
+        // One at a time, the old way.
+        for seq in 1..=3 {
+            s.append_event(&ev("one", seq)).unwrap();
+        }
+        // The same run, batched.
+        let batch: Vec<TranscriptEvent> = (1..=3).map(|seq| ev("many", seq)).collect();
+        s.append_events(&batch).unwrap();
+
+        let a = s.load_recent_events("one", 0, 100).unwrap();
+        let b = s.load_recent_events("many", 0, 100).unwrap();
+        assert_eq!(a.len(), 3);
+        assert_eq!(
+            a.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            b.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            "same seqs, ascending, either way"
+        );
+
+        // An empty batch is a no-op, not an empty transaction.
+        s.append_events(&[]).unwrap();
+        assert_eq!(s.load_recent_events("many", 0, 100).unwrap().len(), 3);
+    }
+
 }

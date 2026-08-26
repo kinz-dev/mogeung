@@ -83,6 +83,19 @@ to every client, unchanged or not. A client that *asks* (`Rescan`,
 payload: the echo is its confirmation. New clients lose nothing to the gates —
 the snapshot carries the queue, and a session's diff is fetched on selection.
 
+**A gate only works if the payload can hold still.** `R-J65`. `Queue` was
+gated from the start and never once stayed silent, because `AttentionItem`'s
+`detail` carried a rendered duration — so any waiting row differed from its own
+previous value every tick and the whole 28.5 KB list went to every window at
+the poll rate. `detail` is static text now and the clock travels as `since`, an
+anchor instant the window renders from. `since` is
+`#[serde(default, skip_serializing_if = "Option::is_none")]`, so it is absent
+on rows that have no clock and a client built before the change parses the
+queue unchanged. The general rule this is the second instance of — `R-J55` was
+the first, for `Health` — is that **a by-construction-volatile field inside a
+gated payload silently disables the gate**; either mask it in the comparison or
+move it off the wire.
+
 **A moved diff travels as a summary; hunks travel on request.** `R-J53`. The
 scan loop announces `ChangeSummary` — per-file counts, paths, review tallies,
 no hunk bodies — because the full `Change` grows for the life of the session

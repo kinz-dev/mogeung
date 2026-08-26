@@ -225,43 +225,61 @@ impl Runs {
         // actually a full stderr buffer.
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        for (pipe, is_err) in [(stdout.map(Box::new), false)] {
-            if let Some(p) = pipe {
-                self.pump(id.clone(), *p, is_err);
-            }
-        }
-        if let Some(p) = stderr {
-            self.pump_err(id.clone(), p);
-        }
+        let out_pump = stdout.map(|p| self.pump(id.clone(), p, false));
+        let err_pump = stderr.map(|p| self.pump_err(id.clone(), p));
 
         let this = self.clone();
         let wait_id = id.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
+            // **Drain before ending.** `child.wait()` returns when the process
+            // is gone, which says nothing about whether the pumps have read
+            // what it left in the pipes — so a run could be marked `Exited`
+            // with its last lines still in flight, and a client that renders
+            // the log on `Ended` showed a truncated one. `dropped` was
+            // under-reported at the same moment, for the same reason. Awaiting
+            // the pumps costs nothing (both end when their pipe closes, which
+            // the exit already did) and makes `Ended` mean "the output is all
+            // here". `R-J68`.
+            if let Some(t) = out_pump {
+                let _ = t.await;
+            }
+            if let Some(t) = err_pump {
+                let _ = t.await;
+            }
             this.finish(&wait_id, status.ok().and_then(|s| s.code())).await;
         });
 
         Ok(run)
     }
 
-    fn pump(&self, run_id: String, pipe: tokio::process::ChildStdout, stderr: bool) {
+    fn pump(
+        &self,
+        run_id: String,
+        pipe: tokio::process::ChildStdout,
+        stderr: bool,
+    ) -> tokio::task::JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(pipe).lines();
             while let Ok(Some(text)) = lines.next_line().await {
                 this.push(&run_id, text, stderr).await;
             }
-        });
+        })
     }
 
-    fn pump_err(&self, run_id: String, pipe: tokio::process::ChildStderr) {
+    fn pump_err(
+        &self,
+        run_id: String,
+        pipe: tokio::process::ChildStderr,
+    ) -> tokio::task::JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(pipe).lines();
             while let Ok(Some(text)) = lines.next_line().await {
                 this.push(&run_id, text, true).await;
             }
-        });
+        })
     }
 
     async fn push(&self, run_id: &str, text: String, stderr: bool) {
@@ -556,4 +574,40 @@ mod tests {
         assert_eq!(started.session_id.as_deref(), Some("s-1"));
         assert_eq!(runs.list().await[0].session_id.as_deref(), Some("s-1"));
     }
+    /// **`Ended` must mean the output is all here.** `R-J68`.
+    ///
+    /// `child.wait()` returns when the process is gone, which says nothing
+    /// about whether the pumps have read what it left in the pipes. The waiter
+    /// called `finish` straight after it, so a run could be marked `Exited`
+    /// with its last lines still in flight — a client rendering the log on
+    /// `Ended` showed a truncated one, and `dropped` was under-reported at the
+    /// same moment.
+    ///
+    /// The race was probabilistic — the bounded-output test above caught it
+    /// about once in twenty runs and once in three under load, which is how it
+    /// survived as "a flaky test" — so this repeats: on the unfixed code one
+    /// of these laps loses lines with near-certainty.
+    #[tokio::test]
+    async fn a_run_that_has_ended_has_all_of_its_output() {
+        const LINES: usize = 500; // comfortably under `MAX_LINES`, so nothing is dropped
+        for lap in 0..20 {
+            let runs = Runs::new();
+            let c = cfg("/bin/sh", &["-c", &format!("seq 1 {LINES}")]);
+            let started = runs
+                .start(Path::new("/tmp"), &c.id, None, std::slice::from_ref(&c))
+                .await
+                .unwrap();
+            let done = until_ended(&runs, &started.id).await;
+
+            let lines = runs.lines(&started.id).await;
+            assert_eq!(done.dropped, 0, "lap {lap}: nothing should be dropped");
+            assert_eq!(lines.len(), LINES, "lap {lap}: the whole log survives");
+            assert_eq!(
+                lines.last().unwrap().text,
+                LINES.to_string(),
+                "lap {lap}: the last line the child wrote is present when it ends"
+            );
+        }
+    }
+
 }
