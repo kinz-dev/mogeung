@@ -228,7 +228,9 @@ broadcast gone, `snapshot` became 94% of all wire traffic — and not from the
 reconnect loop the *Watch* section above guessed at. Every connect shipped the
 board **twice**: the daemon pushes a snapshot on connect, and the window then
 asked for a re-send it had not missed. Fixed in the client, where the
-redundancy was.
+redundancy was, and verified on the reinstalled bundle: a connection that never
+sends `subscribe` gets **one** snapshot and every live update; one that does
+still gets **two**, because the daemon is deliberately unchanged.
 
 **Not done, deliberately.** The snapshot projection (1.08 MB → ~160 KB) and the
 narrowed `compute_change` are both still open — the first because it changes
