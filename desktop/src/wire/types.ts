@@ -878,8 +878,10 @@ export type ClientMsg =
   | { cmd: "reveal_run_env"; session_id: SessionId; config_id: string; key: string }
   /** Start a CLI in a real terminal. `source` chooses which one (`R-J51`);
    *  the daemon defaults it to Claude Code when a client omits it, and refuses
-   *  a source it has no recipe for rather than starting something else. */
-  | { cmd: "launch_terminal"; dir: string; worktree: boolean; source: SessionSource }
+   *  a source it has no recipe for rather than starting something else.
+   *  `headless` starts it detached under tmux with no terminal window at all
+   *  (`R-J61`) — the daemon refuses that without tmux, in words. */
+  | { cmd: "launch_terminal"; dir: string; worktree: boolean; source: SessionSource; headless: boolean }
   | { cmd: "rescan" }
   | { cmd: "fetch_health" }
   | { cmd: "snooze"; session_id: SessionId; minutes: number }

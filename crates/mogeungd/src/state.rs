@@ -3327,11 +3327,18 @@ impl AppState {
     /// macOS drives Terminal.app over AppleScript; Linux walks the candidate
     /// table in [`linux_terminal_attempts`], preferring a session under tmux
     /// (ADR-0010) so what it starts is hostable, not merely visible. `R-I3`.
+    ///
+    /// **`headless` skips the terminal window entirely** (`R-J61`, asked
+    /// 2026-08-26): a detached tmux session, the same thing `yolomo -d`
+    /// creates, picked up by the next scan and hosted in a mogeung pane —
+    /// or reached later with `tmux attach`. One path for both platforms,
+    /// because with no window to open there is nothing platform-shaped left.
     pub async fn launch_terminal(
         &self,
         dir: &str,
         worktree: bool,
         source: SessionSource,
+        headless: bool,
     ) -> Result<()> {
         // Refused **before** the worktree is cut: a source with no recipe would
         // otherwise leave a branch and a checkout behind for a session that was
@@ -3353,6 +3360,10 @@ impl AppState {
         } else {
             dir
         };
+
+        if headless {
+            return launch_headless(&target, source, &agent);
+        }
 
         // Runtime-selected, like `focus_terminal`, so both compile everywhere.
         if cfg!(target_os = "macos") {
@@ -3707,6 +3718,82 @@ fn in_terminal_command(
         "new-session".to_string(),
         "-s".to_string(),
         session_name(dir, stamp, source),
+        "-c".to_string(),
+        dir.to_string(),
+    ];
+    cmd.extend(agent.iter().cloned());
+    cmd
+}
+
+/// The headless launch: a detached tmux session and no terminal window.
+/// `R-J61`, and it is `yolomo -d` as a daemon path, inheriting that flag's
+/// two commitments.
+///
+/// **Without tmux it refuses rather than falls back.** The attached path can
+/// degrade to a bare agent in a terminal window — visible, not hostable —
+/// but headless has nothing to degrade *to*: with no tmux there is no pty,
+/// and a fallback that opened a window would be the opposite of what was
+/// asked. Same reasoning as `yolomo -d`'s own refusal.
+///
+/// One path for both platforms, because with no window to open there is
+/// nothing platform-shaped left — no AppleScript, no candidate table.
+fn launch_headless(target: &Path, source: SessionSource, agent: &[String]) -> Result<()> {
+    let dir = target.to_string_lossy();
+    let stamp = Utc::now().format("%m%d-%H%M%S").to_string();
+    let name = session_name(&dir, &stamp, source);
+    let cmd = headless_command(&dir, &name, agent);
+    let out = match std::process::Command::new(&cmd[0]).args(&cmd[1..]).output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow!(
+                "headless needs tmux, and tmux is not installed — with the headless \
+                 option off, a terminal window can still start the agent"
+            ));
+        }
+        Err(e) => return Err(anyhow!("could not run tmux: {e}")),
+        Ok(out) => out,
+    };
+    if !out.status.success() {
+        // tmux says why on stderr, and that sentence is the whole diagnosis —
+        // the same rule the terminal walk applies to a refused launch.
+        let why = String::from_utf8_lossy(&out.stderr);
+        let first = why
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("no message");
+        return Err(anyhow!("tmux would not create the session — {first}"));
+    }
+    // The session's first client will be a mogeung pane, and the default
+    // (`smallest`) would let that pane shrink a full-size terminal attached
+    // later. `-w` and the trailing `:` are both load-bearing — without `-w`,
+    // tmux 3.6 answers "no such window" on stderr and the protection is
+    // silently never applied, which is the bug `yolomo` carried until
+    // 2026-08-25. Advisory: the session is up either way, so a failure here
+    // is a log line rather than an error after the fact.
+    match std::process::Command::new("tmux")
+        .args(["set-option", "-w", "-t", &format!("={name}:"), "window-size", "latest"])
+        .output()
+    {
+        Ok(o) if !o.status.success() => {
+            tracing::warn!("window-size latest was not applied to {name}");
+        }
+        Err(e) => tracing::warn!("window-size latest was not applied to {name}: {e}"),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The argv for a headless start, pure so its shape is pinned by a test the
+/// way [`in_terminal_command`]'s is. `-d` is the whole difference from the
+/// attached shape: tmux owns the pty either way (ADR-0010); this session just
+/// starts with no client, which is what makes a window unnecessary.
+fn headless_command(dir: &str, name: &str, agent: &[String]) -> Vec<String> {
+    let mut cmd = vec![
+        "tmux".to_string(),
+        "new-session".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        name.to_string(),
         "-c".to_string(),
         dir.to_string(),
     ];
@@ -4744,6 +4831,40 @@ mod terminal_tests {
 
         let refused = agent_command(SessionSource::Codex).expect_err("codex has no recipe");
         assert!(refused.to_string().contains("codex"), "{refused}");
+    }
+
+    /// A headless launch is the attached one minus the window. `R-J61`.
+    ///
+    /// The shape that matters: `-d`, so no terminal is ever implied; the same
+    /// naming convention as the attached path, because `tmux ls` and a later
+    /// `tmux attach` must not care how the session was started; the directory
+    /// verbatim; and the agent's argv trailing, never joined into a string.
+    #[test]
+    fn a_headless_launch_is_a_detached_tmux_session() {
+        let claude = agent_command(SessionSource::ClaudeCode).expect("claude launches");
+        let name = session_name("/home/me/my proj.v2", "0826-101500", SessionSource::ClaudeCode);
+        assert_eq!(name, "mogeung-my-proj-v2-0826-101500");
+        let cmd = headless_command("/home/me/my proj.v2", &name, &claude);
+        assert_eq!(&cmd[..3], &["tmux", "new-session", "-d"]);
+        assert_eq!(&cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1], &name);
+        assert_eq!(
+            &cmd[cmd.iter().position(|a| a == "-c").unwrap() + 1],
+            "/home/me/my proj.v2",
+            "the directory itself must stay verbatim"
+        );
+        assert_eq!(&cmd[cmd.len() - claude.len()..], &claude[..]);
+        assert!(
+            !cmd.iter().any(|a| a == "sh" || a == "bash" || a.contains("new-session ")),
+            "nothing may hand the command to a shell or join it into a string: {cmd:?}"
+        );
+
+        // Qwen keeps its infix here too — how a session was started must not
+        // change what it is called.
+        let qwen = agent_command(SessionSource::QwenCode).expect("qwen launches");
+        let name = session_name("/home/me/api", "0826-101500", SessionSource::QwenCode);
+        assert_eq!(name, "mogeung-qwen-api-0826-101500");
+        let cmd = headless_command("/home/me/api", &name, &qwen);
+        assert_eq!(&cmd[cmd.len() - qwen.len()..], &qwen[..]);
     }
 
     /// The spec's words: on Wayland the answer is an honest refusal that says

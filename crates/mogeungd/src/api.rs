@@ -1003,8 +1003,9 @@ async fn handle(
             dir,
             worktree,
             source,
+            headless,
         } => {
-            if let Err(e) = state.launch_terminal(&dir, worktree, source).await {
+            if let Err(e) = state.launch_terminal(&dir, worktree, source, headless).await {
                 err(e);
             }
         }

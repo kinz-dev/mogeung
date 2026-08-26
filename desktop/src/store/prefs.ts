@@ -160,6 +160,16 @@ export interface Prefs {
    * never stop paying.
    */
   launchSource: SessionSource;
+  /**
+   * Start new sessions headless — detached under tmux, no terminal window,
+   * hosted in a mogeung pane. `R-J61`.
+   *
+   * Remembered for `launchSource`'s reason: it says how *you* run agents, and
+   * re-ticking it every morning is the click you stop noticing and never stop
+   * paying. Off by default — a terminal window is what this window always
+   * did, and what a machine without tmux can still deliver.
+   */
+  launchHeadless: boolean;
   queueWidth: number;
   /**
    * The Git pane's list of commits and paths. Its own setting rather than a
@@ -265,6 +275,7 @@ export const defaultPrefs = (): Prefs => ({
   infoHeight: 240,
   notesEditorHeight: 256,
   launchSource: "claude_code",
+  launchHeadless: false,
   queueWidth: 380,
   gitSidebarWidth: 340,
   groupByRepo: false,

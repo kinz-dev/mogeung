@@ -57,6 +57,15 @@ pub enum ClientMsg {
         /// something else. See `State::launch_terminal`.
         #[serde(default)]
         source: SessionSource,
+        /// Start the session headless: a detached tmux session and no
+        /// terminal window, so a mogeung pane is its first head — what
+        /// `yolomo -d` does. `R-J61`.
+        ///
+        /// Defaults to `false` for the reason `source` defaults: a client
+        /// built before the choice existed omits the field and keeps getting
+        /// the terminal window it was already getting.
+        #[serde(default)]
+        headless: bool,
     },
     /// Rescan for sessions immediately instead of waiting for the next poll.
     Rescan,

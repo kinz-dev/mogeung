@@ -100,7 +100,7 @@ describe("choosing which CLI to start", () => {
     fireEvent.click(screen.getByText(/open a claude terminal/));
 
     expect(launches()).toEqual([
-      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "claude_code" },
+      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "claude_code", headless: false },
     ]);
   });
 
@@ -111,7 +111,7 @@ describe("choosing which CLI to start", () => {
     fireEvent.click(screen.getByText(/open a qwen terminal/));
 
     expect(launches()).toEqual([
-      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "qwen_code" },
+      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "qwen_code", headless: false },
     ]);
     // Written through to the preferences, not merely to this render.
     expect(useStore.getState().prefs.launchSource).toBe("qwen_code");
@@ -131,5 +131,49 @@ describe("choosing which CLI to start", () => {
   it("does not offer Codex at all", () => {
     open();
     expect(screen.queryByTitle(/^start codex/)).toBeNull();
+  });
+});
+
+/**
+ * Headless, and the dialog telling the truth about it. `R-J61`.
+ *
+ * The wire flag is the feature; the texts are the part that can rot. A button
+ * reading "open a … terminal" above a launch that opens no window would be
+ * `R-J51`'s stale-warning bug in a new coat — a sentence about a thing that
+ * is not being done.
+ */
+describe("starting headless", () => {
+  const launches = (): unknown[] =>
+    (useStore.getState() as unknown as { sent: unknown[] }).sent ?? [];
+
+  beforeEach(() => {
+    useStore.setState({
+      send: (m: unknown) => useStore.setState({ sent: [...launches(), m] } as never),
+    } as never);
+  });
+
+  it("sends headless on the wire, and remembers the choice", () => {
+    open();
+    fireEvent.click(screen.getByLabelText("headless — no terminal window"));
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByText(/start a headless claude/));
+
+    expect(launches()).toEqual([
+      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "claude_code", headless: true },
+    ]);
+    // Written through to the preferences, not merely to this render.
+    expect(useStore.getState().prefs.launchHeadless).toBe(true);
+  });
+
+  it("stops promising a terminal window once none will open", () => {
+    open();
+    expect(screen.getByText(/in your terminal/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("headless — no terminal window"));
+
+    expect(screen.getByText(/under tmux — no terminal window/)).toBeInTheDocument();
+    expect(screen.queryByText(/in your terminal/)).toBeNull();
+    expect(screen.queryByText(/open a claude terminal/)).toBeNull();
+    expect(screen.getByText(/start a headless claude/)).toBeInTheDocument();
   });
 });

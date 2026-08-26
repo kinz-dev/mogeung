@@ -35,6 +35,15 @@
  * inside it. Favourites go **above** the recents and the recents keep their
  * place under them — nothing is taken away, and a folder you have not kept is
  * still one click from being started and two from being kept.
+ *
+ * **Headless since `R-J61`**, asked 2026-08-26: starting from here always
+ * opened a terminal window too, and for a session you mean to drive from a
+ * mogeung pane that window is a thing to go and close. Headless is `yolomo
+ * -d` behind a checkbox — a detached tmux session, picked up by the next scan
+ * — and the choice is remembered beside the CLI, for the same reason. The
+ * subtitle and the button follow it the way the yolo warning follows the CLI:
+ * a dialog promising a terminal it will not open is a sentence about a thing
+ * that is not being done.
  */
 
 import { useMemo, useState } from "react";
@@ -71,6 +80,7 @@ export function LaunchWindow() {
   // the same CLI every morning is the kind of click you stop noticing and
   // never stop paying. `setPrefs` writes through to the file.
   const source = useStore((s) => s.prefs.launchSource);
+  const headless = useStore((s) => s.prefs.launchHeadless);
   const setPrefs = useStore((s) => s.setPrefs);
   const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
 
@@ -96,14 +106,18 @@ export function LaunchWindow() {
 
   const go = () => {
     if (!typed) return;
-    send({ cmd: "launch_terminal", dir: typed, worktree, source: chosen.source });
+    send({ cmd: "launch_terminal", dir: typed, worktree, source: chosen.source, headless });
     close();
   };
 
   return (
     <Dialog
       title="New session"
-      subtitle={`opens a real interactive ${sourceLabel(chosen.source)} in your terminal`}
+      subtitle={
+        headless
+          ? `starts a real interactive ${sourceLabel(chosen.source)} under tmux — no terminal window`
+          : `opens a real interactive ${sourceLabel(chosen.source)} in your terminal`
+      }
       onClose={close}
     >
       <div className="min-w-[30rem]">
@@ -231,9 +245,21 @@ export function LaunchWindow() {
           />
         </div>
 
+        <div className="mt-1">
+          <Checkbox
+            checked={headless}
+            onChange={(v) => setPrefs({ launchHeadless: v })}
+            label="headless — no terminal window"
+            title="a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
+          />
+        </div>
+
         <div className="mt-3 flex items-center gap-2">
           <Button variant="solid" onClick={go} disabled={!typed}>
-            <Rocket size={11} /> open a {sourceLabel(chosen.source)} terminal
+            <Rocket size={11} />{" "}
+            {headless
+              ? `start a headless ${sourceLabel(chosen.source)}`
+              : `open a ${sourceLabel(chosen.source)} terminal`}
           </Button>
           <Dim className="text-2xs">
             it opens where you are watching — the daemon's machine, not necessarily this one
