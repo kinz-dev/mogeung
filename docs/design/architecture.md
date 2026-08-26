@@ -518,6 +518,19 @@ resolves on the miss path only, so the ordinary case stays a string compare,
 and it canonicalises the longest *existing* ancestor because a deleted file is
 precisely what a diff is about.
 
+`R-J62` is the same failure reached by a different road: a touch that is not in
+the repo **at all**. Agents write scratch files — a plan under `/tmp`, a note
+under `~/.claude` — and those land in `touched_files` beside the real edits.
+The filter ran whenever that list was non-empty, so a session whose only
+recorded write was a scratchpad matched nothing and reported no changes while
+its worktree held real work; one out-of-repo touch was worse than none, because
+none skips the filter entirely. Only touches that resolve to a path *inside*
+the root are candidates now — `relative_to_root` hands back an absolute path
+for one that does not, which is the test — and a session left with no
+candidates falls back to the whole worktree diff, the answer a session with no
+touches already got. A scratchpad alongside real edits changes nothing: the
+out-of-repo path is dropped, not the filter.
+
 ## Modules added 2026-07-29
 
 The daemon grew five read-side modules, each behind the existing scan or

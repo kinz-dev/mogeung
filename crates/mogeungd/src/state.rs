@@ -2250,13 +2250,26 @@ impl AppState {
 
         // Several sessions can share a working tree, so attribute the diff to
         // the files this session actually touched when we know them.
-        if !session.touched_files.is_empty() {
-            let root = session.repo_root.clone().unwrap_or_else(|| session.cwd.clone());
-            let touched: Vec<String> = session
-                .touched_files
-                .iter()
-                .map(|p| relative_to_root(&root, p))
-                .collect();
+        //
+        // Only a touch that landed **inside** the repo can attribute anything.
+        // `relative_to_root` hands back an absolute path for one that did not,
+        // and folding those into the filter left it matching nothing at all:
+        // the session was credited with an empty diff while its worktree held
+        // real work. One out-of-repo touch was therefore worse than none —
+        // none skips the filter entirely — and an agent's first write is very
+        // often a scratchpad under `/tmp` or a note under `~/.claude`, so the
+        // Changes pane went blank for the rest of the session. `R-J62`.
+        let root = session
+            .repo_root
+            .clone()
+            .unwrap_or_else(|| session.cwd.clone());
+        let touched: Vec<String> = session
+            .touched_files
+            .iter()
+            .map(|p| relative_to_root(&root, p))
+            .filter(|rel| !Path::new(rel).is_absolute())
+            .collect();
+        if !touched.is_empty() {
             change
                 .files
                 .retain(|f| touched.iter().any(|t| t == &f.path || f.path.ends_with(t.as_str())));
