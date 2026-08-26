@@ -252,8 +252,35 @@ are the boundary between polling for *evidence* and repeating *work*.
 
 The Codex pass follows the same rule one directory over (`R-J56`): its
 `threads` index is read only when the index file's mtime moved, except while
-a Codex session is marked alive — Codex liveness is a recency heuristic and
-must be free to decay to dead without the file changing.
+a Codex session is marked alive.
+
+## Codex liveness is a registry now, not a guess (2026-08-26)
+
+`R-J70`. It used to be a recency heuristic — alive meant "wrote something in
+the last ten minutes and has an unfinished turn" — and that is wrong in the
+direction that matters most. A session **waiting for you** is the most
+important row on the board and is also the one that has written nothing for
+twenty minutes, so it fell off the queue exactly when it mattered, and a
+`Done` status meant "gone" rather than "your turn".
+
+Codex `0.149` takes an advisory `flock` on
+`~/.codex/thread-writer-locks/<thread-id>.lock` for as long as a thread is
+open. The file names the thread and the lock names the process, so it is a real
+registry — the equivalent of `~/.claude/sessions/*.json`, and the thing
+`R-J30` needed for Claude Code.
+
+**The lock is read, never taken.** Testing a lock by trying to acquire it is
+the obvious implementation and is refused here: this daemon must not compete
+with an agent for a resource the agent needs (ADR-0003), and a momentary grab
+is precisely the race that would make a Codex thread fail to start. On Linux
+the holder is read out of `/proc/locks`, which touches nothing and yields the
+pid as well — so a live Codex thread can be *hosted* in an Agent pane rather
+than only pointed at. Where the kernel does not publish locks (macOS) the
+file's presence is the answer and the pid is unknown; a lock left behind by a
+crash reads as alive there, which is the stated cost of not interfering. An
+install with no lock directory at all — an older Codex — falls back to the old
+heuristic, because concluding "nothing is alive" would be a worse lie than the
+guess.
 
 ## Who runs the daemon
 

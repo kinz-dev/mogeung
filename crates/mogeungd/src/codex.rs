@@ -345,6 +345,12 @@ pub const KNOWN_IGNORED: &[&str] = &[
     // Codex's pre-edit file snapshot bookkeeping, analogous to Claude Code's
     // `file-history-snapshot` which ADR-0004 declines to read.
     "ghost_snapshot",
+    // `0.149`: a full snapshot of the environment the turn ran in — AGENTS.md
+    // digests, app instructions, the collaboration mode, a filesystem listing.
+    // Ignored on the same grounds as `ghost_snapshot`: everything in it that
+    // this product acts on (`cwd`) is already carried by `session_meta`, and
+    // the rest is a large blob re-emitted per turn.
+    "world_state",
 ];
 
 /// Top-level kinds this parser extracts data from.
@@ -367,7 +373,122 @@ pub const KNOWN_ITEMS: &[&str] = &[
     "turn_aborted",
     "exec_approval_request",
     "apply_patch_approval_request",
+    // `0.149.1` renamed the turn boundary and moved message content behind a
+    // wrapper. The old names stay: this list is what we can *read*, and a
+    // rollout written by an older Codex is still on disk and still valid.
+    // `R-J70`.
+    "task_started",
+    "task_complete",
+    "token_count",
+    "item_completed",
+    "message",
 ];
+
+/// The `item.type` values understood inside an `event_msg/item_completed`.
+///
+/// `0.149` wraps what used to be top-level items in a completion envelope, so
+/// the taxonomy gained a third level. This list keeps drift down there exactly
+/// as loud as drift in the two above it: an item type outside it surfaces as
+/// `event_msg/item_completed/<Type>` in the health panel rather than being
+/// silently dropped.
+///
+/// Deliberately short. Only what has actually been observed is listed — a tool
+/// call or a file change will announce itself the first time one happens, which
+/// is the canary doing its job rather than a gap. `R-J70`.
+pub const KNOWN_COMPLETED_ITEMS: &[&str] = &["UserMessage", "AgentMessage"];
+
+/// A Codex thread that is **running right now**, and the process running it.
+///
+/// `R-J70`. Until `0.149` there was no way to know: the index records threads,
+/// not liveness, so `alive` was a recency guess — "it wrote something in the
+/// last ten minutes" — which is wrong in the direction that matters most. A
+/// session sitting and waiting for you is the single most important row on the
+/// board, and it is also the one that has written nothing for twenty minutes.
+///
+/// Codex now takes an advisory `flock` on
+/// `~/.codex/thread-writer-locks/<thread-id>.lock` for as long as a thread is
+/// open. That is a real registry: the file names the thread, and the lock names
+/// the process.
+#[derive(Debug, Clone, Default)]
+pub struct CodexLive {
+    /// Thread id → the pid holding its writer lock, where the platform can say.
+    pub threads: HashMap<String, Option<u32>>,
+    /// False when this install has no lock directory at all — an older Codex.
+    /// Callers must then fall back rather than conclude "nothing is alive".
+    pub supported: bool,
+}
+
+/// Which threads are open, by asking the lock directory.
+///
+/// **Never acquires anything.** Testing a lock by trying to take it is the
+/// obvious implementation and is forbidden here: this daemon must not compete
+/// with an agent for a resource the agent needs (ADR-0003), and a momentary
+/// grab is exactly the race that would make a Codex thread fail to start. On
+/// Linux the holder is read out of `/proc/locks`, which touches nothing. Where
+/// that is unavailable — macOS — presence of the file is the answer and the pid
+/// is `None`; a lock left behind by a crash reads as alive there, which is the
+/// stated cost of not interfering.
+pub fn scan_live(home: &Path) -> CodexLive {
+    let dir = home.join("thread-writer-locks");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return CodexLive::default();
+    };
+    let held = locks_by_inode();
+    let mut out = CodexLive {
+        supported: true,
+        ..Default::default()
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // `.coordination.lock` sits beside the per-thread ones and names no
+        // thread.
+        let Some(id) = name.strip_suffix(".lock").filter(|s| !s.starts_with('.')) else {
+            continue;
+        };
+        match &held {
+            // Linux: the file is evidence only if something actually holds it,
+            // so a crash leaves no ghost on the board.
+            Some(by_inode) => {
+                let Ok(meta) = e.metadata() else { continue };
+                let ino = std::os::unix::fs::MetadataExt::ino(&meta);
+                if let Some(pid) = by_inode.get(&ino) {
+                    out.threads.insert(id.to_string(), Some(*pid));
+                }
+            }
+            None => {
+                out.threads.insert(id.to_string(), None);
+            }
+        }
+    }
+    out
+}
+
+/// `inode → holder pid` for every advisory lock on this machine, or `None`
+/// where the kernel does not publish them.
+fn locks_by_inode() -> Option<HashMap<u64, u32>> {
+    let text = std::fs::read_to_string("/proc/locks").ok()?;
+    let mut out = HashMap::new();
+    for line in text.lines() {
+        // `161: FLOCK  ADVISORY  WRITE 487395 fc:01:47072312 0 EOF`
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let Some(pos) = f.iter().position(|x| x.contains(':') && x.matches(':').count() == 2)
+        else {
+            continue;
+        };
+        let Some(pid) = pos.checked_sub(1).and_then(|i| f.get(i)) else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else { continue };
+        let Some(ino) = f[pos].rsplit(':').next().and_then(|i| i.parse::<u64>().ok()) else {
+            continue;
+        };
+        out.insert(ino, pid);
+    }
+    Some(out)
+}
 
 /// The outcome of reading one rollout line. Mirrors `adapter::LineOutcome` so
 /// Codex drift feeds the same health vocabulary as Claude drift.
@@ -637,6 +758,67 @@ fn extract(v: &Value, kind: &str) -> CodexLineOutcome {
                     out.tail = Some(TailEvent::AgentActivity);
                 }
                 "turn_started" => out.tail = Some(TailEvent::TurnStarted),
+                // `0.149`'s turn boundary, under new names. `R-J70`.
+                "task_started" => out.tail = Some(TailEvent::TurnStarted),
+                "task_complete" => {
+                    out.tail = Some(TailEvent::TurnComplete);
+                    // The reply itself rides on the completion event, which is
+                    // the only place it appears without the model-facing
+                    // boilerplate around it.
+                    out.text = str_at(payload, "last_agent_message")
+                        .map(|t| truncate(t, 8000).to_string());
+                    // No usage here: `0.149` moved it to its own `token_count`
+                    // event, which may arrive before or after this one.
+                    out.usage = usage_from(payload);
+                }
+                // Usage as its own event since `0.149`. `usage_from` already
+                // looks in `info.total_token_usage`, which is where it landed.
+                "token_count" => out.usage = usage_from(payload),
+                // The completion envelope `0.149` wrapped items in. The turn
+                // *and* the text are read from here rather than from
+                // `response_item/message`, because this stream carries only
+                // what actually happened: the model-facing one also replays
+                // the system prompt, the skills block and an
+                // `<environment_context>` under `role: "user"`, any of which
+                // would otherwise be mistaken for something you typed.
+                "item_completed" => {
+                    let Some(inner) = payload.get("item") else {
+                        return CodexLineOutcome::Barren {
+                            kind: format!("{kind}/{item}"),
+                        };
+                    };
+                    let Some(it) = str_at(inner, "type") else {
+                        return CodexLineOutcome::Barren {
+                            kind: format!("{kind}/{item}"),
+                        };
+                    };
+                    if !KNOWN_COMPLETED_ITEMS.contains(&it) {
+                        return CodexLineOutcome::Unknown {
+                            kind: format!("{kind}/{item}/{it}"),
+                        };
+                    }
+                    match it {
+                        "UserMessage" => {
+                            out.text = message_text(inner).map(|t| truncate(&t, 4000));
+                            out.is_user_turn = true;
+                            out.tail = Some(TailEvent::UserMessage);
+                        }
+                        "AgentMessage" => {
+                            out.text = message_text(inner).map(|t| truncate(&t, 8000));
+                            out.tail = Some(TailEvent::AgentActivity);
+                        }
+                        _ => {
+                            return CodexLineOutcome::Barren {
+                                kind: format!("{kind}/{item}/{it}"),
+                            }
+                        }
+                    }
+                }
+                // The model-facing transcript. Read as **activity only**: every
+                // line of it is duplicated by `item_completed` above, and the
+                // duplicate is the clean one. Counting a turn here as well
+                // would double every turn a session has.
+                "message" => out.tail = Some(TailEvent::AgentActivity),
                 "turn_complete" => {
                     out.tail = Some(TailEvent::TurnComplete);
                     out.usage = usage_from(payload);
@@ -1230,4 +1412,131 @@ mod tests {
         assert!(r.error.is_some());
         assert_eq!(r.counts.lines_seen(), 0);
     }
+    // ---------------------------------------------------------------------
+    // Codex 0.149 — the taxonomy rename. `R-J70`.
+    //
+    // Shapes copied from a real rollout and cut down to the fields that carry
+    // something. Written out rather than pointing at a corpus file because
+    // these are the *new* names, and a test that would have passed before the
+    // rename proves nothing.
+    // ---------------------------------------------------------------------
+
+    /// `turn_started` became `task_started`; the turn boundary must still be
+    /// found, or `derive_status` answers `Done` for a session mid-turn and the
+    /// board calls a working agent finished.
+    #[test]
+    fn the_renamed_turn_boundary_is_still_a_turn() {
+        let started = r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":1787763756}}"#;
+        assert_eq!(parsed(started).tail, Some(TailEvent::TurnStarted));
+
+        let done = r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Ready—what would you like to test?","duration_ms":2237}}"#;
+        let p = parsed(done);
+        assert_eq!(p.tail, Some(TailEvent::TurnComplete));
+        assert_eq!(
+            p.text.as_deref(),
+            Some("Ready—what would you like to test?"),
+            "the reply rides on the completion event"
+        );
+
+        assert_eq!(derive_status(&[TailEvent::TurnStarted]), CodexStatus::Working);
+        assert_eq!(
+            derive_status(&[TailEvent::TurnStarted, TailEvent::TurnComplete]),
+            CodexStatus::Done
+        );
+    }
+
+    /// Usage moved out of the turn-complete event into its own. Before this,
+    /// a Codex session reported every token as input and none as output.
+    #[test]
+    fn usage_arrives_as_its_own_event_now() {
+        let l = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":13601,"cached_input_tokens":9984,"output_tokens":13,"reasoning_output_tokens":0,"total_tokens":13614}}}}"#;
+        let u = parsed(l).usage.expect("token_count carries usage");
+        assert_eq!(u.input_tokens, 13601);
+        assert_eq!(u.output_tokens, 13);
+        assert_eq!(u.cached_input_tokens, 9984);
+    }
+
+    /// Messages are wrapped in a completion envelope. The *user* one is what
+    /// counts a turn — and it is read from here rather than from
+    /// `response_item`, which is tested below for why.
+    #[test]
+    fn a_wrapped_user_message_is_the_turn_that_counts() {
+        let l = r#"{"type":"event_msg","payload":{"type":"item_completed","thread_id":"th","turn_id":"t1","item":{"type":"UserMessage","id":"i1","content":[{"type":"text","text":"Testing"}]}}}"#;
+        let p = parsed(l);
+        assert!(p.is_user_turn, "a wrapped user message is still a turn");
+        assert_eq!(p.text.as_deref(), Some("Testing"));
+        assert_eq!(p.tail, Some(TailEvent::UserMessage));
+
+        let a = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"text","text":"Ready"}]}}}"#;
+        let p = parsed(a);
+        assert!(!p.is_user_turn, "the agent's reply is not a turn you took");
+        assert_eq!(p.text.as_deref(), Some("Ready"));
+    }
+
+    /// **The double-count this avoids.** `response_item/message` replays the
+    /// model-facing transcript, including an `<environment_context>` blob under
+    /// `role: "user"`. Counting turns there would count every turn twice and
+    /// would show a system preamble as the last thing you typed.
+    #[test]
+    fn the_model_facing_transcript_is_activity_only() {
+        let env = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/home/kinz</cwd>\n</environment_context>"}]}}"#;
+        let p = parsed(env);
+        assert!(!p.is_user_turn, "a replayed preamble is not a prompt");
+        assert_eq!(p.text, None, "and must not become `last_prompt`");
+        assert_eq!(p.tail, Some(TailEvent::AgentActivity));
+
+        let dev = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>..."}]}}"#;
+        assert!(!parsed(dev).is_user_turn);
+    }
+
+    /// The third level of the taxonomy must drift as loudly as the first two,
+    /// or a tool call becomes silence. `KNOWN_COMPLETED_ITEMS` is deliberately
+    /// short, so this is the shape most users will meet first.
+    #[test]
+    fn an_unknown_completed_item_names_all_three_levels() {
+        let l = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":"ls"}}}"#;
+        match parse_rollout_line(l) {
+            CodexLineOutcome::Unknown { kind } => {
+                assert_eq!(kind, "event_msg/item_completed/CommandExecution")
+            }
+            other => panic!("third-level drift must be flagged, got {other:?}"),
+        }
+    }
+
+    /// A live thread is the lock file that names it; `.coordination.lock` is
+    /// not a thread, and an install with no lock directory must report
+    /// `supported: false` so callers fall back instead of concluding the
+    /// machine is empty.
+    #[test]
+    fn live_threads_come_from_the_writer_locks() {
+        let home = std::env::temp_dir().join(format!("mogeung-codex-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let none = scan_live(&home);
+        assert!(!none.supported, "no lock directory means we cannot say");
+        assert!(none.threads.is_empty());
+
+        let dir = home.join("thread-writer-locks");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".coordination.lock"), "").unwrap();
+        std::fs::write(dir.join("01a03ed7-1217-7530-90b7-ddd5e7255b5d.lock"), "").unwrap();
+
+        let live = scan_live(&home);
+        assert!(live.supported, "the directory exists, so the answer is real");
+        assert!(
+            !live.threads.contains_key(".coordination"),
+            "the coordination lock names no thread"
+        );
+        // On Linux an unheld lock file is correctly *not* live; elsewhere
+        // presence is all we have. Both are asserted through the same door.
+        let held = std::fs::read_to_string("/proc/locks").is_ok();
+        assert_eq!(
+            live.threads.contains_key("01a03ed7-1217-7530-90b7-ddd5e7255b5d"),
+            !held,
+            "a lock nobody holds is a ghost where the kernel will say so"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
 }

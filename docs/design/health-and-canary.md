@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-08-25
+updated: 2026-08-26
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -131,6 +131,38 @@ whether the new type matters and adds it to `HANDLED` or `KNOWN_IGNORED`.
 Counters are in-memory and reset when the daemon restarts. Persisting them would
 make "have I seen this type before?" survive restarts, which matters more once
 the alert has been dismissed a few times — not yet built.
+
+## The Codex taxonomy moved, and the canary said so (2026-08-26)
+
+`R-J70`, and `A4`'s clearest evidence yet. Codex `0.149.1` renamed its turn
+boundary and wrapped message content in a completion envelope, so a rollout
+that mogeung had been reading fell to **two understood shapes out of eight**.
+Nothing broke loudly: the session still appeared, with `turns: 0`,
+`tokens_out: 0` and no `last_activity`, which is the failure mode this project
+most fears — a plausible answer that is wrong.
+
+| mogeung read | `0.149.1` writes |
+|---|---|
+| `turn_started` | `task_started` |
+| `turn_complete` | `task_complete` (and it carries the reply) |
+| `user_message` / `agent_message` | `item_completed` → `item.type` |
+| usage on turn-complete | its own `token_count` event |
+| — | `world_state` (ignored) |
+
+The canary named all six in `Health.codex_unknown` before anyone read a line of
+Codex source, which is what it is for. Two things came out of fixing it:
+
+**The taxonomy gained a third level.** `item_completed` wraps an `item.type`,
+so drift can now hide one layer deeper than `kind/item`. It surfaces as
+`event_msg/item_completed/<Type>`, and `KNOWN_COMPLETED_ITEMS` is deliberately
+short — only what has been observed. A tool call or a file change will announce
+itself the first time one happens. That is the canary working, not a gap.
+
+**Two streams carry the same words.** `response_item/message` replays the
+model-facing transcript — system prompt, skills block, and an
+`<environment_context>` blob under `role: "user"`. Turns and text are read from
+`item_completed` alone; reading both would count every turn twice and show a
+system preamble as the last thing you typed.
 
 ## Codex and rate limits (2026-07-29)
 

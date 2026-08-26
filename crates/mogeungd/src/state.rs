@@ -1874,6 +1874,10 @@ impl AppState {
             unknown.into_iter().collect(),
         );
 
+        // Which threads are actually open. `R-J70`: Codex holds an advisory
+        // lock per live thread, so this is a registry rather than a guess.
+        let live = crate::codex::scan_live(&self.codex_home);
+
         let now = Utc::now();
         for (t, roll) in details {
             let status = roll.as_ref().map(|r| r.status());
@@ -1881,14 +1885,28 @@ impl AppState {
                 .recency()
                 .map(|r| (now - r).num_minutes() < 10)
                 .unwrap_or(false);
-            // No pid registry exists for Codex; "alive" is recency plus an
-            // unfinished turn — a heuristic, and labelled one in the docs.
-            let alive = recent && !matches!(status, Some(CodexStatus::Done) | None);
-            let live_status = match status {
-                Some(CodexStatus::Working) => Some(mogeung_core::LiveStatus::Busy),
-                Some(CodexStatus::Waiting) => Some(mogeung_core::LiveStatus::Idle),
-                _ => None,
+            // Before `R-J70` there was no registry and "alive" was recency plus
+            // an unfinished turn — which is wrong in the direction that matters
+            // most: a session waiting for you is the most important row on the
+            // board *and* the one that has written nothing for twenty minutes,
+            // so it fell off exactly when it mattered. The writer lock answers
+            // directly. The old heuristic stays as the fallback for an install
+            // with no lock directory, where concluding "nothing is alive" would
+            // be a worse lie than the guess.
+            let held = live.threads.get(&t.id);
+            let alive = if live.supported {
+                held.is_some()
+            } else {
+                recent && !matches!(status, Some(CodexStatus::Done) | None)
             };
+            let live_status = match (alive, status) {
+                (true, Some(CodexStatus::Working)) => Some(mogeung_core::LiveStatus::Busy),
+                // Open, and not mid-turn: it is waiting for you. This is the
+                // whole point of the registry — `Done` used to mean "gone".
+                (true, _) => Some(mogeung_core::LiveStatus::Idle),
+                (false, _) => None,
+            };
+            let pid = held.copied().flatten();
 
             let existing = self.get(&t.id).await;
             let mut s = existing.unwrap_or_else(|| {
@@ -1923,6 +1941,12 @@ impl AppState {
                 s.last_event_at = u;
             }
             s.alive = alive;
+            // The lock names the process that holds it, so a live Codex thread
+            // can be *hosted* rather than only pointed at — the same thing
+            // `tmux_target` buys every other source. Kept when the platform
+            // cannot say, on the same reasoning as the Claude pass: a pid we
+            // once knew is better evidence than none. `R-J70`.
+            s.pid = pid.or(s.pid);
             if s.live_status != live_status {
                 s.status_since = Some(now);
             }
