@@ -1,7 +1,7 @@
 ---
 title: Run and debug
 status: active
-updated: 2026-08-25
+updated: 2026-08-26
 covers:
   - crates/mogeung-core/src/run.rs
   - crates/mogeungd/src/detect.rs
@@ -206,6 +206,24 @@ answers to **did the tests pass**, and `R-N7` shows this beside a claim, so
 
 **The output ring is bounded and says what it dropped.** A log that quietly
 loses its middle is worse than one that admits it.
+
+**`Ended` means the output is all here.** `R-J68`. `start` spawns three
+independent tasks — a pump per pipe, and a waiter that calls `child.wait()` and
+then `finish`. `child.wait()` returns when the *process* is gone, which says
+nothing about whether the pumps have read what it left in the pipes, so a run
+could be marked `Exited` with its last lines still in flight: a client that
+renders the log when it hears `Ended` showed a truncated one, and `dropped`
+under-reported at the same instant — which is the worse half, because the whole
+point of that counter is that the log never lies about what it lost. The waiter
+awaits both pumps before finishing. It costs nothing, since a pump ends when its
+pipe closes and the exit already closed it.
+
+This surfaced as a *flaky test* rather than a bug report: the bounded-output
+test failed about one lap in twenty, and reliably under the load of a full
+workspace run, which was enough to make `gen-status.sh` write **FAILING** at
+random. The lesson is in the shape — an intermittent failure in a test about
+concurrency is evidence about the code, not about the test — so the repeated
+test that now guards it runs the same shape twenty times.
 
 ## Secrets never travel
 

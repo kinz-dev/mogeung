@@ -210,6 +210,26 @@ this work and the checks that must pass before handing it back, and a run that
 reports a truncated log while claiming to have finished is a worse bug than
 anything else on this list.
 
+**Verified on the reinstalled binary, 2026-08-26.** Queue broadcasts
+0.69/s → 0.10/s and 1.07 → 0.15 MB/min; fork CPU 1.22% → 0.24%; disk writes
+0.27 → 0.02 MB/min; refaults 0, memory pressure 0.00. `R-J67` showed **no
+measurable difference** and is recorded as such rather than claimed as a win.
+
+**One claim in this document was wrong and is corrected in `R-J66`.** Both
+reviews cited *230 write syscalls per tick* as the per-event SQLite inserts,
+and this plan repeated it. Thread-level attribution on the running process
+shows writes are WebKit's — `ReceiveQueue` 305/s, GTK main 161/s,
+`VBlankMonitor` 50/s — against ~20/s across every tokio worker. `syscw` was
+measuring the window, never the store. The batching still helped; the number
+offered as proof of it did not belong to it.
+
+**The verification found a new one, `R-J69`.** With the queue's per-tick
+broadcast gone, `snapshot` became 94% of all wire traffic — and not from the
+reconnect loop the *Watch* section above guessed at. Every connect shipped the
+board **twice**: the daemon pushes a snapshot on connect, and the window then
+asked for a re-send it had not missed. Fixed in the client, where the
+redundancy was.
+
 **Not done, deliberately.** The snapshot projection (1.08 MB → ~160 KB) and the
 narrowed `compute_change` are both still open — the first because it changes
 the wire contract and deserves its own pass, the second because the obvious

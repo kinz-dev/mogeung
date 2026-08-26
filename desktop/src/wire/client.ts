@@ -100,9 +100,18 @@ export class DaemonClient {
     ws.onopen = () => {
       this.attempt = 0;
       this.opts.onState("open");
-      // Always first. The daemon answers with a full snapshot, which is what
-      // makes reconnect a replacement rather than a merge.
-      ws.send(JSON.stringify({ cmd: "subscribe" } satisfies ClientMsg));
+      // **No `subscribe` here.** The daemon pushes the full snapshot on
+      // connect, before this socket has said anything — that push is what
+      // makes a reconnect a replacement rather than a merge, and it happens
+      // whether or not we ask. `Subscribe` is documented as *re-send* the
+      // snapshot, so asking for one on open bought a second copy of the
+      // largest payload on the wire and nothing else: measured 2 × 1.19 MB per
+      // connect, which with `R-J65`'s queue traffic gone was 94% of all
+      // traffic. The command stays in the protocol — it is the explicit
+      // recovery path, and a third-party client may want it — but the one
+      // client that always reconnects on lag does not need to send it, because
+      // the daemon's answer to lag is "reconnect", and a reconnect is a
+      // connect. `R-J69`.
       const pending = this.queue;
       this.queue = [];
       for (const text of pending) ws.send(text);

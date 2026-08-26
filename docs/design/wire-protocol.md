@@ -18,7 +18,7 @@ available as plain REST so the daemon is curl-able without a UI.
 
 | Command | Effect |
 |---|---|
-| `Subscribe` | Re-send the full snapshot |
+| `Subscribe` | **Re-send** the full snapshot. The daemon already pushes one on connect, before the socket has said anything — so this is the explicit recovery path, not the way a client gets its first board. The window does not send it on open: doing so bought a second copy of the largest payload on the wire and nothing else (`R-J69`) |
 | `SetHunkReviewed` | Mark or unmark one hunk |
 | `ReviewAll` | Mark every hunk in the current diff |
 | `RefreshChange` | The full diff — hunks included — answered **on the asking socket only** (`R-J59`). Served from the daemon's cache unless `force` (serde-defaulted, so older clients keep their meaning) insists on git being consulted again; selection changes and summary-driven refreshes want the current answer cheaply, the pane's *recompute from disk* button wants a recompute |
