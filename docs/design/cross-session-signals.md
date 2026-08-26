@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-25
+updated: 2026-08-26
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -59,7 +59,11 @@ which is where the reconciliation lives.
 
 Recomputed **every scan**, not only when files move, because a collision also
 *ends* — one side exits, or the window lapses — and a stale collision warning is
-worse than none.
+worse than none. Cheaply, since `R-J57`: each live session's touch window is
+computed **once** per pass (it used to be recomputed per *pair*), detection
+runs over those precomputed sides rather than a clone of the whole board, and
+the paths sit in a `BTreeSet` so identical collisions compare equal between
+ticks instead of re-broadcasting in a shuffled order.
 
 ### What it cannot see
 
