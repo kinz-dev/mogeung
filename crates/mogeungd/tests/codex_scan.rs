@@ -125,3 +125,66 @@ async fn no_codex_install_reports_nothing() {
     assert!(!h.codex_present);
     assert!(h.codex_error.is_none());
 }
+
+/// **A Codex thread you have just opened is on the board.** `R-J73`.
+///
+/// Reported 2026-08-26: *"After running codexmo, I have to type a message
+/// before it appear on the ATTENTION list."* Codex writes the `threads` row on
+/// the first user turn, so between starting a session and speaking to it there
+/// was a live agent, a tmux pane hosting it, and nothing in the queue — which
+/// is the moment you are most likely to be looking for it. This is `R-J30` one
+/// CLI over, and the writer lock is what makes it answerable.
+///
+/// The lock is **held for real** rather than merely created: on Linux
+/// `codex::scan_live` reads `/proc/locks` and correctly ignores an unheld file,
+/// so a test that only touched one would pass while proving nothing.
+#[tokio::test]
+async fn a_thread_that_has_never_been_spoken_to_still_reaches_the_board() {
+    use std::os::unix::io::AsRawFd;
+
+    let (claude, codex) = homes("unspoken");
+    // An index that exists and is empty: the thread is open, and Codex has not
+    // written a row for it yet. Exactly the reported state.
+    let conn = Connection::open(codex.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(SCHEMA).unwrap();
+    drop(conn);
+
+    let id = "01a04095-6927-7be0-8953-ee38457ef7fd";
+    let dir = codex.join("thread-writer-locks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".coordination.lock"), "").unwrap();
+    let lock = std::fs::File::create(dir.join(format!("{id}.lock"))).unwrap();
+    // Held for the life of this test, the way a running `codex` holds it.
+    let rc = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(rc, 0, "the test must actually hold the lock");
+
+    let state = boot(claude, codex).await;
+
+    let sessions = state.sessions.read().await;
+    let s = sessions
+        .get(id)
+        .expect("an open thread belongs on the board before its first turn");
+    assert_eq!(s.source, SessionSource::Codex);
+    assert!(s.alive, "the lock is held, so the thread is open");
+    assert_eq!(
+        s.live_status,
+        Some(LiveStatus::Idle),
+        "open and mid-nothing is waiting for you — the reason to show it this early"
+    );
+    assert!(
+        !sessions.contains_key(".coordination"),
+        "the coordination lock names no thread"
+    );
+    drop(sessions);
+
+    // And it must not be adopted twice, nor fight with the index pass once the
+    // thread finally writes its row.
+    state.scan().await;
+    assert_eq!(
+        state.sessions.read().await.len(),
+        1,
+        "a second pass must not adopt the same thread again"
+    );
+
+    drop(lock);
+}

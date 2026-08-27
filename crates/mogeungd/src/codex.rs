@@ -466,6 +466,17 @@ pub fn scan_live(home: &Path) -> CodexLive {
     out
 }
 
+/// When a thread's writer lock was taken — which is when the thread opened.
+///
+/// The lock file is empty, so its mtime is the only thing it carries besides
+/// its name. Used for a thread adopted before it has an index row, where there
+/// is no `created_at` to read. `R-J73`.
+pub fn lock_started_at(home: &Path, id: &str) -> Option<DateTime<Utc>> {
+    let path = home.join("thread-writer-locks").join(format!("{id}.lock"));
+    let meta = std::fs::metadata(path).ok()?;
+    Some(DateTime::<Utc>::from(meta.modified().ok()?))
+}
+
 /// `inode → holder pid` for every advisory lock on this machine, or `None`
 /// where the kernel does not publish them.
 fn locks_by_inode() -> Option<HashMap<u64, u32>> {
@@ -1535,6 +1546,31 @@ mod tests {
             live.threads.contains_key("01a03ed7-1217-7530-90b7-ddd5e7255b5d"),
             !held,
             "a lock nobody holds is a ghost where the kernel will say so"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A thread adopted before it has an index row has no `created_at` to
+    /// read, so the lock's mtime stands in — it is taken when the thread
+    /// opens, and the empty file carries nothing else. `R-J73`.
+    #[test]
+    fn the_lock_says_when_the_thread_opened() {
+        let home = std::env::temp_dir().join(format!("mogeung-codex-lockat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let dir = home.join("thread-writer-locks");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(
+            lock_started_at(&home, "01a04095-6927-7be0-8953-ee38457ef7fd").is_none(),
+            "no lock, no answer — the caller falls back to now"
+        );
+
+        std::fs::write(dir.join("01a04095-6927-7be0-8953-ee38457ef7fd.lock"), "").unwrap();
+        let at = lock_started_at(&home, "01a04095-6927-7be0-8953-ee38457ef7fd")
+            .expect("a lock that exists has an mtime");
+        assert!(
+            (Utc::now() - at).num_seconds().abs() < 60,
+            "a lock just written must read as just now, got {at}"
         );
         let _ = std::fs::remove_dir_all(&home);
     }

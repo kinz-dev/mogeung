@@ -1058,6 +1058,7 @@ dependencies = [
  "clap",
  "futures-util",
  "ignore",
+ "libc",
  "mdns-sd",
  "mogeung-core",
  "rusqlite",

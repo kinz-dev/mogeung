@@ -1877,9 +1877,21 @@ impl AppState {
         // Which threads are actually open. `R-J70`: Codex holds an advisory
         // lock per live thread, so this is a registry rather than a guess.
         let live = crate::codex::scan_live(&self.codex_home);
+        // Shared with the other passes rather than forked again (`R-J64`), and
+        // only asked for when something is actually open.
+        let (panes, parents) = if live.threads.is_empty() {
+            (
+                std::sync::Arc::new(Vec::new()),
+                std::sync::Arc::new(HashMap::new()),
+            )
+        } else {
+            self.process_table(false).await
+        };
 
         let now = Utc::now();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (t, roll) in details {
+            seen.insert(t.id.clone());
             let status = roll.as_ref().map(|r| r.status());
             let recent = t
                 .recency()
@@ -1942,11 +1954,24 @@ impl AppState {
             }
             s.alive = alive;
             // The lock names the process that holds it, so a live Codex thread
-            // can be *hosted* rather than only pointed at — the same thing
-            // `tmux_target` buys every other source. Kept when the platform
-            // cannot say, on the same reasoning as the Claude pass: a pid we
-            // once knew is better evidence than none. `R-J70`.
+            // can be *hosted* rather than only pointed at. Kept when the
+            // platform cannot say, on the same reasoning as the Claude pass: a
+            // pid we once knew is better evidence than none. `R-J70`.
             s.pid = pid.or(s.pid);
+            // `R-J73`. `R-J70` stopped at the pid and left this comment
+            // claiming the session was hostable, which it was not: nothing ever
+            // walked the pid to its pane, so every Codex session — including
+            // one started by `codexmo` seconds earlier — answered *this session
+            // is not running under tmux* when you clicked it. Dropped when the
+            // thread closes: a target that points at a pane the session no
+            // longer owns is worse than none.
+            s.tmux_target = if alive {
+                s.pid
+                    .and_then(|p| tmux_target_in(p, &panes, &parents))
+                    .or(s.tmux_target.clone())
+            } else {
+                None
+            };
             if s.live_status != live_status {
                 s.status_since = Some(now);
             }
@@ -1994,6 +2019,49 @@ impl AppState {
             }
 
             self.put_or_coast(&before, s).await;
+        }
+
+        // A thread that is **open but has never been spoken to** is not in the
+        // index at all: Codex writes the `threads` row on the first user turn,
+        // so between `codexmo` and your first message there is a live agent,
+        // a tmux pane hosting it, and nothing on the board. Reported 2026-08-26:
+        // *"After running codexmo, I have to type a message before it appear on
+        // the ATTENTION list."*
+        //
+        // This is `R-J30` one CLI over — a session you have just opened is the
+        // one you are most likely to be looking for — and the writer lock is
+        // what makes it answerable: the id is the filename, the pid holds the
+        // lock, and the pane comes from the pid. `R-J73`.
+        for (id, pid) in &live.threads {
+            if seen.contains(id) {
+                continue;
+            }
+            let known = self.sessions.read().await.contains_key(id);
+            if known {
+                continue;
+            }
+            // Started when the lock was taken, which is when the thread opened.
+            let at = crate::codex::lock_started_at(&self.codex_home, id).unwrap_or(now);
+            let mut s = blank_session(id.clone(), SessionSource::Codex, at, at);
+            s.alive = true;
+            // Open and mid-nothing: it is waiting for you, which is the whole
+            // reason to show it this early.
+            s.live_status = Some(mogeung_core::LiveStatus::Idle);
+            s.status_since = Some(at);
+            s.pid = *pid;
+            s.tmux_target = pid.and_then(|p| tmux_target_in(p, &panes, &parents));
+            // The registry carries no cwd — the lock file is empty — so it comes
+            // from the process, and only where the platform will say. Absent, the
+            // row still appears and fills itself in from the index the moment the
+            // thread is spoken to; that is strictly better than staying invisible.
+            if let Some(cwd) = pid.and_then(process_cwd) {
+                s.cwd = cwd;
+                if let Some((root, base)) = self.probe_repo(&s.cwd, s.started_at).await {
+                    s.repo_root = Some(root);
+                    s.base_sha = base;
+                }
+            }
+            self.put(s).await;
         }
     }
 
@@ -4698,6 +4766,18 @@ pub fn tmux_panes() -> Vec<(u32, String)> {
 /// started by hand. It is not an error and must not be reported as one: it is
 /// the difference between a session mogeung can host and one it can only point
 /// you at.
+/// A process's working directory, where the platform will say. `R-J73`.
+///
+/// Linux publishes it as a symlink and this is a readlink. macOS does not, and
+/// the honest answer there is `None`: the alternative is forking `lsof` per
+/// adoption, and the only caller can do without — a Codex session adopted from
+/// its lock fills its cwd in from the index the moment it is spoken to.
+fn process_cwd(pid: u32) -> Option<String> {
+    let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    let s = path.to_string_lossy().into_owned();
+    (!s.is_empty()).then_some(s)
+}
+
 pub fn tmux_target_in(
     pid: u32,
     panes: &[(u32, String)],

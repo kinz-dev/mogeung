@@ -33,3 +33,7 @@ futures-util = "0.3"
 # Encoder side of zstd, only to build `.jsonl.zst` fixtures in tests; the
 # daemon itself decodes with the pure-Rust `ruzstd`.
 zstd = "0.13"
+# Only to *hold* an advisory lock in a test, so the Codex live registry can be
+# exercised the way the kernel actually sees it: on Linux an unheld lock file is
+# correctly not a live thread, so a test that merely creates one proves nothing.
+libc = "0.2"

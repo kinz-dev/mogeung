@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-26
+updated: 2026-08-27
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -268,6 +268,15 @@ Codex `0.149` takes an advisory `flock` on
 open. The file names the thread and the lock names the process, so it is a real
 registry — the equivalent of `~/.claude/sessions/*.json`, and the thing
 `R-J30` needed for Claude Code.
+
+Two things follow from the registry, and `R-J73` had to add both after
+`R-J70` shipped without them. A thread with **no index row at all** — Codex
+writes one on the first user turn — is adopted from its lock alone, so a
+session you have just started is on the board before you speak to it rather
+than after; its start time is the lock's mtime and its cwd comes from the
+process where the platform will say. And the pid is walked to its **pane**, so
+the session can actually be hosted: `R-J70` set the pid and said it was
+hostable, which was true of the pid and not of the code.
 
 **The lock is read, never taken.** Testing a lock by trying to acquire it is
 the obvious implementation and is refused here: this daemon must not compete
