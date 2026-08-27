@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Start `codex` inside a tmux session that mogeung can host in a pane.
+#
+#   codexmo                 start a NEW session for this directory
+#   codexmo -d              same, but headless: don't attach this terminal.
+#                           mogeung's Terminal pane becomes the session's only
+#                           head; the session name is printed for scripting.
+#   codexmo -- -m gpt-5.6   anything after the flags is passed through to codex
+#
+# This is `yolomo` for Codex, and it is a deliberate sibling rather than a flag
+# on that script. ADR-0029 took the same position one directory over: with three
+# agent CLIs, visible duplication is cheaper than an abstraction that has to be
+# held in your head to know what runs. **They must move together.** A fix to the
+# tmux handling below belongs in `yolomo` and `qwenmo` too, and vice versa.
+#
+# Every run starts a fresh agent: two runs in one directory are two sessions
+# (mogeung-codex-api, mogeung-codex-api-2, …), not two clients of one agent. To
+# re-attach to a session you detached from (or started with -d), use tmux:
+#
+#   tmux attach -t mogeung-codex-<dir>
+#
+# The name carries `codex` so a Claude, a Qwen and a Codex session in the same
+# directory are tellable apart in `tmux ls`. Nothing in mogeung parses it —
+# panes are matched by process ancestry, not by name — so it is for you.
+#
+# Why tmux at all: a pty has exactly one master. A `codex` started in a bare
+# terminal is owned by that terminal and nothing else can ever attach to it,
+# which is why mogeung can only *point at* such a session. tmux owns the pty
+# instead, and is built for several clients at once, so the same live session
+# can be in a mogeung pane and in your terminal simultaneously. See ADR-0010.
+#
+# ---------------------------------------------------------------------------
+# Why this one is not `--dangerously-bypass-approvals-and-sandbox`
+# ---------------------------------------------------------------------------
+# That flag is the literal twin of `claude --dangerously-skip-permissions`, and
+# it is deliberately not the default here, because it does one thing more than
+# its siblings do: it turns off a **sandbox**. Neither `claude` nor `qwen` has
+# one to give up, so making it the default would take a step beyond what
+# `yolomo` and `qwenmo` take — silently, on your behalf.
+#
+# `--ask-for-approval never` buys the property mogeung actually needs. An agent
+# blocked on an approval prompt it never wrote to disk is a session the board
+# reads as *working* while it waits for you (feature 0036, ADR-0029). Under
+# `never` there are no prompts at all: a command the sandbox refuses fails, and
+# the failure goes straight back to the model, which keeps working. Nothing
+# waits invisibly.
+#
+# `--sandbox workspace-write` is what an interactive `codex` already gives you,
+# so this is your usual session minus the prompts, not a weaker one. If you do
+# want the full bypass, ask for it and it wins — the flags below are defaults
+# you pass through:
+#
+#   codexmo -- --dangerously-bypass-approvals-and-sandbox
+#
+# Nothing here traps the session. Detach and it keeps running; attach from any
+# terminal with `tmux attach -t <name>`; kill mogeung and nothing happens to it.
+#
+# mogeung never runs this for you. You run it; mogeung notices. ADR-0003.
+#
+# bash 3.2, which is what macOS ships.
+
+set -uo pipefail
+
+detach=0
+if [ "${1:-}" = "-d" ] || [ "${1:-}" = "--detach" ]; then
+  detach=1
+  shift
+fi
+# Allow `codexmo -- <codex args>` so a leading `-m`/`-p`/`-c` is not mistaken
+# for ours.
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+
+# Codex installs a symlink in ~/.local/bin pointing into a versioned standalone
+# release, and ~/.local/bin is not on every shell's PATH — `command -v codex`
+# fails in a login shell that never sourced a profile. `yolomo` never had to
+# think about this because `claude` puts itself on PATH; `qwenmo` did, for the
+# same reason as here. Resolving it now beats a "command not found" from inside
+# a detached tmux session, where nobody sees the error.
+#
+# `packages/standalone/current` is listed after the symlink, not instead of it:
+# it is the same binary by a less stable name, and it is only reached when the
+# symlink is missing.
+codex_bin=""
+if command -v codex >/dev/null 2>&1; then
+  codex_bin="codex"
+else
+  for candidate in \
+    "$HOME/.local/bin/codex" \
+    "$HOME/.codex/packages/standalone/current/bin/codex" \
+    "$HOME/.codex/bin/codex" \
+    "/usr/local/bin/codex" \
+    "/opt/homebrew/bin/codex"; do
+    if [ -x "$candidate" ]; then
+      codex_bin="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$codex_bin" ]; then
+  echo "codexmo: cannot find the codex binary." >&2
+  echo "         Looked on PATH, then in ~/.local/bin," >&2
+  echo "         ~/.codex/packages/standalone/current/bin, ~/.codex/bin," >&2
+  echo "         /usr/local/bin and /opt/homebrew/bin." >&2
+  exit 1
+fi
+
+# Already inside tmux. Nesting gains nothing and would make the pane mapping
+# ambiguous, so just run codex here — unless -d, where no attach happens and so
+# nothing nests: creating a detached session from inside tmux is fine.
+if [ "$detach" -eq 0 ] && [ -n "${TMUX:-}" ]; then
+  exec "$codex_bin" --ask-for-approval never --sandbox workspace-write ${1+"$@"}
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  if [ "$detach" -eq 1 ]; then
+    # A plain fallback would run codex in *this* terminal — the opposite of
+    # headless — so refuse loudly instead of surprising the caller.
+    echo "codexmo: -d needs tmux, and tmux is not installed." >&2
+    exit 1
+  fi
+  echo "codexmo: tmux is not installed — falling back to a plain session." >&2
+  echo "         mogeung will be able to see it but not host it." >&2
+  exec "$codex_bin" --ask-for-approval never --sandbox workspace-write ${1+"$@"}
+fi
+
+dir=$(pwd)
+# tmux parses ':' and '.' as target separators, so a session named after a
+# directory containing them would be unaddressable. Everything outside a safe
+# set becomes a dash rather than being dropped, so two different directories
+# cannot collapse onto one name.
+safe=$(basename "$dir" | sed 's/[^A-Za-z0-9_-]/-/g')
+base="mogeung-codex-${safe}"
+
+# Each run gets its own session — running codexmo twice in one directory means
+# two agents working in parallel, not a second window onto the first one
+# (which is what silently happened before, and looks exactly like "my second
+# agent never started"). First free suffix wins, so names stay predictable.
+#
+# `=` is tmux's exact-match prefix. Without it `has-session -t foo` also
+# matches `foobar`, and the count would include the wrong project's sessions.
+name="$base"
+n=2
+while tmux has-session -t "=${name}" 2>/dev/null; do
+  name="${base}-${n}"
+  n=$((n + 1))
+done
+
+tmux new-session -d -s "$name" -c "$dir" \
+  "$codex_bin" --ask-for-approval never --sandbox workspace-write ${1+"$@"} || {
+    echo "codexmo: could not create the tmux session" >&2
+    exit 1
+  }
+
+# Size to whichever client is being used, rather than to the smallest one.
+# The default is `smallest`, which would let a narrow mogeung pane shrink a
+# full-screen terminal attached to the same session — silent, and baffling
+# when it happens to you.
+# `-w` and the trailing `:` are both load-bearing. `window-size` is a *window*
+# option, so without `-w` tmux 3.6 answers "no such window: =mogeung-…" and the
+# option is never set — silently, on stderr, after the session has already
+# started. Both siblings carried that bug at some point; see `qwenmo`.
+tmux set-option -w -t "=${name}:" window-size latest >/dev/null
+
+if [ "$detach" -eq 1 ]; then
+  # The name on stdout so scripts can capture it; the human note on stderr.
+  echo "$name"
+  echo "codexmo: started headless — mogeung will pick it up on its next scan." >&2
+  echo "         attach a terminal any time with: tmux attach -t ${name}" >&2
+  exit 0
+fi
+
+exec tmux attach-session -t "=${name}"

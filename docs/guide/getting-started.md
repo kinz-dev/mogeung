@@ -46,7 +46,7 @@ script does the lot:
 ./scripts/install.sh
 ```
 
-It builds both halves, puts `mogeungd`, `yolomo` and `qwenmo` in
+It builds both halves, puts `mogeungd`, `yolomo`, `qwenmo` and `codexmo` in
 `~/.local/bin`, and
 installs the window's `.deb` with `dpkg -i`, asking for `sudo` at that step and
 no other. `./scripts/install.sh --uninstall` takes it all back off. See
@@ -64,18 +64,34 @@ has exactly one master, and that terminal owns it, so mogeung's Agent pane can
 only point you at it. Start it under tmux instead and the same live session can
 be in your terminal and in a mogeung pane at once ([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)).
 
-That is all `yolomo` and `qwenmo` do:
+That is all `yolomo`, `qwenmo` and `codexmo` do:
 
 ```sh
 yolomo          # claude, under tmux
 qwenmo          # qwen, under tmux
-qwenmo -d       # ...headless: mogeung's pane becomes its only terminal
+codexmo         # codex, under tmux
+codexmo -d      # ...headless: mogeung's pane becomes its only terminal
 ```
 
-Run either in the directory you want the agent working in. Plain `claude` or
-`qwen` still works and is still watched — you just get a pane that points
+Run one in the directory you want the agent working in. Plain `claude`, `qwen`
+or `codex` still works and is still watched — you just get a pane that points
 rather than one that attaches, which is the usual reason an agent shows up
 correctly and the Terminal pane stays empty.
+
+The three are siblings on purpose rather than one script with a flag
+([ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)): they differ in the
+binary and in how each CLI is told to stop asking, and that is easier to read
+than to abstract. Each skips approval prompts, because an agent blocked on a
+prompt it never wrote to disk reads as *working* while it waits for you.
+`codexmo` is the one that stops short of its CLI's most dangerous flag: it uses
+`--ask-for-approval never --sandbox workspace-write` rather than
+`--dangerously-bypass-approvals-and-sandbox`, because that flag also turns off a
+**sandbox**, which neither of the other two CLIs has to give up. You get your
+usual Codex session minus the prompts. Ask for the full bypass and it wins:
+
+```sh
+codexmo -- --dangerously-bypass-approvals-and-sandbox
+```
 
 mogeung never runs these for you ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
 You start the agent; mogeung notices.

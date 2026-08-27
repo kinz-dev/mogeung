@@ -16,9 +16,9 @@
 #      does nothing when clicked, next to the real one — so it is cleared
 #      first, before anything can add a working entry beside it.
 #   2. **The daemon and the launchers** into $PREFIX (default ~/.local/bin, no
-#      sudo). `mogeungd` is what watches; `yolomo` starts claude and `qwenmo`
-#      starts qwen, each under tmux so mogeung can host it in a pane rather
-#      than only point at it (ADR-0010).
+#      sudo). `mogeungd` is what watches; `yolomo` starts claude, `qwenmo`
+#      starts qwen and `codexmo` starts codex, each under tmux so mogeung can
+#      host it in a pane rather than only point at it (ADR-0010).
 #   3. **The window**, as a `.deb` installed with `dpkg -i`. That is the whole
 #      reason this script grew: the Tauri bundler already produces a package
 #      that carries the icon and the desktop entry properly, and the last step
@@ -54,7 +54,7 @@ UNINSTALL=0
 BUNDLES="deb"
 
 # The complete list of what this script installs into $PREFIX.
-INSTALLABLES="mogeungd yolomo qwenmo"
+INSTALLABLES="mogeungd yolomo qwenmo codexmo"
 
 # What --uninstall removes: what it installs, plus the retired window it used
 # to. Left in the sweep deliberately — a machine that ran the old script has a
@@ -186,6 +186,7 @@ mkdir -p "$PREFIX" || exit 1
 install -m 755 target/release/mogeungd "$PREFIX/mogeungd" || exit 1
 install -m 755 scripts/yolomo          "$PREFIX/yolomo"   || exit 1
 install -m 755 scripts/qwenmo          "$PREFIX/qwenmo"   || exit 1
+install -m 755 scripts/codexmo         "$PREFIX/codexmo"  || exit 1
 
 for name in $INSTALLABLES; do
     echo "▸ installed $PREFIX/$name"
