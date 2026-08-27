@@ -22,9 +22,17 @@
  * approve-everything flag differs per CLI and the warning has to follow it, or
  * it becomes a sentence about a flag that is not being passed.
  *
- * **Codex is absent rather than disabled**: mogeung has no recipe for starting
- * it, and a control you can see but not press invites the question *why not*,
- * every time. The daemon refuses it in words if a client asks anyway.
+ * **All three CLIs since `R-J72`.** Codex used to be absent rather than
+ * disabled — there was no recipe for starting it, and a control you can see but
+ * not press invites the question *why not*, every time. `codexmo` wrote the
+ * recipe down, so the daemon has an answer and the choice belongs here.
+ *
+ * Codex's yolo line is the one that is **not** its CLI's most dangerous flag.
+ * `--dangerously-bypass-approvals-and-sandbox` is the exact analogue of the
+ * other two, and it does one thing more than either: it turns off a
+ * **sandbox**, which neither `claude` nor `qwen` has to give up. Taking that
+ * step because a click said yolo is not a choice this window makes for you.
+ * What it starts is your usual Codex session minus the prompts.
  *
  * **Two lists since `R-J45`**, asked for 2026-08-24: *"I seldom need to open a
  * new claude session from a terminal"*. That is the sentence that changes this
@@ -57,15 +65,18 @@ import { sourceLabel, type SessionSource } from "@/wire/types";
 
 /**
  * The CLIs this window can start, and the flag each one's yolo mode is spelled
- * with. Codex is deliberately not here — see the header note.
+ * with.
  *
  * The flag is quoted rather than described because it is the thing you would
  * search for, and because a warning that paraphrases the danger is a warning
- * you can read without noticing.
+ * you can read without noticing. It must stay the truth: these strings are
+ * what `agent_command` actually runs, and a dialog quoting a flag the daemon
+ * does not pass is worse than one saying nothing.
  */
 const LAUNCHABLE: readonly { source: SessionSource; yolo: string }[] = [
   { source: "claude_code", yolo: "--dangerously-skip-permissions" },
   { source: "qwen_code", yolo: "--approval-mode yolo" },
+  { source: "codex", yolo: "--ask-for-approval never --sandbox workspace-write" },
 ];
 
 export function LaunchWindow() {

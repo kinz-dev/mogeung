@@ -3850,11 +3850,61 @@ fn agent_command(source: SessionSource) -> Result<Vec<String>> {
             "--approval-mode".to_string(),
             "yolo".to_string(),
         ]),
-        SessionSource::Codex => Err(anyhow!(
-            "mogeung has no recipe for starting codex — start it yourself and it will \
-             appear in the queue like any other session"
-        )),
+        // `R-J72`. Codex was refused here until `codexmo` gave it a recipe:
+        // there was no answer to "what does mogeung run", and starting a
+        // *different* agent quietly would have been the worse failure.
+        //
+        // **Not the literal twin of the other two.** Codex's own
+        // `--dangerously-bypass-approvals-and-sandbox` is the exact analogue of
+        // `--dangerously-skip-permissions`, and it does one thing more than
+        // either sibling does: it turns off a **sandbox**, which neither
+        // `claude` nor `qwen` has to give up. Taking that step silently,
+        // because a click said "yolo", is not a choice this window gets to make
+        // for you. `never` buys what the board actually needs — no agent
+        // blocked on an approval prompt it never wrote to disk, reading as
+        // *working* while it waits for you — and `workspace-write` is the
+        // sandbox an interactive `codex` already gives you. Same reasoning,
+        // same flags, as `scripts/codexmo`; the two must move together.
+        SessionSource::Codex => Ok(vec![
+            codex_binary(),
+            "--ask-for-approval".to_string(),
+            "never".to_string(),
+            "--sandbox".to_string(),
+            "workspace-write".to_string(),
+        ]),
     }
+}
+
+/// Where `codex` actually is, as an absolute path — the same problem
+/// [`qwen_binary`] solves, for the same reason, with one wrinkle of its own.
+///
+/// Codex installs `~/.local/bin/codex` as a **symlink into a versioned
+/// standalone release**, so the stable name is the symlink and the real file
+/// moves with every update. `packages/standalone/current` is listed after it,
+/// not instead of it: same binary, less stable name, reached only when the
+/// symlink is missing.
+fn codex_binary() -> String {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join("codex");
+            if cand.is_file() {
+                return cand.to_string_lossy().into_owned();
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for cand in [
+        format!("{home}/.local/bin/codex"),
+        format!("{home}/.codex/packages/standalone/current/bin/codex"),
+        format!("{home}/.codex/bin/codex"),
+        "/usr/local/bin/codex".to_string(),
+        "/opt/homebrew/bin/codex".to_string(),
+    ] {
+        if Path::new(&cand).is_file() {
+            return cand;
+        }
+    }
+    "codex".to_string()
 }
 
 /// What `yolomo` adds, and the whole of what "yolo mode" means here:
@@ -5003,12 +5053,12 @@ mod terminal_tests {
 
     /// Which CLI a launch starts is the caller's choice. `R-J51`.
     ///
-    /// Three things, and the third is the one that would go wrong quietly.
-    /// Qwen gets `qwenmo`'s flag rather than Claude's — the two CLIs do not
-    /// share a spelling for *stop asking* — its tmux session carries the CLI in
-    /// its name so two agents in one directory are tellable apart in `tmux ls`,
-    /// and **Codex is refused**: there is no recipe, and starting a different
-    /// agent than the one asked for is the worst answer available.
+    /// Each CLI gets its own spelling of *stop asking* — they do not share one
+    /// — and its own tmux name, so two agents in one directory are tellable
+    /// apart in `tmux ls`. Codex was refused here until `R-J72`; it now has a
+    /// recipe, and the test that pinned the refusal is replaced by one that
+    /// pins **which** recipe, because the wrong flags are the way this would
+    /// go wrong quietly.
     #[test]
     fn a_launch_starts_the_cli_you_asked_for() {
         let qwen = agent_command(SessionSource::QwenCode).expect("qwen launches");
@@ -5031,8 +5081,31 @@ mod terminal_tests {
         let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
         assert_eq!(name, "mogeung-api-0729-101500");
 
-        let refused = agent_command(SessionSource::Codex).expect_err("codex has no recipe");
-        assert!(refused.to_string().contains("codex"), "{refused}");
+        // Codex, and the flags it must *not* have. `R-J72`.
+        let codex = agent_command(SessionSource::Codex).expect("codex launches");
+        assert!(codex[0].ends_with("codex"), "{}", codex[0]);
+        assert_eq!(
+            &codex[1..],
+            &[
+                "--ask-for-approval".to_string(),
+                "never".to_string(),
+                "--sandbox".to_string(),
+                "workspace-write".to_string(),
+            ]
+        );
+        assert!(
+            !codex.iter().any(|a| a.contains("dangerously")),
+            "the sandbox is not something a click gets to turn off: {codex:?}"
+        );
+        assert!(
+            !codex.contains(&SKIP_PERMISSIONS.to_string()),
+            "that flag is Claude's, and codex would refuse it"
+        );
+
+        let cmd = in_terminal_command("/home/me/api", true, "0729-101500", SessionSource::Codex, &codex);
+        let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
+        assert_eq!(name, "mogeung-codex-api-0729-101500");
+        assert_eq!(&cmd[cmd.len() - 5..], &codex[..]);
     }
 
     /// A headless launch is the attached one minus the window. `R-J61`.

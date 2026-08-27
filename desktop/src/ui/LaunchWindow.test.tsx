@@ -127,10 +127,25 @@ describe("choosing which CLI to start", () => {
     expect(screen.queryByText("--dangerously-skip-permissions")).toBeNull();
   });
 
-  /** mogeung has no recipe for starting it; a dead control invites "why not". */
-  it("does not offer Codex at all", () => {
+  /**
+   * Codex is offered since `R-J72` — and started with flags that are
+   * deliberately **not** its CLI's most dangerous ones.
+   *
+   * `--dangerously-bypass-approvals-and-sandbox` is the exact analogue of the
+   * other two rows and it also turns off a sandbox, which neither sibling CLI
+   * has to give up. This asserts the quoted line, because the quote is a
+   * promise about what the daemon runs: `agent_command` passes exactly these
+   * flags, and the two are only kept honest by both being pinned.
+   */
+  it("offers Codex, and quotes flags that keep its sandbox", () => {
     open();
-    expect(screen.queryByTitle(/^start codex/)).toBeNull();
+    fireEvent.click(screen.getByTitle(/^start codex/));
+
+    expect(
+      screen.getByText("--ask-for-approval never --sandbox workspace-write"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/dangerously-bypass/)).toBeNull();
+    expect(screen.queryByText("--dangerously-skip-permissions")).toBeNull();
   });
 });
 
