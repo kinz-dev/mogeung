@@ -146,6 +146,7 @@ impl HealthTracker {
         threads: u32,
         error: Option<String>,
         unknown: Vec<(String, u64)>,
+        trusted_dirs: Vec<String>,
     ) {
         self.agents.insert(
             source.to_string(),
@@ -155,6 +156,7 @@ impl HealthTracker {
                 threads,
                 error,
                 unknown,
+                trusted_dirs,
             },
         );
     }

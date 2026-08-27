@@ -1872,6 +1872,7 @@ impl AppState {
             details.len() as u32,
             index_error,
             unknown.into_iter().collect(),
+            crate::codex::trusted_dirs(&self.codex_home),
         );
 
         // Which threads are actually open. `R-J70`: Codex holds an advisory
@@ -2120,6 +2121,8 @@ impl AppState {
             threads.len() as u32,
             None,
             unknown.into_iter().collect(),
+            // Qwen has no per-directory trust to report.
+            Vec::new(),
         );
 
         let live_by_id: HashMap<String, &crate::qwen::QwenLiveEntry> =
@@ -3593,6 +3596,33 @@ impl AppState {
         };
 
         if headless {
+            // **A headless launch must not create a session nobody can see.**
+            // `R-J74`. Codex asks "do you trust this directory?" the first time
+            // it works in one, and opens no thread until you answer — so with
+            // no terminal window the prompt has nowhere to appear, and the
+            // session is invisible to you *and* to this daemon, which reads
+            // Codex's own bookkeeping and finds none. Reported 2026-08-26:
+            // *"I can see the process in ps command. But that doesn't appear in
+            // the mogeung."*
+            //
+            // Refused in words rather than started, on `R-J61`'s own reasoning
+            // for the missing-tmux case: a launch that cannot do what was asked
+            // should say so, not do something else quietly. The trust question
+            // is deliberately left for you to answer — `-c projects.…` would
+            // settle it here and that is not a decision a *start* button gets
+            // to make.
+            if source == SessionSource::Codex {
+                let trusted = crate::codex::trusted_dirs(&self.codex_home);
+                let dir = target.to_string_lossy().into_owned();
+                if !trusted.iter().any(|t| t == &dir) {
+                    return Err(anyhow!(
+                        "codex has not been trusted in {dir} — it will stop on a \
+                         prompt that a headless session has no window to show. \
+                         Start it with a terminal once, answer the question, and \
+                         headless works here from then on"
+                    ));
+                }
+            }
             return launch_headless(&target, source, &agent);
         }
 

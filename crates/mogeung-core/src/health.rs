@@ -206,6 +206,14 @@ pub struct AgentHealth {
     /// Line kinds this CLI's parser did not recognise — its canary, same
     /// philosophy as `unknown_types`. Replaced wholesale each scan.
     pub unknown: Vec<(String, u64)>,
+    /// Directories this CLI has been granted, where it has such a notion.
+    /// Codex asks per directory and records the answer; a launch into one that
+    /// is missing here stops on a prompt, which is invisible when the launch
+    /// was headless. Empty for a CLI with no such concept, and
+    /// `#[serde(default)]` so a client built before this parses unchanged.
+    /// `R-J74`.
+    #[serde(default)]
+    pub trusted_dirs: Vec<String>,
 }
 
 impl Health {

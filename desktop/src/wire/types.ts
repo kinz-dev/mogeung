@@ -334,6 +334,14 @@ export interface AgentHealth {
   threads: number;
   error: string | null;
   unknown: [string, number][];
+  /**
+   * Directories this CLI has been granted, where it has such a notion. Codex
+   * asks per directory and records the answer; a launch into one that is not
+   * here stops on a prompt, which a headless session has no window to show.
+   * Absent on a daemon built before `R-J74`. Matching is by **exact path** —
+   * that is how Codex matches.
+   */
+  trusted_dirs?: string[];
 }
 
 // ---------------------------------------------------------------------------

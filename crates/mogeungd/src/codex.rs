@@ -466,6 +466,49 @@ pub fn scan_live(home: &Path) -> CodexLive {
     out
 }
 
+/// The directories Codex has been told it may work in. `R-J74`.
+///
+/// Codex asks *"do you trust the contents of this directory?"* on first use of
+/// each one, and records the answer in `~/.codex/config.toml`:
+///
+/// ```toml
+/// [projects."/home/you/repo"]
+/// trust_level = "trusted"
+/// ```
+///
+/// mogeung reads this and never writes it. The question is a security decision
+/// and it is yours; a launcher that answered it for you — `-c projects.…` would
+/// — is a launcher that quietly widened what an agent may touch because you
+/// clicked *start*. What this buys instead is the ability to **say so before**
+/// you start a headless session into a directory Codex will stop in, where the
+/// prompt has no window to appear in and the session is invisible to everyone,
+/// including this daemon.
+///
+/// Matching is by exact path, because that is how Codex matches: trusting
+/// `/home/you` does **not** trust `/home/you/repo`, which is how the reported
+/// case arose. Unreadable or malformed config is an empty list — the caller
+/// then warns about nothing, which is the right way to be wrong here.
+pub fn trusted_dirs(home: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
+        return Vec::new();
+    };
+    let Ok(v) = text.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    let Some(projects) = v.get("projects").and_then(|p| p.as_table()) else {
+        return Vec::new();
+    };
+    projects
+        .iter()
+        .filter(|(_, cfg)| {
+            cfg.get("trust_level")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t == "trusted")
+        })
+        .map(|(dir, _)| dir.clone())
+        .collect()
+}
+
 /// When a thread's writer lock was taken — which is when the thread opened.
 ///
 /// The lock file is empty, so its mtime is the only thing it carries besides

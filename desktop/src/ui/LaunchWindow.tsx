@@ -92,6 +92,7 @@ export function LaunchWindow() {
   // never stop paying. `setPrefs` writes through to the file.
   const source = useStore((s) => s.prefs.launchSource);
   const headless = useStore((s) => s.prefs.launchHeadless);
+  const health = useStore((s) => s.health);
   const setPrefs = useStore((s) => s.setPrefs);
   const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
 
@@ -106,6 +107,14 @@ export function LaunchWindow() {
     return [...seen].filter((r) => !isFavourite(favourites, r)).sort();
   }, [sessions, favourites]);
 
+  const untrusted = useMemo(() => {
+    const typedDir = normaliseDir(dir);
+    if (source !== "codex" || !typedDir) return false;
+    const dirs = health?.agents?.find((a) => a.source === "codex")?.trusted_dirs;
+    if (!dirs) return false;
+    return !dirs.includes(typedDir);
+  }, [source, dir, health]);
+
   if (!open) return null;
   const close = () => useStore.setState({ showLaunch: false });
 
@@ -115,9 +124,33 @@ export function LaunchWindow() {
   const typed = normaliseDir(dir);
   const typedIsKept = isFavourite(favourites, typed);
 
+
+  /**
+   * Would a headless launch here create a session nobody can see? `R-J74`.
+   *
+   * Codex asks *"do you trust this directory?"* the first time it works in one
+   * and opens no thread until you answer — so with no terminal window the
+   * prompt has nowhere to appear, and the session is invisible to you and to
+   * the daemon alike, which reads Codex's own bookkeeping and finds none.
+   *
+   * Exact-path, because that is how Codex matches: trusting `/home/you` does
+   * not trust `/home/you/repo`, which is how this was reported. A daemon that
+   * does not send the list at all (older, or a CLI with no such notion) warns
+   * about nothing rather than guessing — the daemon refuses as the backstop.
+   */
+
   const go = () => {
     if (!typed) return;
-    send({ cmd: "launch_terminal", dir: typed, worktree, source: chosen.source, headless });
+    send({
+      cmd: "launch_terminal",
+      dir: typed,
+      worktree,
+      source: chosen.source,
+      // Never headless into a directory the CLI has not been granted: the
+      // preference is remembered, so it must not silently apply where it
+      // cannot work. `R-J74`.
+      headless: headless && !untrusted,
+    });
     close();
   };
 
@@ -258,17 +291,33 @@ export function LaunchWindow() {
 
         <div className="mt-1">
           <Checkbox
-            checked={headless}
+            checked={headless && !untrusted}
+            disabled={untrusted}
             onChange={(v) => setPrefs({ launchHeadless: v })}
             label="headless — no terminal window"
-            title="a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
+            title={
+              untrusted
+                ? "not available here yet: codex will stop on a trust prompt, and a headless session has no window to show it in"
+                : "a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
+            }
           />
         </div>
+
+        {/* Said before the click, not after. The daemon refuses this launch
+            too, but a refusal you read once the session already failed to
+            appear is a worse version of the same sentence. */}
+        {untrusted && (
+          <div className="mt-1 text-2xs text-[var(--amber)]">
+            codex has not been trusted in this directory. It asks once, and a
+            headless session has no window to ask in — so start it with a
+            terminal this time. Headless works here from then on.
+          </div>
+        )}
 
         <div className="mt-3 flex items-center gap-2">
           <Button variant="solid" onClick={go} disabled={!typed}>
             <Rocket size={11} />{" "}
-            {headless
+            {headless && !untrusted
               ? `start a headless ${sourceLabel(chosen.source)}`
               : `open a ${sourceLabel(chosen.source)} terminal`}
           </Button>

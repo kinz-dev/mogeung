@@ -263,24 +263,31 @@ export function Checkbox({
   onChange,
   label,
   title,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
   title?: string;
+  /** Shown, dimmed and inert. A control that is simply gone invites "where did
+   *  it go"; one that is visible with a reason beside it answers that. */
+  disabled?: boolean;
 }) {
   return (
     <label
       title={title}
       className={cn(
-        "inline-flex cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 text-xs select-none",
+        "inline-flex items-center gap-1.5 rounded-sm px-1 py-0.5 text-xs select-none",
         motion,
-        "hover:bg-[var(--state-hover)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--ring)] has-[:focus-visible]:-outline-offset-2",
+        disabled
+          ? "cursor-not-allowed opacity-50"
+          : "cursor-pointer hover:bg-[var(--state-hover)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--ring)] has-[:focus-visible]:-outline-offset-2",
       )}
     >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         className="h-3 w-3 accent-[var(--blue)] outline-none"
       />

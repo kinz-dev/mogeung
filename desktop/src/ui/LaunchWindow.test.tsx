@@ -192,3 +192,74 @@ describe("starting headless", () => {
     expect(screen.getByText(/start a headless claude/)).toBeInTheDocument();
   });
 });
+
+/**
+ * A headless launch must not create a session nobody can see. `R-J74`.
+ *
+ * Reported 2026-08-26: *"I can see the process in ps command. But that doesn't
+ * appear in the mogeung."* Codex asks whether it may work in a directory the
+ * first time it sees one, and opens no thread until you answer — so headless
+ * gave the prompt no window to appear in, and the session was invisible to the
+ * user and to the daemon alike, which reads Codex's own bookkeeping.
+ *
+ * The daemon refuses this too. These pin the half you read *before* clicking,
+ * because a refusal that arrives after the session failed to appear is a worse
+ * version of the same sentence.
+ */
+describe("headless into a directory codex has not been trusted in", () => {
+  /** `open()` plus the daemon's answer about which directories codex may use. */
+  function openWithTrust(trusted: string[] | undefined) {
+    useStore.setState({
+      prefs: { ...defaultPrefs(), launchHeadless: true },
+      showLaunch: true,
+      sent: [],
+      health: {
+        agents: [
+          { source: "codex", present: true, threads: 0, error: null, unknown: [], trusted_dirs: trusted },
+        ],
+      },
+    } as never);
+    render(<LaunchWindow />);
+  }
+
+  const chooseCodexIn = (dir: string) => {
+    fireEvent.click(screen.getByTitle(/^start codex/));
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: dir } });
+  };
+
+  it("says so, and stops promising headless, before you click", () => {
+    openWithTrust(["/home/kinz"]);
+    chooseCodexIn("/home/kinz/projects/mogeung");
+
+    expect(screen.getByText(/has not been trusted in this directory/i)).toBeInTheDocument();
+    // The preference is still on, so the button is the thing that must not lie.
+    expect(screen.getByRole("button", { name: /open a codex terminal/i })).toBeInTheDocument();
+  });
+
+  /** Exact-path, because that is how Codex matches — the reported case was a
+   *  *subdirectory* of a directory that had been trusted. */
+  it("is satisfied only by the exact directory", () => {
+    openWithTrust(["/home/kinz/projects/mogeung"]);
+    chooseCodexIn("/home/kinz/projects/mogeung");
+
+    expect(screen.queryByText(/has not been trusted/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /start a headless codex/i })).toBeInTheDocument();
+  });
+
+  /** A daemon that cannot say warns about nothing rather than guessing; its own
+   *  refusal is the backstop. */
+  it("stays quiet when the daemon does not send the list", () => {
+    openWithTrust(undefined);
+    chooseCodexIn("/home/kinz/projects/mogeung");
+    expect(screen.queryByText(/has not been trusted/i)).toBeNull();
+  });
+
+  /** Claude has no per-directory trust and must not inherit the warning. */
+  it("does not warn for a CLI with no such notion", () => {
+    openWithTrust(["/somewhere/else"]);
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), {
+      target: { value: "/home/kinz/projects/mogeung" },
+    });
+    expect(screen.queryByText(/has not been trusted/i)).toBeNull();
+  });
+});
