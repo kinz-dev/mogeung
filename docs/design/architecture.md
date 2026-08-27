@@ -254,6 +254,16 @@ The Codex pass follows the same rule one directory over (`R-J56`): its
 `threads` index is read only when the index file's mtime moved, except while
 a Codex session is marked alive.
 
+That gate has to watch **the writer-lock directory too** (`R-J76`), and missing
+it made `R-J73` look like it had not worked. A thread nobody has spoken to
+writes no index row, so the index and its WAL never move; with no Codex session
+yet alive the pass returned early and never reached the lock scan the adoption
+reads from. The first user message wrote the row, moved the mtime, opened the
+gate — so a session appeared the moment you typed and not before, which is
+exactly what a gate closing over a live session looks like from the outside.
+A directory's mtime changes when an entry is created or removed, which is a
+thread opening or closing, so the stamp now carries it as a fourth element.
+
 ## Codex liveness is a registry now, not a guess (2026-08-26)
 
 `R-J70`. It used to be a recency heuristic — alive meant "wrote something in

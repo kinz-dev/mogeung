@@ -207,7 +207,21 @@ struct ChangeProbe {
 
 /// The Codex index as last seen: which db file, and the mtimes of it and its
 /// WAL sidecar. A changed path (migration bump) reads as changed, correctly.
-type CodexIndexStamp = (PathBuf, Option<std::time::SystemTime>, Option<std::time::SystemTime>);
+/// What the Codex pass looks at to decide whether anything can have moved:
+/// the index file, its WAL sidecar, and **the writer-lock directory**.
+///
+/// The lock directory is the fourth element and `R-J76` added it. Without it
+/// the gate below could close over a session that had just started: a thread
+/// that has not been spoken to writes no index row, so the first two never
+/// move, and the pass returned before it ever looked at the locks that
+/// `R-J73` adopts from. A directory's mtime changes when an entry is created
+/// or removed, which is exactly a thread opening or closing.
+type CodexIndexStamp = (
+    PathBuf,
+    Option<std::time::SystemTime>,
+    Option<std::time::SystemTime>,
+    Option<std::time::SystemTime>,
+);
 
 /// Where every non-Claude agent CLI keeps its state.
 ///
@@ -1798,10 +1812,13 @@ impl AppState {
         // The gate stays open while any Codex session is still marked alive,
         // because "alive" here is a recency heuristic that must be free to
         // decay to dead without the file changing under it.
+        let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        // The lock directory moves when a thread opens or closes, which is the
+        // one thing that happens without the index being touched. `R-J76`.
+        let locks = mtime(&self.codex_home.join("thread-writer-locks"));
         let stamp = install.state_db().map(|db| {
-            let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
             let wal = db.with_extension("sqlite-wal");
-            (db.clone(), mtime(&db), mtime(&wal))
+            (db.clone(), mtime(&db), mtime(&wal), locks)
         });
         {
             let any_alive = {

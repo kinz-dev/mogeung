@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-08-26
+updated: 2026-08-27
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -186,8 +186,20 @@ that has not drifted, which is the exact failure this whole file exists to
 prevent.
 
 So the tracker keys a `BTreeMap` by source name and `Health` carries
-`agents: Vec<AgentHealth>` — `{source, present, threads, error, unknown}` per
-CLI. Alerts are prefixed by that source, so `qwen/system/telepathy` and
+`agents: Vec<AgentHealth>` — `{source, present, threads, error, unknown,
+trusted_dirs}` per CLI.
+
+`trusted_dirs` (`R-J74`) is the odd one, and it is here because it is *what
+mogeung knows about that CLI's install* — the same kind of thing as `present`.
+Codex asks whether it may work in a directory the first time it sees one and
+opens no thread until you answer, so a launch into an untrusted directory stops
+on a prompt; headless gives that prompt no window, and the result is a running,
+tmux-hosted agent invisible to you and to this daemon alike. Carrying the list
+lets the New session window say so **before** you click. It is read from
+`~/.codex/config.toml` and never written: answering the trust question for you
+would be a launcher quietly widening what an agent may touch. `#[serde(default)]`,
+and empty for a CLI with no such notion — a window that gets no list warns about
+nothing rather than guessing, and the daemon's own refusal is the backstop. Alerts are prefixed by that source, so `qwen/system/telepathy` and
 `codex/thought` sit in one list and stay tellable apart. The four `codex_*`
 fields are **still populated**: a snapshot is a wire type, dropping a field is a
 break, and a client built before this change keeps working. They are marked

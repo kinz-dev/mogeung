@@ -188,3 +188,56 @@ async fn a_thread_that_has_never_been_spoken_to_still_reaches_the_board() {
 
     drop(lock);
 }
+
+/// **The index gate must not close over a session that has just started.**
+/// `R-J76`.
+///
+/// Reported 2026-08-26, after `R-J73` was supposed to have fixed exactly this:
+/// *"even if I start a session without the headless for codex, I still need to
+/// type a sample message before the session appear in the ATTENTION list."*
+///
+/// `R-J56` reads the `threads` index only when its mtime moved, except while a
+/// Codex session is marked alive — and `R-J73`'s lock scan ran **after** that
+/// gate. A thread nobody has spoken to writes no index row, so with no Codex
+/// session yet alive the pass returned before it ever looked at the locks. The
+/// first user message wrote the row, moved the mtime, opened the gate, and the
+/// session appeared — which is precisely the symptom.
+///
+/// The bug lives on the *second* scan: the first always runs, because nothing
+/// has been stamped yet. So this boots, then starts a thread, then scans again.
+#[tokio::test]
+async fn a_thread_that_starts_after_the_first_scan_still_reaches_the_board() {
+    use std::os::unix::io::AsRawFd;
+
+    let (claude, codex) = homes("late-start");
+    let conn = Connection::open(codex.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(SCHEMA).unwrap();
+    drop(conn);
+    // The directory exists from the start, empty — as it does on a machine
+    // where Codex has run before. Only its *contents* change below.
+    std::fs::create_dir_all(codex.join("thread-writer-locks")).unwrap();
+
+    // Scan one: nothing running, and the stamp is recorded.
+    let state = boot(claude, codex.clone()).await;
+    assert!(state.sessions.read().await.is_empty());
+
+    // Now a thread opens. The index is untouched — Codex writes that row on the
+    // first user turn, and there has not been one.
+    let id = "01a040bb-5505-7130-8fd1-96d84ad92852";
+    let lock =
+        std::fs::File::create(codex.join("thread-writer-locks").join(format!("{id}.lock"))).unwrap();
+    let rc = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(rc, 0, "the test must actually hold the lock");
+
+    state.scan().await;
+
+    let sessions = state.sessions.read().await;
+    assert!(
+        sessions.contains_key(id),
+        "a thread that opened after the first scan must not wait for you to type: {:?}",
+        sessions.keys().collect::<Vec<_>>()
+    );
+    assert!(sessions[id].alive);
+    drop(sessions);
+    drop(lock);
+}
