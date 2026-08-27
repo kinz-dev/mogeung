@@ -25,6 +25,7 @@ import {
   Bookmark,
   ChevronDown,
   ChevronRight,
+  ClipboardCopy,
   Download,
   NotebookPen,
   Search as SearchIcon,
@@ -37,7 +38,8 @@ import { best, type Engine } from "@/lib/search";
 import { clock, oneLine } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { eventLabel, eventText, type TranscriptEvent } from "@/wire/types";
-import { noteFromConversation, noteFromTurn, transcriptFilename, transcriptMarkdown } from "@/lib/notes";
+import { noteFromConversation, noteFromTurn, textOf, transcriptFilename, transcriptMarkdown } from "@/lib/notes";
+import { writeClipboard } from "@/lib/clipboard";
 import { chooseSavePath, exportText, isTauri } from "@/lib/tauri";
 import { newestIndex, orderedTurns, visibleTurns } from "@/lib/turns";
 
@@ -74,6 +76,7 @@ const Turn = memo(function Turn({
   onMark,
   onRemark,
   onCopyToNote,
+  onCopyText,
   highlighted,
 }: {
   ev: TranscriptEvent;
@@ -84,6 +87,7 @@ const Turn = memo(function Turn({
   onMark: (seq: number) => void;
   onRemark: (seq: number, text: string) => void;
   onCopyToNote: (seq: number) => void;
+  onCopyText: (seq: number) => void;
   highlighted: boolean;
 }) {
   const [open, setOpen] = useState(true);
@@ -132,6 +136,20 @@ const Turn = memo(function Turn({
           className="opacity-0 group-hover:opacity-100"
         >
           <NotebookPen size={11} />
+        </IconButton>
+        {/*
+          The same words, going somewhere else entirely — so this one takes the
+          **turn's text and nothing else**. Its note sibling above writes a
+          heading, the speaker and a rule, which is what you want in something
+          you will find again months later and exactly what you do not want
+          when you are pasting into an issue or a chat.
+        */}
+        <IconButton
+          title="copy this turn's text to the clipboard"
+          onClick={() => onCopyText(ev.seq)}
+          className="opacity-0 group-hover:opacity-100"
+        >
+          <ClipboardCopy size={11} />
         </IconButton>
         {long && (
           <IconButton title={open ? "collapse" : "expand"} onClick={() => setOpen(!open)}>
@@ -254,6 +272,7 @@ export function TranscriptPane() {
   const sessions = useStore((s) => s.sessions);
   const send = useStore((s) => s.send);
   const pushError = useStore((s) => s.pushError);
+  const pushNotice = useStore((s) => s.pushNotice);
   const focusTs = useStore((s) => s.focusEventTs);
   const highlightSeq = useStore((s) => s.highlightSeq);
   const focusSeq = useStore((s) => s.focusSeq);
@@ -347,6 +366,38 @@ export function TranscriptPane() {
       if (ev) copyToNote(noteFromTurn(id ? (sessions[id] ?? null) : null, ev));
     },
     [shown, id, sessions, copyToNote],
+  );
+
+  /**
+   * The clipboard, which is the other place a turn can go.
+   *
+   * **Confirmed out loud.** Its note sibling opens the rail, so you can see
+   * where the words landed; a clipboard write has no such tell, and a button
+   * with no visible effect is a button you press twice and then distrust. The
+   * failure is reported the same way for the same reason — a webview that
+   * refuses the clipboard is the one case where nothing happens *and* nothing
+   * is wrong with what you asked for.
+   */
+  const copyText = useCallback(
+    (text: string, what: string) => {
+      if (!text.trim()) {
+        pushNotice(`${what} has no text to copy`, "info");
+        return;
+      }
+      void writeClipboard(text)
+        .then(() => pushNotice(`${what} copied to the clipboard`))
+        .catch((e) => pushError(`could not copy: ${String(e)}`));
+    },
+    [pushNotice, pushError],
+  );
+
+  const onCopyText = useCallback(
+    (seq: number) => {
+      const ev = shown.find((e) => e.seq === seq);
+      // The turn's own words, without the note's heading — see the button.
+      if (ev) copyText(textOf(ev) ?? "", "turn");
+    },
+    [shown, copyText],
   );
 
   /**
@@ -535,6 +586,21 @@ export function TranscriptPane() {
           >
             <NotebookPen size={12} />
           </IconButton>
+          {/*
+            The conversation to the clipboard. Unlike the per-turn button this
+            **keeps the note's shape**, because a conversation pasted as bare
+            text with no speakers is not readable — and it copies what is on
+            screen (`visible`), so the `thinking` checkbox above means the same
+            thing here as it does everywhere else in this pane.
+          */}
+          <IconButton
+            title="copy this conversation to the clipboard — what is shown, in Markdown"
+            onClick={() =>
+              copyText(noteFromConversation(id ? (sessions[id] ?? null) : null, visible), "conversation")
+            }
+          >
+            <ClipboardCopy size={12} />
+          </IconButton>
           <IconButton title="find in this transcript  (Ctrl+F)" active={showFind} onClick={() => setShowFind(!showFind)}>
             <SearchIcon size={12} />
           </IconButton>
@@ -587,6 +653,7 @@ export function TranscriptPane() {
                     onRemark={onRemark}
                     onMark={onMark}
                     onCopyToNote={onCopyToNote}
+                    onCopyText={onCopyText}
                   />
                 </div>
               );
