@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-26
+updated: 2026-08-28
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -55,7 +55,26 @@ SQLite at `~/.mogeung/mogeung.db`:
 - `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
 - `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
   writing (`R-B35`)
+- `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
+  conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
+
+**`chats` is the second one that cannot be recomputed, and it is kept
+differently from `notes` on purpose.** A note is written deliberately, one at
+a time, and is kept for ever and mirrored to markdown. A conversation
+accumulates simply by using the panel, so it is capped — 200, oldest
+*touched* first out — and it is **not** mirrored: half of it is model output,
+and [ADR-0032](../decisions/0032-the-chat-panel-remembers.md) is explicit that
+this is a convenience for finding a question again rather than a document with
+a lifetime of its own. `R-L2`'s copy-into-a-note is still how you keep one on
+purpose.
+
+`turns` is the whole conversation as one JSON array. It is read whole, written
+whole and sent whole, so a row per turn would be normalisation nothing queries
+— and the common write, appending one exchange, would be a delete-and-reinsert
+anyway. `n_turns` is stored rather than derived with `json_array_length`,
+which a test caught erroring the **entire listing** when any single row's JSON
+is malformed; one bad row must cost one door, not the history.
 
 **`notes` is the odd one, and deliberately.** Everything else here is derived:
 lose it and a rescan of `~/.claude` and git rebuilds it. A note cannot be

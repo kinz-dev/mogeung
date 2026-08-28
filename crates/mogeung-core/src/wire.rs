@@ -292,6 +292,26 @@ pub enum ClientMsg {
     ModelChat {
         id: String,
         messages: Vec<crate::model::ChatTurn>,
+        /// Which conversation this belongs to, for the history. `R-O9`.
+        ///
+        /// `#[serde(default)]` and optional, and both matter: a client built
+        /// before the history sends nothing and gets the old behaviour, which
+        /// is an ask that is answered and then forgotten. `None` is therefore
+        /// not a missing field to be filled in with a guess — it is a request
+        /// **not to keep this**, and the daemon honours it.
+        #[serde(default)]
+        conversation: Option<String>,
+    },
+
+    /// Every kept conversation, newest first. `R-O9`.
+    ChatList {},
+    /// One conversation's turns, to go on reading or go on asking.
+    ChatLoad {
+        id: String,
+    },
+    /// Forget one conversation. There is no undo and the window says so.
+    ChatDelete {
+        id: String,
     },
 
     /// Read `~/.mogeung/config.toml`, to show it. `R-J79`.
@@ -667,6 +687,26 @@ pub struct WorktreeInfo {
 /// note to one turn of one transcript; a note keeps existing when that session
 /// ends, is forgotten, or the repository moves. A note with neither is a
 /// free-standing document, which is what `R-L2` will be made of.
+/// One kept conversation, without its turns. `R-O9`.
+///
+/// The list is a list of *doors*, not of contents: a fortnight of asking
+/// produces conversations whose combined text is larger than anything else
+/// this protocol sends unasked, and the panel only ever shows one of them at
+/// a time. `ChatLoad` fetches the turns of the one you picked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatSummary {
+    pub id: String,
+    /// The first thing you asked, trimmed to a line. Derived rather than
+    /// entered: a conversation you have to name before you can have one is a
+    /// conversation you do not start.
+    pub title: String,
+    /// How many turns, so a one-question aside is distinguishable from an
+    /// afternoon at a glance.
+    pub turns: u32,
+    pub created: i64,
+    pub updated: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
@@ -977,6 +1017,19 @@ pub enum ServerMsg {
         /// endpoint is free to route `default` wherever it likes.
         model: String,
         elapsed_ms: u64,
+    },
+    /// The kept conversations, in answer to `ChatList` and `ChatDelete`.
+    /// `R-O9`.
+    ChatHistory {
+        chats: Vec<ChatSummary>,
+        /// Why the list is empty of anything but a sentence: history is
+        /// refused wherever chat is, and is off entirely when the file says so.
+        refusal: Option<String>,
+    },
+    /// One conversation, whole. `R-O9`.
+    ChatConversation {
+        id: String,
+        turns: Vec<crate::model::ChatTurn>,
     },
     /// The config file, and what may be done to it. `R-J79`.
     ///

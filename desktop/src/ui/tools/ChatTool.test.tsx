@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useStore } from "@/store";
 import type { ClientMsg, Health, ModelHealth } from "@/wire/types";
 import { ChatTool, threadAsMarkdown } from "./ChatTool";
@@ -38,7 +38,15 @@ const sent: ClientMsg[] = [];
 describe("the chat panel", () => {
   beforeEach(() => {
     sent.length = 0;
-    useStore.setState({ chat: [], health: null, send: (m) => void sent.push(m) });
+    useStore.setState({
+      chat: [],
+      health: null,
+      conversationId: null,
+      chatHistory: null,
+      chatHistoryRefusal: null,
+      showChatHistory: false,
+      send: (m) => void sent.push(m),
+    });
   });
 
   it("takes a question when the daemon says it may", () => {
@@ -139,5 +147,141 @@ describe("threadAsMarkdown", () => {
     );
     expect(md).toContain("asked");
     expect(md.split("\n").filter((l) => l.startsWith("**")).length).toBe(1);
+  });
+});
+
+/**
+ * The three gestures are three different lifetimes. `R-O9`, ADR-0032.
+ *
+ * They look alike and they are not, which is exactly the confusion worth
+ * pinning: **new** forgets which thread this window is in, **clear** empties
+ * the panel and stays in the thread, and only the ✕ in the history deletes
+ * anything. A test that let *clear* start sending a fresh conversation id
+ * would have shipped a button that silently orphans your last answer.
+ */
+describe("keeping and finding conversations", () => {
+  const ask = (text: string) => act(() => useStore.getState().askModel(text));
+  const lastChat = () =>
+    [...sent].reverse().find((m) => m.cmd === "model_chat") as
+      | Extract<ClientMsg, { cmd: "model_chat" }>
+      | undefined;
+
+  beforeEach(() => useStore.setState({ health: health({}) }));
+
+  it("mints a conversation on the first ask, not on open", () => {
+    render(<ChatTool />);
+    expect(useStore.getState().conversationId).toBeNull();
+    expect(sent.some((m) => m.cmd === "model_chat")).toBe(false);
+
+    ask("first");
+    const id = useStore.getState().conversationId;
+    expect(id).toBeTruthy();
+    expect(lastChat()?.conversation).toBe(id);
+  });
+
+  it("keeps asking in the same conversation until you start a new one", () => {
+    ask("first");
+    const first = useStore.getState().conversationId;
+    ask("second");
+    expect(lastChat()?.conversation).toBe(first);
+
+    act(() => useStore.getState().newConversation());
+    expect(useStore.getState().conversationId).toBeNull();
+    expect(useStore.getState().chat).toEqual([]);
+
+    ask("third");
+    expect(useStore.getState().conversationId).not.toBe(first);
+    expect(lastChat()?.conversation).not.toBe(first);
+  });
+
+  /**
+   * The one that would have been a real bug. `clear` reads like a delete and
+   * is not: it empties the panel and leaves you in the thread, so the next
+   * question continues the conversation the daemon already has rather than
+   * beginning a second one that has lost its first half.
+   */
+  it("clearing the panel stays in the conversation", () => {
+    ask("first");
+    const id = useStore.getState().conversationId;
+    act(() => useStore.getState().clearChat());
+    expect(useStore.getState().chat).toEqual([]);
+    expect(useStore.getState().conversationId).toBe(id);
+    ask("again");
+    expect(lastChat()?.conversation).toBe(id);
+  });
+
+  it("asks for the list when the history is opened, every time", () => {
+    render(<ChatTool />);
+    expect(sent.some((m) => m.cmd === "chat_list")).toBe(false);
+    act(() => useStore.setState({ showChatHistory: true }));
+    expect(sent.filter((m) => m.cmd === "chat_list")).toHaveLength(1);
+    act(() => useStore.setState({ showChatHistory: false }));
+    act(() => useStore.setState({ showChatHistory: true }));
+    expect(sent.filter((m) => m.cmd === "chat_list")).toHaveLength(2);
+  });
+
+  /**
+   * `null` is *not asked yet* and `[]` is *asked, and there are none*. An
+   * empty list rendered for the first reads as data loss.
+   */
+  it("tells looking apart from empty", () => {
+    useStore.setState({ showChatHistory: true, chatHistory: null });
+    const { rerender } = render(<ChatTool />);
+    expect(screen.getByText(/looking/)).toBeInTheDocument();
+
+    act(() => useStore.setState({ chatHistory: [] }));
+    rerender(<ChatTool />);
+    expect(screen.getByText(/no conversations yet/)).toBeInTheDocument();
+  });
+
+  it("opens a conversation and goes on asking in it", () => {
+    useStore.setState({
+      showChatHistory: true,
+      chatHistory: [
+        { id: "old", title: "why is the queue empty", turns: 4, created: 1, updated: 2 },
+      ],
+    });
+    render(<ChatTool />);
+    fireEvent.click(screen.getByTitle("why is the queue empty"));
+    expect(sent).toContainEqual({ cmd: "chat_load", id: "old" });
+
+    // The daemon answers with the turns, and the panel is now *in* that
+    // thread — asking again continues it rather than forking a copy.
+    act(() =>
+      useStore.getState().ingest({
+        ev: "chat_conversation",
+        id: "old",
+        turns: [
+          { role: "user", content: "why is the queue empty" },
+          { role: "assistant", content: "because" },
+        ],
+      }),
+    );
+    expect(useStore.getState().conversationId).toBe("old");
+    expect(useStore.getState().chat).toHaveLength(2);
+    ask("and now");
+    expect(lastChat()?.conversation).toBe("old");
+  });
+
+  it("forgets one conversation on the daemon, and only from the history", () => {
+    useStore.setState({
+      showChatHistory: true,
+      chatHistory: [{ id: "old", title: "a thread", turns: 2, created: 1, updated: 2 }],
+    });
+    render(<ChatTool />);
+    fireEvent.click(screen.getByTitle(/forget this conversation/));
+    expect(sent).toContainEqual({ cmd: "chat_delete", id: "old" });
+  });
+
+  /** The daemon's own words, not a second version composed here. */
+  it("shows why there is no history rather than an empty list", () => {
+    useStore.setState({
+      showChatHistory: true,
+      chatHistory: [],
+      chatHistoryRefusal: "not keeping conversations — `chat_history = false`",
+    });
+    render(<ChatTool />);
+    expect(screen.getByText(/chat_history = false/)).toBeInTheDocument();
+    expect(screen.queryByText(/no conversations yet/)).not.toBeInTheDocument();
   });
 });

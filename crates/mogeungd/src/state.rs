@@ -134,6 +134,12 @@ pub struct AppState {
     /// never set it are tests and the window's own hosted daemon, both of which
     /// are loopback in fact.
     pub config_editable: std::sync::OnceLock<bool>,
+    /// Whether the chat panel's conversations are kept. `R-O9`, ADR-0032.
+    ///
+    /// Unset reads as **on**, matching `Options`' default and the config
+    /// file's absent-means-yes — the callers that never set it are tests and
+    /// the window's own hosted daemon before it has been told otherwise.
+    pub chat_history: std::sync::OnceLock<bool>,
     /// Whether this daemon may write to a repository at all. `R-D19`.
     ///
     /// A `OnceLock` for the same reason `ssh_target` is one: only the code
@@ -514,6 +520,7 @@ impl AppState {
             model: crate::model::Model::new(),
             writes_allowed: std::sync::OnceLock::new(),
             config_editable: std::sync::OnceLock::new(),
+            chat_history: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
             qwen_home,

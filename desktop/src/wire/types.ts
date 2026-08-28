@@ -360,6 +360,22 @@ export interface ChatTurn {
   content: string;
 }
 
+/**
+ * One kept conversation, without its turns. `R-O9`.
+ *
+ * A list of doors: the panel shows one conversation at a time, and sending
+ * every thread's text on connect would be the largest unasked-for payload in
+ * this protocol.
+ */
+export interface ChatSummary {
+  id: string;
+  /** The first thing you asked, trimmed to a line by the daemon. */
+  title: string;
+  turns: number;
+  created: number;
+  updated: number;
+}
+
 /// What mogeung can see of one other agent CLI's install.
 export interface AgentHealth {
   /// The wire name of the `SessionSource` — `codex`, `qwen`.
@@ -995,7 +1011,15 @@ export type ClientMsg =
    * which is what makes the panel ephemeral by construction rather than by a
    * promise to delete something.
    */
-  | { cmd: "model_chat"; id: string; messages: ChatTurn[] }
+  /**
+   * `conversation` names the thread this belongs to, for the history
+   * (`R-O9`). Omitting it is a request **not to keep this** — it is how the
+   * panel behaved before there was a history, and the daemon honours it.
+   */
+  | { cmd: "model_chat"; id: string; messages: ChatTurn[]; conversation?: string }
+  | { cmd: "chat_list" }
+  | { cmd: "chat_load"; id: string }
+  | { cmd: "chat_delete"; id: string }
   /**
    * The config file. `R-J79`.
    *
@@ -1151,6 +1175,9 @@ export type ServerMsg =
       error: string | null;
       saved: boolean;
     }
+  /** The kept conversations, newest first. `R-O9`. */
+  | { ev: "chat_history"; chats: ChatSummary[]; refusal: string | null }
+  | { ev: "chat_conversation"; id: string; turns: ChatTurn[] }
   | { ev: "git_stash_list"; session_id: SessionId; stashes: StashInfo[] }
   | {
       ev: "git_stash_diff";

@@ -352,6 +352,33 @@ configured, an endpoint consent does not cover, a public bind — arrives as an
 ordinary `error` rather than as a silence. A panel that shows nothing reads as
 broken and gets reported as a bug in mogeung.
 
+## The chat history (`R-O9`)
+
+`model_chat` grew a `conversation` field, and omitting it means what it has
+always meant: answer this and keep nothing. A client built before the history
+sends nothing and gets the old behaviour unchanged.
+
+`chat_list`, `chat_load` and `chat_delete` are the history itself. The list
+carries **summaries, not turns** — a fortnight of asking produces more text
+than anything else this protocol sends unasked, and the panel shows one
+conversation at a time.
+
+**Only answered exchanges are kept**, because the write is on the success arm
+of the reply. A refusal or a dead endpoint leaves nothing, which matches the
+rule the client already had: a failed exchange stays on screen and is never
+sent back as context.
+
+**Refused wherever the ask is.** These rows hold the same free-form text, so a
+daemon bound beyond loopback serves no history and says so — the same shape as
+[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4 and, for the
+same reason, with no flag. `chat_history = false` is a second, different
+refusal: it still lists what was kept before the line was written, because
+hiding that would both lie about what is on disk and take away the only way to
+delete it.
+
+See [ADR-0032](../decisions/0032-the-chat-panel-remembers.md) for what this
+gives up.
+
 ## The config file (`R-J79`)
 
 `config_get` and `config_save` both answer with one `config` event carrying the

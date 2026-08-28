@@ -241,7 +241,8 @@ fn host(listener: TcpListener) {
                     desktop: false,
                     push_url: None,
                 },
-                // Read from the config file, and **only** these three. `R-O1`.
+                // Read from the config file, and **only** these four. `R-O1`,
+                // `R-O9`.
                 //
                 // This hosted daemon reads nothing else from `config.toml` — it
                 // takes the defaults for `db`, `poll_ms` and the rest — and
@@ -260,6 +261,10 @@ fn host(listener: TcpListener) {
                 // on the shape mogeung is normally run in.
                 // [ADR-0031](../../../../docs/decisions/0031-consent-to-a-named-host.md)
                 // replaced it with a key that names the host it consents to.
+                // `R-O9`: the fourth key, and read for the same reason as the
+                // other three — a hosted daemon has no argv, so a preference
+                // it cannot be told is a preference that does not exist.
+                chat_history: cfg.chat_history.unwrap_or(true),
                 model: mogeung_core::model::ModelSettings {
                     url: cfg.model_url.clone(),
                     model: cfg.model_name.clone(),

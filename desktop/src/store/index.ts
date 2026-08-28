@@ -16,6 +16,7 @@ import { summarize } from "@/store/changes";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
+  ChatSummary,
   Analytics,
   Run,
   RunConfig,
@@ -528,10 +529,29 @@ export interface AppState {
   /** Values revealed **one at a time**, deliberately. `R-N6`. */
   revealedEnv: Record<string, string>;
 
+  /**
+   * Which kept conversation the panel is in. `R-O9`.
+   *
+   * Made when the first question of a thread is asked rather than on open, so
+   * opening the panel and closing it again leaves nothing behind — an empty
+   * conversation is not a conversation.
+   */
+  conversationId: string | null;
+  /** The kept conversations, newest first, or `null` before asking. */
+  chatHistory: ChatSummary[] | null;
+  /** Why there is no history, from the daemon. */
+  chatHistoryRefusal: string | null;
+  /** Whether the panel is showing the list instead of the thread. */
+  showChatHistory: boolean;
+
   // -- actions ------------------------------------------------------------
   send: (msg: ClientMsg) => void;
   /** Ask the daemon's model. `R-O5`. */
   askModel: (text: string) => void;
+  /** Put the thread away and start a fresh one. `R-O9`. */
+  newConversation: () => void;
+  /** Open a kept conversation and go on asking in it. `R-O9`. */
+  openConversation: (id: string) => void;
   clearChat: () => void;
   ingest: (msg: ServerMsg) => void;
   select: (id: SessionId) => void;
@@ -721,6 +741,10 @@ export const useStore = create<AppState>((set, get) => ({
   showKeymap: false,
   showConfig: false,
   config: null,
+  conversationId: null,
+  chatHistory: null,
+  chatHistoryRefusal: null,
+  showChatHistory: false,
   showConnections: false,
   showPrompt: false,
   flagged: [],
@@ -755,6 +779,10 @@ export const useStore = create<AppState>((set, get) => ({
     const content = text.trim();
     if (!content) return;
     const id = chatId();
+    // Minted on the first ask of a thread, not when the panel opens: a
+    // conversation nobody asked anything in is not a conversation, and
+    // opening the panel to read the refusal must not leave a row behind.
+    const conversation = get().conversationId ?? chatId();
     // The turns that actually happened.
     //
     // A failed exchange leaves its error on screen — you want to see what went
@@ -782,9 +810,37 @@ export const useStore = create<AppState>((set, get) => ({
         { id, role: "assistant", content: "", pending: true },
       ],
     }));
-    get().send({ cmd: "model_chat", id, messages });
+    set({ conversationId: conversation });
+    get().send({ cmd: "model_chat", id, messages, conversation });
   },
 
+  /**
+   * Put the thread away and start a fresh one. `R-O9`.
+   *
+   * Nothing is sent: the daemon has already kept every answered exchange, so
+   * "new" is only this window forgetting which thread it was in. That is why
+   * this is safe to press mid-answer — the reply still lands in the store,
+   * matched by its own id, and is kept against the conversation it was asked
+   * in rather than the one you have moved to.
+   */
+  newConversation: () =>
+    set({ chat: [], conversationId: null, showChatHistory: false }),
+
+  openConversation: (id) => {
+    set({ showChatHistory: false });
+    get().send({ cmd: "chat_load", id });
+  },
+
+  /**
+   * Empty the panel.
+   *
+   * Since `R-O9` this clears the **window** and not the record: the
+   * conversation is on the daemon and the history is where it is forgotten,
+   * one row at a time and deliberately. A button that quietly deleted from
+   * disk what looks like a screen-clearing gesture would be the worst kind of
+   * surprise, so this leaves `conversationId` alone — ask again and the thread
+   * carries on where it was.
+   */
   clearChat: () => set({ chat: [] }),
 
   select: (id) => {
@@ -1151,6 +1207,23 @@ export const useStore = create<AppState>((set, get) => ({
               : m,
           ),
         }));
+        break;
+      case "chat_history":
+        set({ chatHistory: msg.chats, chatHistoryRefusal: msg.refusal ?? null });
+        break;
+      case "chat_conversation":
+        // Replaced wholesale, and the panel is put **into** that conversation
+        // — opening an old thread and asking again has to continue it rather
+        // than fork a copy under a new id, which is the difference between a
+        // history and a graveyard.
+        set({
+          conversationId: msg.id,
+          chat: msg.turns.map((t, i) => ({
+            id: `${msg.id}:${i}`,
+            role: t.role === "user" ? "user" : "assistant",
+            content: t.content,
+          })),
+        });
         break;
       case "config":
         // Replaced wholesale, including after a save: the daemon re-reads the

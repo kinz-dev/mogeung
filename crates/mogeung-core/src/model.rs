@@ -291,6 +291,32 @@ pub fn health(settings: &ModelSettings, chat_allowed: bool) -> ModelHealth {
     }
 }
 
+/// The first thing you asked, on one line. `R-O9`.
+///
+/// Derived rather than entered — a conversation you have to name before you
+/// can have one is a conversation you do not start. Whitespace is collapsed
+/// because a pasted stack trace's first line is mostly indentation, and the
+/// cut counts **characters, not bytes**, so a question in any script survives
+/// it intact.
+pub fn chat_title(turns: &[ChatTurn]) -> String {
+    let first = turns
+        .iter()
+        .find(|t| t.role == "user")
+        .map(|t| t.content.as_str())
+        .unwrap_or("");
+    let flat = first.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        // A title has to be *something*: a blank row in the history is a door
+        // you cannot tell from a rendering bug.
+        return "(empty)".to_string();
+    }
+    if flat.chars().count() <= 72 {
+        return flat;
+    }
+    let cut: String = flat.chars().take(71).collect();
+    format!("{}…", cut.trim_end())
+}
+
 /// The host out of a URL, without a URL crate.
 ///
 /// Handles the three shapes that actually turn up in a config file: a scheme or
@@ -540,6 +566,33 @@ mod tests {
 
         let ok = health(&no("http://127.0.0.1:8000/v1"), true);
         assert!(ok.allowed && ok.chat_allowed && ok.refusal.is_none());
+    }
+
+    /// A history is scanned, not read, so the title has to survive the two
+    /// things people actually paste into a chat box: something indented, and
+    /// something very long. `R-O9`.
+    #[test]
+    fn a_title_is_the_first_ask_flattened_onto_one_line() {
+        let ask = |c: &str| chat_title(&[ChatTurn::user(c), ChatTurn::assistant("...")]);
+
+        assert_eq!(ask("why is the queue empty"), "why is the queue empty");
+        // A pasted stack trace's first line is mostly indentation.
+        assert_eq!(ask("  thread 'main'\n    at foo\n"), "thread 'main' at foo");
+
+        let long = ask(&"x".repeat(200));
+        assert_eq!(long.chars().count(), 72, "71 and the ellipsis");
+        assert!(long.ends_with('…'));
+
+        // Counted in characters, not bytes — otherwise this panics on a
+        // boundary or truncates into nonsense.
+        let korean = ask(&"모괴".repeat(100));
+        assert_eq!(korean.chars().count(), 72);
+
+        // The assistant never names the conversation, and a title is always
+        // something rather than a blank row you cannot tell from a bug.
+        assert_eq!(chat_title(&[ChatTurn::assistant("hello")]), "(empty)");
+        assert_eq!(chat_title(&[]), "(empty)");
+        assert_eq!(ask("   "), "(empty)");
     }
 
     /// The host is rendered in a window and pasted into bug reports; a URL can

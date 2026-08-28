@@ -2,7 +2,7 @@
 title: A local model beside the agents
 status: in-progress
 updated: 2026-08-28
-roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8]
+roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9]
 depends_on: [A3, A4, A29, A35, A36, A37, A38]
 ---
 
@@ -314,6 +314,23 @@ and a flag turns out to be the weaker one, because a flag is blanket. So
 consent names its host: `allow_remote_model = "spark-7ecc"` is consent to that
 machine and no other, and moving `model_url` asks again. `true` and the flag
 remain as the blanket grant, exactly as strong as before and no stronger.
+
+**The panel's *no table to forget* lasted five hours.** `R-O5` shipped
+storing nothing, and it was a designed property rather than an omission: the
+one free-form surface in the product, resting on an `UNTESTED` `A37`, built to
+be cheap to remove. A history was asked for the same evening, and `R-O9` gives
+it up on purpose — recorded in
+[ADR-0032](../decisions/0032-the-chat-panel-remembers.md) rather than allowed
+to happen as a side effect of a feature request, because what changes is not
+the panel but where your questions live.
+
+What survived the change is the part worth naming: the daemon keeps only
+**answered** exchanges, which falls out of putting the write on the success arm
+rather than from a rule anyone has to remember; the history is refused exactly
+where the ask is; and the three gestures that look like each other — *new*,
+*clear*, *forget* — are three lifetimes, stated in the panel's own header
+table because a delete disguised as a screen-clear is the mistake this shape
+invites.
 
 **The `/models` URL is what people paste.** It is the URL you can `curl`, so it
 is the one in shell history and the one that reaches a config file — and asking

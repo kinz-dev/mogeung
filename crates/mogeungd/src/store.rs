@@ -79,6 +79,34 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS notes_by_session ON notes (session_id, seq);
 
+            -- The chat panel's conversations (R-O9, ADR-0032). Half the user's
+            -- own writing and half the model's answer, which is why it is kept
+            -- like a note and pruned like a log: `CHAT_KEEP` conversations,
+            -- oldest first out, plus an explicit delete per row.
+            --
+            -- `turns` is the whole conversation as one JSON array rather than
+            -- a row per turn. It is read whole, written whole and sent whole —
+            -- the wire has never carried half a conversation — so a turns
+            -- table would be normalisation nothing asks for, and it would make
+            -- the common write (append one exchange) a delete-and-reinsert
+            -- anyway.
+            --
+            -- `n_turns` is stored rather than counted from `turns` with
+            -- `json_array_length`. Two reasons, and a test found the first:
+            -- that function errors the **whole listing** if any single row's
+            -- JSON is malformed, so one bad row would cost the history rather
+            -- than one door. It also needs the JSON1 extension, which is not
+            -- worth depending on for a number we already know at write time.
+            CREATE TABLE IF NOT EXISTS chats (
+                id      TEXT PRIMARY KEY,
+                title   TEXT NOT NULL,
+                turns   TEXT NOT NULL,
+                n_turns INTEGER NOT NULL DEFAULT 0,
+                created INTEGER NOT NULL,
+                updated INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS chats_by_updated ON chats (updated DESC);
+
             -- Per-repo signal command and its last run (R-E2). The command
             -- is the user's own, run only on an explicit click.
             CREATE TABLE IF NOT EXISTS signals (
@@ -222,6 +250,95 @@ impl Store {
     pub fn delete_note(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Chat conversations (R-O9, ADR-0032)
+    // -----------------------------------------------------------------------
+
+    /// How many conversations are kept before the oldest falls off.
+    ///
+    /// A cap and not "for ever", which is the one place this differs from a
+    /// note: a note is written on purpose, one at a time, and a conversation
+    /// accumulates simply by using the panel. Two hundred is far past what a
+    /// fortnight of `A37` would produce and small enough that the whole list
+    /// is one cheap query — the point is that the number exists, not that it
+    /// is exactly this.
+    pub const CHAT_KEEP: usize = 200;
+
+    /// Every conversation, newest first, **without** its turns.
+    pub fn load_chats(&self) -> Result<Vec<mogeung_core::wire::ChatSummary>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare(
+            "SELECT id, title, created, updated, n_turns FROM chats ORDER BY updated DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(mogeung_core::wire::ChatSummary {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                created: r.get(2)?,
+                updated: r.get(3)?,
+                turns: r.get::<_, i64>(4).unwrap_or(0).max(0) as u32,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// One conversation's turns.
+    ///
+    /// A row whose JSON will not parse comes back as **empty rather than as an
+    /// error**: this is a panel, the corpus parsers' degrade-never-panic rule
+    /// applies to our own writing too, and a history that refuses to open
+    /// because one row is bad is worse than one door that leads nowhere.
+    pub fn load_chat(&self, id: &str) -> Result<Vec<mogeung_core::model::ChatTurn>> {
+        let c = self.conn.lock().unwrap();
+        let json: Option<String> = c
+            .query_row("SELECT turns FROM chats WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .ok();
+        Ok(json
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default())
+    }
+
+    /// Insert or replace one conversation, then prune to [`Self::CHAT_KEEP`].
+    ///
+    /// The title is only written on insert — `ON CONFLICT` leaves it alone —
+    /// because it is the *first* thing you asked, and a conversation renaming
+    /// itself to your latest question as you go is a list you cannot scan.
+    pub fn save_chat(
+        &self,
+        id: &str,
+        title: &str,
+        turns: &[mogeung_core::model::ChatTurn],
+        now: i64,
+    ) -> Result<()> {
+        let json = serde_json::to_string(turns)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO chats (id, title, turns, n_turns, created, updated) \
+             VALUES (?1, ?2, ?3, ?5, ?4, ?4) \
+             ON CONFLICT(id) DO UPDATE SET turns = ?3, n_turns = ?5, updated = ?4",
+            params![id, title, json, now, turns.len() as i64],
+        )?;
+        // Oldest out. `updated` and not `created`, so a conversation you came
+        // back to yesterday outlives one you abandoned last month.
+        c.execute(
+            "DELETE FROM chats WHERE id NOT IN              (SELECT id FROM chats ORDER BY updated DESC LIMIT ?1)",
+            params![Self::CHAT_KEEP as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_chat(&self, id: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM chats WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -593,6 +710,72 @@ mod tests {
         // An empty batch is a no-op, not an empty transaction.
         s.append_events(&[]).unwrap();
         assert_eq!(s.load_recent_events("many", 0, 100).unwrap().len(), 3);
+    }
+
+    fn turn(role: &str, content: &str) -> mogeung_core::model::ChatTurn {
+        mogeung_core::model::ChatTurn { role: role.into(), content: content.into() }
+    }
+
+    /// The three properties a conversation store has that a note store does
+    /// not. `R-O9`, ADR-0032.
+    #[test]
+    fn a_conversation_keeps_its_first_title_and_the_oldest_falls_off() {
+        let s = store("chats");
+
+        // Growing a conversation replaces its turns and moves `updated` —
+        // and leaves the **title** alone. A list that renamed itself to your
+        // latest question as you went is a list you cannot scan.
+        let first = vec![turn("user", "why is the queue empty"), turn("assistant", "because")];
+        s.save_chat("c1", "why is the queue empty", &first, 100).unwrap();
+        let grown = [first.clone(), vec![turn("user", "and now"), turn("assistant", "ok")]].concat();
+        s.save_chat("c1", "and now", &grown, 200).unwrap();
+
+        let list = s.load_chats().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].title, "why is the queue empty", "the title is the first ask");
+        assert_eq!(list[0].turns, 4, "the turn count follows the thread");
+        assert_eq!(list[0].created, 100, "created does not move");
+        assert_eq!(list[0].updated, 200);
+        assert_eq!(s.load_chat("c1").unwrap(), grown);
+
+        s.delete_chat("c1").unwrap();
+        assert!(s.load_chats().unwrap().is_empty());
+        assert!(s.load_chat("c1").unwrap().is_empty(), "gone is gone");
+    }
+
+    /// Pruning is by `updated`, not `created`: a conversation you came back to
+    /// yesterday outlives one you abandoned last month. Getting this backwards
+    /// would throw away exactly the threads worth keeping, and silently.
+    #[test]
+    fn the_cap_drops_the_least_recently_touched() {
+        let s = store("chats-cap");
+        let body = vec![turn("user", "q"), turn("assistant", "a")];
+        // Oldest `created` of the lot, but touched most recently.
+        s.save_chat("ancient", "ancient", &body, 1).unwrap();
+        for n in 0..Store::CHAT_KEEP {
+            s.save_chat(&format!("c{n}"), "filler", &body, 1_000 + n as i64).unwrap();
+        }
+        s.save_chat("ancient", "ancient", &body, 10_000).unwrap();
+
+        let list = s.load_chats().unwrap();
+        assert_eq!(list.len(), Store::CHAT_KEEP, "capped");
+        assert!(list.iter().any(|c| c.id == "ancient"), "revisiting keeps it alive");
+        assert!(!list.iter().any(|c| c.id == "c0"), "the least recently touched went");
+    }
+
+    /// Our own writing degrades the way the corpus parsers do (`A4`): a row
+    /// whose JSON will not parse opens empty rather than failing the call, so
+    /// one bad row costs one door and not the whole history.
+    #[test]
+    fn an_unreadable_conversation_is_empty_not_an_error() {
+        let s = store("chats-bad");
+        s.save_chat("c", "t", &[turn("user", "q")], 1).unwrap();
+        {
+            let c = s.conn.lock().unwrap();
+            c.execute("UPDATE chats SET turns = 'not json' WHERE id = 'c'", []).unwrap();
+        }
+        assert!(s.load_chat("c").unwrap().is_empty());
+        assert_eq!(s.load_chats().unwrap().len(), 1, "the row is still listed, so it can be deleted");
     }
 
 }

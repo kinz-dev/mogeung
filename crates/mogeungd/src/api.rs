@@ -134,6 +134,70 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// reading everything it should be. Curl-able without a UI, deliberately — the
 /// answer to "is the board empty because nothing is happening, or because
 /// mogeung went blind?" should not require a window.
+/// Why the chat history is unavailable, if it is. `R-O9`, ADR-0032.
+///
+/// Two reasons and they are different sentences, because they send you
+/// somewhere different: a bind beyond loopback is a property of how this
+/// daemon was started, and `chat_history = false` is a line you wrote.
+fn chat_refusal(state: &AppState) -> Option<String> {
+    if !state.model.chat_allowed() {
+        return Some(
+            "the chat history is not served by a daemon bound beyond loopback              (ADR-0031 clause 4): it holds the same free-form text the ask              does. Bind 127.0.0.1 and reach it over ssh."
+                .to_string(),
+        );
+    }
+    // Unset reads as on, matching `Options`' default and the file's
+    // absent-means-yes.
+    if !*state.chat_history.get().unwrap_or(&true) {
+        return Some(
+            "not keeping conversations — `chat_history = false` in              ~/.mogeung/config.toml. Anything kept before that line was              written is still here; turning the tap off does not empty the              bucket."
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// The kept conversations, or the sentence saying why there are none.
+fn chat_history_msg(state: &AppState) -> ServerMsg {
+    let refusal = chat_refusal(state);
+    ServerMsg::ChatHistory {
+        // Still listed when history is *off*: what was kept before the line
+        // was written is still kept, and a list that hid it would be lying
+        // about what is on disk — and would take away the only way to delete
+        // it. The bind refusal is the one that returns nothing.
+        chats: if state.model.chat_allowed() {
+            state.store.load_chats().unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        refusal,
+    }
+}
+
+/// Append one answered exchange to a conversation. `R-O9`.
+///
+/// Failures are logged and swallowed: the answer is already on its way to a
+/// panel that is showing it, and losing the *record* of a reply must never
+/// look like losing the reply.
+fn keep_conversation(state: &AppState, id: &str, sent: &[mogeung_core::model::ChatTurn], answer: &str) {
+    if chat_refusal(state).is_some() {
+        return;
+    }
+    // What was sent already **is** the conversation: the client filters
+    // failed exchanges out before asking, so this is the thread as it will be
+    // re-sent — not a second reconstruction of it that could disagree.
+    let mut turns = sent.to_vec();
+    turns.push(mogeung_core::model::ChatTurn::assistant(answer));
+    let title = mogeung_core::model::chat_title(&turns);
+    if let Err(e) = state
+        .store
+        .save_chat(id, &title, &turns, chrono::Utc::now().timestamp())
+    {
+        tracing::warn!("could not keep the conversation: {e}");
+    }
+}
+
+
 /// Why the config file may not be edited from here, if it may not. `R-J79`.
 ///
 /// Loopback only, and there is deliberately no flag: the file holds `push_url`
@@ -965,18 +1029,51 @@ async fn handle(
                 });
             });
         }
-        ClientMsg::ModelChat { id, messages } => {
+        // The chat history. `R-O9`, ADR-0032.
+        //
+        // Refused wherever the ask itself is: these rows hold the same
+        // free-form text, and a daemon that will not take a question has no
+        // business handing back the last two hundred.
+        ClientMsg::ChatList {} => send_reply(&reply, chat_history_msg(&state)),
+        ClientMsg::ChatLoad { id } => {
+            if chat_refusal(&state).is_none() {
+                let turns = state.store.load_chat(&id).unwrap_or_default();
+                send_reply(&reply, ServerMsg::ChatConversation { id, turns });
+            }
+        }
+        ClientMsg::ChatDelete { id } => {
+            if chat_refusal(&state).is_none() {
+                if let Err(e) = state.store.delete_chat(&id) {
+                    err(anyhow::anyhow!("could not forget that conversation: {e}"));
+                }
+            }
+            send_reply(&reply, chat_history_msg(&state));
+        }
+        ClientMsg::ModelChat {
+            id,
+            messages,
+            conversation,
+        } => {
             let state = state.clone();
             let reply = reply.clone();
             tokio::spawn(async move {
                 let msg = match state.model.chat(&messages).await {
-                    Ok(a) => ServerMsg::ModelReply {
-                        id,
-                        text: Some(a.text),
-                        error: None,
-                        model: a.model,
-                        elapsed_ms: a.elapsed_ms,
-                    },
+                    Ok(a) => {
+                        // Kept only when the client named a conversation and
+                        // the file has not said no — and only on an answer, so
+                        // a refusal or a dead endpoint leaves no half-thread
+                        // behind that would be re-sent as context next time.
+                        if let Some(cid) = conversation.as_deref() {
+                            keep_conversation(&state, cid, &messages, &a.text);
+                        }
+                        ServerMsg::ModelReply {
+                            id,
+                            text: Some(a.text),
+                            error: None,
+                            model: a.model,
+                            elapsed_ms: a.elapsed_ms,
+                        }
+                    }
                     // A refusal and a failure arrive by the same door. The
                     // panel has to say *something* — a silent box reads as a
                     // bug in mogeung rather than as a daemon declining.

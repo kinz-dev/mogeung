@@ -137,6 +137,11 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             ssh_target: args.ssh_target.or(cfg.ssh_target),
             advertise: args.advertise || cfg.advertise.unwrap_or(false),
             allow_run: args.allow_run,
+            // File only, and absent means yes. No flag: this is a standing
+            // preference about what is kept on disk, not a property of one
+            // invocation, and a run that quietly stopped recording would be
+            // the confusing half of the pair. `R-O9`.
+            chat_history: cfg.chat_history.unwrap_or(true),
             model: mogeung_core::model::ModelSettings {
                 url: args.model_url.or(cfg.model_url),
                 model: args.model_name.or(cfg.model_name),

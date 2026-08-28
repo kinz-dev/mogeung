@@ -73,6 +73,15 @@ impl Model {
         self.inner.lock().expect("model lock").settings.clone()
     }
 
+    /// The bind gate, for the verbs that are not the ask itself.
+    ///
+    /// The chat **history** is refused wherever chat is: it holds the same
+    /// free-form text, and a daemon that will not take a question has no
+    /// business handing back the last two hundred. `R-O9`.
+    pub fn chat_allowed(&self) -> bool {
+        self.inner.lock().expect("model lock").chat_allowed
+    }
+
     /// The Health row, including what the last ask did.
     pub fn health(&self) -> Option<ModelHealth> {
         let g = self.inner.lock().expect("model lock");

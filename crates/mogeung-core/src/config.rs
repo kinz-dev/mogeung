@@ -72,6 +72,18 @@ pub struct Config {
     /// that one grants running processes, not reading an endpoint.
     #[serde(default)]
     pub allow_remote_model: crate::model::RemoteConsent,
+    /// Daemon: keep the chat panel's conversations, so they can be found
+    /// again. `R-O9`. Absent means yes.
+    ///
+    /// `R-O5` shipped storing nothing — *no table to forget* — and the history
+    /// reverses that deliberately
+    /// ([ADR-0032](../../../docs/decisions/0032-the-chat-panel-remembers.md)).
+    /// This key is the way back: `chat_history = false` and the daemon answers
+    /// every ask and keeps none of it, exactly as it did before. What is
+    /// already kept stays kept — turning the tap off is not the same act as
+    /// emptying the bucket, and a setting that deleted your history would be a
+    /// nasty surprise for anyone who set it to stop *adding* to it.
+    pub chat_history: Option<bool>,
     /// Window: the global shortcut that raises it. An empty string disables
     /// it, which is the file's way of saying `--no-hotkey`.
     pub hotkey: Option<String>,

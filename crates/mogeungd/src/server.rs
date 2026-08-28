@@ -34,6 +34,10 @@ pub struct Options {
     pub advertise: bool,
     /// Permit starting processes on a non-loopback bind. ADR-0025 clause 4.
     pub allow_run: bool,
+    /// Keep the chat panel's conversations. `R-O9`, ADR-0032. Default on;
+    /// `chat_history = false` in the file is the way back to `R-O5`'s
+    /// keep-nothing behaviour.
+    pub chat_history: bool,
     /// The local model seam. `R-O1`, ADR-0031 — including the consent,
     /// which is clause 3's flag: an endpoint that is not this machine is
     /// publishing, and has to be asked for.
@@ -51,6 +55,9 @@ impl Default for Options {
             ssh_target: None,
             advertise: false,
             allow_run: false,
+            // On, matching the file's absent-means-yes: the history is the
+            // ordinary behaviour and turning it off is the deliberate act.
+            chat_history: true,
             model: mogeung_core::model::ModelSettings::default(),
         }
     }
@@ -210,6 +217,7 @@ where
     // door: the file it edits holds `push_url` and `model_url`, both outbound.
     // `R-J79`.
     let _ = state.config_editable.set(addr.ip().is_loopback());
+    let _ = state.chat_history.set(opts.chat_history);
 
     // Run output reaches clients as events on the socket everything else uses.
     // Spawned here rather than inside `Runs` because `Runs` has no opinion
