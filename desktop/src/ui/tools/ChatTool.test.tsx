@@ -304,6 +304,14 @@ describe("keeping and finding conversations", () => {
  * — so the panel says where instead. These pin that it is said, that it is only
  * said when true, and that it never claims the bytes stay home.
  */
+/**
+ * ADR-0033 clause 6's disclosure, after it was cut back. `R-O10`.
+ *
+ * The standing line under the thread was removed on 2026-08-28 at the owner's
+ * request. These now pin the thinner promise that replaced it: the hosts are
+ * still reachable, on the admin button's tooltip, and the empty state still
+ * refuses to present a loopback proxy as though the endpoint were local.
+ */
 describe("saying where a proxy forwards", () => {
   // Its own reset: the suite's other `beforeEach` hooks are scoped to their
   // own `describe`, so without this the panel starts with whatever thread the
@@ -318,13 +326,18 @@ describe("saying where a proxy forwards", () => {
   const line = () =>
     document.body.textContent?.replace(/\s+/g, " ") ?? "";
 
-  it("names every host the proxy may forward to", () => {
+  it("names every host the proxy may forward to, on the admin button", () => {
     useStore.setState({
-      health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied(["api.anthropic.com"]) } as Health,
+      health: {
+        ...health({ host: "127.0.0.1", remote: false }),
+        ...proxied(["api.anthropic.com"], "http://127.0.0.1:41235/"),
+      } as Health,
     });
     render(<ChatTool />);
-    expect(line()).toContain("may forward to");
-    expect(screen.getByText("api.anthropic.com")).toBeInTheDocument();
+    // Not a standing line any more — a tooltip. Thinner than clause 6 asked
+    // for, and pinned so it is not thinned further by accident.
+    expect(screen.getByTitle(/may forward to api\.anthropic\.com/)).toBeInTheDocument();
+    expect(line()).not.toContain("may forward to");
   });
 
   /**
@@ -333,13 +346,16 @@ describe("saying where a proxy forwards", () => {
    * The proxy itself is still announced — that is what explains why the model
    * under each answer changes from question to question.
    */
-  it("announces the proxy but claims no forwarding when there is none", () => {
+  it("claims no forwarding when there is none", () => {
     useStore.setState({
-      health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied([]) } as Health,
+      health: {
+        ...health({ host: "127.0.0.1", remote: false }),
+        ...proxied([], "http://127.0.0.1:41235/"),
+      } as Health,
     });
     render(<ChatTool />);
-    expect(line()).toContain("via mogeung's proxy");
-    expect(line()).not.toContain("may forward to");
+    expect(screen.getByTitle(/admin interface/)).toBeInTheDocument();
+    expect(screen.queryByTitle(/may forward to/)).not.toBeInTheDocument();
   });
 
   /**
@@ -371,7 +387,8 @@ describe("saying where a proxy forwards", () => {
   it("says nothing when there is no proxy", () => {
     useStore.setState({ health: health({}) });
     render(<ChatTool />);
-    expect(line()).not.toContain("may forward to");
+    expect(line()).not.toContain("proxy");
+    expect(screen.queryByTitle(/admin interface/)).not.toBeInTheDocument();
   });
 
   /**

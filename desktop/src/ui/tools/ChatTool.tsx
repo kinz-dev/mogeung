@@ -39,7 +39,7 @@ import remarkGfm from "remark-gfm";
 import { ExternalLink, History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import type { ChatMessage } from "@/store";
-import { Dim, Empty, IconButton, Mono } from "@/ui/primitives";
+import { Dim, Empty, IconButton } from "@/ui/primitives";
 import { interactive } from "@/ui/styles";
 import { cn } from "@/lib/cn";
 import { stamp } from "@/lib/format";
@@ -188,14 +188,20 @@ export function ChatTool() {
   const proxy = health?.proxy ?? null;
 
   /**
-   * Where prompts actually go. `R-O10`.
+   * Where prompts actually go. `R-O10`, ADR-0033 clause 6.
    *
    * With mogeung's own llmproxy in front, `model.host` is `127.0.0.1` and
    * ADR-0031's consent gate passes without asking — while the proxy may be
    * forwarding to a vendor. mogeung cannot gate that (routing is decided per
    * request, and a target can fail over), so a gate would be a promise it
-   * could not keep. It says where instead, and says it *here* rather than only
-   * in the Health view, because this is the box you type the prompt into.
+   * could not keep, and the ADR chose an honest sentence instead.
+   *
+   * **That sentence is no longer on screen.** It was a standing line under the
+   * thread until 2026-08-28, when it was removed at the owner's request as
+   * clutter. What survives is the admin button's tooltip below. Recording the
+   * change here rather than deleting the reasoning with the markup: the ADR
+   * still says mogeung reports where prompts go, and a hover is a thinner
+   * version of reporting than the clause had in mind.
    */
   const forwardsTo = proxy?.forwards_to ?? [];
   // A daemon built before pillar `O` sends no row at all, which is a different
@@ -255,6 +261,29 @@ export function ChatTool() {
           >
             <History size={14} />
           </IconButton>
+          {/*
+            llmproxy's admin interface binds a **random** port, so without this
+            nobody could reach it. When admin is off there is no URL and no
+            button, rather than a button that goes nowhere.
+
+            The hosts the proxy may forward to are in the **tooltip**, which is
+            all that is left of ADR-0033 clause 6's disclosure — the standing
+            line it asked for was removed at the owner's request on 2026-08-28
+            as clutter. That is a deliberate weakening and is recorded as one:
+            where a prompt goes is now answerable only on a hover, and only
+            while admin is enabled.
+          */}
+          {proxy?.admin_url && (
+            <IconButton
+              title={
+                `open llmproxy's admin interface (${proxy.admin_url})` +
+                (forwardsTo.length > 0 ? ` — may forward to ${forwardsTo.join(", ")}` : "")
+              }
+              onClick={() => void openLocalUrl(proxy.admin_url!)}
+            >
+              <ExternalLink size={12} />
+            </IconButton>
+          )}
         </div>
       </div>
 
@@ -287,41 +316,6 @@ export function ChatTool() {
       {/* The reason, verbatim from the daemon. The window does not compose its
           own version: there is one place that decides whether a model may be
           asked, and this renders what it said. */}
-      {/* Shown whenever the proxy is in the path, not only when it forwards.
-          Two jobs: it explains why the model under each answer changes from
-          question to question, and it is where the disclosure and the admin
-          button live. Not styled as a warning — adding a forwarding provider
-          is a deliberate act, and nagging about a decision somebody made on
-          purpose is how a line stops being read. */}
-      {usable && !showHistory && proxy?.url && (
-        <div className="flex items-center gap-1 border-t border-[var(--border)] px-2 py-1 text-2xs text-[var(--dim)]">
-          <span className="min-w-0 flex-1 truncate">
-            via mogeung's proxy
-            {forwardsTo.length > 0 && (
-              <>
-                {" "}
-                — may forward to <Mono>{forwardsTo.join(", ")}</Mono>
-              </>
-            )}
-          </span>
-          {/*
-            llmproxy's admin interface binds a **random** port, so before this
-            button nobody could reach it — which is exactly what was reported.
-            The daemon reads the port out of llmproxy's own runtime metadata;
-            when admin is off there is no URL and no button, rather than a
-            button that goes nowhere.
-          */}
-          {proxy.admin_url && (
-            <IconButton
-              title={`open llmproxy's admin interface (${proxy.admin_url})`}
-              onClick={() => void openLocalUrl(proxy.admin_url!)}
-            >
-              <ExternalLink size={12} />
-            </IconButton>
-          )}
-        </div>
-      )}
-
       {!usable && !showHistory && (
         <div className="border-t border-[var(--border)] px-2 py-2 text-2xs text-[var(--dim)]">
           {unknown
