@@ -845,7 +845,7 @@ keystroke away and excellent.
 
 ---
 
-## O. A local model beside the agents — **`R-O1`, `R-O5`, `R-O9`, `R-O10` and `R-O11` kept 2026-08-28; `R-O2` still gates the rest, and `A37`'s fortnight is still owed**
+## O. A local model beside the agents — **`R-O1`, `R-O5`, `R-O9`, `R-O10` and `R-O11` kept 2026-08-28; the rest ranked on value, `R-O3` next, and `A37`'s fortnight owed 2026-09-11**
 
 Asked 2026-08-27: *"I have a local running AI model that I can use and call as
 API"*, then widened the same day to the whole development life-cycle. Five
@@ -874,6 +874,30 @@ chat named as the single free-form exception and refused off loopback; and a
 **non-loopback model endpoint is publishing** — 67 MB of transcripts is the
 most publishable thing this product holds, so it needs a flag rather than a
 config line.
+
+**Ranked 2026-08-28, on user value first and complexity second**, at an
+explicit ask. The order below is the order to build in; the rows keep their
+numbers and their places, because a number that moves is a number that stops
+identifying anything.
+
+| | row | value | effort | what decides its place |
+| --- | --- | --- | --- | --- |
+| 1 | `R-O3` reading guide | highest | M | Aims at the surface that costs the most time every day: an agent diff of 22 files where three matter, found by scrolling. It also makes an existing surface better rather than adding a new one, which is the cheapest kind of value to keep. |
+| 2 | `R-O7` draft the prompt | medium | **S** | The only unbuilt row resting on **no untested assumption** — it improves the window ADR-0008 already built and leaves its single action alone. Cheapest real win in the pillar, and it can go at any time, including beside something else. |
+| 3 | `R-O4` ask the diff | highest **ceiling** | L | The row that claims *nothing else can do this*, and the claim is true. Below `R-O3` on **sequence, not worth**: it is the same bet — a model reading mogeung's evidence usefully — at three times the cost, so `R-O3` settles it cheaply first. |
+| 4 | `R-O6` semantic search | narrower | M | Real, but a second list beside a grep that already works, where the others answer questions nothing answers today. Its sharpest payoff is `R-F4`, not search itself. Closer than it looks: `bge-m3` is on the box and the proxy already has an embedding provider. |
+| 5 | `R-O8` the fortnight | — | S | Not buildable, a date. Due **2026-09-11**, and it now has five ✅ rows waiting on it rather than none. |
+
+**`R-O2` is not skipped, it is split.** Re-reading it, it is two harnesses for
+two different features that happen to share a row: the model's reading order
+against the keyword order (`A35`, `A3` — `R-O3`'s bet) and semantic recall
+against grep (`A38` — `R-O6`'s bet). Nothing needs both at once, and one row
+that must be finished before four others can start is a gate that will be
+resented and then skipped. So each half becomes the **first commit of the row
+it gates**: `--bin judge` prints the reading order before `R-O3` draws a panel
+on it, and the recall set is measured before `R-O6` shows a second list. The
+doc rule is honoured exactly as written — the assumption is tested before the
+feature is built — and value-first ordering costs nothing to get it.
 
 **`R-O2` is not a feature, and this is pillar `N`'s lesson applied rather than
 rediscovered.** `A35` carries the whole pillar and is `UNTESTED`, so the doc
