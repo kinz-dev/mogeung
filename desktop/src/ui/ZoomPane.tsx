@@ -16,6 +16,18 @@
  * and control height at its original size and the pane would come apart. `zoom`
  * scales the layout, which is what "make this bigger" actually means.
  *
+ * **No level badge.** A zoomed pane used to carry a small `150%` button in its
+ * bottom-right corner, which doubled as the reset. It was removed on
+ * 2026-08-28 at an explicit ask: it sits *over* the content, it is there for
+ * as long as the zoom is — which for a pane you deliberately made bigger is
+ * always — and the thing it reports is the one thing you can already see.
+ *
+ * Nothing is stranded by that. `⌘⇧0` / `Ctrl+Shift+0` clears every pane's
+ * factor (`zoom.reset.panes`), which is the gesture that actually gets reached
+ * for — *everything looks wrong* rather than *this one pane is 10% too big* —
+ * and it is in the shortcuts window and the palette. Undoing one pane is
+ * Ctrl+wheel the other way, which is how it got there.
+ *
  * One exception, and it is the Code pane: Monaco already scales everything it
  * draws from its own `fontSize`, and it measures in device pixels to map a
  * click to a character. So it takes the factor as a font size and this wrapper
@@ -114,16 +126,6 @@ export function ZoomPane({
       style={zoom === 1 || !scale ? undefined : ({ zoom } as React.CSSProperties)}
     >
       {children}
-      {Math.abs(zoom - 1) > 0.01 && (
-        <button
-          type="button"
-          onClick={() => zoomPane(name, 1 / zoom)}
-          title="reset this pane's zoom"
-          className="absolute right-1 bottom-1 z-10 rounded-sm border border-[var(--border)] bg-[var(--bg-raised)] px-1 text-2xs text-[var(--dim)] outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-      )}
     </div>
   );
 }

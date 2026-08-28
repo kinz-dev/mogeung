@@ -92,3 +92,31 @@ describe("a pane's Ctrl+wheel zoom", () => {
   // so `style.zoom` reads `undefined` whatever the component did. An assertion
   // that cannot distinguish the two behaviours is worse than none.
 });
+
+/**
+ * The level badge is gone, and stays gone. `R-J83`.
+ *
+ * A zoomed pane used to carry a small `150%` button in its bottom-right
+ * corner. It sat over the content, it was there for as long as the zoom was —
+ * which for a pane you deliberately made bigger is always — and it reported
+ * the one thing you can already see. Removed at an explicit ask; this is what
+ * keeps a helpful-looking indicator from being added back.
+ */
+describe("a zoomed pane", () => {
+  it("shows no level overlay over its content", () => {
+    const { prefs, setPrefs } = useStore.getState();
+    setPrefs({ zoom: { ...prefs.zoom, rail: 1.5 } });
+
+    const { container, queryByTitle } = render(
+      <ZoomPane name="rail">
+        <div>the panel</div>
+      </ZoomPane>,
+    );
+
+    expect(container.textContent).toBe("the panel");
+    expect(container.textContent).not.toMatch(/\d+%/);
+    expect(queryByTitle(/reset this pane/i)).toBeNull();
+    // And the factor is still applied — the badge went, not the zoom.
+    expect(useStore.getState().prefs.zoom.rail).toBe(1.5);
+  });
+});
