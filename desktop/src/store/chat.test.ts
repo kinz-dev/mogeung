@@ -113,14 +113,21 @@ describe("the chat reducer", () => {
  *  an insecure origin — so the fallback is a real path, not decoration. */
 describe("request ids without crypto.randomUUID", () => {
   it("still gives every ask its own id", () => {
-    const original = globalThis.crypto?.randomUUID;
-    if (original) vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(undefined as never);
+    // Unconditionally: `crypto.randomUUID` is always defined in the type
+    // environment, so guarding the spy on it made `tsc` reject the file — and
+    // `vitest` does not typecheck, so it passed here and failed the install
+    // build instead.
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(undefined as never);
     sent.length = 0;
     useStore.setState({ chat: [], send: (m) => void sent.push(m) });
     useStore.getState().askModel("one");
     useStore.getState().askModel("two");
     const ids = sent.filter((m) => m.cmd === "model_chat").map((m) => (m as { id: string }).id);
     expect(new Set(ids).size).toBe(2);
+    // And that they came from the fallback rather than from a `randomUUID`
+    // the spy failed to reach — otherwise this test passes without ever
+    // exercising the path it is named after.
+    expect(ids.every((id) => id.startsWith("chat-"))).toBe(true);
     vi.restoreAllMocks();
   });
 });

@@ -108,10 +108,20 @@ database carried over from an older build can mislead you.
 **Shell scripts here must run on bash 3.2**, which is what macOS ships. No
 `mapfile`, and expanding an empty array under `set -u` is an error.
 
-Before handing work back: `cargo test --workspace`, `npm test` in
-`desktop/` **and** `./scripts/check-docs.sh` must all pass. The window is
-TypeScript since [ADR-0020](docs/decisions/0020-the-egui-client-is-retired.md),
-so cargo alone no longer tests the client at all.
+Before handing work back: `cargo test --workspace`, `npm test` **and
+`npm run check`** in `desktop/`, **and** `./scripts/check-docs.sh` must all
+pass. The window is TypeScript since
+[ADR-0020](docs/decisions/0020-the-egui-client-is-retired.md), so cargo alone
+no longer tests the client at all.
+
+**`npm run check` is `tsc --noEmit`, and it is on this list because `npm test`
+does not typecheck.** Vitest transpiles and never checks types, so a type error
+— including one in a test file — passes every command above and then fails
+`npm run build`, which is `tsc --noEmit && vite build` and is what
+`beforeBuildCommand` runs. The first anyone hears of it is a broken
+`./scripts/install.sh`, which is the slowest possible place to find out.
+Learnt on 2026-08-28, from a guard in a test that `tsc` correctly called
+always-true.
 
 ## Testing
 

@@ -28,8 +28,13 @@ procs:
 
   # The client's own suite. Two clients became one, but the tests did not
   # merge — the daemon's are cargo's and the window's are vitest's.
+  #
+  # `npm run check` first, and in the same key rather than a fourth process:
+  # vitest transpiles without typechecking, so a type error passes the suite
+  # and then fails `npm run build` at install time. Types first, because a
+  # failing typecheck usually explains the failing test.
   test-desktop:
-    shell: cd desktop && npm test
+    shell: cd desktop && npm run check && npm test
     autostart: false
 
   docs:
