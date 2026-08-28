@@ -554,6 +554,95 @@ async fn machine_id() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Open a **loopback** URL in the system browser. `R-O10`.
+///
+/// The one thing this shell can launch that is not a pty, and it is deliberately
+/// the narrowest possible version of that: `http://127.0.0.1:<port>/…` and
+/// nothing else. It exists for one button — llmproxy's admin interface, whose
+/// port is random and therefore unguessable — and adding the general opener
+/// plugin instead would have handed the webview *"open anything"*, which is a
+/// different capability entirely from *"open the local page we just told you
+/// about"*.
+///
+/// The check is on the parsed **host**, not on a string prefix: `http://127.0.0.1.evil.com/`
+/// starts with the right characters and is not this machine. Refusing rather
+/// than sanitising, because there is exactly one caller and it has a valid URL.
+#[tauri::command]
+async fn open_local_url(url: String) -> Result<(), String> {
+    is_loopback_http(&url)?;
+
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let program = "xdg-open";
+
+    std::process::Command::new(program)
+        .arg(&url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open {url}: {e}"))
+}
+
+/// The whole of `open_local_url`'s decision, split out so it can be tested
+/// without launching a browser.
+fn is_loopback_http(url: &str) -> Result<(), String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("only http:// is opened here")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // `user@host` first, then strip a port. Both matter: `evil.com@127.0.0.1`
+    // and `127.0.0.1.evil.com:80` are the two shapes that read as loopback to
+    // a careless check and are not.
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = authority.rsplit_once(':').map_or(authority, |(h, _)| h);
+    let local = host == "localhost"
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if local {
+        Ok(())
+    } else {
+        Err(format!("{host} is not this machine — refusing to open it"))
+    }
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::is_loopback_http;
+
+    /// This is the narrowest opener that does the job, and the test is what
+    /// keeps it narrow. `R-O10`. Every refusal here is a URL that reads as
+    /// loopback to a string-prefix check and is not.
+    #[test]
+    fn only_this_machine_over_plain_http() {
+        for ok in [
+            "http://127.0.0.1:41235/",
+            "http://localhost:8080/admin",
+            "http://[::1]:41235/",
+            "http://127.0.0.1:41235/x?y=1#z",
+        ] {
+            assert!(is_loopback_http(ok).is_ok(), "{ok} is this machine");
+        }
+        for bad in [
+            "http://127.0.0.1.evil.com/",     // prefix that is not the host
+            "http://evil.com@127.0.0.1.x/",   // userinfo hiding the real host
+            "http://example.com/",
+            "https://127.0.0.1/",             // only http, so there is one shape to check
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(is_loopback_http(bad).is_err(), "{bad} must be refused");
+        }
+    }
+}
+
 /// Attach to a running daemon, or take the port and host one. `R-?`/ADR-0009.
 ///
 /// Called by the window before it connects, and **idempotent**: the answer is
@@ -637,6 +726,7 @@ pub fn run() {
             pty_close,
             export_text,
             machine_id,
+            open_local_url,
             daemon_acquire
         ])
         .setup(|app| {

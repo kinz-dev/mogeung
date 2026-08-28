@@ -14,10 +14,11 @@ import { useStore } from "@/store";
 import type { ClientMsg, Health, ModelHealth } from "@/wire/types";
 import { ChatTool, threadAsMarkdown } from "./ChatTool";
 
-const proxied = (forwards: string[]): Partial<Health> => ({
+const proxied = (forwards: string[], admin?: string): Partial<Health> => ({
   proxy: {
     state: { state: "hosting", port: 8717 },
     url: "http://127.0.0.1:8717/v1",
+    admin_url: admin ?? null,
     forwards_to: forwards,
   },
 });
@@ -328,14 +329,42 @@ describe("saying where a proxy forwards", () => {
 
   /**
    * A proxy whose providers are all on this machine forwards nowhere, and
-   * saying so anyway would be the line that teaches you to stop reading it.
+   * claiming otherwise would be the line that teaches you to stop reading it.
+   * The proxy itself is still announced — that is what explains why the model
+   * under each answer changes from question to question.
    */
-  it("says nothing when the proxy forwards nowhere", () => {
+  it("announces the proxy but claims no forwarding when there is none", () => {
     useStore.setState({
       health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied([]) } as Health,
     });
     render(<ChatTool />);
+    expect(line()).toContain("via mogeung's proxy");
     expect(line()).not.toContain("may forward to");
+  });
+
+  /**
+   * The whole reason the button exists. `R-O10`.
+   *
+   * llmproxy's admin interface binds a **random** port, so before this nobody
+   * could reach it. With admin off there is no URL — and then there must be no
+   * button, because a control that goes nowhere is worse than an absent one.
+   */
+  it("offers the admin interface only when there is one", () => {
+    useStore.setState({
+      health: {
+        ...health({ host: "127.0.0.1", remote: false }),
+        ...proxied([], "http://127.0.0.1:41235/"),
+      } as Health,
+    });
+    const { unmount } = render(<ChatTool />);
+    expect(screen.getByTitle(/admin interface/)).toBeInTheDocument();
+    unmount();
+
+    useStore.setState({
+      health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied([]) } as Health,
+    });
+    render(<ChatTool />);
+    expect(screen.queryByTitle(/admin interface/)).not.toBeInTheDocument();
   });
 
   /** No proxy at all is the ordinary case and must read exactly as before. */

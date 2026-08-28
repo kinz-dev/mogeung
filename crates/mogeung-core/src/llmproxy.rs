@@ -39,6 +39,43 @@ pub fn derive_port(daemon_port: u16) -> u16 {
     daemon_port.saturating_add(1000)
 }
 
+/// Where llmproxy records what a running instance is, keyed by its address.
+///
+/// `$XDG_RUNTIME_DIR/llmproxy-<sanitised addr>.json`, falling back to the
+/// temp directory — llmproxy's own derivation, reimplemented rather than
+/// asked for, because there is no endpoint that reports it and the file is the
+/// only place the **admin** URL exists.
+///
+/// That is the whole reason this function is here: the admin interface binds a
+/// **random** port by default, so nobody can know it, which is precisely the
+/// complaint (2026-08-28: *"no one know the admin port number"*). llmproxy
+/// writes it down; mogeung reads it and puts a button on it.
+///
+/// Reimplementing a neighbour's private path is a coupling worth naming: if
+/// llmproxy moves it, the button disappears and nothing else breaks — which is
+/// the failure mode this is allowed to have.
+pub fn runtime_info_path(addr: &str) -> std::path::PathBuf {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let sanitised: String = addr
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    dir.join(format!("llmproxy-{sanitised}.json"))
+}
+
+/// The admin URL out of that file, when there is one.
+///
+/// `None` covers every ordinary case — admin disabled, the file absent, a
+/// shape we do not recognise — because this drives a button that is simply not
+/// shown, and a missing convenience must never be an error anybody reads.
+pub fn admin_url(runtime_info: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(runtime_info).ok()?;
+    let url = v.get("admin_url")?.as_str()?.trim();
+    (!url.is_empty()).then(|| url.to_string())
+}
+
 /// What the daemon was told about the proxy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProxySettings {
@@ -99,6 +136,14 @@ pub struct ProxyHealth {
     pub state: ProxyState,
     /// What the model seam was pointed at, when it was pointed anywhere.
     pub url: Option<String>,
+    /// llmproxy's own admin interface, if that instance has one running.
+    ///
+    /// Read from llmproxy's runtime metadata rather than configured here,
+    /// because the admin port is **random** unless somebody pinned it — which
+    /// is what made it unreachable in the first place. `None` when admin is
+    /// off, and the window shows no button rather than a dead one.
+    #[serde(default)]
+    pub admin_url: Option<String>,
     /// **Where this proxy forwards, off this machine.**
     ///
     /// The reason this field exists is the hole a proxy opens in
@@ -113,7 +158,12 @@ pub struct ProxyHealth {
 
 impl ProxyHealth {
     pub fn off() -> Self {
-        ProxyHealth { state: ProxyState::Off, url: None, forwards_to: Vec::new() }
+        ProxyHealth {
+            state: ProxyState::Off,
+            url: None,
+            admin_url: None,
+            forwards_to: Vec::new(),
+        }
     }
 }
 
@@ -190,6 +240,16 @@ pub fn starter_config(listen: &str, upstream: &str) -> String {
 listen_addr = "{listen}"
 
 default_provider = "default"
+
+# llmproxy's own admin interface — decisions, spend, health, live config.
+#
+# On, and on a **random** loopback port, which is llmproxy's default and would
+# normally make it unfindable. mogeung reads the port out of llmproxy's runtime
+# metadata and puts a button on it, so random costs nothing and avoids
+# colliding with anything. `enable = false` turns it off; pinning
+# `listen_address` here works too, and the button follows either way.
+[admin]
+enable = true
 
 # The endpoint mogeung was already using. Nothing here leaves this machine
 # until you add a provider that does.
@@ -309,6 +369,43 @@ base_url = "http://127.0.0.1:8000/v1"
 
         let local = starter_config("127.0.0.1:8717", "http://127.0.0.1:8000/v1");
         assert!(forwards_to(&local).is_empty(), "a local endpoint forwards nowhere");
+    }
+
+    /// The admin port is random by default, so the only way to know it is the
+    /// file llmproxy writes. `R-O10`.
+    #[test]
+    fn the_admin_url_comes_out_of_llmproxys_own_metadata() {
+        let info = r#"{"pid":42,"proxy_url":"http://127.0.0.1:8799/",
+                       "admin_url":"http://127.0.0.1:41235/","integrated":false}"#;
+        assert_eq!(admin_url(info).as_deref(), Some("http://127.0.0.1:41235/"));
+
+        // Every ordinary absence is `None`, never an error: this drives a
+        // button that is simply not shown.
+        assert!(admin_url(r#"{"pid":42,"proxy_url":"x"}"#).is_none(), "admin off");
+        assert!(admin_url(r#"{"admin_url":null}"#).is_none());
+        assert!(admin_url(r#"{"admin_url":"  "}"#).is_none());
+        assert!(admin_url("not json").is_none());
+        assert!(admin_url("").is_none());
+    }
+
+    /// llmproxy's own derivation, reimplemented — so it is pinned here rather
+    /// than trusted to memory.
+    #[test]
+    fn the_metadata_path_is_addressed_by_the_listen_address() {
+        // Set, so the test does not depend on the machine's own runtime dir.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
+        assert_eq!(
+            runtime_info_path("127.0.0.1:8799"),
+            std::path::PathBuf::from("/run/user/1000/llmproxy-127_0_0_1_8799.json")
+        );
+    }
+
+    /// The starter turns admin on, because a random port nobody can discover
+    /// is exactly the complaint this feature answers.
+    #[test]
+    fn the_starter_enables_the_admin_interface() {
+        let cfg = starter_config("127.0.0.1:8717", "http://127.0.0.1:8000/v1");
+        assert!(cfg.contains("[admin]") && cfg.contains("enable = true"));
     }
 
     #[test]

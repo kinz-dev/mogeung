@@ -607,6 +607,15 @@ exited, and the process-group kill `run.rs` uses would reach nothing.
 parent *thread* under a runtime free to retire it, macOS does not have it, and
 it would not reach a detached grandchild either.
 
+**The admin interface is reachable because the daemon reads its port.**
+llmproxy binds admin on a random loopback port, so nobody could find it. It
+writes the URL into its own runtime metadata file, which mogeung reads and puts
+a button on. Opening it is the desktop shell's first launch that is not a pty,
+and it is deliberately the narrowest one that does the job: `open_local_url`
+accepts `http://` on a **parsed** loopback host and refuses everything else,
+rather than adding the general opener plugin and giving the webview *open
+anything*.
+
 **Where it forwards is reported, never gated.** A proxy on `127.0.0.1` passes
 ADR-0031 clause 3 without asking. mogeung refuses to extend the gate — routing
 is per request, so it could only be sometimes-right — and names the hosts

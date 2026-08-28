@@ -181,6 +181,23 @@ export async function exportText(name: string, contents: string, path?: string):
   return await core.invoke<string>("export_text", { name, contents, path: path ?? null });
 }
 
+/**
+ * Open a loopback URL in the system browser. `R-O10`.
+ *
+ * The shell refuses anything that is not this machine, so this cannot become a
+ * general "open a link" — see `open_local_url` in `lib.rs`. In a browser tab
+ * there is no shell to ask and `window.open` is the honest equivalent: the page
+ * is already in a browser.
+ */
+export async function openLocalUrl(url: string): Promise<void> {
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { core } = await api();
+  await core.invoke("open_local_url", { url });
+}
+
 export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
   const { core } = await api();
   await core.invoke("pty_resize", { id, cols, rows });

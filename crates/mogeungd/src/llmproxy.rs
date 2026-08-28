@@ -52,6 +52,7 @@ struct Inner {
     state: Option<ProxyState>,
     url: Option<String>,
     forwards_to: Vec<String>,
+    admin_url: Option<String>,
     /// The port to stop on shutdown, when there is one to stop.
     ///
     /// Set for an adopted instance as well as a hosted one, deliberately. The
@@ -110,6 +111,7 @@ impl Proxy {
             tracing::info!("llmproxy already serving 127.0.0.1:{port} — adopting it");
             g.state = Some(ProxyState::Adopted { port });
             g.url = Some(settings.url_for(port));
+            g.admin_url = read_admin_url(port);
             g.stop_port = Some(port);
             return g.url.clone();
         }
@@ -124,6 +126,7 @@ impl Proxy {
                     .unwrap_or_default();
                 g.state = Some(ProxyState::Hosting { port });
                 g.url = Some(settings.url_for(port));
+                g.admin_url = read_admin_url(port);
                 g.stop_port = Some(port);
                 tracing::info!(
                     "llmproxy started on 127.0.0.1:{port}, rules in {}{}",
@@ -178,9 +181,21 @@ impl Proxy {
         ProxyHealth {
             state: g.state.clone().unwrap_or(ProxyState::Off),
             url: g.url.clone(),
+            admin_url: g.admin_url.clone(),
             forwards_to: g.forwards_to.clone(),
         }
     }
+}
+
+/// llmproxy's admin URL for the instance on this port, if it has one.
+///
+/// Read from the metadata file llmproxy writes, because the admin interface
+/// binds a **random** port by default and there is no endpoint that reports
+/// it. Every failure is `None` — this drives a button that is not shown.
+fn read_admin_url(port: u16) -> Option<String> {
+    let path = mogeung_core::llmproxy::runtime_info_path(&format!("127.0.0.1:{port}"));
+    let text = std::fs::read_to_string(path).ok()?;
+    mogeung_core::llmproxy::admin_url(&text)
 }
 
 /// mogeung's own rules file. Never `~/.llmproxy/config.toml` — keeping the two

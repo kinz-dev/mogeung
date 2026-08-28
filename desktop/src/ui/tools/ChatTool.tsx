@@ -36,13 +36,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
+import { ExternalLink, History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import type { ChatMessage } from "@/store";
 import { Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { interactive } from "@/ui/styles";
 import { cn } from "@/lib/cn";
 import { stamp } from "@/lib/format";
+import { openLocalUrl } from "@/lib/tauri";
 
 /**
  * The thread as markdown, for `R-L2`'s note.
@@ -286,14 +287,38 @@ export function ChatTool() {
       {/* The reason, verbatim from the daemon. The window does not compose its
           own version: there is one place that decides whether a model may be
           asked, and this renders what it said. */}
-      {/* Not a warning and not styled as one: adding a forwarding provider to
-          the proxy config is a deliberate act, and nagging about a decision
-          somebody made on purpose is how a line stops being read. It is here
-          rather than only in the Health view because this is the box the
-          prompt is typed into. */}
-      {usable && !showHistory && forwardsTo.length > 0 && (
-        <div className="border-t border-[var(--border)] px-2 py-1 text-2xs text-[var(--dim)]">
-          via mogeung's proxy — may forward to <Mono>{forwardsTo.join(", ")}</Mono>
+      {/* Shown whenever the proxy is in the path, not only when it forwards.
+          Two jobs: it explains why the model under each answer changes from
+          question to question, and it is where the disclosure and the admin
+          button live. Not styled as a warning — adding a forwarding provider
+          is a deliberate act, and nagging about a decision somebody made on
+          purpose is how a line stops being read. */}
+      {usable && !showHistory && proxy?.url && (
+        <div className="flex items-center gap-1 border-t border-[var(--border)] px-2 py-1 text-2xs text-[var(--dim)]">
+          <span className="min-w-0 flex-1 truncate">
+            via mogeung's proxy
+            {forwardsTo.length > 0 && (
+              <>
+                {" "}
+                — may forward to <Mono>{forwardsTo.join(", ")}</Mono>
+              </>
+            )}
+          </span>
+          {/*
+            llmproxy's admin interface binds a **random** port, so before this
+            button nobody could reach it — which is exactly what was reported.
+            The daemon reads the port out of llmproxy's own runtime metadata;
+            when admin is off there is no URL and no button, rather than a
+            button that goes nowhere.
+          */}
+          {proxy.admin_url && (
+            <IconButton
+              title={`open llmproxy's admin interface (${proxy.admin_url})`}
+              onClick={() => void openLocalUrl(proxy.admin_url!)}
+            >
+              <ExternalLink size={12} />
+            </IconButton>
+          )}
         </div>
       )}
 

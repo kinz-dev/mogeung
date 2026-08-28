@@ -359,6 +359,14 @@ export interface ProxyHealth {
     | { state: "hosting"; port: number }
     | { state: "failed"; reason: string };
   url: string | null;
+  /**
+   * llmproxy's own admin interface — decisions, spend, health, live config.
+   *
+   * Read by the daemon from llmproxy's runtime metadata, because the admin
+   * port is **random** by default and therefore unguessable. `null` when admin
+   * is off, and the window shows no button rather than a dead one.
+   */
+  admin_url?: string | null;
   /** Hosts this proxy sends prompts to that are not this machine. */
   forwards_to: string[];
 }
