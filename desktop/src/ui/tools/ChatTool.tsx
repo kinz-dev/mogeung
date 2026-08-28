@@ -66,7 +66,7 @@ export function threadAsMarkdown(chat: ChatMessage[], when: Date): string {
 }
 
 /** One row. Split out so the pending and error shapes are visible at a glance. */
-function Turn({ m }: { m: ChatMessage }) {
+function Turn({ m, now }: { m: ChatMessage; now: number }) {
   if (m.role === "user") {
     return (
       <div className="border-l-2 border-[var(--blue)] pl-2 text-sm whitespace-pre-wrap">
@@ -74,10 +74,18 @@ function Turn({ m }: { m: ChatMessage }) {
       </div>
     );
   }
-  if (m.pending) {
-    // A local model can take a minute. Showing nothing for a minute is
-    // indistinguishable from a broken panel, which is how it gets reported.
-    return <Dim className="text-sm italic">thinking…</Dim>;
+  // Nothing has arrived yet. A local model can take a minute to its first
+  // token, and showing nothing for a minute is indistinguishable from a broken
+  // panel — which is how it gets reported.
+  if (m.pending && !m.content) {
+    // With the seconds, because a thinking model at high effort reasons for
+    // half a minute before it writes anything and streaming cannot shorten
+    // that — there is no answer text yet to stream. A number that moves is
+    // the difference between *working* and *hung*.
+    const secs = m.started ? Math.floor((now - m.started) / 1000) : 0;
+    return (
+      <Dim className="text-sm italic">thinking…{secs > 0 ? ` ${secs}s` : ""}</Dim>
+    );
   }
   if (m.error) {
     return (
@@ -93,7 +101,11 @@ function Turn({ m }: { m: ChatMessage }) {
       <div className="prose-mogeung">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
       </div>
-      {(m.model || m.elapsed_ms !== undefined) && (
+      {/* Only once it has finished. While streaming there is no elapsed time
+          worth printing and the model may not be known yet — a line that
+          appears, changes and settles is more distracting than one that
+          arrives when the answer does. `R-O11`. */}
+      {!m.pending && (m.model || m.elapsed_ms !== undefined) && (
         <Dim className="mt-1 block text-2xs">
           {m.model}
           {m.elapsed_ms !== undefined ? ` · ${(m.elapsed_ms / 1000).toFixed(1)}s` : ""}
@@ -252,6 +264,18 @@ export function ChatTool() {
   }, [showHistory, send]);
 
   const waiting = useMemo(() => chat.some((m) => m.pending), [chat]);
+  // Told apart on purpose: *waiting* is nothing yet, *answering* is text
+  // already arriving. Before `R-O11` there was only the first of those.
+  const streaming = useMemo(() => chat.some((m) => m.pending && !!m.content), [chat]);
+
+  // Ticks only while something is out, so an idle panel re-renders never.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!waiting) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [waiting]);
 
   const submit = () => {
     if (!draft.trim() || !usable) return;
@@ -329,7 +353,7 @@ export function ChatTool() {
             </Empty>
           )}
           {chat.map((m) => (
-            <Turn key={m.id} m={m} />
+            <Turn key={m.id} m={m} now={now} />
           ))}
           <div ref={bottom} />
         </div>
@@ -376,7 +400,9 @@ export function ChatTool() {
           className="w-full resize-none rounded-sm bg-[var(--bg)] px-2 py-1 text-sm outline-none disabled:opacity-50"
         />
         <div className="flex items-center gap-1">
-          {waiting && <Dim className="text-2xs">waiting…</Dim>}
+          {waiting && (
+            <Dim className="text-2xs">{streaming ? "answering…" : "waiting…"}</Dim>
+          )}
           <div className="ml-auto flex items-center gap-1">
             <IconButton
               title="copy this conversation into a note"

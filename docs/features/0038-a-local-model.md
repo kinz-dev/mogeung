@@ -2,7 +2,7 @@
 title: A local model beside the agents
 status: in-progress
 updated: 2026-08-28
-roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10]
+roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10, R-O11]
 depends_on: [A3, A4, A29, A35, A36, A37, A38]
 ---
 

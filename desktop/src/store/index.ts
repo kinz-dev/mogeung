@@ -94,6 +94,16 @@ export interface ChatMessage {
   content: string;
   /** The ask is out and nothing has come back yet. */
   pending?: boolean;
+  /**
+   * When the ask went out, local clock, so the wait can be counted on screen.
+   * `R-O11`.
+   *
+   * A thinking model at high effort reasons before it writes a word — 28
+   * seconds, measured, on a route to Claude — and streaming cannot shorten
+   * that because there is no answer text yet to stream. A motionless
+   * "thinking…" for half a minute reads as a hang, so the seconds are shown.
+   */
+  started?: number;
   /** A refusal or a failure. Shown; never sent back as context. */
   error?: string;
   /** What actually answered, which may not be what was asked for. */
@@ -832,7 +842,7 @@ export const useStore = create<AppState>((set, get) => ({
         // The pending row is added here rather than when the answer arrives,
         // so the panel shows the ask is in flight. A local model can take a
         // minute, and a box that does nothing for a minute reads as broken.
-        { id, role: "assistant", content: "", pending: true },
+        { id, role: "assistant", content: "", pending: true, started: Date.now() },
       ],
     }));
     set({ conversationId: conversation });
@@ -1223,6 +1233,21 @@ export const useStore = create<AppState>((set, get) => ({
       case "notes":
         set({ notes: msg.notes });
         break;
+      case "model_chunk":
+        // Appended to the pending turn, which stays pending: the answer is not
+        // finished until `model_reply` says so, and the "thinking…" row is
+        // what `Turn` shows in its place until there is something to read.
+        //
+        // Matched by id like the reply, because two questions can be in flight
+        // and their chunks interleave on one socket.
+        set((s) => ({
+          chat: s.chat.map((m) =>
+            m.id === msg.id && m.pending
+              ? { ...m, content: m.content + msg.delta }
+              : m,
+          ),
+        }));
+        break;
       case "model_reply":
         // Matched by id rather than by position: nothing stops a second
         // question being asked while the first is still out, and the answers
@@ -1233,6 +1258,10 @@ export const useStore = create<AppState>((set, get) => ({
               ? {
                   ...m,
                   pending: false,
+                  // The whole text, replacing whatever the chunks built. They
+                  // are an early view and this is the truth, so a chunk that
+                  // never arrived is repaired here rather than leaving a hole
+                  // in the answer nobody can see.
                   content: msg.text ?? "",
                   error: msg.error ?? undefined,
                   model: msg.model || undefined,

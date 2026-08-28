@@ -1057,7 +1057,26 @@ async fn handle(
             let state = state.clone();
             let reply = reply.clone();
             tokio::spawn(async move {
-                let msg = match state.model.chat(&messages).await {
+                // Forwarded as it arrives. `R-O11`: on a route to a large
+                // model this is the difference between one second and forty
+                // before anything appears at all.
+                //
+                // The batches are already coalesced by the model seam, so this
+                // is a handful of small events per answer rather than one per
+                // token — which is what keeps the bounded reply lane (`R-J59`)
+                // from dropping a client mid-answer for lag.
+                let chunk_reply = reply.clone();
+                let chunk_id = id.clone();
+                let msg = match state
+                    .model
+                    .chat_streaming(&messages, |delta| {
+                        send_reply(
+                            &chunk_reply,
+                            ServerMsg::ModelChunk { id: chunk_id.clone(), delta },
+                        );
+                    })
+                    .await
+                {
                     Ok(a) => {
                         // Kept only when the client named a conversation and
                         // the file has not said no — and only on an answer, so

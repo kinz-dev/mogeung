@@ -340,6 +340,29 @@ anyone can reach must not become a general-purpose LLM proxy.
 and nothing is kept, so the panel is ephemeral by construction rather than by a
 promise to delete something — there is no chat table to forget.
 
+**The answer streams. `R-O11`.** The request carries `stream: true`, and the
+daemon forwards `model_chunk` events on the asking socket as text arrives,
+always followed by exactly one `model_reply` carrying the **whole** text.
+
+That redundancy is the design rather than waste: the reply is the truth and the
+chunks are an early view of it, so a dropped chunk costs a moment of jitter
+rather than a corrupted answer, and a client that ignores chunks entirely
+behaves exactly as it did before. The client replaces its accumulated text with
+the reply's for that reason.
+
+**Deltas are coalesced, not sent per token** — 60 ms or 400 characters,
+whichever comes first. The reply lane is bounded at 256 (`R-J59`) and a fast
+endpoint emits hundreds of tokens a second; one event each would have a client
+that stalls for a moment dropped for lag, which is a worse experience than the
+wait streaming exists to remove.
+
+**It degrades to a single response.** A server that ignores `stream: true`
+answers with one JSON object and no `data:` frames; nothing is forwarded live
+and the whole body is read by the non-streaming parser, so the panel works as
+it did before. Reasoning is never streamed: it is accumulated and shown only
+when it is all there is, which is the same rule the single-response path
+follows.
+
 **The handler is spawned, not awaited.** A cold local model can take a minute,
 and the read loop awaiting it would stop that connection accepting anything
 else — the whole window frozen on one text box. The answer goes down the reply

@@ -1003,6 +1003,23 @@ pub enum ServerMsg {
     /// chosen for.
     Notes { notes: Vec<Note> },
 
+    /// A piece of an answer as it arrives. `R-O11`.
+    ///
+    /// Sent on the asking socket while a [`ClientMsg::ModelChat`] is in flight,
+    /// and always followed by exactly one [`ServerMsg::ModelReply`] carrying
+    /// the **whole** text. That redundancy is deliberate: the reply is the
+    /// truth and the chunks are an early view of it, so a client that ignores
+    /// chunks entirely still works, and a dropped chunk costs a moment of
+    /// jitter rather than a corrupted answer.
+    ///
+    /// Deltas are **coalesced** rather than sent per token: the reply lane is
+    /// bounded (`R-J59`), and a fast endpoint can emit hundreds of tokens a
+    /// second — enough to have a slow client dropped for lag mid-answer, which
+    /// is a worse experience than the wait this feature exists to remove.
+    ModelChunk {
+        id: String,
+        delta: String,
+    },
     /// One answer to one [`ClientMsg::ModelChat`], on the asking socket.
     ///
     /// Carries `text` **or** `error`, never both and never neither. A refusal

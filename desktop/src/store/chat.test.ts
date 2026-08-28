@@ -131,3 +131,74 @@ describe("request ids without crypto.randomUUID", () => {
     vi.restoreAllMocks();
   });
 });
+
+/**
+ * Streaming. `R-O11`.
+ *
+ * The property that matters is that the **reply is the truth**: chunks are an
+ * early view, so a dropped one has to be repaired rather than leaving a hole
+ * nobody can see. These pin that, and that chunks land on the right question
+ * when two are in flight.
+ */
+describe("an answer that arrives in pieces", () => {
+  beforeEach(() => {
+    useStore.setState({ chat: [], health: null, send: () => {} });
+  });
+
+  const pending = (id: string, content = "") =>
+    useStore.setState({
+      chat: [{ id, role: "assistant" as const, content, pending: true }],
+    });
+
+  it("appends each chunk to the turn it belongs to", () => {
+    pending("q1");
+    useStore.getState().ingest({ ev: "model_chunk", id: "q1", delta: "Hel" });
+    useStore.getState().ingest({ ev: "model_chunk", id: "q1", delta: "lo" });
+    expect(useStore.getState().chat[0].content).toBe("Hello");
+    expect(useStore.getState().chat[0].pending).toBe(true);
+  });
+
+  /** Two questions can be out at once and their chunks interleave. */
+  it("does not put one answer's text into another", () => {
+    useStore.setState({
+      chat: [
+        { id: "q1", role: "assistant", content: "", pending: true },
+        { id: "q2", role: "assistant", content: "", pending: true },
+      ],
+    });
+    useStore.getState().ingest({ ev: "model_chunk", id: "q2", delta: "two" });
+    useStore.getState().ingest({ ev: "model_chunk", id: "q1", delta: "one" });
+    expect(useStore.getState().chat.map((m) => m.content)).toEqual(["one", "two"]);
+  });
+
+  /**
+   * The repair. A chunk lost on the way leaves the streamed text short, and
+   * the reply replaces it wholesale rather than appending — otherwise the
+   * answer on screen would be quietly missing a piece.
+   */
+  it("the final reply is the truth, not the sum of the chunks", () => {
+    pending("q1", "Hel");
+    useStore.getState().ingest({
+      ev: "model_reply",
+      id: "q1",
+      text: "Hello, world",
+      error: null,
+      model: "qwen",
+      elapsed_ms: 900,
+    });
+    const [m] = useStore.getState().chat;
+    expect(m.content).toBe("Hello, world");
+    expect(m.pending).toBe(false);
+    expect(m.model).toBe("qwen");
+  });
+
+  /** A chunk for a turn that already finished must not reopen it. */
+  it("ignores a chunk that arrives after the reply", () => {
+    pending("q1");
+    useStore.getState().ingest({
+      ev: "model_reply", id: "q1", text: "done", error: null, model: "m", elapsed_ms: 1,
+    });
+    useStore.getState().ingest({ ev: "model_chunk", id: "q1", delta: " late" });
+    expect(useStore.getState().chat[0].content).toBe("done");
+  });
+});

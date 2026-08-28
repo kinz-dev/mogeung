@@ -1183,6 +1183,15 @@ export type ServerMsg =
   | { ev: "kit"; entries: KitEntry[] }
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
+  /**
+   * A piece of an answer as it arrives. `R-O11`.
+   *
+   * Always followed by exactly one `model_reply` carrying the **whole** text,
+   * which is the truth — these are an early view of it. So a dropped chunk
+   * costs a moment of jitter rather than a corrupted answer, and a client that
+   * ignores them entirely still works.
+   */
+  | { ev: "model_chunk"; id: string; delta: string }
   /** `text` or `error`, never both and never neither. */
   | {
       ev: "model_reply";
