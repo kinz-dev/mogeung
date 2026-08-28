@@ -48,7 +48,11 @@ const TOOLS: Record<RailTool, { label: string; icon: typeof Folder }> = {
   search: { label: "Search", icon: Search },
   notes: { label: "Notes", icon: NotebookPen },
   bookmarks: { label: "Bookmarks", icon: Bookmark },
-  chat: { label: "Chat", icon: MessageSquare },
+  // *Ask Mogeung* rather than *Chat*, asked for 2026-08-28. "Chat" names the
+  // widget; this names what it is for, and in a rail whose other four headers
+  // are nouns for things you already have, the one that answers questions is
+  // worth spelling as an invitation.
+  chat: { label: "Ask Mogeung", icon: MessageSquare },
 };
 
 const BODIES: Record<RailTool, React.FunctionComponent> = {

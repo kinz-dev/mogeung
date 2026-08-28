@@ -129,7 +129,12 @@ describe("the macOS defaults", () => {
   it("keep ⌥ where ⌘ is spoken for, and say which", () => {
     // `⌘A` selects all, `⌘C` copies, `⌘W` closes the window, `⌘H` hides the
     // app, `⌘K` is our palette and `⌘0` is our reset-zoom.
-    expect(macKeys("pane.agent")).toEqual(["Alt+KeyA"]);
+    //
+    // `rail.chat` is the one that holds `A` since 2026-08-28 — it inherited
+    // the chord from `pane.agent` and, with it, the reason the chord cannot be
+    // `⌘A`. The Agent pane moved to a letter where `⌘` is free.
+    expect(macKeys("rail.chat")).toEqual(["Alt+KeyA"]);
+    expect(macKeys("pane.agent")).toEqual(["Meta+g"]);
     expect(macKeys("pane.code")).toEqual(["Alt+KeyC"]);
     expect(macKeys("wall")).toEqual(["Alt+KeyW"]);
     expect(macKeys("health")).toEqual(["Alt+KeyH"]);

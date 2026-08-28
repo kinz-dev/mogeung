@@ -157,7 +157,12 @@ export const ACTIONS: Action[] = [
   // sits at the far right — a rightmost thing wearing the highest digit.
   dockTool("changes", "Changes", ["Alt+2"]),
   dockTool("transcript", "Transcript", ["Alt+3"]),
-  pane("agent", "Agent", ["Alt+a"]),
+  // `Alt+G` (a-**g**-ent) since 2026-08-28. It was `Alt+A` for as long as
+  // there have been panes, and giving that up is a real cost — a trained
+  // chord that now means something else is worse than one that never worked.
+  // It moved because `Alt+A` was asked for by name for the chat panel, and of
+  // the two, the one with a free adjacent letter is this one.
+  pane("agent", "Agent", ["Alt+g"]),
   {
     id: "pane.code",
     label: "Focus the newest open file",
@@ -400,7 +405,11 @@ export const ACTIONS: Action[] = [
   rail("search", "global search", ["Alt+s"]),
   rail("notes", "notes", ["Alt+n"]),
   rail("bookmarks", "bookmarks", ["Alt+b"]),
-  rail("chat", "the chat panel", ["Alt+j"]),
+  // `Alt+A` at an explicit ask, 2026-08-28, and it cost the Agent pane the
+  // chord it had held — see `pane("agent", …)` below, which moved to `Alt+G`.
+  // Named *Ask Mogeung* in the same breath: "chat" says what the widget is,
+  // and this says what it is for.
+  rail("chat", "Ask Mogeung", ["Alt+a"]),
 
   {
     id: "queue.focus",
@@ -706,7 +715,7 @@ export const MAC_KEYS: Record<string, string[]> = {
   "rail.search": ["Meta+s"],
   "rail.notes": ["Meta+n"],
   "rail.bookmarks": ["Meta+b"],
-  "rail.chat": ["Meta+j"],
+  "pane.agent": ["Meta+g"],
   "info.toggle": ["Meta+o"],
   rescan: ["Meta+r"],
   "prefs.export": ["Meta+Shift+e"],
@@ -715,7 +724,9 @@ export const MAC_KEYS: Record<string, string[]> = {
 
   // Letters where `⌘` is spoken for. The mnemonic survives; only the modifier
   // and the spelling change.
-  "pane.agent": ["Alt+KeyA"], // `⌘A` selects all
+  // Inherited from `pane.agent` along with the chord itself: `⌘A` selects all,
+  // so the rail's one non-`⌘` tool is the one whose letter is spoken for.
+  "rail.chat": ["Alt+KeyA"],
   "pane.code": ["Alt+KeyC"], // `⌘C` copies
   wall: ["Alt+KeyW"], // `⌘W` closes the window
   health: ["Alt+KeyH"], // `⌘H` hides the application
@@ -725,10 +736,15 @@ export const MAC_KEYS: Record<string, string[]> = {
   // spelled by character` caught the first attempt. Whether macOS composes a
   // character under ⌘⌥ is exactly the kind of thing worth not betting on.
   "file.copy_path": ["Meta+Alt+KeyC"],
-  // These two stay beside the pane they act on rather than following the
-  // free-`⌘` rule: splitting the Agent pane is `⌥⇧A` because reaching it is
-  // `⌥A`, and a family split across two modifiers is a family you have to
-  // memorise twice.
+  // These two do not follow the free-`⌘` rule, and since 2026-08-28 they no
+  // longer sit beside the pane they act on either. `⌥⇧A` was chosen *because*
+  // reaching the pane was `⌥A`; the pane has moved to `⌘G` and these stayed.
+  //
+  // Deliberately, and it is a trade rather than an oversight: these are the
+  // rarer two gestures of the three, and moving them as well would charge a
+  // second relearning for chords nothing is contending for. The family is
+  // split, which the old comment here said was worth avoiding — that judgement
+  // was made when nothing was asking for `A`, and something now is.
   "pane.agent.split": ["Alt+Shift+KeyA"],
   "pane.agent.hold": ["Alt+Shift+KeyH"],
 
