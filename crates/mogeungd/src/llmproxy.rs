@@ -234,13 +234,17 @@ fn config_path(settings: &ProxySettings) -> std::path::PathBuf {
 
 /// Is an llmproxy answering here?
 ///
+/// Public so `--bin judge` can ask the same question: a harness that graded a
+/// different endpoint than the panel talks to would be measuring the wrong
+/// model and reporting it as a finding.
+///
 /// Hand-rolled HTTP/1.0 over a raw socket, the way the window's own start-up
 /// probe does it: one request, once, at start-up, and not worth an HTTP client
 /// for. The body must be llmproxy's own `{"status":"ok"}` — anything else
 /// holding the port is *not* adopted, because attaching the model seam to an
 /// unrelated service is how you get a chat panel that times out with no
 /// explanation.
-fn probe(port: u16) -> bool {
+pub fn probe(port: u16) -> bool {
     use std::io::{Read, Write};
     use std::time::Duration;
 
