@@ -273,12 +273,16 @@ async fn post_streaming(
 
     let status = child.wait().await;
 
-    // Anything at all arrived as a stream — including a mid-stream error
-    // frame. `finish` decides what it adds up to. A partial answer is kept
-    // rather than discarded: a timeout half way through a long reply leaves
-    // something worth reading, and throwing it away to report a failure the
-    // user can already see is the wrong trade.
-    if !(state.text.is_empty() && state.reasoning.is_empty() && state.error.is_none()) {
+    // **Any frame at all** means this was a stream, so `finish` decides what it
+    // adds up to — including "nothing", which it reports as a model that
+    // answered with nothing rather than as unparseable JSON. Judging by
+    // accumulated text instead sent a truncated stream to the whole-body
+    // parser below, which quoted raw SSE back at the user.
+    //
+    // A partial answer is kept rather than discarded: a timeout half way
+    // through a long reply leaves something worth reading, and throwing it
+    // away to report a failure the user can already see is the wrong trade.
+    if state.frames > 0 {
         return state.finish();
     }
 
@@ -372,6 +376,16 @@ pub struct StreamState {
     pub done: bool,
     /// An error frame. Stops the read and becomes the panel's message.
     pub error: Option<String>,
+    /// How many `data:` frames arrived, of any kind.
+    ///
+    /// This and **not** the accumulated text is what says whether the response
+    /// was a stream. A reply cut off after its opening `{"role":"assistant"}`
+    /// frame — a timeout on a long prompt, which is exactly what a big diff
+    /// produces — has no text and is still unmistakably a stream. Judging by
+    /// the text sent that case to the whole-body parser, which reported *the
+    /// endpoint did not answer with JSON* and quoted the SSE at the user.
+    /// Found by `--bin judge` on a 60-file diff.
+    pub frames: usize,
 }
 
 impl StreamState {
@@ -391,6 +405,7 @@ impl StreamState {
         if payload.is_empty() {
             return None;
         }
+        self.frames += 1;
         if payload == "[DONE]" {
             self.done = true;
             return None;
@@ -784,6 +799,25 @@ mod tests {
         assert!(st.error.is_some());
         let e = st.finish().unwrap_err();
         assert!(e.contains("context length exceeded"), "{e}");
+    }
+
+    /// A stream cut off after its opening frame is still a **stream**, and must
+    /// not be handed to the whole-body parser. `R-O11`, found by `--bin judge`
+    /// on a 60-file diff that timed out: the old check asked whether any text
+    /// had accumulated, so this case reported *the endpoint did not answer with
+    /// JSON* and quoted raw SSE at the user.
+    #[test]
+    fn a_truncated_stream_is_still_a_stream() {
+        let mut st = StreamState::default();
+        st.push_line(r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#);
+        assert_eq!(st.frames, 1, "a frame arrived, even though no text did");
+        assert!(st.text.is_empty() && st.reasoning.is_empty() && st.error.is_none());
+        // And it reports the honest thing rather than a parser complaint.
+        assert_eq!(st.finish().unwrap_err(), "the model answered with nothing");
+
+        // Nothing at all is the only case that may fall through to the
+        // whole-body parser.
+        assert_eq!(StreamState::default().frames, 0);
     }
 
     /// Some servers answer a streaming request with one whole completion in a
