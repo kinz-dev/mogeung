@@ -30,9 +30,19 @@
 # in release. `--no-desktop` is the old behaviour when that is not what you
 # want, and `--no-build` installs whatever is already sitting in `target/`.
 #
-# **`sudo` is needed for step 3 and only step 3.** dpkg writes to /usr/bin, so
-# the password prompt arrives after the builds rather than at the start; that
-# is unavoidable without asking for a password you might not end up needing.
+# **`sudo` is needed for step 3 and only step 3**, and there are two ways to
+# give it. Either works and neither prompts in the middle of the builds:
+#
+#   sudo ./scripts/install.sh    # sudo asks once, before anything runs
+#   ./scripts/install.sh         # the script asks once, up front, then keeps
+#                                # the credential warm across the long builds
+#
+# Running the whole thing under `sudo` needs care, which is why it is handled
+# here rather than left to chance: as root, `$HOME` is `/root`, so a naive run
+# would build against root's cargo and npm caches and install the launchers
+# into `/root/.local/bin` — the one place they are no use to anybody. So when
+# invoked through `sudo`, everything except `dpkg` is run back as the
+# **invoking** user, and their `$HOME` is what `--prefix` defaults from.
 #
 # On macOS step 3 builds the bundle and stops: the artefact is a `.app` and a
 # `.dmg`, and where those go is a decision this script does not get to make.
@@ -42,6 +52,43 @@
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
+ROOT="$PWD"
+
+# ── who is this actually being installed for? ────────────────────────────────
+#
+# `RUN_AS` is set only when we are root *because of sudo*. A real root login
+# (no `SUDO_USER`) is left alone: that user means /root, and second-guessing
+# them would be worse than doing as asked.
+RUN_AS=""
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    RUN_AS="$SUDO_USER"
+    # `eval echo ~user` rather than `getent`, which macOS does not have.
+    HOME="$(eval echo "~$SUDO_USER")"
+    export HOME
+fi
+
+# Run a build step as the invoking user, or directly when there is none.
+#
+# `-i` and not a bare `-u`: sudo resets `PATH` to `secure_path`, which on most
+# machines contains neither `~/.cargo/bin` nor whatever `node` a version
+# manager put on the path — so without a login shell the builds fail to find
+# their own toolchain. The `cd` is explicit because `-i` starts in `$HOME`.
+as_user() {
+    if [ -n "$RUN_AS" ]; then
+        sudo -u "$RUN_AS" -i sh -c "cd '$ROOT' && $1"
+    else
+        sh -c "$1"
+    fi
+}
+
+# Give a file we installed as root back to the person it is for. Without this
+# the launchers end up root-owned in a user's ~/.local/bin, and the next run
+# *without* sudo cannot overwrite them.
+give_back() {
+    [ -n "$RUN_AS" ] || return 0
+    chown "$RUN_AS" "$@" 2>/dev/null
+    return 0
+}
 
 PREFIX="$HOME/.local/bin"
 BUILD=1
@@ -114,6 +161,50 @@ need_sudo() {
     return 1
 }
 
+# The pid of the keep-alive below, so it can be stopped. Empty when there is
+# none, which is the case whenever the script is already root.
+SUDO_KEEPALIVE=""
+stop_keepalive() {
+    [ -n "$SUDO_KEEPALIVE" ] && kill "$SUDO_KEEPALIVE" 2>/dev/null
+    SUDO_KEEPALIVE=""
+    return 0
+}
+trap stop_keepalive EXIT
+
+# Authenticate **before** the builds, not after them.
+#
+# The builds take minutes, and a password prompt that arrives at the end of
+# them is the worst possible moment: you have walked away, and the run you came
+# back to has been sitting idle rather than finishing. Asking first costs a
+# prompt on a run that might have been `--no-desktop` anyway, which is a much
+# smaller price.
+#
+# `sudo -v` caches the credential, and its timestamp expires (typically 5
+# minutes) long before a cold release build finishes — so a background loop
+# refreshes it while we work, and the `EXIT` trap above stops that loop
+# whatever happens. Nothing is elevated by this: `-v` only extends a
+# credential the user just typed.
+authenticate_early() {
+    need_sudo || return 1
+    [ -z "$SUDO" ] && return 0
+    echo "▸ this needs root at the end, to install the .deb — asking now so the"
+    echo "  builds are not interrupted by it later."
+    if ! sudo -v; then
+        echo >&2
+        echo "could not authenticate. Run this from a terminal, or use" >&2
+        echo "  sudo ./scripts/install.sh" >&2
+        echo "which asks once before anything runs." >&2
+        return 1
+    fi
+    while true; do
+        sudo -n true 2>/dev/null
+        sleep 45
+        kill -0 "$$" 2>/dev/null || exit
+    done &
+    SUDO_KEEPALIVE=$!
+    return 0
+}
+
 # Print the header comment, stopping at the first line that is not one.
 usage() {
     awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -162,6 +253,11 @@ if [ "$UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
+# Before anything slow. `--no-desktop` needs no root at all, so it is not asked.
+if [ "$DESKTOP" -eq 1 ] && [ "$UNINSTALL" -eq 0 ]; then
+    authenticate_early || exit 1
+fi
+
 # Step 1, and first on purpose: a dead entry sitting next to the real one is
 # the confusing state, so clear it before step 3 can create the real one.
 remove_stale_shortcut || exit 1
@@ -170,7 +266,7 @@ remove_stale_shortcut || exit 1
 
 if [ "$BUILD" -eq 1 ]; then
     echo "▸ building the daemon (release)…"
-    cargo build --release || exit 1
+    as_user "cargo build --release" || exit 1
 fi
 
 if [ ! -x "target/release/mogeungd" ]; then
@@ -189,6 +285,7 @@ install -m 755 scripts/qwenmo          "$PREFIX/qwenmo"   || exit 1
 install -m 755 scripts/codexmo         "$PREFIX/codexmo"  || exit 1
 
 for name in $INSTALLABLES; do
+    give_back "$PREFIX/$name"
     echo "▸ installed $PREFIX/$name"
 done
 
@@ -200,10 +297,10 @@ if [ "$DESKTOP" -eq 1 ]; then
         # free, and this script is already the slow one.
         if [ ! -d "desktop/node_modules" ]; then
             echo "▸ installing the window's dependencies…"
-            (cd desktop && npm install) || exit 1
+            as_user "cd desktop && npm install" || exit 1
         fi
         echo "▸ building the window (release) — this compiles the daemon again, so it is minutes…"
-        (cd desktop && npm run tauri build -- --bundles "$BUNDLES") || exit 1
+        as_user "cd desktop && npm run tauri build -- --bundles '$BUNDLES'" || exit 1
     fi
 
     if [ "$(uname -s)" != "Linux" ]; then
@@ -223,17 +320,9 @@ if [ "$DESKTOP" -eq 1 ]; then
 
     need_sudo || exit 1
     echo "▸ installing $DEB (needs root)…"
-    # Authenticate *before* dpkg, so a password problem reports itself as one.
-    # Without this the two failures print the same message, and the commonest
-    # one — no terminal to type into, which is every non-interactive run — read
-    # as a broken package.
-    if [ -n "$SUDO" ] && ! $SUDO -v; then
-        echo >&2
-        echo "could not authenticate. Run this from a terminal, or install the" >&2
-        echo "package yourself once you can:" >&2
-        echo "  sudo dpkg -i $DEB" >&2
-        exit 1
-    fi
+    # No prompt here: `authenticate_early` asked before the builds and has been
+    # keeping the credential warm ever since, or we are already root because
+    # this was run under sudo. Either way the password moment is behind us.
     if ! $SUDO dpkg -i "$DEB"; then
         echo >&2
         echo "dpkg refused it. If it named missing dependencies, this fixes them:" >&2
