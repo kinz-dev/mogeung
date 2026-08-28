@@ -45,9 +45,23 @@ fi
 #
 # Count only ledger rows — lines beginning "| A<digit>" — so the status-legend
 # table further up the same file is not mistaken for data.
+#
+# And read the **status column**, not the whole row. A row that cites another
+# assumption's status in its evidence — "it is `AT RISK` because…", "stays
+# `AT RISK` rather than `REFUTED`" — used to be counted under that status too,
+# so every tally here was inflated by however often the ledger talked about
+# itself. Found 2026-08-28 when four new `UNTESTED` rows moved the at-risk
+# count as well.
 ledger=docs/product/assumptions.md
 count_status() {
-    grep -E '^\| A[0-9]+ \|' "$ledger" 2>/dev/null | grep -c "\`$1\`" || echo 0
+    awk -F'|' -v want="\`$1\`" '
+        /^\| A[0-9]+ \|/ {
+            s = $4
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            if (s == want) n++
+        }
+        END { print n+0 }
+    ' "$ledger" 2>/dev/null
 }
 a_untested=$(count_status UNTESTED)
 a_risk=$(count_status "AT RISK")

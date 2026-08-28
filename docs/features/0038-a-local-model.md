@@ -1,0 +1,271 @@
+---
+title: A local model beside the agents
+status: draft
+updated: 2026-08-28
+roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8]
+depends_on: [A3, A4, A29, A35, A36, A37, A38]
+---
+
+# 0038 — A local model beside the agents
+
+Asked 2026-08-27: *"I have a local running AI model that I can use and call as
+API"*, then widened the same day to the whole development life-cycle. Five
+candidates were chosen out of that conversation and they are what this spec
+covers. The rest of the brainstorm is deliberately not recorded — a list nobody
+picked from is not a plan, and this repository already has enough documents.
+
+**The finding that shaped the spec: none of the five needs a fence moved.**
+The question was posed with the design rules explicitly suspended, and the
+features that came back out of it sit inside the rules as written.
+[ADR-0003](../decisions/0003-observe-do-not-spawn.md) is untouched — nothing
+here starts, steers or stops an agent.
+[ADR-0019](../decisions/0019-a-viewer-not-an-editor.md) is untouched — nothing
+here writes a worktree file, so the concurrent writer, the cost that decided
+that ADR, is not paid. [ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)
+is untouched — `R-O7` drafts better text into the window that already exists
+and still offers exactly one action.
+
+That is worth stating plainly because it is evidence about the rules rather
+than about the features: given permission to break them, the work that looked
+most valuable did not need to.
+
+What *is* new is [ADR-0030](../decisions/0030-a-model-reads-the-evidence.md),
+and it exists for two reasons that have nothing to do with agents — where the
+model call lives, and the fact that `R-O5` puts a free-form string on a wire
+that has only ever carried ids.
+
+## Spec
+
+### Problem
+
+Five moments where mogeung already holds the material and cannot use it.
+
+**1. A 22-file diff has no shape.** The Changes pane lists files and the
+reading order underneath is keyword heuristics — [A3](../product/assumptions.md),
+`UNTESTED` since the ledger was written, evidence in full: *"ranked `auth.rs`
+above a lockfile once, in a test."* An agent-made change is mostly mechanical
+with three hunks that matter, and finding those three is done by scrolling.
+
+**2. The rationale for a line is on disk and unreachable from the line.**
+`R-F2` links a file to the sessions that touched it and `R-F9` links a commit
+to the turns nearest its timestamp. Neither answers *why is there a mutex
+here* — and the answer is in the transcript, written by the thing that added
+it, three panes away and not indexed by the question anyone actually asks.
+
+**3. A quick question means leaving.** Not a question about this repository —
+a question about a `sed` flag, a Rust lifetime, a git incantation. mogeung is
+the window that is open, and the assistant is somewhere else.
+
+**4. Search finds the words you remember, not the thing you meant.**
+[Feature 0017](0017-cross-session.md) put semantic search out of scope with a
+reason and a sequence: *"Semantic/embedding search — honest substring/token
+search first."* Substring search shipped in 2026-07 and has been in daily use
+since, so the condition attached to that refusal is met. The sharpest cost of
+its absence is `R-F4`: recurring-failure detection compares **literal** error
+text, so the same failure worded two ways is two failures, and a failure worded
+freshly each time is invisible.
+
+**5. A review's intent still dies on the way to the terminal.** ADR-0008 built
+the prompt window and it works, but what it composes is a concatenation —
+flagged hunks, hunk headers, your terse notes — and turning that into a
+sentence an agent can act on is still done by hand, in the window, every time.
+
+### Assumptions
+
+| # | Status | Why it matters here |
+|---|---|---|
+| [A35](../product/assumptions.md) | `UNTESTED` | The pillar's premise: a local model's reading of mogeung's own evidence is worth the screen space. `R-O2` is its test and it comes first |
+| [A36](../product/assumptions.md) | `UNTESTED` | `R-O4` rests on the rationale for a change being in the transcript and reachable from the line. The links exist (`R-F2`, `R-F9`); that they answer the question is the bet |
+| [A37](../product/assumptions.md) | `UNTESTED` | `R-O5`, and it is [A27](../product/assumptions.md)'s shape exactly — a text box in mogeung competing with a better one already open beside it. A27 is `AT RISK`, which is the precedent to read before building this |
+| [A38](../product/assumptions.md) | `UNTESTED` | `R-O6`: that embeddings find what substring search missed **often enough to earn a second list** |
+| [A3](../product/assumptions.md) | `UNTESTED` | `R-O3` is the first real attempt to settle it, in the direction [pillar K](../product/roadmap.md#k-explicitly-not) permits |
+| [A29](../product/assumptions.md) | `SUPPORTED` | `R-O6` extends the search panel A29 settled rather than adding a sixth box |
+| [A4](../product/assumptions.md) | `AT RISK` | As everywhere. A model reading transcripts inherits every shape the parser has not seen |
+
+> **The doc rule applies and is not being waived.** A35 is `UNTESTED` and it
+> carries the whole pillar, so `R-O2` — the harness — is the work, and
+> `R-O3`–`R-O7` are gated on what it says. `R-O5` is the exception and it is an
+> honest one: A37 is a question about habit, and no harness measures habit. It
+> is built small and judged by `R-O8`.
+
+### Acceptance
+
+**`R-O1` — the seam**
+
+- [ ] A model endpoint is configured on the daemon; with none configured every
+      pane below renders exactly what it renders today and says *no model
+      configured* where the feature would have been — never a spinner, never an
+      empty panel that reads as broken
+- [ ] Health carries a model row, per endpoint, the way it grew a per-source
+      list for a third agent CLI (`R-I15`): reachable, model name, last error
+- [ ] No model call happens on the scan tick. A pane asks; the answer arrives
+      later or does not arrive
+- [ ] The daemon refuses a non-loopback **model endpoint** unless started with
+      an explicit flag, and the window states where the bytes go
+
+**`R-O2` — the harness, before the panels**
+
+- [ ] `cargo run -q -p mogeungd --bin judge` runs the reading guide and the
+      existing keyword order over every session on this machine that has a
+      diff, and prints where they disagree
+- [ ] It reports semantic recall against grep on a fixed query set: hits grep
+      missed, and hits grep found that the index ranked away
+- [ ] It exits **non-zero when the model is unreachable or returns nothing**,
+      so a broken setup can never read as *no findings* — `--bin sweep`'s
+      discipline, for the same reason
+
+**`R-O3` — the reading guide**
+
+- [ ] For a session with changed files, the Changes pane offers a model
+      ordering with a one-line reason per file and a paragraph naming what
+      carries the change and what is mechanical
+- [ ] The reason is always visible where the ordering is used — the ranking is
+      never a black box ([attention-ranking](../design/attention-ranking.md))
+- [ ] The keyword ordering is one click away, unchanged, and is what shows when
+      no model is configured
+- [ ] The two orderings are never blended. Pillar K allows honest heuristics or
+      real analysis and refuses the middle
+- [ ] Nothing here touches the queue's tiers or scores
+
+**`R-O4` — ask the diff, answered from the transcript**
+
+- [ ] From a hunk or a line, a question can be asked and is answered in place
+- [ ] Every answer **cites the turns it used**, and a citation opens the
+      Transcript pane at that moment (`R-F9`'s machinery)
+- [ ] When no transcript covers the line, the answer says so and is labelled as
+      read from the code alone — an uncited answer is never presented as
+      provenance
+
+**`R-O5` — the chat panel**
+
+- [ ] A chat tool in the right rail takes a question and answers in place,
+      conversationally, with no repository context and no tools
+- [ ] The conversation is **ephemeral**; one gesture copies it into a note
+      (`R-L2`'s copy-into-a-note, reused rather than a second store)
+- [ ] It is refused on a non-loopback bind unless the flag from `R-O1` is
+      passed, and the refusal says why
+
+**`R-O6` — semantic search as a second list**
+
+- [ ] The Insight search panel keeps its grep results, first and unchanged
+- [ ] A second list, labelled **similar** and never *matches*, shows semantic
+      hits, and says which model produced the index and when it was built
+- [ ] An index older than the corpus says so rather than answering as though
+      current
+- [ ] Recurring-failure rows (`R-F4`) cluster failures that share meaning
+      rather than literal text, and every cluster can be expanded to the
+      literal strings that were joined
+
+**`R-O7` — draft the follow-up prompt**
+
+- [ ] The prompt window offers a drafted instruction composed from the flagged
+      hunks and their notes
+- [ ] The raw concatenation is one click away, so what the draft dropped is
+      inspectable
+- [ ] The window still offers exactly **one** action: copy
+
+**`R-O8` — the verdict**
+
+- [ ] After a fortnight, each row above is kept or removed against the removal
+      condition written in its assumption, and A35–A38 take a status
+
+### Explicitly out of scope
+
+- **Any write to a worktree file.** ADR-0019's concurrent writer is unchanged
+  and unanswerable; a model that edits while an agent edits is the same
+  problem with a new author.
+- **Any path into a session's input.** ADR-0003. `R-O7` ends at the clipboard,
+  which is where ADR-0008 put the boundary and where it stays.
+- **The model choosing an attention tier.** Tiers are facts — the registry's
+  `idle`, an unmatched `tool_use`, a recorded API error. A model may order
+  within a view; it may not move a badge.
+- **Model output as evidence.** `R-N7`'s rule generalises: *a run we did must
+  not launder a claim the agent made.* A model's opinion is a third column and
+  is never merged with a claim or a run.
+- **A cloud endpoint by default.** Sending the corpus to a remote host is
+  publishing, which is [ADR-0014](../decisions/0014-fetch-is-not-publishing.md)'s
+  line. Loopback unless explicitly and visibly configured otherwise.
+- **Agentic loops** — a model that runs commands, iterates, or works unattended.
+  Nothing here needs one, and the security argument for one is a different ADR.
+
+## Plan
+
+### Approach
+
+**The daemon holds the model, not the client.** The corpus is on the daemon's
+machine, the derived index has to live where [ADR-0016](../decisions/0016-rebuild-derived-state.md)
+says derived state lives, and *"the daemon is the product; every UI is a client
+with no local authority"* is the rule this would otherwise be the first
+exception to. It also decides the remote case correctly: a window watching a
+Mac (`R-I6`) gets **that machine's** transcripts read by whatever endpoint that
+daemon is configured with, rather than the window's own.
+
+The cost is real and stated rather than discovered: the machine with the GPU may
+not be the machine with the sessions. The endpoint is therefore a URL in daemon
+config rather than an in-process model, so a remote daemon can be pointed back
+at this desk — with `R-O1`'s non-loopback flag as the gate, because that
+configuration is exactly the one that puts transcripts on a network.
+
+Everything else follows the shape `insight` already has: a request-path family
+that computes on demand, cached by content hash, droppable and rebuildable —
+never on the scan tick, which is `R-J8`'s lesson (broadcast only what changed;
+never make the poll loop do work).
+
+### Files touched
+
+| Path | Change |
+|---|---|
+| `crates/mogeung-core/src/model.rs` | New — request/response types, the prompt builders, the no-model state |
+| `crates/mogeung-core/src/wire.rs` | New `Model*` command family; one free-form variant, the rest id-carrying |
+| `crates/mogeung-core/src/config.rs` | Endpoint, model name, embedding model, the non-loopback flag |
+| `crates/mogeung-core/src/health.rs` | A per-endpoint model row |
+| `crates/mogeungd/src/model.rs` | New — the HTTP client, work queue, content-hash cache |
+| `crates/mogeungd/src/insight.rs` | Embedding index; `similar` beside the grep path; `R-F4` clustering |
+| `crates/mogeung-core/src/review.rs` | Reading-guide ordering beside the keyword one, never blended |
+| `crates/mogeungd/src/api.rs`, `server.rs` | REST twins; the non-loopback refusal |
+| `crates/mogeungd/src/bin/judge.rs` | New — `R-O2`'s harness |
+| `desktop/src/panes/ChangesPane.tsx` | The guide, the reason column, the fallback toggle |
+| `desktop/src/ui/DiffView.tsx` | Ask-from-a-hunk, citations that open the Transcript |
+| `desktop/src/ui/Rail.tsx` + a new rail tool | The chat panel |
+| `desktop/src/panes/InsightPane.tsx` | The second, labelled list |
+| `desktop/src/ui/PromptWindow.tsx` | The draft, and the raw view behind it |
+
+### Risks and unknowns
+
+- **A37 is A27 wearing a different hat.** Notes were asked for as directly as
+  this and are `AT RISK` because the editor beside mogeung was where writing
+  already happened. The chat window beside mogeung is a stronger incumbent than
+  a text editor was. This is why `R-O5` stores nothing.
+- **Latency.** A reading guide that arrives after you have started scrolling is
+  worse than no reading guide. The harness should report time-to-first-guide,
+  not only quality.
+- **Contention.** A local model doing background work shares a machine with
+  three or four agents and a `cargo build`. Indexing is the part that must be
+  interruptible.
+- **A4, again.** A model summarising a transcript shape the parser silently
+  dropped will describe a session confidently and wrongly. Citations are the
+  mitigation: an answer that cannot point at turns is labelled as not having
+  any.
+- **The draft that is nearly right.** ADR-0008 predicted this pressure by name
+  — *"'just paste it for me' is one keystroke from 'just send it'"* — and
+  `R-O7` makes the paste better, which makes the pressure worse. The refusal is
+  written down now, before there is a button worth wanting.
+
+### Test strategy
+
+- Prompt builders and response parsing are pure: unit tests with recorded
+  fixtures, no endpoint.
+- A fake endpoint (a local HTTP stub) for the daemon path: latency, failure,
+  malformed output, and the no-model state — which is the one that must never
+  break a pane.
+- The ordering rule gets a test that would fail today: with a model configured
+  and a model absent, the Changes pane must produce two orderings and never a
+  third that mixes them.
+- `--bin judge` is the acceptance test for A35 and A38 and is not a unit test;
+  it runs against this machine's corpus and prints numbers a human reads.
+- Client suites for the fallback rendering, the citation click-through, and the
+  prompt window still offering one action.
+
+## Notes
+
+*Filled during implementation. Surprises, dead ends, things the plan got wrong.*

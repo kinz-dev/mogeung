@@ -7,11 +7,11 @@
 | Branch | `main` |
 | Tests | 509 passing |
 | Rust | 35933 lines |
-| Docs | 96 files, 29 ADRs |
+| Docs | 98 files, 30 ADRs |
 
 ## Assumptions
 
-Untested: **12** · At risk: **6** · Supported: 18 · Refuted: 2
+Untested: **15** · At risk: **5** · Supported: 17 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -58,4 +58,5 @@ Untested: **12** · At risk: **6** · Supported: 18 · Refuted: 2
 | [Run and Debug](docs/features/0035-run-and-debug.md) | `active` | [A4, A32, A33, A34] |
 | [Qwen Code adapter](docs/features/0036-qwen-code-adapter.md) | `in-progress` | [A4, A23] |
 | [Performance pass 3 — the chatter, not the disk](docs/features/0037-performance-pass-3.md) | `draft` | [A4] |
+| [A local model beside the agents](docs/features/0038-a-local-model.md) | `draft` | [A3, A4, A29, A35, A36, A37, A38] |
 

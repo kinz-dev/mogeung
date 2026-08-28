@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-08-24
+updated: 2026-08-28
 ---
 
 # Roadmap
@@ -836,6 +836,71 @@ keystroke away and excellent.
 | R-N12 | **IntelliJ's configurations, and Java — deferred 2026-08-09, and the condition to take them up** — dropped from the first cut in the same conversation that planned them: *"may be just drop the intellij's runConfiguration and the Java support for now."* Not struck through, because this is not the refusal that convention marks — the evidence is a reason to **start** elsewhere, not an argument that either is wrong. What is being deferred: `.run/*.run.xml`, `.idea/runConfigurations/*.xml` and `.idea/workspace.xml`'s `RunManager` (10 of 19 repos here, and the only checked-in shared configurations in the corpus are the Java project's), plus `java-debug`. **The reasons it is a reasonable thing to defer**, kept so nobody re-derives them: `workspace.xml` is a live IDE's private state with no specification, readable half-written while RustRover has it open; its `type` namespace is extended by every plugin, so the classification list may never converge; most of its entries here are `temporary="true"`, IntelliJ's word for *you ran this once*; and `java-debug` resolves its classpath through the Eclipse JDT language server, which is a dependency the size of this pillar — the way round it is to **attach over JDWP rather than launch**, letting the JVM resolve and reading the main class and module straight off the `.run.xml`. **What takes it up**: `R-N1` keeps measuring these sources whether or not they are parsed, and detection's ceiling — a run needing arguments, environment, or an attach — is the first honest evidence, which should arrive as a recorded annoyance rather than a memory. A deferral with no measurement behind it becomes permanent by forgetting. **Taken up 2026-08-20, in principle and not yet in code — [ADR-0028](../decisions/0028-intellij-when-there-is-a-debugger.md).** The measurement fired: 59 repositories on the Linux machine carry **243 checked-in IntelliJ configurations across 13 of them**, all in the user's own projects, against one `launch.json` that belongs to a third-party clone. Counted by configurations rather than by files, which is the count ADR-0026's decisive second reading used — pointing the other way this time. **The namespace argument turns out to be about the private file and not the checked-in ones**: checked in there are **three** types (`Application`, `CompoundRunConfigurationType`, `Multirun`, two of them composites of the first) where `workspace.xml` has **nine**, including `docker-deploy` and a Kotlin script type. So the two halves separate cleanly and `workspace.xml` stays deferred on sharper grounds than *not yet*. **What this row now waits for is `R-N9`, not evidence.** Not one of the 243 names a command that can be spawned: 194 are `MAIN_CLASS_NAME` plus an IntelliJ `<module>`, whose classpath IntelliJ resolves from its own project model, and the other 49 name other configurations. The way to start one is ADR-0026's own note — **attach over JDWP rather than launch** — which is the debugger. Building the reader today would put 183 named-but-dead rows in one repository's panel, and *listed as unrunnable with its type named* is a rule about a configuration not going **silently missing**, not a licence to fill a panel. A cheap trigger to bring it forward is written down: a checked-in `.run.xml` carrying a directly spawnable type — a Gradle task, a shell script, a Maven goal — needs no debugger at all, and none exists here today | M | |
 | R-N13 | **The week of use, and A33's removal condition honoured** — the same non-feature that opens this roadmap, applied to a pillar whose competition is one keystroke away and genuinely excellent. If runs are started in mogeung and then repeated in RustRover, the panel **comes out** rather than being improved; "nearly as good as a real debugger" is a losing position to defend forever. Written as a row so that it is somebody's job | S | |
 | R-N14 | **Docker and compose as things you can run** — the deferral [feature 0035](../features/0035-run-and-debug.md) named and did not hold: *"Docker / compose configurations, which the sweep found in the corpus. `KNOWN_IGNORED`, listed and named"* — no row behind it, in a spec that says one bullet earlier that *"a deferral with no measurement behind it becomes permanent by forgetting."* This is that row, so the forgetting has to be deliberate. **What it is not** is parsing `docker-deploy` out of `.idea/workspace.xml`; that is one of the four plugin-defined types [ADR-0026](../decisions/0026-other-peoples-run-configurations.md) found there and exactly the reading it rejected. It is **detection** — the source that ADR made first-class: a `compose.yaml`/`docker-compose.yml` in the tree offers its services, a `Dockerfile` offers a build, both labelled inferred like every other detected command, nothing read from a format that moves. **Three things make this more than one more manifest in `detect.rs`, and they are why it is a row.** (1) **The agent refusal has to see through the container.** ADR-0025 clause 1 refuses a configuration resolving to an agent CLI *by name*, and a service whose `command:` or `entrypoint:` is `claude` or `codex` passes that check trivially, because the outer binary is `docker`. Either the service's own command is matched or this feature becomes the thing [ADR-0003](../decisions/0003-observe-do-not-spawn.md) forbids, wearing a container as a disguise. (2) **A container outlives the process that started it.** `R-N4` has the daemon own a child and stop it by killing it; `docker compose up` returns with the containers still running, so *stop* has to mean `stop`/`down` or mogeung leaks containers it will never mention again — and a watcher that silently accumulates running containers is worse than one that cannot start them at all. `run --rm` rather than `up` is the cheap first answer and the ownership question outlives it. (3) **`R-N6`'s masking extends here or it has a hole**: compose carries `environment:` and `env_file:`, which is the precise shape of the leak that row exists to prevent, and a compose file rendered in the panel is where it would reappear first. **What takes it up**: `R-N1`'s sweep counting compose files across the corpus the way it counts the rest. This repository has none — the same inertness `A32` is `AT RISK` for — and the number everywhere else is unknown until the sweep runs | M |  |
+
+---
+
+## O. A local model beside the agents
+
+Asked 2026-08-27: *"I have a local running AI model that I can use and call as
+API"*, then widened the same day to the whole development life-cycle. Five
+candidates were chosen out of that conversation and they are the rows below.
+
+**The pillar's founding finding is about the rules, not the features.** The
+brainstorm was run a second time with the design rules explicitly suspended —
+*"let's ignore this design rule"* — and what came back still fits inside them.
+Nothing here writes a worktree file, so
+[ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)'s concurrent writer,
+the cost that decided that ADR, is not paid. Nothing here touches a session's
+input, so [ADR-0003](../decisions/0003-observe-do-not-spawn.md) is not
+approached. `R-O7` improves the text in the window
+[ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md) built and
+leaves its single action alone. Given permission to break the fences, the work
+that looked most valuable did not need to — which is the strongest evidence the
+fences have ever had, and it arrived from the direction that was trying to
+knock them down.
+
+[ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) is therefore not a
+carve-out. It answers three questions the features would otherwise answer by
+accident: the **daemon** holds the endpoint rather than the client, because the
+corpus is on the daemon's machine and a window watching a Mac must read that
+Mac's transcripts; the wire carries **ids** as it always has, with `R-O5`'s
+chat named as the single free-form exception and refused off loopback; and a
+**non-loopback model endpoint is publishing** — 67 MB of transcripts is the
+most publishable thing this product holds, so it needs a flag rather than a
+config line.
+
+**`R-O2` is not a feature, and this is pillar `N`'s lesson applied rather than
+rediscovered.** `A35` carries the whole pillar and is `UNTESTED`, so the doc
+rule says the first work is to test it. `R-N1`'s sweep changed its own pillar's
+plan twice in one afternoon; the harness here exists so that a finding about
+whether the model is worth listening to is something the repository owns rather
+than something somebody happened to notice.
+
+**Two rows are honest exceptions to that gate.** `R-O5` rests on `A37`, which
+is a question about **habit** — will a text box here beat the assistant already
+open beside it — and no harness measures habit. `A27` is the precedent and it is
+`AT RISK` for exactly this reason, which is why the chat panel stores nothing:
+it is built small so that removing it costs nothing. `R-O1` precedes everything
+because the harness cannot run without it.
+
+**What this pillar refuses**, so that the refusals are findable when they are
+proposed: any write to a worktree file, any path into a session's input, a
+model that sets an attention tier, model output presented as evidence beside a
+claim (`R-N7`'s rule generalised), a cloud endpoint by default, and an agentic
+loop. None of the six is needed by anything below.
+
+See [feature 0038](../features/0038-a-local-model.md).
+
+| # | Item | Effort | |
+|---|---|---|---|
+| R-O1 | **A model seam, and what happens when there is no model** — the endpoint in daemon config, a `Model*` wire family, a per-endpoint health row (the shape health already grew for a third agent CLI in `R-I15`), a work queue with a content-hash cache, and the refusal of a non-loopback endpoint without `--allow-remote-model`. The row that matters more than it sounds is the **absent** case: with no model configured every pane below must render exactly what it renders today and say *no model configured* where the feature would have been — never a spinner, never an empty panel that reads as broken, which is `A4`'s degrade-never-panic discipline applied to a dependency that is a URL rather than a file format. And never on the scan tick: `R-J8` bought that lesson once already | M | |
+| R-O2 | **The harness, before the panels** — `cargo run -q -p mogeungd --bin judge`, over whatever corpus is on this machine, printing the model's reading order beside the keyword order for every session that has a diff, and semantic recall against grep on a fixed query set. **Exits non-zero when the model is unreachable or returns nothing**, because `--bin sweep` learnt that a broken setup reading as *no findings* is the failure that costs you a year. This is `A35`'s test and `A38`'s, and under the doc rule it is what has to happen before `R-O3`–`R-O7` are built rather than after | M | |
+| R-O3 | **The reading guide** — a model ordering of a session's changed files with a one-line reason each and a paragraph naming what carries the change and what is mechanical. The surface this aims at is the one that costs the most time: an agent-made diff is 22 files of which three matter, and finding those three is currently done by scrolling. **The design line is [pillar K](#k-explicitly-not)'s**: either honest keyword heuristics or real analysis, never a blend — so this is a *second* ordering that can be switched to, the keyword one is what shows with no model, and a weighted mix of the two is refused in advance because it would look authoritative while still being wrong. The reason is always visible where the ordering is used, which is `attention-ranking.md`'s rule about never being a black box. Nothing here touches the queue's tiers. This is also the first real attempt to settle [A3](assumptions.md), `UNTESTED` since the ledger was written on evidence that reads, in full, *"ranked `auth.rs` above a lockfile once, in a test"* | M | |
+| R-O4 | **Ask the diff, answered from the transcript** — from a hunk or a line, a question, answered in place from the turns that produced it. The claim in the row is that **nothing else can do this**: a review tool has the diff, an IDE has the code, and only mogeung has the conversation that wrote the line sitting beside it. The machinery is largely built — `R-F2` links a file to the sessions that touched it, `R-F9` and `insight::turns_near` link a moment to its turns — and what is missing is the question. **Every answer cites the turns it used and a citation opens the Transcript there**; where no transcript covers the line the answer says so and is labelled as read from the code alone. That labelling is not politeness, it is `A4`'s mitigation: a model summarising a transcript shape the parser silently dropped would otherwise describe a session confidently and wrongly. Rests on [A36](assumptions.md) | L | |
+| R-O5 | **A chat panel in the rail** — a generic assistant for quick questions, conversational, no repository context and no tools in the first cut. **The only row here that carries a free-form string on the wire**, which is why ADR-0030 names it as the exception and refuses it off loopback: a daemon reachable over a LAN must not become a general-purpose LLM proxy because a text box was convenient. **It stores nothing** — the conversation is ephemeral and one gesture copies it into a note, reusing `R-L2`'s copy-into-a-note rather than inventing a second store. That is not minimalism, it is [A37](assumptions.md) taking `A27`'s warning seriously: notes were asked for as directly as this and are `AT RISK` because the editor beside mogeung turned out to be where writing already happened, and the chat window beside mogeung is a stronger incumbent than a text editor was. Built small so that removing it costs nothing | M | |
+| R-O6 | **Semantic search, as a second labelled list** — embeddings over the transcripts and `history.jsonl`, shown beside the grep results and never instead of them. [Feature 0017](../features/0017-cross-session.md) put this out of scope with a reason and a sequence — *"Semantic/embedding search — honest substring/token search first"* — and that condition is now met: substring search shipped in 2026-07 and has been in daily use since. The list is labelled **similar** and never *matches*, names the model that built the index and when, and an index older than the corpus says so rather than answering as though current. **The sharpest payoff is `R-F4`**, which compares literal error text today, so the same failure worded two ways is two failures and a failure worded freshly each time is invisible; clusters expand to the literal strings they joined, so the join is inspectable rather than asserted. Extends the panel [A29](assumptions.md) settled rather than adding a sixth box. Rests on [A38](assumptions.md) | M | |
+| R-O7 | **Draft the follow-up prompt** — the flagged hunks and their notes composed into an instruction rather than concatenated into one, in the window [ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md) already built, with the raw concatenation one click away so what the draft dropped is inspectable. **The window still offers exactly one action: copy.** The hazard is stated rather than discovered, because that ADR stated it first — *"'just paste it for me' is one keystroke from 'just send it'"* — and this row makes the paste materially better, which makes the keystroke more tempting than it has ever been. The refusal is written down now, before there is a button worth wanting | S | |
+| R-O8 | **The fortnight, and the removal conditions honoured** — the same non-feature that opens this roadmap and that `R-N13` is still waiting on, applied to a pillar whose competition is a browser tab away. Each row is kept or removed against the condition written into its assumption, and `A35`–`A38` take a status rather than staying `UNTESTED` while the panels stay on screen. Written as a row so that it is somebody's job | S | |
 
 ---
 

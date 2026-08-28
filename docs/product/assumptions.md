@@ -1,7 +1,7 @@
 ---
 title: Assumption ledger
 status: active
-updated: 2026-08-09
+updated: 2026-08-28
 ---
 
 # Assumption ledger
@@ -73,6 +73,14 @@ assumption — not to build the feature.**
 
 | A34 | Verification is the human's remaining job, so the run belongs beside the claim rather than in a separate tool | `UNTESTED` | This is the argument [ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) rests on, and it is a **narrowing** of A33 rather than a restatement: A33 says you will run things here, this says the *reason* is that the thing you want to run is the one the agent just claimed passed. [ADR-0019](../decisions/0019-a-viewer-not-an-editor.md) settled the editor question by working out what the human still does — *"the agent does the editing, and what the human does is read"* — and this row says that was right and incomplete. The partial support is that the product already built three quarters of the loop and stopped: `R-E1` records the build and test commands a session ran, `R-E3` binds *"tests pass"*-shaped prose to that evidence or visibly to none, and neither can answer *did it really?* **What distinguishes it from A33 as evidence**: A33 is satisfied by a run panel anyone would use; this is satisfied only if the runs that get started are the ones anchored to a claim. If runs are started from the file tree and never from a session's row, A33 may hold while this is refuted — and that would mean mogeung had built a general-purpose run panel, which is the thing pillar K exists to refuse |
 
+| A35 | A local model's reading of mogeung's own evidence is worth the screen space it takes | `UNTESTED` | Asked for directly 2026-08-27 — *"I have a local running AI model that I can use and call as API"* — and a specific ask is stronger than a wish, but this row has **no evidence at all** and should not be read as though the ask were any. It carries the whole of pillar `O`, which is why `R-O2` is a harness rather than a panel: the doc rule is not optional and the pillar's first work is to test this. What makes it genuinely uncertain is that the competition is not *nothing* — it is the keyword heuristics that already ship, which are fast, explainable and free, and a model that is merely *as good* loses to them on every axis that is not quality. **Removal condition agreed in advance:** if `R-O2` shows the model's ordering agreeing with the keyword ordering where it matters, or disagreeing and being wrong, the pillar comes out rather than being tuned — "a better prompt would fix it" is the losing position [A33](#ledger) also has to defend | [feature 0038](../features/0038-a-local-model.md); [ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) |
+
+| A36 | The rationale for a change is in the transcript that produced it, and is reachable from the line | `UNTESTED` | The bet under `R-O4`, and the one place this product could answer a question nothing else can: a review tool has the diff, an IDE has the code, and only mogeung has the conversation beside them. **The structure is not the bet** — `R-F2` links a file to the sessions that touched it, `R-F9` and `insight::turns_near` link a moment to its turns, and all of it works today. The bet is that the turns near a line actually contain the **why**. The reason to doubt it is specific and worth writing down before it is discovered: an assistant narrates *what it did* far more often than *why*, and the why is usually in the human's prompt several turns earlier — so the retrieval may be pointing at the wrong end of the conversation, which is a fixable design error masquerading as a failed assumption. **Removal condition agreed in advance:** a fortnight in which the answers cite turns that do not contain the reason; the honest response is to try prompts-not-replies once before removing, and to record that as the second attempt rather than as the first working | [feature 0038](../features/0038-a-local-model.md) |
+
+| A37 | A chat panel inside mogeung gets used rather than the assistant already open beside it | `UNTESTED` | Asked for directly 2026-08-27 — *"a generic AI chat panel at the right panel where I can ask random quick questions"* — and it is **[A27](#ledger)'s shape exactly**, which is the most useful thing to know about it. A27 said the user would write notes in mogeung rather than in the editor already open beside it; it is `AT RISK` on a count of two notes in a week, because the incumbent was already open and already better at the job. The incumbent here is a chat window, competing with a chat panel, and it is a stronger incumbent than a text editor was. What argues *for* the row is the only thing that distinguishes it: the question is asked while looking at something in mogeung, and the cost A27 lost to was the switch rather than the writing. `R-O5` is therefore built to be cheap to remove — it stores nothing, and its persistence is `R-L2`'s copy-into-a-note. **Removal condition agreed in advance:** a fortnight in which the panel is opened and abandoned, or in which the questions asked in it get re-asked elsewhere — the panel comes out and nothing replaces it | [feature 0038](../features/0038-a-local-model.md) |
+
+| A38 | Embeddings find what substring search missed, often enough to earn a second list | `UNTESTED` | [Feature 0017](../features/0017-cross-session.md) put semantic search out of scope with a reason and a sequence — *"Semantic/embedding search — honest substring/token search first"* — so this row exists because that condition is met rather than because the refusal was wrong. **It is two claims and they can take different verdicts**, which is the [A33](#ledger)/[A34](#ledger) distinction repeated: the *search* half asks whether a second list beside grep gets read, and the `R-F4` half asks whether recurring failures cluster better by meaning than by literal text. The second is the one with a concrete failure to point at — a failure worded freshly each time is invisible today — and it may hold while the first is refuted, in which case the embeddings stay and the second list goes. **Removal condition agreed in advance:** `R-O2`'s recall run showing the semantic list adding little grep did not already find, or a fortnight in which it is the list that gets ignored — either way the second list comes out and grep stays alone, which is where feature 0017 deliberately started | [feature 0038](../features/0038-a-local-model.md) |
+
 ## Notes on the most dangerous ones
 
 **A1 and A6 are the product.** If either is false, mogeung has no reason to
@@ -98,6 +106,14 @@ where it was — it changes what A24 is an assumption *about*. ADR-0012's
 loopback-or-token guard is what keeps the original sentence true, and if that
 guard is ever relaxed for convenience, A24 should be re-filed as `AT RISK` the
 same day rather than left reading as though nothing moved.
+
+**A37 is A27 with a stronger incumbent, and that is the point of filing it
+separately.** A27 bet that writing would happen here rather than in the editor
+already open, and it is `AT RISK` on a count of two notes in a week. A37 makes
+the same bet about asking rather than writing, against a competitor that is
+better at its job than a text editor is at being a notepad. If it survives, the
+thing it will have shown is that the *switch* was the cost both times — which
+would be worth knowing about A27 too.
 
 **A10 deserves scrutiny.** It was the opening complaint and remains untouched
 after two versions. Either it matters and we have been avoiding it, or it
