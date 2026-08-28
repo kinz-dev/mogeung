@@ -14,6 +14,14 @@ import { useStore } from "@/store";
 import type { ClientMsg, Health, ModelHealth } from "@/wire/types";
 import { ChatTool, threadAsMarkdown } from "./ChatTool";
 
+const proxied = (forwards: string[]): Partial<Health> => ({
+  proxy: {
+    state: { state: "hosting", port: 8717 },
+    url: "http://127.0.0.1:8717/v1",
+    forwards_to: forwards,
+  },
+});
+
 const health = (model: Partial<ModelHealth> | null): Health =>
   ({
     alerts: [],
@@ -283,5 +291,71 @@ describe("keeping and finding conversations", () => {
     render(<ChatTool />);
     expect(screen.getByText(/chat_history = false/)).toBeInTheDocument();
     expect(screen.queryByText(/no conversations yet/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The sentence that stands in for a gate mogeung cannot have. `R-O10`.
+ *
+ * With its own llmproxy in front, `model.host` is `127.0.0.1`, so ADR-0031's
+ * consent gate passes without asking while prompts may be going to a vendor.
+ * mogeung cannot gate that — routing is per request and a target can fail over
+ * — so the panel says where instead. These pin that it is said, that it is only
+ * said when true, and that it never claims the bytes stay home.
+ */
+describe("saying where a proxy forwards", () => {
+  // Its own reset: the suite's other `beforeEach` hooks are scoped to their
+  // own `describe`, so without this the panel starts with whatever thread the
+  // previous test left behind and the empty-state hint never renders.
+  beforeEach(() => {
+    sent.length = 0;
+    useStore.setState({ chat: [], showChatHistory: false, send: (m) => void sent.push(m) });
+  });
+
+  // The line is split by the <Mono> holding the host, so a plain text matcher
+  // sees two nodes and neither of them whole.
+  const line = () =>
+    document.body.textContent?.replace(/\s+/g, " ") ?? "";
+
+  it("names every host the proxy may forward to", () => {
+    useStore.setState({
+      health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied(["api.anthropic.com"]) } as Health,
+    });
+    render(<ChatTool />);
+    expect(line()).toContain("may forward to");
+    expect(screen.getByText("api.anthropic.com")).toBeInTheDocument();
+  });
+
+  /**
+   * A proxy whose providers are all on this machine forwards nowhere, and
+   * saying so anyway would be the line that teaches you to stop reading it.
+   */
+  it("says nothing when the proxy forwards nowhere", () => {
+    useStore.setState({
+      health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied([]) } as Health,
+    });
+    render(<ChatTool />);
+    expect(line()).not.toContain("may forward to");
+  });
+
+  /** No proxy at all is the ordinary case and must read exactly as before. */
+  it("says nothing when there is no proxy", () => {
+    useStore.setState({ health: health({}) });
+    render(<ChatTool />);
+    expect(line()).not.toContain("may forward to");
+  });
+
+  /**
+   * The empty state must not claim the endpoint is the machine it is proxied
+   * from — `127.0.0.1` there would read as *this stays local*, which is the
+   * precise misreading this whole row exists to prevent.
+   */
+  it("does not present the loopback proxy as the endpoint", () => {
+    useStore.setState({
+      health: { ...health({ host: "127.0.0.1", remote: false }), ...proxied(["api.anthropic.com"]) } as Health,
+    });
+    render(<ChatTool />);
+    expect(line()).toContain("mogeung's own proxy");
+    expect(line()).not.toContain("at 127.0.0.1");
   });
 });

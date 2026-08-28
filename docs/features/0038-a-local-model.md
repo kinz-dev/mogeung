@@ -2,7 +2,7 @@
 title: A local model beside the agents
 status: in-progress
 updated: 2026-08-28
-roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9]
+roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10]
 depends_on: [A3, A4, A29, A35, A36, A37, A38]
 ---
 
@@ -331,6 +331,21 @@ where the ask is; and the three gestures that look like each other — *new*,
 *clear*, *forget* — are three lifetimes, stated in the panel's own header
 table because a delete disguised as a screen-clear is the mistake this shape
 invites.
+
+**The consent gate has a shape it cannot see, and `R-O10` is where that got
+said out loud.** ADR-0031 decides consent from the *endpoint's* host. A proxy
+on `127.0.0.1` is loopback, so the gate passes without asking while prompts go
+to a vendor — the mechanism decided in the morning bypassed by the feature
+decided in the afternoon, on the same day.
+
+The instinct was to extend the gate: mogeung writes the proxy's config, so it
+knows the hosts, so it could refuse them. [ADR-0033](../decisions/0033-a-proxy-of-our-own.md)
+clause 6 refuses that, on pillar K's rule rather than on convenience — routing
+is decided per request and a target can fail over, so the gate could only ever
+be sometimes-right, and a gate that is sometimes right looks authoritative
+while being wrong. What mogeung actually knows is *which hosts appear in the
+file*, so that is exactly what it says, in the panel where the prompt is typed
+and read from the file so it survives the proxy being down.
 
 **The `/models` URL is what people paste.** It is the URL you can `curl`, so it
 is the one in shell history and the one that reaches a config file — and asking

@@ -122,6 +122,11 @@ pub struct AppState {
     /// Beside `runs` rather than inside `health`, and for the same reason: it
     /// owns something outside this process, and health only ever *reports*.
     pub model: crate::model::Model,
+    /// mogeung's own llmproxy, when one is asked for. `R-O10`, ADR-0033.
+    ///
+    /// Beside `model` and `runs` for the same reason both of those are here:
+    /// it owns something outside this process. Health only ever reports.
+    pub proxy: crate::llmproxy::Proxy,
     /// Whether the config file may be edited through the wire. `R-J79`.
     ///
     /// Loopback and nothing else — **not** `writes_allowed`, which a tokened
@@ -518,6 +523,7 @@ impl AppState {
             ssh_target: std::sync::OnceLock::new(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
+            proxy: crate::llmproxy::Proxy::new(),
             writes_allowed: std::sync::OnceLock::new(),
             config_editable: std::sync::OnceLock::new(),
             chat_history: std::sync::OnceLock::new(),
@@ -557,6 +563,7 @@ impl AppState {
         // configuration plus the residue of asks somebody made. Reading it is
         // free — no call is made — which is ADR-0030 clause 6 in practice.
         h.model = self.model.health();
+        h.proxy = Some(self.proxy.health());
         h
     }
 

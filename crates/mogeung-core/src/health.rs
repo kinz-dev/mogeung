@@ -175,6 +175,10 @@ pub struct Health {
     /// a moment that has passed by the time it is rendered.
     #[serde(default)]
     pub model: Option<crate::model::ModelHealth>,
+    /// mogeung's own llmproxy in front of the model, when one is asked for.
+    /// `R-O10`. `None` from a daemon that predates it.
+    #[serde(default)]
+    pub proxy: Option<crate::llmproxy::ProxyHealth>,
 
     // -- Codex (R-I1). Defaulted so an older daemon's snapshot still parses.
     /// A `~/.codex` install exists and is being watched.

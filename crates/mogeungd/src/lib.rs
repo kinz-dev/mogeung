@@ -10,6 +10,7 @@ pub mod docscan;
 pub mod git;
 pub mod insight;
 pub mod kit;
+pub mod llmproxy;
 pub mod health;
 pub mod machine;
 pub mod model;

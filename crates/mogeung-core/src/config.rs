@@ -84,6 +84,23 @@ pub struct Config {
     /// emptying the bucket, and a setting that deleted your history would be a
     /// nasty surprise for anyone who set it to stop *adding* to it.
     pub chat_history: Option<bool>,
+    /// Daemon: run an llmproxy of mogeung's own in front of the model, so
+    /// Ask Mogeung can route per question. `R-O10`, ADR-0033. Absent means no.
+    ///
+    /// **Its own instance, not yours.** The rules that suit a coding agent are
+    /// not the rules that suit a chat panel, and llmproxy keys its daemon
+    /// metadata on the bound address, so a second one on a second port is a
+    /// first-class arrangement there rather than a fight.
+    pub llmproxy: Option<bool>,
+    /// Daemon: the binary, looked up on `PATH` unless this is a path.
+    pub llmproxy_bin: Option<String>,
+    /// Daemon: mogeung's own rules file. Default `~/.mogeung/llmproxy.toml`,
+    /// written once if absent and never touched again.
+    pub llmproxy_config: Option<PathBuf>,
+    /// Daemon: an explicit port. Absent derives one from the daemon's own,
+    /// which is what lets the next start-up find an orphan without a file
+    /// recording where it went.
+    pub llmproxy_port: Option<u16>,
     /// Window: the global shortcut that raises it. An empty string disables
     /// it, which is the file's way of saying `--no-hotkey`.
     pub hotkey: Option<String>,

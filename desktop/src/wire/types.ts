@@ -324,6 +324,11 @@ export interface Health {
    * is the residue of an ask somebody made, not a reachability check.
    */
   model?: ModelHealth | null;
+  /**
+   * mogeung's own llmproxy in front of the model, when one is asked for.
+   * `R-O10`. Absent from a daemon that predates it.
+   */
+  proxy?: ProxyHealth | null;
   /// @deprecated Superseded by `agents`. Still sent, so an older client keeps
   /// working; read `agents` instead and get every CLI, not just the second one.
   codex_present?: boolean;
@@ -338,6 +343,26 @@ export interface Health {
  * `host` and never the URL: a URL can carry a key in a query string, and this
  * is rendered in a window and pasted into bug reports.
  */
+/**
+ * mogeung's own llmproxy. `R-O10`, ADR-0033.
+ *
+ * `forwards_to` is the field that matters: consent (ADR-0031 clause 3) is
+ * decided from the endpoint's host, and a proxy on loopback passes that gate
+ * while sending prompts to a vendor. mogeung cannot gate what a proxy forwards
+ * — routing is per request — so it reports it instead, read from the config
+ * file it wrote rather than asked of the running process.
+ */
+export interface ProxyHealth {
+  state:
+    | { state: "off" }
+    | { state: "adopted"; port: number }
+    | { state: "hosting"; port: number }
+    | { state: "failed"; reason: string };
+  url: string | null;
+  /** Hosts this proxy sends prompts to that are not this machine. */
+  forwards_to: string[];
+}
+
 export interface ModelHealth {
   configured: boolean;
   host: string | null;

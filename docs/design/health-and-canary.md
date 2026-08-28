@@ -149,6 +149,15 @@ said*, and *you said, about somewhere else*. Consent names a host, so pointing
 hosts, or the reader is left comparing a config file against a message that
 only quotes half of it.
 
+**The proxy row (`R-O10`).** With mogeung's own llmproxy in front, `host` is
+`127.0.0.1` and says nothing useful about where prompts go. `proxy.forwards_to`
+is the field that does: every non-loopback host in the proxy's config, read
+from the **file** rather than asked of the process, so a failed start still
+reports where it would have sent things. A sentence about the bytes that only
+appears when everything is working is the wrong way round. See
+[ADR-0033](../decisions/0033-a-proxy-of-our-own.md) clause 6 for why this is a
+disclosure and not a gate.
+
 **The host, never the URL.** A URL can carry a key in a query string, and this
 row is rendered in a window and pasted into bug reports.
 

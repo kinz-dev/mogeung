@@ -583,6 +583,36 @@ normally run in.
 [ADR-0031](../decisions/0031-consent-to-a-named-host.md) replaced it with a key
 that names the host it consents to, so moving `model_url` asks again.
 
+## The proxy the daemon owns (`R-O10`, 2026-08-28)
+
+`mogeung_core::llmproxy` holds the policy — which port, what the starter config
+says, which hosts it forwards to — and `mogeungd::llmproxy` owns the child
+process. The same split as the model seam and `run.rs`, for the same reason.
+
+**This is the first long-lived child mogeungd has ever owned**, and
+[ADR-0033](../decisions/0033-a-proxy-of-our-own.md) is where the two things it
+crosses are argued. It is off unless `llmproxy = true` in the config file, and
+file-only: a flag would start a proxy for one invocation and leave it behind.
+
+The port is **derived** from the daemon's own rather than random, so start-up
+recomputes where it left the last one instead of reading a file that could be
+describing a process that died last week — `daemon.rs`'s stale-pid argument,
+applied to somebody else's process. Start-up **adopts** an llmproxy already
+answering there, and shutdown stops it **by address** — `--listen <addr>
+--shutdown`, llmproxy's own mechanism — rather than by signal. llmproxy
+re-execs itself as `--foreground` and detaches, so the spawned process is gone
+within a second and never held the port: a recorded pid names something already
+exited, and the process-group kill `run.rs` uses would reach nothing.
+`PR_SET_PDEATHSIG` is rejected on top of that — it fires on the death of the
+parent *thread* under a runtime free to retire it, macOS does not have it, and
+it would not reach a detached grandchild either.
+
+**Where it forwards is reported, never gated.** A proxy on `127.0.0.1` passes
+ADR-0031 clause 3 without asking. mogeung refuses to extend the gate — routing
+is per request, so it could only be sometimes-right — and names the hosts
+instead, read from the config file rather than from the running process so the
+answer survives the proxy being down.
+
 ## What is deliberately absent
 
 No supervisor, no child processes, no writes to `~/.claude`. See

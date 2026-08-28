@@ -241,8 +241,8 @@ fn host(listener: TcpListener) {
                     desktop: false,
                     push_url: None,
                 },
-                // Read from the config file, and **only** these four. `R-O1`,
-                // `R-O9`.
+                // Read from the config file, and only these. `R-O1`, `R-O9`,
+                // `R-O10`.
                 //
                 // This hosted daemon reads nothing else from `config.toml` — it
                 // takes the defaults for `db`, `poll_ms` and the rest — and
@@ -265,6 +265,16 @@ fn host(listener: TcpListener) {
                 // other three — a hosted daemon has no argv, so a preference
                 // it cannot be told is a preference that does not exist.
                 chat_history: cfg.chat_history.unwrap_or(true),
+                // `R-O10`. The hosted daemon owns the proxy the same way a
+                // standalone one does — and stops it the same way, which is
+                // the case ADR-0033's adopt-on-restart exists for: this
+                // process can be killed without ever running its cleanup.
+                proxy: mogeung_core::llmproxy::ProxySettings {
+                    enabled: cfg.llmproxy.unwrap_or(false),
+                    bin: cfg.llmproxy_bin.clone().unwrap_or_else(|| "llmproxy".into()),
+                    config: cfg.llmproxy_config.clone(),
+                    port: cfg.llmproxy_port,
+                },
                 model: mogeung_core::model::ModelSettings {
                     url: cfg.model_url.clone(),
                     model: cfg.model_name.clone(),

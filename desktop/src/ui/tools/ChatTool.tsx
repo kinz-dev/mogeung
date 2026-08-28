@@ -39,7 +39,7 @@ import remarkGfm from "remark-gfm";
 import { History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import type { ChatMessage } from "@/store";
-import { Dim, Empty, IconButton } from "@/ui/primitives";
+import { Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { interactive } from "@/ui/styles";
 import { cn } from "@/lib/cn";
 import { stamp } from "@/lib/format";
@@ -184,6 +184,19 @@ export function ChatTool() {
   const bottom = useRef<HTMLDivElement>(null);
 
   const model = health?.model ?? null;
+  const proxy = health?.proxy ?? null;
+
+  /**
+   * Where prompts actually go. `R-O10`.
+   *
+   * With mogeung's own llmproxy in front, `model.host` is `127.0.0.1` and
+   * ADR-0031's consent gate passes without asking — while the proxy may be
+   * forwarding to a vendor. mogeung cannot gate that (routing is decided per
+   * request, and a target can fail over), so a gate would be a promise it
+   * could not keep. It says where instead, and says it *here* rather than only
+   * in the Health view, because this is the box you type the prompt into.
+   */
+  const forwardsTo = proxy?.forwards_to ?? [];
   // A daemon built before pillar `O` sends no row at all, which is a different
   // state from "configured and refused" and must not read as an error.
   const unknown = model === null;
@@ -251,7 +264,15 @@ export function ChatTool() {
       ) : (
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-2 py-2">
           {chat.length === 0 && (
-            <Empty hint={usable ? `${model?.model ?? "the endpoint's default"} at ${model?.host}` : undefined}>
+            <Empty
+              hint={
+                usable
+                  ? `${model?.model ?? "the endpoint's default"} at ${
+                      proxy?.url ? "mogeung's own proxy" : model?.host
+                    }`
+                  : undefined
+              }
+            >
               {usable ? "ask anything" : "no model"}
             </Empty>
           )}
@@ -265,6 +286,17 @@ export function ChatTool() {
       {/* The reason, verbatim from the daemon. The window does not compose its
           own version: there is one place that decides whether a model may be
           asked, and this renders what it said. */}
+      {/* Not a warning and not styled as one: adding a forwarding provider to
+          the proxy config is a deliberate act, and nagging about a decision
+          somebody made on purpose is how a line stops being read. It is here
+          rather than only in the Health view because this is the box the
+          prompt is typed into. */}
+      {usable && !showHistory && forwardsTo.length > 0 && (
+        <div className="border-t border-[var(--border)] px-2 py-1 text-2xs text-[var(--dim)]">
+          via mogeung's proxy — may forward to <Mono>{forwardsTo.join(", ")}</Mono>
+        </div>
+      )}
+
       {!usable && !showHistory && (
         <div className="border-t border-[var(--border)] px-2 py-2 text-2xs text-[var(--dim)]">
           {unknown

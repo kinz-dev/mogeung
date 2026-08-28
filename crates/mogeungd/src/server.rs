@@ -34,6 +34,8 @@ pub struct Options {
     pub advertise: bool,
     /// Permit starting processes on a non-loopback bind. ADR-0025 clause 4.
     pub allow_run: bool,
+    /// mogeung's own llmproxy, in front of the model. `R-O10`, ADR-0033.
+    pub proxy: mogeung_core::llmproxy::ProxySettings,
     /// Keep the chat panel's conversations. `R-O9`, ADR-0032. Default on;
     /// `chat_history = false` in the file is the way back to `R-O5`'s
     /// keep-nothing behaviour.
@@ -55,6 +57,7 @@ impl Default for Options {
             ssh_target: None,
             advertise: false,
             allow_run: false,
+            proxy: mogeung_core::llmproxy::ProxySettings::default(),
             // On, matching the file's absent-means-yes: the history is the
             // ordinary behaviour and turning it off is the deliberate act.
             chat_history: true,
@@ -219,6 +222,28 @@ where
     let _ = state.config_editable.set(addr.ip().is_loopback());
     let _ = state.chat_history.set(opts.chat_history);
 
+    // The proxy, once the port is known — it is derived from this one.
+    //
+    // After `prepare` configured the model, so the endpoint it was given is
+    // what seeds the starter config; and the seam is repointed only on
+    // success, because a routing convenience that fails must leave `R-O5`
+    // working exactly as it did before it existed. `R-O10`.
+    if opts.proxy.enabled {
+        let settings = state.model.settings();
+        if let Some(url) =
+            state
+                .proxy
+                .ensure(opts.proxy.clone(), addr.port(), settings.url.as_deref())
+        {
+            let mut repointed = settings;
+            repointed.url = Some(url);
+            // Loopback, so ADR-0031's consent is not asked — and cannot be,
+            // since where a proxy forwards is decided per request. The Health
+            // view says where it goes instead; see ADR-0033.
+            state.model.configure(repointed);
+        }
+    }
+
     // Run output reaches clients as events on the socket everything else uses.
     // Spawned here rather than inside `Runs` because `Runs` has no opinion
     // about the wire — it owns processes, and the daemon owns the broadcast.
@@ -301,6 +326,10 @@ where
     // (`R-J54`); a clean exit persists whatever is still coasting so the
     // deferral never becomes loss.
     state.flush_all_quiet().await;
+    // And the proxy we started, if we started one. Only on the graceful path —
+    // there is no other path, which is exactly why ADR-0033 adopts an orphan
+    // rather than promising this always runs.
+    state.proxy.shutdown();
     Ok(())
 }
 
