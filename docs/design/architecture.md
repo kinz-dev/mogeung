@@ -552,7 +552,8 @@ that leaves the machine. The split is the same one `run.rs` uses: pure decisions
 where they can be tested with nothing running, effects where the processes are.
 
 **The daemon owns the endpoint, not the client**
-([ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) clause 2). The
+([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 2,
+carried forward from ADR-0030). The
 corpus is on the daemon's machine, so a window watching a Mac (`R-I6`) has to
 read *that* machine's transcripts with whatever endpoint *that* daemon was
 given. A client-side call would be the first piece of local authority in a
@@ -565,14 +566,22 @@ shelling out cannot poison the runtime, and the alternative drags a TLS stack
 into a workspace that has managed without one. The body goes down **stdin**, so
 neither argv limits nor quoting can ever be part of a chat message.
 
-**The window's hosted daemon reads `model_url` and `model_name` from
-`config.toml`, and nothing else.** That daemon has never read the config file —
-it takes the defaults for `db`, `poll_ms` and the rest — and widening that is a
-separate question. The model could not wait for it: a hosted daemon has no
-argv, so with nothing read there the chat panel would say *no model configured*
-for ever with no way to change its mind. `allow_remote` is deliberately not
-read, so a hosted daemon reaches loopback endpoints only and says so through
-the health row.
+**The window's hosted daemon reads `model_url`, `model_name` and
+`allow_remote_model` from `config.toml`, and nothing else.** That daemon reads
+the config file for these three and no others — it takes the defaults for `db`,
+`poll_ms` and the rest — and widening that is a separate question. The model
+could not wait for it: a hosted daemon has no argv, so with nothing read there
+the chat panel would say *no model configured* for ever with no way to change
+its mind.
+
+The consent is the third of those, and it was not there when this shipped.
+`--allow-remote-model` was given `--allow-run`'s shape, and the shapes differ in
+the one way that matters here: `runs_allowed` reads the **bind**, so a hosted
+daemon is loopback and never needs the flag, where the model gate reads the
+**endpoint**. Flag-only therefore meant *unreachable* on the shape mogeung is
+normally run in.
+[ADR-0031](../decisions/0031-consent-to-a-named-host.md) replaced it with a key
+that names the host it consents to, so moving `model_url` asks again.
 
 ## What is deliberately absent
 

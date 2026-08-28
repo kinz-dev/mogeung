@@ -1,6 +1,7 @@
 ---
 title: A model may read mogeung's evidence; the daemon holds it and the bytes stay on the machine
-status: active
+status: superseded
+superseded_by: ADR-0031
 updated: 2026-08-28
 decided: 2026-08-28
 ---

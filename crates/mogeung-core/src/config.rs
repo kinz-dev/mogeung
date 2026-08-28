@@ -57,6 +57,21 @@ pub struct Config {
     /// Daemon: which model to ask for, as the endpoint's own `/models` lists
     /// it. Absent means the endpoint's default.
     pub model_name: Option<String>,
+    /// Daemon: consent to a `model_url` that is not on this machine.
+    /// [ADR-0031](../../../docs/decisions/0031-consent-to-a-named-host.md).
+    ///
+    /// `allow_remote_model = "spark-7ecc"` consents to **that host** and no
+    /// other, so changing `model_url` asks again. `true` is the blanket grant
+    /// the `--allow-remote-model` flag has always given; absent is no.
+    ///
+    /// This is the one consent key in the file, and it is here rather than
+    /// flag-only because a window hosting its own daemon
+    /// ([ADR-0009](../../../docs/decisions/0009-the-window-may-host-a-daemon.md))
+    /// has no argv to be given a flag through — so flag-only meant *never* on
+    /// the shape mogeung is normally run in. `--allow-run` still has no twin:
+    /// that one grants running processes, not reading an endpoint.
+    #[serde(default)]
+    pub allow_remote_model: crate::model::RemoteConsent,
     /// Window: the global shortcut that raises it. An empty string disables
     /// it, which is the file's way of saying `--no-hotkey`.
     pub hotkey: Option<String>,
@@ -99,6 +114,78 @@ impl Config {
         }
     }
 
+    /// Read the file as text, for showing it. `R-J79`.
+    ///
+    /// A missing file is `Ok("")` rather than an error: the ordinary state of
+    /// a fresh install is *no config file yet*, and an editor that reports
+    /// that as a failure teaches you to distrust it before you have written a
+    /// line. A file that exists and cannot be read is a real error and says so.
+    pub fn read_text(path: &std::path::Path) -> Result<String, String> {
+        match std::fs::read_to_string(path) {
+            Ok(t) => Ok(t),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(format!("{} could not be read: {e}", path.display())),
+        }
+    }
+
+    /// Parse without loading, so an editor can refuse to write a file the
+    /// daemon would refuse to read.
+    ///
+    /// This is the **strict** reader, and deliberately unlike [`Self::load_from`]:
+    /// loading tolerates everything because the daemon must start, where saving
+    /// tolerates nothing because the person who can fix it is looking at it.
+    /// `deny_unknown_fields` does most of the work — a mistyped key is caught
+    /// here rather than silently ignored until someone wonders why a setting
+    /// does nothing.
+    pub fn check(text: &str) -> Result<Self, String> {
+        toml::from_str::<Config>(text).map_err(|e| e.to_string())
+    }
+
+    /// Validate, keep a copy of what was there, and write.
+    ///
+    /// Three properties, each bought by a way this can go wrong:
+    ///
+    /// - **Validated first.** A file that does not parse is never written, so
+    ///   the worst a bad edit costs is an error message rather than a daemon
+    ///   that starts on defaults and quietly ignores every setting you have.
+    /// - **A `.bak` beside it.** This overwrites a file a human wrote by hand,
+    ///   possibly one with comments in it, from a text box. The previous
+    ///   contents are one `mv` away for exactly as long as it takes to notice.
+    /// - **Written then renamed.** A crash mid-write leaves the old file
+    ///   intact rather than half of the new one, which is the single failure
+    ///   this file cannot survive: it is read before anything else exists to
+    ///   report that it is broken.
+    pub fn write_to(path: &std::path::Path, text: &str) -> Result<(), String> {
+        Self::check(text)?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("{} could not be created: {e}", dir.display()))?;
+        }
+        if let Ok(previous) = std::fs::read_to_string(path) {
+            // Best effort: failing to keep a backup is not a reason to refuse
+            // a save, it is a reason not to promise one.
+            let _ = std::fs::write(path.with_extension("toml.bak"), previous);
+        }
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, text).map_err(|e| format!("{} could not be written: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .map_err(|e| format!("{} could not be replaced: {e}", path.display()))
+    }
+
+    /// Every key this version understands, from the struct rather than from a
+    /// list beside it.
+    ///
+    /// Derived through serde so it cannot drift: a field added above appears
+    /// here without anyone remembering to add it, which is the whole reason
+    /// not to hand-write the list. Order is the declaration order, which is
+    /// grouped by what the key is for and is therefore the order worth showing.
+    pub fn known_keys() -> Vec<String> {
+        match serde_json::to_value(Config::default()) {
+            Ok(serde_json::Value::Object(m)) => m.keys().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The hotkey the window should register, distinguishing "not mentioned"
     /// from "deliberately off". `None` here means the file said nothing and
     /// the built-in default applies.
@@ -116,6 +203,49 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The editor's contract, and each half is a way this can hurt. `R-J79`.
+    #[test]
+    fn saving_validates_first_and_keeps_what_was_there() {
+        let dir = std::env::temp_dir().join(format!("mogeung-save-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        let _ = std::fs::remove_file(&path);
+
+        // Nothing there yet is not an error — it is a fresh install.
+        assert_eq!(Config::read_text(&path).unwrap(), "");
+
+        Config::write_to(&path, "poll_ms = 400\n").unwrap();
+        assert_eq!(Config::read_text(&path).unwrap(), "poll_ms = 400\n");
+
+        // A file that would not load is refused rather than written, and what
+        // was there survives.
+        let err = Config::write_to(&path, "poll_ms = \"not a number\"").unwrap_err();
+        assert!(!err.is_empty(), "a refusal has to say why");
+        assert_eq!(Config::read_text(&path).unwrap(), "poll_ms = 400\n", "the good file survived");
+
+        // A mistyped key is caught here rather than ignored for ever —
+        // `deny_unknown_fields` earning its place.
+        assert!(Config::write_to(&path, "pol_ms = 400").is_err());
+
+        // And a good save keeps the previous contents one `mv` away.
+        Config::write_to(&path, "poll_ms = 900\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+            "poll_ms = 400\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The key list comes from the struct, so a field added above cannot go
+    /// missing from the editor by being forgotten in a second list.
+    #[test]
+    fn the_known_keys_are_the_struct_s_own() {
+        let keys = Config::known_keys();
+        for expected in ["listen", "model_url", "model_name", "allow_remote_model", "hotkey"] {
+            assert!(keys.contains(&expected.to_string()), "{expected} missing from {keys:?}");
+        }
+    }
 
     /// One file per call. Tests run in parallel, and a shared path made three
     /// of them fail by reading each other's config.

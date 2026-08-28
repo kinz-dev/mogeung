@@ -129,7 +129,7 @@ may: `configured`, `host`, `model`, `remote`, `allowed`, `chat_allowed`, a
 `refusal` sentence, and the residue of the last ask (`last_error`,
 `last_ok_ms`).
 
-**It is never a probe.** ADR-0030 clause 6 keeps model calls off the scan tick,
+**It is never a probe.** ADR-0031 clause 6 (carried forward from ADR-0030) keeps model calls off the scan tick,
 so nothing here reaches the endpoint to find out whether it is up —
 `last_error` is what an ask somebody made actually did. *Reachable* is
 deliberately not a field: it would be a claim about a moment that has already
@@ -137,10 +137,17 @@ passed by the time it is rendered, which is the failure this whole document is
 written against.
 
 **A refusal is not an error.** Nothing configured is the ordinary state of a
-fresh install; an endpoint elsewhere without `--allow-remote-model` is a
-decision nobody made. Both fill `refusal` and neither touches `last_error`,
-because a health row blaming an endpoint that was never asked is the kind of
-wrong that costs an afternoon.
+fresh install; an endpoint elsewhere that consent does not cover is a decision
+nobody made. Both fill `refusal` and neither touches `last_error`, because a
+health row blaming an endpoint that was never asked is the kind of wrong that
+costs an afternoon.
+
+There are **two** refusals for the second case and they are not the same
+sentence ([ADR-0031](../decisions/0031-consent-to-a-named-host.md)): *you never
+said*, and *you said, about somewhere else*. Consent names a host, so pointing
+`model_url` at a different machine produces the second — which has to name both
+hosts, or the reader is left comparing a config file against a message that
+only quotes half of it.
 
 **The host, never the URL.** A URL can carry a key in a query string, and this
 row is rendered in a window and pasted into bug reports.

@@ -359,7 +359,7 @@ mod tests {
         m.configure(ModelSettings {
             url: Some("http://spark-7ecc:8000/v1".into()),
             model: None,
-            allow_remote: false,
+            consent: mogeung_core::model::RemoteConsent::None,
         });
         let err = m.chat(&turns()).await.unwrap_err();
         assert!(err.contains("--allow-remote-model"), "{err}");
@@ -373,7 +373,7 @@ mod tests {
         m.configure(ModelSettings {
             url: Some("http://127.0.0.1:8000/v1".into()),
             model: Some("m".into()),
-            allow_remote: true,
+            consent: mogeung_core::model::RemoteConsent::Any,
         });
         m.set_chat_allowed(false);
         let err = m.chat(&turns()).await.unwrap_err();
@@ -396,7 +396,7 @@ mod tests {
         m.configure(ModelSettings {
             url: Some("http://127.0.0.1:9/v1".into()),
             model: None,
-            allow_remote: false,
+            consent: mogeung_core::model::RemoteConsent::None,
         });
         let err = m.chat(&turns()).await.unwrap_err();
         assert!(!err.is_empty());

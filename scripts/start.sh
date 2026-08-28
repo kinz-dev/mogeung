@@ -46,8 +46,10 @@ Options:
   --no-notify        do not pass --notify to the daemon
   --push-url URL     forward notifications to a URL (ntfy, Pushover, webhook)
   --no-build         skip cargo build; run whatever is already there
-  --allow-remote-model  let the daemon reach a model endpoint that is not
-                     this machine (ADR-0030 clause 3; loopback needs no flag)
+  --allow-remote-model  let the daemon reach a model endpoint on ANY host
+                     (ADR-0031 clause 3; loopback needs nothing). Prefer
+                     allow_remote_model = "host" in ~/.mogeung/config.toml,
+                     which consents to one named machine
   --daemon-only      run just the daemon (used by mprocs.yaml)
   --ui-only          run just the window, waiting for the daemon first
   -h, --help         this

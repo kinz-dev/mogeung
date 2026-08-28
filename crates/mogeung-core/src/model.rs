@@ -34,6 +34,91 @@ impl ChatTurn {
     }
 }
 
+/// Consent to reach a model endpoint that is not this machine.
+/// [ADR-0031](../../../docs/decisions/0031-consent-to-a-named-host.md) clause 3.
+///
+/// Three states, and the middle one is the point: consent normally **names the
+/// host it is consent for**, so pointing `model_url` somewhere else asks again
+/// rather than inheriting a yes given for a different machine.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum RemoteConsent {
+    /// Nothing granted. Loopback endpoints still work; anything else is
+    /// refused. The ordinary state, and the default.
+    #[default]
+    None,
+    /// Any host. What `--allow-remote-model` grants, and what
+    /// `allow_remote_model = true` grants — honest, blanket, and no weaker
+    /// than the flag has always been.
+    Any,
+    /// This host and no other. `allow_remote_model = "spark-7ecc"`.
+    Host(String),
+}
+
+impl RemoteConsent {
+    /// Does this consent cover `host`? Compared through [`host_of`], so a
+    /// bare name, a `name:port` and a whole URL all work — the config file is
+    /// hand-written and `http://spark-7ecc:8000/v1` is what is on the
+    /// clipboard when someone reaches for this key.
+    pub fn covers(&self, host: &str) -> bool {
+        match self {
+            RemoteConsent::None => false,
+            RemoteConsent::Any => true,
+            RemoteConsent::Host(h) => match (host_of(h), host_of(host)) {
+                (Some(a), Some(b)) => same_host(&a, &b),
+                _ => false,
+            },
+        }
+    }
+
+    /// The host this consent names, for the refusal that has to explain a
+    /// mismatch. `None` for both the absent and the blanket case, neither of
+    /// which can mismatch.
+    pub fn named(&self) -> Option<&str> {
+        match self {
+            RemoteConsent::Host(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub fn granted(&self) -> bool {
+        !matches!(self, RemoteConsent::None)
+    }
+}
+
+/// `false` / absent, `true`, or a host name — the three things someone
+/// actually writes in a TOML file, read as the three states.
+///
+/// Serialised back as the same shapes, so a round trip through the file does
+/// not turn a named host into something the next version has to guess at.
+impl Serialize for RemoteConsent {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RemoteConsent::None => s.serialize_bool(false),
+            RemoteConsent::Any => s.serialize_bool(true),
+            RemoteConsent::Host(h) => s.serialize_str(h),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RemoteConsent {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Host(String),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Flag(true) => RemoteConsent::Any,
+            Raw::Flag(false) => RemoteConsent::None,
+            // An empty string is someone clearing the key rather than
+            // consenting to a host called "". Read it as they meant it.
+            Raw::Host(h) if h.trim().is_empty() => RemoteConsent::None,
+            Raw::Host(h) => RemoteConsent::Host(h.trim().to_string()),
+        })
+    }
+}
+
 /// What the daemon was configured with, and what that adds up to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelSettings {
@@ -42,9 +127,9 @@ pub struct ModelSettings {
     pub url: Option<String>,
     /// Model id to ask for, as the endpoint's own `/models` lists it.
     pub model: Option<String>,
-    /// ADR-0030 clause 3: a non-loopback endpoint is publishing, and needs
-    /// `--allow-remote-model` said out loud.
-    pub allow_remote: bool,
+    /// ADR-0031 clause 3: a non-loopback endpoint is publishing, and needs
+    /// consent said out loud — the flag, or the config key that names the host.
+    pub consent: RemoteConsent,
 }
 
 impl ModelSettings {
@@ -83,6 +168,9 @@ pub enum Refusal {
     NotConfigured,
     /// The endpoint is not on this machine and nobody said that was intended.
     RemoteEndpoint { host: String },
+    /// Consent was given, but for a different machine. ADR-0031's whole point:
+    /// a yes said for one host is not a yes for the next one.
+    ConsentNamesAnotherHost { host: String, consented: String },
     /// ADR-0030 clause 4: the free-form ask, on a daemon reachable from the
     /// network. There is no flag for this one.
     PublicBind,
@@ -100,9 +188,16 @@ impl Refusal {
                 .to_string(),
             Refusal::RemoteEndpoint { host } => format!(
                 "refusing to send anything to {host}: it is not this machine, and \
-                 a model endpoint elsewhere is publishing (ADR-0030 clause 3, \
-                 ADR-0014). Start the daemon with --allow-remote-model if that \
-                 is what you meant."
+                 a model endpoint elsewhere is publishing (ADR-0031 clause 3, \
+                 ADR-0014). Name it in ~/.mogeung/config.toml — \
+                 allow_remote_model = \"{host}\" — or start the daemon with \
+                 --allow-remote-model."
+            ),
+            Refusal::ConsentNamesAnotherHost { host, consented } => format!(
+                "refusing to send anything to {host}: allow_remote_model consents \
+                 to {consented}, which is a different machine. Consent names a \
+                 host on purpose (ADR-0031 clause 3) — set model_url back to \
+                 {consented}, or change allow_remote_model to \"{host}\"."
             ),
             Refusal::PublicBind => "chat is refused on a daemon bound beyond \
                  loopback (ADR-0030 clause 4): it carries free-form text, and a \
@@ -119,10 +214,20 @@ pub fn admit(settings: &ModelSettings) -> Result<(), Refusal> {
     if !settings.configured() {
         return Err(Refusal::NotConfigured);
     }
-    if settings.remote() && !settings.allow_remote {
-        return Err(Refusal::RemoteEndpoint {
-            host: settings.host().unwrap_or_else(|| "that host".into()),
-        });
+    if settings.remote() {
+        let host = settings.host().unwrap_or_else(|| "that host".into());
+        if !settings.consent.covers(&host) {
+            // Two different sentences, because they are two different
+            // mistakes. "You never said" and "you said, about somewhere else"
+            // send you to different lines of the same file.
+            return Err(match settings.consent.named() {
+                Some(consented) => Refusal::ConsentNamesAnotherHost {
+                    host,
+                    consented: consented.to_string(),
+                },
+                None => Refusal::RemoteEndpoint { host },
+            });
+        }
     }
     Ok(())
 }
@@ -204,6 +309,19 @@ pub fn host_of(url: &str) -> Option<String> {
     (!h.is_empty()).then(|| h.to_string())
 }
 
+/// Are these two host names the same machine, as far as we are willing to say
+/// without asking the network?
+///
+/// Case-folded and bracket-stripped, and **nothing more** — no DNS, no suffix
+/// matching. `spark-7ecc` and `spark-7ecc.local` are two names here, which is
+/// the direction this has to fail in: the cost of being strict is re-reading
+/// one line of a config file, and the cost of being clever is consent that
+/// silently covers a host nobody named.
+pub fn same_host(a: &str, b: &str) -> bool {
+    let norm = |h: &str| h.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    norm(a) == norm(b)
+}
+
 /// Is this host name or address this machine?
 pub fn is_local_host(host: &str) -> bool {
     let h = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
@@ -250,12 +368,20 @@ pub fn normalise_base(url: &str) -> String {
 mod tests {
     use super::*;
 
-    fn settings(url: &str, allow_remote: bool) -> ModelSettings {
+    fn settings(url: &str, consent: RemoteConsent) -> ModelSettings {
         ModelSettings {
             url: Some(url.into()),
             model: Some("qwen3.8-sglang".into()),
-            allow_remote,
+            consent,
         }
+    }
+
+    /// Shorthand for the two states that were the whole world before ADR-0031.
+    fn no(url: &str) -> ModelSettings {
+        settings(url, RemoteConsent::None)
+    }
+    fn any(url: &str) -> ModelSettings {
+        settings(url, RemoteConsent::Any)
     }
 
     #[test]
@@ -289,31 +415,83 @@ mod tests {
         assert!(!none.remote(), "unconfigured is not remote, it is nothing");
     }
 
-    /// ADR-0030 clause 3. This is the case the user's own desk is in.
+    /// ADR-0031 clause 3. This is the case the user's own desk is in.
     #[test]
-    fn a_remote_endpoint_needs_the_flag_and_the_refusal_names_it() {
-        let s = settings("http://spark-7ecc:8000/v1", false);
+    fn a_remote_endpoint_needs_consent_and_the_refusal_names_both_ways_to_give_it() {
+        let s = no("http://spark-7ecc:8000/v1");
         assert!(s.remote());
         let err = admit(&s).unwrap_err();
         assert_eq!(err, Refusal::RemoteEndpoint { host: "spark-7ecc".into() });
         let msg = err.message();
         assert!(msg.contains("--allow-remote-model"), "{msg}");
+        assert!(msg.contains("allow_remote_model"), "the file is reachable too: {msg}");
         assert!(msg.contains("spark-7ecc"), "the refusal must name the host: {msg}");
 
-        assert!(admit(&settings("http://spark-7ecc:8000/v1", true)).is_ok());
+        assert!(admit(&any("http://spark-7ecc:8000/v1")).is_ok());
+    }
+
+    /// The property that made a config key admissible where `--allow-run` has
+    /// no twin: consent is **to a host**, so it does not travel with the URL.
+    #[test]
+    fn consent_to_one_host_is_not_consent_to_the_next() {
+        let named = RemoteConsent::Host("spark-7ecc".into());
+        assert!(admit(&settings("http://spark-7ecc:8000/v1", named.clone())).is_ok());
+
+        let elsewhere = settings("http://api.example.com/v1", named.clone());
+        let err = admit(&elsewhere).unwrap_err();
+        assert_eq!(
+            err,
+            Refusal::ConsentNamesAnotherHost {
+                host: "api.example.com".into(),
+                consented: "spark-7ecc".into(),
+            }
+        );
+        let msg = err.message();
+        assert!(msg.contains("api.example.com") && msg.contains("spark-7ecc"), "{msg}");
+
+        // Case and the shapes a hand-written file arrives in. The URL form is
+        // what is on the clipboard when someone reaches for this key.
+        for written in ["SPARK-7ecc", " spark-7ecc ", "spark-7ecc:8000", "http://spark-7ecc:8000/v1"] {
+            let c = RemoteConsent::Host(written.into());
+            assert!(c.covers("spark-7ecc"), "{written} should cover the host it names");
+        }
+        // And nothing clever: a different name for possibly the same machine
+        // is still a different name.
+        assert!(!named.covers("spark-7ecc.local"));
+        assert!(!RemoteConsent::None.covers("spark-7ecc"));
+        assert!(RemoteConsent::Any.covers("anything-at-all"));
+    }
+
+    /// The three things someone writes in a TOML file, read as the three
+    /// states — and an empty string read as clearing the key rather than as
+    /// consenting to a host called "".
+    #[test]
+    fn the_config_key_reads_the_shapes_people_write() {
+        let parse = |v: &str| {
+            #[derive(Deserialize)]
+            struct T {
+                k: RemoteConsent,
+            }
+            toml::from_str::<T>(&format!("k = {v}")).unwrap().k
+        };
+        assert_eq!(parse("true"), RemoteConsent::Any);
+        assert_eq!(parse("false"), RemoteConsent::None);
+        assert_eq!(parse("\"spark-7ecc\""), RemoteConsent::Host("spark-7ecc".into()));
+        assert_eq!(parse("\"  \""), RemoteConsent::None);
+        assert!(!RemoteConsent::default().granted());
     }
 
     #[test]
-    fn a_loopback_endpoint_needs_no_flag() {
-        assert!(admit(&settings("http://127.0.0.1:8000/v1", false)).is_ok());
-        assert!(admit(&settings("http://localhost:8000/v1", false)).is_ok());
+    fn a_loopback_endpoint_needs_no_consent() {
+        assert!(admit(&no("http://127.0.0.1:8000/v1")).is_ok());
+        assert!(admit(&no("http://localhost:8000/v1")).is_ok());
     }
 
     /// ADR-0030 clause 4, and the property that distinguishes it from clause 3:
     /// there is no flag, so no combination of settings opens it.
     #[test]
     fn chat_is_refused_off_loopback_with_no_way_round_it() {
-        let s = settings("http://127.0.0.1:8000/v1", true);
+        let s = any("http://127.0.0.1:8000/v1");
         assert!(admit_chat(&s, true).is_ok());
         assert_eq!(admit_chat(&s, false), Err(Refusal::PublicBind));
         let msg = Refusal::PublicBind.message();
@@ -349,7 +527,7 @@ mod tests {
     /// render, so it has to carry the reason rather than just the absence.
     #[test]
     fn health_carries_the_refusal_rather_than_only_the_absence() {
-        let h = health(&settings("http://spark-7ecc:8000/v1", false), true);
+        let h = health(&no("http://spark-7ecc:8000/v1"), true);
         assert!(h.configured);
         assert!(h.remote);
         assert!(!h.allowed);
@@ -360,7 +538,7 @@ mod tests {
         assert!(!off.configured);
         assert!(off.refusal.unwrap().contains("no model configured"));
 
-        let ok = health(&settings("http://127.0.0.1:8000/v1", false), true);
+        let ok = health(&no("http://127.0.0.1:8000/v1"), true);
         assert!(ok.allowed && ok.chat_allowed && ok.refusal.is_none());
     }
 
@@ -368,7 +546,7 @@ mod tests {
     /// carry a key in its query string and must not travel with it.
     #[test]
     fn health_publishes_the_host_and_never_the_url() {
-        let h = health(&settings("http://spark-7ecc:8000/v1?api-key=hunter2", true), true);
+        let h = health(&any("http://spark-7ecc:8000/v1?api-key=hunter2"), true);
         assert_eq!(h.host.as_deref(), Some("spark-7ecc"));
         let rendered = format!("{h:?}");
         assert!(!rendered.contains("hunter2"), "{rendered}");

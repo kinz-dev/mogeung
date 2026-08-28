@@ -241,26 +241,29 @@ fn host(listener: TcpListener) {
                     desktop: false,
                     push_url: None,
                 },
-                // Read from the config file, and **only** these two. `R-O1`.
+                // Read from the config file, and **only** these three. `R-O1`.
                 //
-                // This hosted daemon has never read `config.toml` — it takes
-                // the defaults for `db`, `poll_ms` and the rest — and widening
-                // that is a separate question with its own consequences. The
-                // model endpoint cannot wait for it: a window that hosts its own
-                // daemon has no argv, so with nothing read here the chat panel
-                // would say *no model configured* for ever and there would be no
-                // way to change its mind.
+                // This hosted daemon reads nothing else from `config.toml` — it
+                // takes the defaults for `db`, `poll_ms` and the rest — and
+                // widening that is a separate question with its own
+                // consequences. The model seam cannot wait for it: a window that
+                // hosts its own daemon has no argv, so with nothing read here
+                // the chat panel would say *no model configured* for ever and
+                // there would be no way to change its mind.
                 //
-                // `allow_remote` is deliberately **not** read. ADR-0030 clause 3
-                // makes consent to an endpoint elsewhere a flag, and a file this
-                // process cannot be given a flag by is not the place to grant it
-                // — so a hosted daemon reaches loopback endpoints only, and says
-                // so through the health row's refusal. Run `mogeungd` yourself
-                // (which `scripts/start.sh` does) to consent to more.
+                // The consent is read too, which it was not when this shipped.
+                // ADR-0030 clause 3 made it flag-only on `--allow-run`'s shape,
+                // and the shapes are not the same: `runs_allowed` reads the
+                // **bind**, so a hosted daemon is loopback and needs no flag,
+                // where the model gate reads the **endpoint** — leaving consent
+                // literally unreachable here, and the endpoint refused for ever
+                // on the shape mogeung is normally run in.
+                // [ADR-0031](../../../../docs/decisions/0031-consent-to-a-named-host.md)
+                // replaced it with a key that names the host it consents to.
                 model: mogeung_core::model::ModelSettings {
                     url: cfg.model_url.clone(),
                     model: cfg.model_name.clone(),
-                    allow_remote: false,
+                    consent: cfg.allow_remote_model.clone(),
                 },
                 ..Default::default()
             };

@@ -34,7 +34,7 @@ pub struct Options {
     pub advertise: bool,
     /// Permit starting processes on a non-loopback bind. ADR-0025 clause 4.
     pub allow_run: bool,
-    /// The local model seam. `R-O1`, ADR-0030 — including `allow_remote`,
+    /// The local model seam. `R-O1`, ADR-0031 — including the consent,
     /// which is clause 3's flag: an endpoint that is not this machine is
     /// publishing, and has to be asked for.
     pub model: mogeung_core::model::ModelSettings,
@@ -136,10 +136,9 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
             "model endpoint {} ({}){}",
             opts.model.host().unwrap_or_else(|| "?".into()),
             opts.model.model.as_deref().unwrap_or("the endpoint's default"),
-            if opts.model.remote() && !opts.model.allow_remote {
-                " — REFUSED: not this machine, and --allow-remote-model was not passed"
-            } else {
-                ""
+            match mogeung_core::model::admit(&opts.model) {
+                Ok(()) => String::new(),
+                Err(r) => format!(" — REFUSED: {}", r.message()),
             }
         );
     }
@@ -202,11 +201,15 @@ where
     state
         .runs
         .set_allowed(crate::run::runs_allowed(addr, opts.allow_run));
-    // ADR-0030 clause 4, decided from the same address and in the same place,
+    // ADR-0031 clause 4, decided from the same address and in the same place,
     // for the same reason: one computation of "is this safe".
     state
         .model
         .set_chat_allowed(mogeung_core::model::chat_allowed(addr));
+    // And the config editor, on the same reasoning applied to a different
+    // door: the file it edits holds `push_url` and `model_url`, both outbound.
+    // `R-J79`.
+    let _ = state.config_editable.set(addr.ip().is_loopback());
 
     // Run output reaches clients as events on the socket everything else uses.
     // Spawned here rather than inside `Runs` because `Runs` has no opinion

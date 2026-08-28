@@ -286,28 +286,34 @@ whose assumption a harness cannot test. That was the plan's own exception and it
 is recorded here so nobody later reads the order as the gate having been
 skipped.
 
-**The flag-only consent has a hole, and it is the user's own configuration.**
-ADR-0030 clause 3 makes `--allow-remote-model` a flag with no config-file twin,
+**The flag-only consent had a hole, and it was the user's own configuration.**
+ADR-0030 clause 3 made `--allow-remote-model` a flag with no config-file twin,
 copying `--allow-run`'s shape. The copy is imperfect and the difference took an
 hour to find: `runs_allowed` reads the **bind** address, so a window-hosted
 daemon — always loopback — is permitted without any flag and the missing argv
 never bites. The model gate reads the **endpoint** address, and a hosted daemon
 can perfectly reasonably want a remote one. So on the shape mogeung is normally
 run in ([ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md)), the
-consent is unreachable and the endpoint is refused for ever.
+consent was unreachable and the endpoint refused for ever, with a message naming
+a flag that could never be passed.
 
-What was done about it, deliberately narrowly: the hosted daemon now reads
-`model_url` and `model_name` from `config.toml` — it had read *nothing* from
-that file before — and still cannot grant `allow_remote`, so it reaches
-loopback endpoints only and says so through the health row. Reaching an
-endpoint elsewhere means running `mogeungd` yourself, which `scripts/start.sh`
-already does and now has a `--allow-remote-model` passthrough for.
+The first answer was narrow: the hosted daemon learnt to read `model_url` and
+`model_name` from `config.toml` — it had read *nothing* from that file before —
+and still could not grant consent, so it reached loopback endpoints only. That
+was recorded here as **a decision deferred rather than made**, on the grounds
+that it should not be settled an hour after the ADR that set it.
 
-**That is a decision deferred rather than made.** If the friction proves wrong,
-the fix is a new ADR superseding clause 3 — the argument for one being that a
-config file in your own home directory is as deliberate an act as a flag, and
-the argument against being that a file is written once and a flag is typed
-every time. It is not being decided here, an hour after the ADR that set it.
+**It survived one install.** Re-installing and clicking the launcher produced
+exactly the predicted refusal, which is a refusal with no way out — the thing
+`server::admit` taught this codebase not to ship. Settled by
+[ADR-0031](../decisions/0031-consent-to-a-named-host.md), which supersedes
+ADR-0030 and carries five of its six clauses forward verbatim. The replacement
+clause 3 is **not** the argument the deferral anticipated. The question was
+never *is a file as deliberate as a flag*; it is **what an explicit act is**,
+and a flag turns out to be the weaker one, because a flag is blanket. So
+consent names its host: `allow_remote_model = "spark-7ecc"` is consent to that
+machine and no other, and moving `model_url` asks again. `true` and the flag
+remain as the blanket grant, exactly as strong as before and no stronger.
 
 **The `/models` URL is what people paste.** It is the URL you can `curl`, so it
 is the one in shell history and the one that reaches a config file — and asking

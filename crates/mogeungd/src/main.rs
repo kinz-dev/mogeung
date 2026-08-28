@@ -99,13 +99,18 @@ struct Args {
     model_name: Option<String>,
 
     /// Let this daemon send text to a model endpoint that is **not** on this
-    /// machine. ADR-0030 clause 3.
+    /// machine. ADR-0031 clause 3.
     ///
     /// A model endpoint elsewhere is publishing: what mogeung asks it travels
     /// off this box, and ADR-0014 draws the line at publishing rather than at
-    /// the network. Loopback needs no flag. Flag-only, with no config-file
-    /// twin — the same shape as --allow-run, so consent is an act rather than
-    /// a setting somebody once wrote and forgot.
+    /// the network. Loopback needs none of this.
+    ///
+    /// The flag is the **blanket** grant — any host, for this run. The
+    /// narrower and preferred form is `allow_remote_model = "spark-7ecc"` in
+    /// the config file, which consents to one named host and asks again when
+    /// `model_url` moves. Both exist because a window hosting its own daemon
+    /// has no argv (ADR-0009) and would otherwise have no way to consent at
+    /// all.
     #[arg(long)]
     allow_remote_model: bool,
 }
@@ -135,7 +140,15 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             model: mogeung_core::model::ModelSettings {
                 url: args.model_url.or(cfg.model_url),
                 model: args.model_name.or(cfg.model_name),
-                allow_remote: args.allow_remote_model,
+                // The flag is broader than anything the file can say, so it
+                // wins by being checked first — and there is deliberately no
+                // way for the file to *narrow* a flag that was passed. A flag
+                // is this invocation; the file is the standing preference.
+                consent: if args.allow_remote_model {
+                    mogeung_core::model::RemoteConsent::Any
+                } else {
+                    cfg.allow_remote_model
+                },
             },
         },
     )
@@ -231,11 +244,13 @@ mod tests {
         assert!(o.token.is_none());
     }
 
-    /// The endpoint follows the same order as everything else, and the
-    /// **consent does not**: `allow_remote_model` has no config-file twin, so
-    /// there is deliberately nothing here that could grant it from a file.
+    /// The endpoint follows the same order as everything else, and so does the
+    /// consent — ADR-0031, which replaced ADR-0030's flag-only clause because
+    /// a window-hosted daemon has no argv to receive a flag through.
     #[test]
     fn the_model_endpoint_comes_from_the_file_and_the_flag_beats_it() {
+        use mogeung_core::model::RemoteConsent;
+
         let cfg = Config {
             model_url: Some("http://127.0.0.1:8000/v1".into()),
             model_name: Some("from-file".into()),
@@ -244,7 +259,7 @@ mod tests {
         let o = resolve(args(), cfg.clone()).1;
         assert_eq!(o.model.url.as_deref(), Some("http://127.0.0.1:8000/v1"));
         assert_eq!(o.model.model.as_deref(), Some("from-file"));
-        assert!(!o.model.allow_remote, "a file cannot consent to a remote endpoint");
+        assert_eq!(o.model.consent, RemoteConsent::None, "nothing asked for, nothing granted");
 
         let typed = Args {
             model_url: Some("http://spark-7ecc:8000/v1".into()),
@@ -255,7 +270,27 @@ mod tests {
         let o = resolve(typed, cfg).1;
         assert_eq!(o.model.url.as_deref(), Some("http://spark-7ecc:8000/v1"));
         assert_eq!(o.model.model.as_deref(), Some("typed"));
-        assert!(o.model.allow_remote);
+        assert_eq!(o.model.consent, RemoteConsent::Any, "the flag is the blanket grant");
+    }
+
+    /// The case the flag could not reach: a daemon with no argv, consenting
+    /// through the file — and the flag still winning when there is one, since
+    /// `Any` is broader than any host the file could name.
+    #[test]
+    fn the_file_can_consent_to_a_named_host_and_the_flag_still_widens_it() {
+        use mogeung_core::model::RemoteConsent;
+
+        let cfg = Config {
+            model_url: Some("http://spark-7ecc:8000/v1".into()),
+            allow_remote_model: RemoteConsent::Host("spark-7ecc".into()),
+            ..Config::default()
+        };
+        let o = resolve(args(), cfg.clone()).1;
+        assert_eq!(o.model.consent, RemoteConsent::Host("spark-7ecc".into()));
+        assert!(mogeung_core::model::admit(&o.model).is_ok(), "the file alone must be enough");
+
+        let o = resolve(Args { allow_remote_model: true, ..args() }, cfg).1;
+        assert_eq!(o.model.consent, RemoteConsent::Any, "a flag widens, never narrows");
 
         assert!(!resolve(args(), Config::default()).1.model.configured());
     }
