@@ -750,6 +750,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running mogeung");
+        // `build` then `run`, rather than `run(context)`, for one event: on
+        // exit, stop the llmproxy this window started. The hosted daemon's own cleanup is
+        // unreachable — it is handed a shutdown future that never resolves
+        // (ADR-0009) — so without this the proxy outlives the window that
+        // started it, holding a borrowed OAuth token on a known port. `R-O10`.
+        .build(tauri::generate_context!())
+        .expect("error while running mogeung")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                daemon::stop_hosted_proxy();
+            }
+        });
 }

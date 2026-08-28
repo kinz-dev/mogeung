@@ -6,7 +6,7 @@
 |---|---|
 | Branch | `main` |
 | Tests | 550 passing |
-| Rust | 38734 lines |
+| Rust | 38759 lines |
 | Docs | 101 files, 33 ADRs |
 
 ## Assumptions

@@ -195,6 +195,41 @@ mod tests {
         }
     }
 
+    /// The window and the daemon must derive the **same** port, or the window
+    /// asks a port nobody is on, reports success, and leaves the real proxy
+    /// running. `R-O10`.
+    ///
+    /// Built from `ProxySettings` rather than from arithmetic here, so the two
+    /// cannot drift: this asserts the wiring, and `port_for` owns the rule.
+    #[test]
+    fn the_window_stops_the_port_the_daemon_started() {
+        use mogeung_core::config::Config;
+        use mogeung_core::llmproxy::ProxySettings;
+
+        let off = Config::default();
+        assert_eq!(hosted_proxy_target(&off, 7717), None, "nothing to stop when it is off");
+
+        let on = Config { llmproxy: Some(true), ..Config::default() };
+        let settings = ProxySettings { enabled: true, ..ProxySettings::default() };
+        assert_eq!(
+            hosted_proxy_target(&on, 7717),
+            Some(("llmproxy".to_string(), settings.port_for(7717))),
+            "the same derivation server::run uses"
+        );
+
+        // An explicit port and a named binary both travel.
+        let pinned = Config {
+            llmproxy: Some(true),
+            llmproxy_bin: Some("/opt/llmproxy".into()),
+            llmproxy_port: Some(9100),
+            ..Config::default()
+        };
+        assert_eq!(
+            hosted_proxy_target(&pinned, 7717),
+            Some(("/opt/llmproxy".to_string(), 9100))
+        );
+    }
+
     /// A port nobody holds means *we* are the daemon — decided by winning the
     /// bind rather than by asking first, so two windows opening together cannot
     /// both conclude the port is free.
@@ -209,6 +244,61 @@ mod tests {
         // `acquire` would start a real daemon here, so only the decision is
         // exercised: nothing is listening, therefore the bind is what happens.
         assert!(probe(&addr).is_none(), "nothing is serving it yet");
+    }
+}
+
+/// The proxy **this window** started, if it started one: its binary and port.
+///
+/// Set only on the hosting path. When the window merely attached to a daemon
+/// somebody else is running, that daemon owns its proxy and will stop it on its
+/// own way out — stopping it from here would take down a proxy serving a
+/// process that is still very much alive.
+static HOSTED_PROXY: std::sync::OnceLock<(String, u16)> = std::sync::OnceLock::new();
+
+/// What this window would have to stop, given the config and the port it bound.
+///
+/// Split out and tested because it has to agree with `server::run`, which is
+/// what actually starts the proxy: the two derive the port independently, and
+/// a disagreement would be invisible — the window would ask a port nobody is
+/// on, report success, and leave the real proxy running. `None` when the proxy
+/// is off, which is also when there is nothing to stop.
+fn hosted_proxy_target(
+    cfg: &mogeung_core::config::Config,
+    bound_port: u16,
+) -> Option<(String, u16)> {
+    if !cfg.llmproxy.unwrap_or(false) {
+        return None;
+    }
+    let settings = mogeung_core::llmproxy::ProxySettings {
+        enabled: true,
+        bin: cfg.llmproxy_bin.clone().unwrap_or_else(|| "llmproxy".into()),
+        config: cfg.llmproxy_config.clone(),
+        port: cfg.llmproxy_port,
+    };
+    Some((settings.bin.clone(), settings.port_for(bound_port)))
+}
+
+/// Stop the llmproxy this window started. `R-O10`.
+///
+/// Called from the shell's exit handler, and it exists because of a gap
+/// ADR-0033 clause 4 did not close. The hosted daemon is handed a shutdown
+/// future that **never resolves** — see `host` below, and ADR-0009 for why —
+/// so `server::run`'s own cleanup, `Proxy::shutdown` included, is unreachable
+/// on this path. The daemon simply dies with the process, and before this the
+/// proxy did not: it was orphaned on every window close and adopted again on
+/// every launch, which is one process rather than a growing pile but is not
+/// what *"kill it when mogeung is stopped"* asked for. Worse, the orphan holds
+/// a borrowed OAuth token and serves it to anything that can reach the port,
+/// while the window has just told you that closing it stopped watching.
+///
+/// This does not cover `SIGKILL`, and nothing can. Adoption still does.
+pub fn stop_hosted_proxy() {
+    let Some((bin, port)) = HOSTED_PROXY.get() else { return };
+    match mogeungd::llmproxy::stop(bin, *port) {
+        Ok(()) => eprintln!("llmproxy on 127.0.0.1:{port} stopped"),
+        // A line, and no more: the process is on its way out, and the next
+        // launch adopts whatever is still there.
+        Err(e) => eprintln!("could not stop llmproxy on 127.0.0.1:{port}: {e}"),
     }
 }
 
@@ -231,6 +321,14 @@ fn host(listener: TcpListener) {
             if let Some(w) = cfg_warning {
                 eprintln!("{w}");
             }
+            // Recorded before the daemon runs, because after this the thread
+            // never returns.
+            if let Ok(bound) = listener.local_addr() {
+                if let Some(target) = hosted_proxy_target(&cfg, bound.port()) {
+                    let _ = HOSTED_PROXY.set(target);
+                }
+            }
+
             let opts = mogeungd::server::Options {
                 db: mogeungd::server::default_db(),
                 // Off unless asked for, matching `mogeungd`'s own default: the

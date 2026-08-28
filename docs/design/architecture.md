@@ -607,6 +607,16 @@ exited, and the process-group kill `run.rs` uses would reach nothing.
 parent *thread* under a runtime free to retire it, macOS does not have it, and
 it would not reach a detached grandchild either.
 
+**The window stops the proxy it started, because the daemon cannot.** The
+hosted daemon is handed a shutdown future that never resolves, so
+`server::run`'s cleanup — `Proxy::shutdown` included — is unreachable on that
+path; standalone `mogeungd` reaches it on `ctrl_c` and the window never does.
+So the shell's `RunEvent::Exit` calls the same `llmproxy::stop(bin, port)`,
+against a target recorded at host time and only when the window actually
+hosted: attaching to somebody else's daemon must not stop a proxy that daemon
+is still using. Both sides derive the port independently, so that agreement is
+a test.
+
 **The admin interface is reachable because the daemon reads its port.**
 llmproxy binds admin on a random loopback port, so nobody could find it. It
 writes the URL into its own runtime metadata file, which mogeung reads and puts

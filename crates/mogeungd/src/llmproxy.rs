@@ -160,19 +160,11 @@ impl Proxy {
             (g.stop_port.take(), g.settings.bin.clone())
         };
         let Some(port) = port else { return };
-        let out = std::process::Command::new(&bin)
-            .arg("--listen")
-            .arg(format!("127.0.0.1:{port}"))
-            .arg("--shutdown")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .status();
-        match out {
-            Ok(s) if s.success() => tracing::info!("llmproxy on 127.0.0.1:{port} stopped"),
+        match stop(&bin, port) {
+            Ok(()) => tracing::info!("llmproxy on 127.0.0.1:{port} stopped"),
             // Worth a line and not worth more: the daemon is on its way out,
             // and the next start-up adopts whatever is still there.
-            other => tracing::warn!("could not stop llmproxy on 127.0.0.1:{port}: {other:?}"),
+            Err(e) => tracing::warn!("could not stop llmproxy on 127.0.0.1:{port}: {e}"),
         }
     }
 
@@ -184,6 +176,39 @@ impl Proxy {
             admin_url: g.admin_url.clone(),
             forwards_to: g.forwards_to.clone(),
         }
+    }
+}
+
+/// Ask the llmproxy on `port` to stop.
+///
+/// A free function rather than only a method, because there are two callers
+/// that cannot share state: this daemon on its way out, and — when the daemon
+/// is a **thread inside the window** — the window's own exit handler, which has
+/// no reach into `AppState` at all. Two copies of this command would be two
+/// things to keep in step, and the one nobody exercises would be the one that
+/// rots.
+///
+/// Addressed by port, which is llmproxy's own identity for an instance: it
+/// stops exactly that one and leaves any other alone.
+///
+/// `Ok` on a port nobody is serving, because llmproxy exits 0 there — the
+/// verb is idempotent, so `Err` means the invocation itself failed (no such
+/// binary, no permission) rather than "there was nothing to stop". That is
+/// the right way round for a caller on its way out.
+pub fn stop(bin: &str, port: u16) -> Result<(), String> {
+    let status = std::process::Command::new(bin)
+        .arg("--listen")
+        .arg(format!("127.0.0.1:{port}"))
+        .arg("--shutdown")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|e| format!("could not run `{bin}`: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("`{bin} --shutdown` exited {status}"))
     }
 }
 
