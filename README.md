@@ -30,8 +30,9 @@ worse. That was the fatal flaw of the first version — see
 ./scripts/install.sh
 ```
 
-Builds the release daemon and the window, installs `mogeungd`, `yolomo` and
-`qwenmo` (the tmux launchers for `claude` and `qwen`) into
+Builds the release daemon and the window, installs `mogeungd`, `yolomo`,
+`yolomop` and `qwenmo` (the tmux launchers for `claude`, `llmproxy --claude`
+and `qwen`) into
 `~/.local/bin`, and installs the window's `.deb` with `dpkg -i` — after which
 **mogeung is an application in the launcher** like any other. It asks for `sudo`
 once, at the dpkg step and nowhere else. `--no-desktop` stops after the daemon;

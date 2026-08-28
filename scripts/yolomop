@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# Start `claude` **through llmproxy** inside a tmux session that mogeung can
+# host in a pane.
+#
+#   yolomop                 start a NEW session for this directory
+#   yolomop -d              same, but headless: don't attach this terminal.
+#                           mogeung's Terminal pane becomes the session's only
+#                           head; the session name is printed for scripting.
+#   yolomop --proxy         a routing flag before `--` goes to llmproxy itself
+#   yolomop -- --model opus anything after `--` is passed through to claude
+#
+# This is `yolomo` with one substitution: `claude` becomes
+# `llmproxy --claude -- …`, so the session's API traffic goes through the proxy.
+#
+# The `--` is not decoration. llmproxy parses its own flags with clap and takes
+# the agent's only after a `--` separator, so `llmproxy --claude
+# --dangerously-skip-permissions` is *"error: unexpected argument"* and an
+# immediate exit. Started under tmux that reads as a pane that says `[exited]`
+# the moment it opens, with the error already scrolled away — which is exactly
+# how the first version of this script failed. Everything else — the
+# approve-everything flag, the tmux handling, the naming — is the same session
+# `yolomo` starts, and mogeung sees it as the Claude session it is: panes are
+# matched by walking process ancestry, and the extra `llmproxy` level between
+# tmux and `claude` changes nothing about that walk.
+#
+# It is a deliberate sibling rather than a flag on `yolomo`, for the reason
+# ADR-0029 gives for `qwenmo` and `codexmo`: with several ways to start an
+# agent, visible duplication is cheaper than an abstraction you have to hold in
+# your head to know what runs. **They must move together.** A fix to the tmux
+# handling below belongs in `yolomo`, `qwenmo` and `codexmo` too, and vice versa.
+#
+# Every run starts a fresh agent: two runs in one directory are two sessions
+# (mogeung-llmproxy-api, mogeung-llmproxy-api-2, …), not two clients of one
+# agent. To re-attach to a session you detached from (or started with -d), use
+# tmux directly:
+#
+#   tmux attach -t mogeung-llmproxy-<dir>
+#
+# The name carries `llmproxy` so a plain `yolomo` session and a proxied one in
+# the same directory are tellable apart in `tmux ls`. Nothing in mogeung parses
+# it — panes are matched by process ancestry, not by name — so it is for you.
+#
+# Why tmux at all: a pty has exactly one master. A `claude` started in a bare
+# terminal is owned by that terminal and nothing else can ever attach to it,
+# which is why mogeung can only *point at* such a session. tmux owns the pty
+# instead, and is built for several clients at once, so the same live session
+# can be in a mogeung pane and in your terminal simultaneously. See ADR-0010.
+#
+# Nothing here traps the session. Detach and it keeps running; attach from any
+# terminal with `tmux attach -t <name>`; kill mogeung and nothing happens to it.
+#
+# mogeung never runs this for you. You run it; mogeung notices. ADR-0003.
+#
+# bash 3.2, which is what macOS ships.
+
+set -uo pipefail
+
+detach=0
+if [ "${1:-}" = "-d" ] || [ "${1:-}" = "--detach" ]; then
+  detach=1
+  shift
+fi
+# llmproxy's routing flags are its own, and clap wants them *before* the `--`
+# that starts the agent's. Absorbing the three named ones here is what makes
+# `yolomop --proxy` mean what it looks like it means; without it the flag would
+# land after the separator and be handed to claude, which does not know it.
+# Anything else is claude's — no spaces in these tokens, so a plain string
+# stands in for an array bash 3.2 would make awkward under `set -u`.
+proxy_args=""
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    --intercept|--proxy|--integrated)
+      proxy_args="$proxy_args $1"
+      shift
+      ;;
+    *) break ;;
+  esac
+done
+
+# Allow `yolomop -- <claude args>` so a leading `-d` meant for claude is not
+# mistaken for ours.
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+
+# `claude` installs itself onto PATH; `llmproxy` may not be, and a login shell
+# that never sourced a profile would fail with "command not found" from inside
+# a detached tmux session, where nobody sees the error. Resolve it here, while
+# there is still a terminal to complain to.
+proxy_bin=""
+if command -v llmproxy >/dev/null 2>&1; then
+  proxy_bin="llmproxy"
+else
+  for candidate in \
+    "$HOME/.local/bin/llmproxy" \
+    "$HOME/go/bin/llmproxy" \
+    "/usr/local/bin/llmproxy" \
+    "/opt/homebrew/bin/llmproxy"; do
+    if [ -x "$candidate" ]; then
+      proxy_bin="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$proxy_bin" ]; then
+  echo "yolomop: cannot find the llmproxy binary." >&2
+  echo "         Looked on PATH, then in ~/.local/bin, ~/go/bin," >&2
+  echo "         /usr/local/bin and /opt/homebrew/bin." >&2
+  echo "         For an unproxied session, use: yolomo" >&2
+  exit 1
+fi
+
+# Already inside tmux. Nesting gains nothing and would make the pane mapping
+# ambiguous, so just run it here — unless -d, where no attach happens and so
+# nothing nests: creating a detached session from inside tmux is fine.
+if [ "$detach" -eq 0 ] && [ -n "${TMUX:-}" ]; then
+  exec "$proxy_bin" --claude $proxy_args -- --dangerously-skip-permissions ${1+"$@"}
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  if [ "$detach" -eq 1 ]; then
+    # A plain fallback would run the session in *this* terminal — the opposite
+    # of headless — so refuse loudly instead of surprising the caller.
+    echo "yolomop: -d needs tmux, and tmux is not installed." >&2
+    exit 1
+  fi
+  echo "yolomop: tmux is not installed — falling back to a plain session." >&2
+  echo "         mogeung will be able to see it but not host it." >&2
+  exec "$proxy_bin" --claude $proxy_args -- --dangerously-skip-permissions ${1+"$@"}
+fi
+
+dir=$(pwd)
+# tmux parses ':' and '.' as target separators, so a session named after a
+# directory containing them would be unaddressable. Everything outside a safe
+# set becomes a dash rather than being dropped, so two different directories
+# cannot collapse onto one name.
+safe=$(basename "$dir" | sed 's/[^A-Za-z0-9_-]/-/g')
+base="mogeung-llmproxy-${safe}"
+
+# Each run gets its own session — running yolomop twice in one directory means
+# two agents working in parallel, not a second window onto the first one
+# (which is what silently happened before, and looks exactly like "my second
+# agent never started"). First free suffix wins, so names stay predictable.
+#
+# `=` is tmux's exact-match prefix. Without it `has-session -t foo` also
+# matches `foobar`, and the count would include the wrong project's sessions.
+name="$base"
+n=2
+while tmux has-session -t "=${name}" 2>/dev/null; do
+  name="${base}-${n}"
+  n=$((n + 1))
+done
+
+tmux new-session -d -s "$name" -c "$dir" \
+  "$proxy_bin" --claude $proxy_args -- --dangerously-skip-permissions ${1+"$@"} || {
+    echo "yolomop: could not create the tmux session" >&2
+    exit 1
+  }
+
+# Size to whichever client is being used, rather than to the smallest one.
+# The default is `smallest`, which would let a narrow mogeung pane shrink a
+# full-screen terminal attached to the same session — silent, and baffling
+# when it happens to you.
+# `-w` and the trailing `:` are both load-bearing. `window-size` is a *window*
+# option, so without `-w` tmux 3.6 answers "no such window: =mogeung-…" and the
+# option is never set — silently, on stderr, after the session has already
+# started. `yolomo` carried that bug unnoticed for a while: the failure mode is
+# not a crash but the absence of the protection the comment above describes.
+tmux set-option -w -t "=${name}:" window-size latest >/dev/null
+
+if [ "$detach" -eq 1 ]; then
+  # The name on stdout so scripts can capture it; the human note on stderr.
+  echo "$name"
+  echo "yolomop: started headless — mogeung will pick it up on its next scan." >&2
+  echo "         attach a terminal any time with: tmux attach -t ${name}" >&2
+  exit 0
+fi
+
+exec tmux attach-session -t "=${name}"

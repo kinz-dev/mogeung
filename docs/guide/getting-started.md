@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-08-25
+updated: 2026-08-27
 ---
 
 # Getting started
@@ -46,8 +46,8 @@ script does the lot:
 ./scripts/install.sh
 ```
 
-It builds both halves, puts `mogeungd`, `yolomo`, `qwenmo` and `codexmo` in
-`~/.local/bin`, and
+It builds both halves, puts `mogeungd`, `yolomo`, `yolomop`, `qwenmo` and
+`codexmo` in `~/.local/bin`, and
 installs the window's `.deb` with `dpkg -i`, asking for `sudo` at that step and
 no other. `./scripts/install.sh --uninstall` takes it all back off. See
 [desktop/README.md](../../desktop/README.md) for the bundles themselves — the
@@ -64,10 +64,11 @@ has exactly one master, and that terminal owns it, so mogeung's Agent pane can
 only point you at it. Start it under tmux instead and the same live session can
 be in your terminal and in a mogeung pane at once ([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)).
 
-That is all `yolomo`, `qwenmo` and `codexmo` do:
+That is all `yolomo`, `yolomop`, `qwenmo` and `codexmo` do:
 
 ```sh
 yolomo          # claude, under tmux
+yolomop         # the same claude session, through `llmproxy --claude`
 qwenmo          # qwen, under tmux
 codexmo         # codex, under tmux
 codexmo -d      # ...headless: mogeung's pane becomes its only terminal
