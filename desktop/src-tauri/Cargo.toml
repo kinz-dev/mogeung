@@ -37,6 +37,9 @@ anyhow = "1"
 # exactly as the egui client does. A path dependency out of this workspace is
 # fine — `mogeungd` is a normal crate and does not drag webkit in with it.
 mogeungd = { path = "../../crates/mogeungd" }
+# Its types, for the daemon options this window builds — `R-O1`'s model
+# settings are the first field here that is not a primitive.
+mogeung-core = { path = "../../crates/mogeung-core" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tauri-plugin-dialog = "2.7.2"
 

@@ -2376,6 +2376,7 @@ name = "mogeung-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mogeung-core",
  "mogeungd",
  "portable-pty",
  "serde",

@@ -78,6 +78,39 @@ import {
   type ScopedPrefs,
 } from "./prefs";
 
+/**
+ * One turn in the chat panel. `R-O5`.
+ *
+ * A user turn and the assistant turn answering it are two rows sharing one
+ * request id — the assistant's is the id itself, the user's is `<id>:you` —
+ * so an answer can be matched to its question without an index.
+ */
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  /** The ask is out and nothing has come back yet. */
+  pending?: boolean;
+  /** A refusal or a failure. Shown; never sent back as context. */
+  error?: string;
+  /** What actually answered, which may not be what was asked for. */
+  model?: string;
+  elapsed_ms?: number;
+}
+
+/**
+ * A request id for one ask.
+ *
+ * `randomUUID` is absent on an insecure origin and in some test environments,
+ * so the counter is a real fallback rather than defensive decoration — ids only
+ * have to be unique within one window's lifetime.
+ */
+let chatSeq = 0;
+function chatId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `chat-${Date.now().toString(36)}-${++chatSeq}`;
+}
+
 /** Which detail pane is forward. Serialised into the dockview layout. */
 export type PaneId =
   | "queue"
@@ -355,6 +388,16 @@ export interface AppState {
   radius: BlastRadius | null;
   usage: UsageReport | null;
   notes: Note[];
+  /**
+   * The chat panel's conversation. `R-O5`.
+   *
+   * **In memory only, and deliberately.** The daemon stores none of it
+   * (ADR-0030), and it is not in `prefs` either, so it does not reach
+   * `localStorage` — closing the window is the whole of the retention policy.
+   * It lives in the store rather than in the component so that closing the
+   * rail tool and reopening it does not lose the thread mid-question.
+   */
+  chat: ChatMessage[];
   /** Memory and skills under `~/.claude`, and whichever one is open. `R-F14`. */
   kit: import("@/wire/types").KitEntry[];
   kitDoc: import("@/wire/types").KitDoc | null;
@@ -459,6 +502,9 @@ export interface AppState {
 
   // -- actions ------------------------------------------------------------
   send: (msg: ClientMsg) => void;
+  /** Ask the daemon's model. `R-O5`. */
+  askModel: (text: string) => void;
+  clearChat: () => void;
   ingest: (msg: ServerMsg) => void;
   select: (id: SessionId) => void;
   setPrefs: (patch: Partial<Prefs>) => void;
@@ -619,6 +665,7 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  chat: [],
   kit: [],
   kitDoc: null,
   kitLoaded: false,
@@ -673,6 +720,42 @@ export const useStore = create<AppState>((set, get) => ({
       client?.send({ cmd: "note_list" });
     }
   },
+
+  askModel: (text) => {
+    const content = text.trim();
+    if (!content) return;
+    const id = chatId();
+    // The turns that actually happened.
+    //
+    // A failed exchange leaves its error on screen — you want to see what went
+    // wrong — and is dropped from what gets sent, **both halves of it**. The
+    // error itself is mogeung's own words and is not a turn in the
+    // conversation; and the question it failed to answer has to go with it,
+    // or the model receives a question nobody ever answered and may take the
+    // new one for a clarification of the old.
+    const failed = new Set(
+      get()
+        .chat.filter((m) => m.error)
+        .map((m) => `${m.id}:you`),
+    );
+    const history = get()
+      .chat.filter((m) => !m.pending && !m.error && !failed.has(m.id))
+      .map((m) => ({ role: m.role, content: m.content }));
+    const messages = [...history, { role: "user", content }];
+    set((s) => ({
+      chat: [
+        ...s.chat,
+        { id: `${id}:you`, role: "user", content },
+        // The pending row is added here rather than when the answer arrives,
+        // so the panel shows the ask is in flight. A local model can take a
+        // minute, and a box that does nothing for a minute reads as broken.
+        { id, role: "assistant", content: "", pending: true },
+      ],
+    }));
+    get().send({ cmd: "model_chat", id, messages });
+  },
+
+  clearChat: () => set({ chat: [] }),
 
   select: (id) => {
     const { selected, events, search } = get();
@@ -1019,6 +1102,25 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "notes":
         set({ notes: msg.notes });
+        break;
+      case "model_reply":
+        // Matched by id rather than by position: nothing stops a second
+        // question being asked while the first is still out, and the answers
+        // may come back in either order.
+        set((s) => ({
+          chat: s.chat.map((m) =>
+            m.id === msg.id
+              ? {
+                  ...m,
+                  pending: false,
+                  content: msg.text ?? "",
+                  error: msg.error ?? undefined,
+                  model: msg.model || undefined,
+                  elapsed_ms: msg.elapsed_ms,
+                }
+              : m,
+          ),
+        }));
         break;
       case "kit":
         set({ kit: msg.entries, kitLoaded: true });

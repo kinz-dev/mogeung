@@ -272,6 +272,28 @@ pub enum ClientMsg {
     },
     NoteDelete { id: String },
 
+    // -- The local model. `R-O5`, ADR-0030.
+    /// Ask the configured model a question, and answer on this socket only.
+    ///
+    /// **The whole conversation travels every time, and the daemon keeps none
+    /// of it.** That is what makes the chat panel ephemeral by construction
+    /// rather than by a promise to delete something later: there is no chat
+    /// table to forget, and closing the window is the whole of the retention
+    /// policy.
+    ///
+    /// The one free-form string in this protocol. ADR-0030 clause 4 names it as
+    /// the exception and refuses it on a bind beyond loopback — a daemon anyone
+    /// can reach must not become a general-purpose LLM proxy because a text box
+    /// was convenient.
+    ///
+    /// `id` is the client's own, echoed back on [`ServerMsg::ModelReply`]. Not a
+    /// correlation layer: nothing here waits, and the answer lands in the store
+    /// like every other event.
+    ModelChat {
+        id: String,
+        messages: Vec<crate::model::ChatTurn>,
+    },
+
     /// Resolve one conflicted file. `R-D22`.
     ///
     /// Whole-file, matching what `R-D16`'s three-way view shows. A resolution
@@ -920,6 +942,22 @@ pub enum ServerMsg {
     /// one daemon cannot drift — which is the property daemon ownership was
     /// chosen for.
     Notes { notes: Vec<Note> },
+
+    /// One answer to one [`ClientMsg::ModelChat`], on the asking socket.
+    ///
+    /// Carries `text` **or** `error`, never both and never neither. A refusal
+    /// (nothing configured, a remote endpoint with no flag, a public bind)
+    /// arrives here as an ordinary error rather than as a silence, because a
+    /// panel that shows nothing reads as broken and gets reported as a bug.
+    ModelReply {
+        id: String,
+        text: Option<String>,
+        error: Option<String>,
+        /// What actually answered, which may not be what was asked for — an
+        /// endpoint is free to route `default` wherever it likes.
+        model: String,
+        elapsed_ms: u64,
+    },
     /// The stash list.
     GitStashList {
         session_id: SessionId,

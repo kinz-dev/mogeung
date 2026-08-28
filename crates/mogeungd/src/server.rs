@@ -34,6 +34,10 @@ pub struct Options {
     pub advertise: bool,
     /// Permit starting processes on a non-loopback bind. ADR-0025 clause 4.
     pub allow_run: bool,
+    /// The local model seam. `R-O1`, ADR-0030 — including `allow_remote`,
+    /// which is clause 3's flag: an endpoint that is not this machine is
+    /// publishing, and has to be asked for.
+    pub model: mogeung_core::model::ModelSettings,
 }
 
 impl Default for Options {
@@ -47,6 +51,7 @@ impl Default for Options {
             ssh_target: None,
             advertise: false,
             allow_run: false,
+            model: mogeung_core::model::ModelSettings::default(),
         }
     }
 }
@@ -122,6 +127,23 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
         let _ = state.ssh_target.set(target);
     }
 
+    state.model.configure(opts.model.clone());
+    if opts.model.configured() {
+        // Said out loud at start-up, because "which model am I talking to"
+        // is the first question of every report about a wrong answer — and
+        // the host, never the URL, which can carry a key in a query string.
+        tracing::info!(
+            "model endpoint {} ({}){}",
+            opts.model.host().unwrap_or_else(|| "?".into()),
+            opts.model.model.as_deref().unwrap_or("the endpoint's default"),
+            if opts.model.remote() && !opts.model.allow_remote {
+                " — REFUSED: not this machine, and --allow-remote-model was not passed"
+            } else {
+                ""
+            }
+        );
+    }
+
     if opts.notify.enabled() {
         state.configure_notifications(opts.notify.clone()).await;
         tracing::info!(
@@ -180,6 +202,11 @@ where
     state
         .runs
         .set_allowed(crate::run::runs_allowed(addr, opts.allow_run));
+    // ADR-0030 clause 4, decided from the same address and in the same place,
+    // for the same reason: one computation of "is this safe".
+    state
+        .model
+        .set_chat_allowed(mogeung_core::model::chat_allowed(addr));
 
     // Run output reaches clients as events on the socket everything else uses.
     // Spawned here rather than inside `Runs` because `Runs` has no opinion

@@ -1,6 +1,6 @@
 ---
 title: A local model beside the agents
-status: draft
+status: in-progress
 updated: 2026-08-28
 roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8]
 depends_on: [A3, A4, A29, A35, A36, A37, A38]
@@ -92,15 +92,15 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O1` — the seam**
 
-- [ ] A model endpoint is configured on the daemon; with none configured every
+- [x] A model endpoint is configured on the daemon; with none configured every
       pane below renders exactly what it renders today and says *no model
       configured* where the feature would have been — never a spinner, never an
       empty panel that reads as broken
-- [ ] Health carries a model row, per endpoint, the way it grew a per-source
+- [x] Health carries a model row, per endpoint, the way it grew a per-source
       list for a third agent CLI (`R-I15`): reachable, model name, last error
-- [ ] No model call happens on the scan tick. A pane asks; the answer arrives
+- [x] No model call happens on the scan tick. A pane asks; the answer arrives
       later or does not arrive
-- [ ] The daemon refuses a non-loopback **model endpoint** unless started with
+- [x] The daemon refuses a non-loopback **model endpoint** unless started with
       an explicit flag, and the window states where the bytes go
 
 **`R-O2` — the harness, before the panels**
@@ -138,12 +138,20 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O5` — the chat panel**
 
-- [ ] A chat tool in the right rail takes a question and answers in place,
+- [x] A chat tool in the right rail takes a question and answers in place,
       conversationally, with no repository context and no tools
-- [ ] The conversation is **ephemeral**; one gesture copies it into a note
+- [x] The conversation is **ephemeral**; one gesture copies it into a note
       (`R-L2`'s copy-into-a-note, reused rather than a second store)
-- [ ] It is refused on a non-loopback bind unless the flag from `R-O1` is
-      passed, and the refusal says why
+- [x] It is refused outright on a non-loopback bind, with **no flag** that
+      opens it, and the refusal says why and offers the ssh route instead
+
+> **This line was wrong when it was written and is corrected here rather than
+> quietly.** It said *"unless the flag from `R-O1` is passed"*, which
+> contradicts [ADR-0030](../decisions/0030-a-model-reads-the-evidence.md)
+> clause 4 — *"refused entirely on a non-loopback bind"*. The ADR is the
+> decision and this spec was the draft; an escape hatch that exists is one that
+> becomes the documented workaround, which is `server::admit`'s reason for
+> having no `--insecure` either.
 
 **`R-O6` — semantic search as a second list**
 
@@ -269,3 +277,64 @@ never make the poll loop do work).
 ## Notes
 
 *Filled during implementation. Surprises, dead ends, things the plan got wrong.*
+
+### `R-O1` and `R-O5`, built 2026-08-28
+
+**The plan said the harness comes first and it did not.** `R-O2` still gates
+`R-O3`, `R-O4`, `R-O6` and `R-O7`; what was built is the seam and the one row
+whose assumption a harness cannot test. That was the plan's own exception and it
+is recorded here so nobody later reads the order as the gate having been
+skipped.
+
+**The flag-only consent has a hole, and it is the user's own configuration.**
+ADR-0030 clause 3 makes `--allow-remote-model` a flag with no config-file twin,
+copying `--allow-run`'s shape. The copy is imperfect and the difference took an
+hour to find: `runs_allowed` reads the **bind** address, so a window-hosted
+daemon — always loopback — is permitted without any flag and the missing argv
+never bites. The model gate reads the **endpoint** address, and a hosted daemon
+can perfectly reasonably want a remote one. So on the shape mogeung is normally
+run in ([ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md)), the
+consent is unreachable and the endpoint is refused for ever.
+
+What was done about it, deliberately narrowly: the hosted daemon now reads
+`model_url` and `model_name` from `config.toml` — it had read *nothing* from
+that file before — and still cannot grant `allow_remote`, so it reaches
+loopback endpoints only and says so through the health row. Reaching an
+endpoint elsewhere means running `mogeungd` yourself, which `scripts/start.sh`
+already does and now has a `--allow-remote-model` passthrough for.
+
+**That is a decision deferred rather than made.** If the friction proves wrong,
+the fix is a new ADR superseding clause 3 — the argument for one being that a
+config file in your own home directory is as deliberate an act as a flag, and
+the argument against being that a file is written once and a flag is typed
+every time. It is not being decided here, an hour after the ADR that set it.
+
+**The `/models` URL is what people paste.** It is the URL you can `curl`, so it
+is the one in shell history and the one that reaches a config file — and asking
+for `…/v1/models/chat/completions` fails with a 404 nobody can read.
+`normalise_base` strips it rather than refusing, because refusing a URL that
+works in curl is a worse first five minutes.
+
+**A thinking model can answer with nothing.** The endpoint on this desk returns
+`reasoning_content` beside `content`, and a model that spends its budget
+reasoning returns the second empty. Rendering that as an empty bubble reads as a
+mogeung bug, so the reasoning is shown **labelled as reasoning** and never
+passed off as the answer.
+
+**A failed exchange leaves the thread in both directions.** The first cut
+dropped the error from the next request and kept the question that provoked it,
+which sends the model a question nobody answered — it may take the next one for
+a clarification of the old. Both halves go.
+
+**Verified live, not only at the wire** — `R-J38` is the standing warning about
+stopping one step short. All three gates were exercised against a running
+daemon: a remote endpoint with the flag answered in 1.9s; the same endpoint
+without it refused and sent nothing; a `0.0.0.0` bind with a token refused chat
+with no way round it. Then the panel itself, in a browser tab against that
+daemon — question in, answer rendered, `RadixArk/Qwen3.8-27B-NVFP4 · 1.3s`
+underneath it.
+
+**What is not built:** no REST twin for `model_chat`. Every other command has
+one; this one is the free-form string, and a second door into it is surface to
+delete if `A37` says the panel goes. Worth revisiting when `R-O3` or `R-O4`
+arrives with an id-carrying command that wants one.

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-27
+updated: 2026-08-28
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -543,6 +543,36 @@ serialisation, for the reason the egui client kept it out of egui's: the widths
 and open-or-closed of the surrounding furniture are the user's settings, and a
 layout engine's snapshot is the wrong place to keep something that has to
 survive the layout being reset.
+
+## The model seam (`R-O1`, 2026-08-28)
+
+`mogeung_core::model` holds the policy — what is configured, whether it is
+allowed, and the sentence saying why not — and `mogeungd::model` holds the part
+that leaves the machine. The split is the same one `run.rs` uses: pure decisions
+where they can be tested with nothing running, effects where the processes are.
+
+**The daemon owns the endpoint, not the client**
+([ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) clause 2). The
+corpus is on the daemon's machine, so a window watching a Mac (`R-I6`) has to
+read *that* machine's transcripts with whatever endpoint *that* daemon was
+given. A client-side call would be the first piece of local authority in a
+client, which the TypeScript port was able to claim it never took.
+
+The endpoint is a **URL in config**, not an in-process model, because the box
+with the GPU and the box with the sessions may differ. `curl` makes the call —
+`notify.rs`'s trade, for its reasons: one POST on a human-initiated action,
+shelling out cannot poison the runtime, and the alternative drags a TLS stack
+into a workspace that has managed without one. The body goes down **stdin**, so
+neither argv limits nor quoting can ever be part of a chat message.
+
+**The window's hosted daemon reads `model_url` and `model_name` from
+`config.toml`, and nothing else.** That daemon has never read the config file —
+it takes the defaults for `db`, `poll_ms` and the rest — and widening that is a
+separate question. The model could not wait for it: a hosted daemon has no
+argv, so with nothing read there the chat panel would say *no model configured*
+for ever with no way to change its mind. `allow_remote` is deliberately not
+read, so a hosted daemon reaches loopback endpoints only and says so through
+the health row.
 
 ## What is deliberately absent
 

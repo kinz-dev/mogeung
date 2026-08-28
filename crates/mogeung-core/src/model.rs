@@ -1,0 +1,376 @@
+//! The local model seam. `R-O1`.
+//!
+//! mogeung may employ a model to read the evidence it already holds — see
+//! [ADR-0030](../../../docs/decisions/0030-a-model-reads-the-evidence.md). This
+//! module holds the parts both binaries need: what is configured, whether it is
+//! allowed, and the one-line reason when it is not.
+//!
+//! **Everything here is pure.** The call itself lives in `mogeungd::model`,
+//! because a request that leaves the machine belongs on the side that already
+//! owns processes and sockets. What is here is the policy, so the policy can be
+//! tested without an endpoint and so the window and the daemon cannot come to
+//! disagree about it.
+
+use serde::{Deserialize, Serialize};
+
+/// One turn of a chat. The daemon stores none of these: the conversation lives
+/// in the window and is sent whole on every ask, which is what makes `R-O5`
+/// ephemeral by construction rather than by a promise to delete something.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatTurn {
+    /// `user` or `assistant`. Not an enum: this is forwarded verbatim to an
+    /// OpenAI-compatible endpoint, and a server that grows a third role should
+    /// not need a mogeung release.
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatTurn {
+    pub fn user(content: impl Into<String>) -> Self {
+        ChatTurn { role: "user".into(), content: content.into() }
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        ChatTurn { role: "assistant".into(), content: content.into() }
+    }
+}
+
+/// What the daemon was configured with, and what that adds up to.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelSettings {
+    /// Base URL of an OpenAI-compatible API — the part before `/chat/completions`,
+    /// e.g. `http://spark-7ecc:8000/v1`.
+    pub url: Option<String>,
+    /// Model id to ask for, as the endpoint's own `/models` lists it.
+    pub model: Option<String>,
+    /// ADR-0030 clause 3: a non-loopback endpoint is publishing, and needs
+    /// `--allow-remote-model` said out loud.
+    pub allow_remote: bool,
+}
+
+impl ModelSettings {
+    pub fn configured(&self) -> bool {
+        self.url.as_ref().is_some_and(|u| !u.trim().is_empty())
+    }
+
+    /// The host of the configured endpoint, if there is one.
+    pub fn host(&self) -> Option<String> {
+        self.url.as_deref().and_then(host_of)
+    }
+
+    /// Is the endpoint somewhere other than this machine?
+    ///
+    /// **No DNS is done, deliberately.** A hostname that happens to resolve to
+    /// `127.0.0.1` is still treated as remote, so this fails closed: the worst
+    /// case is being asked for a flag you did not strictly need, rather than
+    /// posting transcripts to a host nobody consented to. Resolving would also
+    /// make the answer depend on the network at the moment it was asked, which
+    /// is not a property a safety check should have.
+    pub fn remote(&self) -> bool {
+        match self.host() {
+            Some(h) => !is_local_host(&h),
+            // Unconfigured is not remote; it is nothing. The refusal for that
+            // case is `NotConfigured`, which says something more useful.
+            None => false,
+        }
+    }
+}
+
+/// Why a model request was refused, before it was made.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Refusal {
+    /// Nothing is configured. Not an error — the ordinary state of a fresh
+    /// install, and every surface must render as it did before models existed.
+    NotConfigured,
+    /// The endpoint is not on this machine and nobody said that was intended.
+    RemoteEndpoint { host: String },
+    /// ADR-0030 clause 4: the free-form ask, on a daemon reachable from the
+    /// network. There is no flag for this one.
+    PublicBind,
+}
+
+impl Refusal {
+    /// One line, written for someone who has not read the source — and, where
+    /// there is a way out, naming it. A refusal that does not say what to do
+    /// instead gets worked around by whatever the internet suggests first,
+    /// which is `server::admit`'s lesson.
+    pub fn message(&self) -> String {
+        match self {
+            Refusal::NotConfigured => "no model configured — set `model_url` in \
+                 ~/.mogeung/config.toml, or pass --model-url"
+                .to_string(),
+            Refusal::RemoteEndpoint { host } => format!(
+                "refusing to send anything to {host}: it is not this machine, and \
+                 a model endpoint elsewhere is publishing (ADR-0030 clause 3, \
+                 ADR-0014). Start the daemon with --allow-remote-model if that \
+                 is what you meant."
+            ),
+            Refusal::PublicBind => "chat is refused on a daemon bound beyond \
+                 loopback (ADR-0030 clause 4): it carries free-form text, and a \
+                 daemon anyone can reach must not become a general-purpose LLM \
+                 proxy. There is no flag for this — bind 127.0.0.1 and reach it \
+                 over ssh."
+                .to_string(),
+        }
+    }
+}
+
+/// The settings check every model request passes, chat or not.
+pub fn admit(settings: &ModelSettings) -> Result<(), Refusal> {
+    if !settings.configured() {
+        return Err(Refusal::NotConfigured);
+    }
+    if settings.remote() && !settings.allow_remote {
+        return Err(Refusal::RemoteEndpoint {
+            host: settings.host().unwrap_or_else(|| "that host".into()),
+        });
+    }
+    Ok(())
+}
+
+/// The extra check the free-form ask passes. `chat_allowed` comes from the bind
+/// address, decided once at start-up the way `runs_allowed` is — two places
+/// that both compute "is this safe" are two places that can come to disagree.
+pub fn admit_chat(settings: &ModelSettings, chat_allowed: bool) -> Result<(), Refusal> {
+    admit(settings)?;
+    if !chat_allowed {
+        return Err(Refusal::PublicBind);
+    }
+    Ok(())
+}
+
+/// ADR-0030 clause 4, decided from the bind address.
+///
+/// Loopback is the same trust boundary as the terminal panel, which can already
+/// run anything. Unlike [`crate::model::admit`]'s remote-endpoint gate there is
+/// **no flag** here: an escape hatch that exists is one that becomes the
+/// documented workaround.
+pub fn chat_allowed(bind: std::net::SocketAddr) -> bool {
+    bind.ip().is_loopback()
+}
+
+/// What the Health view says about the model, so "is it on?" is answerable
+/// without making a call. Never probed on the scan tick — `last_error` and
+/// `last_ok` are the residue of asks that actually happened.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelHealth {
+    pub configured: bool,
+    /// Host only, never the full URL: a URL can carry a key in a query string
+    /// and this is rendered in a window and pasted into bug reports.
+    pub host: Option<String>,
+    pub model: Option<String>,
+    pub remote: bool,
+    /// The settings gate passes — the endpoint may be asked.
+    pub allowed: bool,
+    /// The bind gate passes — the chat panel may ask.
+    pub chat_allowed: bool,
+    /// Why not, when one of the two is false.
+    pub refusal: Option<String>,
+    /// The last failure, and the last success, in wall-clock milliseconds.
+    pub last_error: Option<String>,
+    pub last_ok_ms: Option<u64>,
+}
+
+/// Build the health row from settings and the bind decision.
+pub fn health(settings: &ModelSettings, chat_allowed: bool) -> ModelHealth {
+    let refusal = admit_chat(settings, chat_allowed).err();
+    ModelHealth {
+        configured: settings.configured(),
+        host: settings.host(),
+        model: settings.model.clone(),
+        remote: settings.remote(),
+        allowed: admit(settings).is_ok(),
+        chat_allowed,
+        refusal: refusal.map(|r| r.message()),
+        last_error: None,
+        last_ok_ms: None,
+    }
+}
+
+/// The host out of a URL, without a URL crate.
+///
+/// Handles the three shapes that actually turn up in a config file: a scheme or
+/// none, a port or none, and a bracketed IPv6 literal. Anything it cannot read
+/// is `None`, which the callers treat as *not local* rather than as *fine*.
+pub fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    // `user:pass@host` — the last `@` wins, since a password may contain one.
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if let Some(after) = authority.strip_prefix('[') {
+        let (h, _) = after.split_once(']')?;
+        return (!h.is_empty()).then(|| h.to_string());
+    }
+    let h = authority.split(':').next()?;
+    (!h.is_empty()).then(|| h.to_string())
+}
+
+/// Is this host name or address this machine?
+pub fn is_local_host(host: &str) -> bool {
+    let h = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    if h == "localhost" {
+        return true;
+    }
+    h.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// The `/chat/completions` URL for a base like `http://host:8000/v1`.
+///
+/// A trailing slash in the config file is the likeliest typo and must not
+/// produce a `//` that some servers 404 on.
+pub fn chat_url(base: &str) -> String {
+    format!("{}/chat/completions", base.trim_end_matches('/'))
+}
+
+/// The `/models` URL, which is what a human pastes when asked for the endpoint
+/// — so it is also what the config file is likely to be given by mistake.
+pub fn models_url(base: &str) -> String {
+    format!("{}/models", base.trim_end_matches('/'))
+}
+
+/// Read a base URL as forgivingly as is safe.
+///
+/// The endpoint people have in their shell history is the one they can `curl`,
+/// which is `…/v1/models` — pasting that into `model_url` would otherwise ask
+/// for `…/v1/models/chat/completions` and fail with a 404 nobody can read. The
+/// suffix is stripped rather than refused, because refusing a URL that works in
+/// curl is a worse first five minutes.
+pub fn normalise_base(url: &str) -> String {
+    let u = url.trim().trim_end_matches('/');
+    for tail in ["/models", "/chat/completions"] {
+        if let Some(base) = u.strip_suffix(tail) {
+            return base.to_string();
+        }
+    }
+    u.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(url: &str, allow_remote: bool) -> ModelSettings {
+        ModelSettings {
+            url: Some(url.into()),
+            model: Some("qwen3.8-sglang".into()),
+            allow_remote,
+        }
+    }
+
+    #[test]
+    fn a_host_comes_out_of_every_url_shape_we_might_be_given() {
+        assert_eq!(host_of("http://spark-7ecc:8000/v1").as_deref(), Some("spark-7ecc"));
+        assert_eq!(host_of("http://127.0.0.1:8000/v1").as_deref(), Some("127.0.0.1"));
+        assert_eq!(host_of("https://user:pa@ss@example.com/v1").as_deref(), Some("example.com"));
+        assert_eq!(host_of("http://[::1]:8000/v1").as_deref(), Some("::1"));
+        assert_eq!(host_of("localhost:8000").as_deref(), Some("localhost"));
+        assert_eq!(host_of(""), None);
+    }
+
+    /// The direction this must fail in. A name we cannot read, or one that only
+    /// DNS could resolve, counts as **remote** — so the worst case is a flag
+    /// you did not need, never a transcript posted to a host nobody named.
+    #[test]
+    fn only_literal_loopback_counts_as_local() {
+        for local in ["localhost", "127.0.0.1", "127.1.2.3", "::1", "[::1]"] {
+            assert!(is_local_host(local), "{local} is this machine");
+        }
+        for remote in ["spark-7ecc", "example.com", "192.168.1.5", "0.0.0.0"] {
+            assert!(!is_local_host(remote), "{remote} must not read as local");
+        }
+    }
+
+    #[test]
+    fn nothing_configured_is_not_an_error_it_is_a_state() {
+        let none = ModelSettings::default();
+        assert!(!none.configured());
+        assert_eq!(admit(&none), Err(Refusal::NotConfigured));
+        assert!(!none.remote(), "unconfigured is not remote, it is nothing");
+    }
+
+    /// ADR-0030 clause 3. This is the case the user's own desk is in.
+    #[test]
+    fn a_remote_endpoint_needs_the_flag_and_the_refusal_names_it() {
+        let s = settings("http://spark-7ecc:8000/v1", false);
+        assert!(s.remote());
+        let err = admit(&s).unwrap_err();
+        assert_eq!(err, Refusal::RemoteEndpoint { host: "spark-7ecc".into() });
+        let msg = err.message();
+        assert!(msg.contains("--allow-remote-model"), "{msg}");
+        assert!(msg.contains("spark-7ecc"), "the refusal must name the host: {msg}");
+
+        assert!(admit(&settings("http://spark-7ecc:8000/v1", true)).is_ok());
+    }
+
+    #[test]
+    fn a_loopback_endpoint_needs_no_flag() {
+        assert!(admit(&settings("http://127.0.0.1:8000/v1", false)).is_ok());
+        assert!(admit(&settings("http://localhost:8000/v1", false)).is_ok());
+    }
+
+    /// ADR-0030 clause 4, and the property that distinguishes it from clause 3:
+    /// there is no flag, so no combination of settings opens it.
+    #[test]
+    fn chat_is_refused_off_loopback_with_no_way_round_it() {
+        let s = settings("http://127.0.0.1:8000/v1", true);
+        assert!(admit_chat(&s, true).is_ok());
+        assert_eq!(admit_chat(&s, false), Err(Refusal::PublicBind));
+        let msg = Refusal::PublicBind.message();
+        assert!(msg.contains("ssh"), "must offer the way out: {msg}");
+        assert!(!msg.contains("--allow"), "must not imply a flag exists: {msg}");
+    }
+
+    #[test]
+    fn the_bind_decides_whether_chat_is_allowed() {
+        let at = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+        assert!(chat_allowed(at("127.0.0.1:7717")));
+        assert!(chat_allowed(at("[::1]:7717")));
+        assert!(!chat_allowed(at("0.0.0.0:7717")));
+        assert!(!chat_allowed(at("192.168.1.5:7717")));
+    }
+
+    /// The URL a human can `curl` is `…/v1/models`, and that is what gets
+    /// pasted into the config file. Asking for `…/v1/models/chat/completions`
+    /// afterwards fails with a 404 nobody can read.
+    #[test]
+    fn the_models_url_is_accepted_as_a_base() {
+        assert_eq!(normalise_base("http://spark-7ecc:8000/v1/models"), "http://spark-7ecc:8000/v1");
+        assert_eq!(normalise_base("http://spark-7ecc:8000/v1/"), "http://spark-7ecc:8000/v1");
+        assert_eq!(normalise_base("http://spark-7ecc:8000/v1"), "http://spark-7ecc:8000/v1");
+        assert_eq!(
+            chat_url(&normalise_base("http://spark-7ecc:8000/v1/models")),
+            "http://spark-7ecc:8000/v1/chat/completions"
+        );
+        assert_eq!(models_url("http://h:1/v1/"), "http://h:1/v1/models");
+    }
+
+    /// The health row is what the window renders when there is nothing to
+    /// render, so it has to carry the reason rather than just the absence.
+    #[test]
+    fn health_carries_the_refusal_rather_than_only_the_absence() {
+        let h = health(&settings("http://spark-7ecc:8000/v1", false), true);
+        assert!(h.configured);
+        assert!(h.remote);
+        assert!(!h.allowed);
+        assert_eq!(h.host.as_deref(), Some("spark-7ecc"));
+        assert!(h.refusal.unwrap().contains("--allow-remote-model"));
+
+        let off = health(&ModelSettings::default(), true);
+        assert!(!off.configured);
+        assert!(off.refusal.unwrap().contains("no model configured"));
+
+        let ok = health(&settings("http://127.0.0.1:8000/v1", false), true);
+        assert!(ok.allowed && ok.chat_allowed && ok.refusal.is_none());
+    }
+
+    /// The host is rendered in a window and pasted into bug reports; a URL can
+    /// carry a key in its query string and must not travel with it.
+    #[test]
+    fn health_publishes_the_host_and_never_the_url() {
+        let h = health(&settings("http://spark-7ecc:8000/v1?api-key=hunter2", true), true);
+        assert_eq!(h.host.as_deref(), Some("spark-7ecc"));
+        let rendered = format!("{h:?}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+    }
+}

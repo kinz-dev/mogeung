@@ -21,7 +21,7 @@
 
 import * as React from "react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Bookmark, Folder, NotebookPen, Search, X } from "lucide-react";
+import { Bookmark, Folder, MessageSquare, NotebookPen, Search, X } from "lucide-react";
 import { useStore } from "@/store";
 import { useChord } from "@/lib/keymap";
 import { RAIL_TOOLS, type RailTool } from "@/store/prefs";
@@ -31,6 +31,7 @@ import { FilesTool } from "@/ui/tools/FilesTool";
 import { SearchTool } from "@/ui/tools/SearchTool";
 import { NotesTool } from "@/ui/tools/NotesTool";
 import { BookmarksTool } from "@/ui/tools/BookmarksTool";
+import { ChatTool } from "@/ui/tools/ChatTool";
 import { ZoomPane } from "@/ui/ZoomPane";
 
 /**
@@ -47,6 +48,7 @@ const TOOLS: Record<RailTool, { label: string; icon: typeof Folder }> = {
   search: { label: "Search", icon: Search },
   notes: { label: "Notes", icon: NotebookPen },
   bookmarks: { label: "Bookmarks", icon: Bookmark },
+  chat: { label: "Chat", icon: MessageSquare },
 };
 
 const BODIES: Record<RailTool, React.FunctionComponent> = {
@@ -54,6 +56,7 @@ const BODIES: Record<RailTool, React.FunctionComponent> = {
   search: SearchTool,
   notes: NotesTool,
   bookmarks: BookmarksTool,
+  chat: ChatTool,
 };
 
 /**
@@ -72,6 +75,7 @@ export function Rail() {
     search: useChord("rail.search"),
     notes: useChord("rail.notes"),
     bookmarks: useChord("rail.bookmarks"),
+    chat: useChord("rail.chat"),
   };
   const open = useStore((s) => s.prefs.rail);
   const railWidth = useStore((s) => s.prefs.railWidth);

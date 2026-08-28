@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-27
+updated: 2026-08-28
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -413,6 +413,22 @@ For a tmux session that limitation no longer bites, because attaching (`R-B18`)
 replaces focusing rather than depending on it. A session started with a bare
 `claude` in an unscriptable terminal remains genuinely unreachable, and mogeung
 says so.
+
+## What the signals do not read (2026-08-28)
+
+`state.rs` gained a `model` field with `R-O1`, and none of the signals above is
+an input to it or an output of it: collision warning, permission-vs-instruction,
+loop detection, snooze and the notification rules are all computed from
+transcripts and the registry exactly as before, and a configured model changes
+none of them.
+
+Recorded rather than left implicit, because `state.rs` is covered by this
+document — so every change to that file asks whether the signals moved, and the
+answer here is no. The same note in `attention-ranking.md` exists for the same
+reason. When a model *does* start feeding a signal, it will be
+[pillar `O`](../product/roadmap.md)'s own rows saying so, and ADR-0030 clause 5
+is the standing rule that its output gets a column of its own rather than being
+merged into one of these.
 
 ## The insight layer (2026-07-29)
 

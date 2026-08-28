@@ -117,6 +117,11 @@ pub struct AppState {
     pub ssh_target: std::sync::OnceLock<String>,
     /// Every run this daemon owns. `R-N4`.
     pub runs: crate::run::Runs,
+    /// The local model seam, when one is configured. `R-O1`, ADR-0030.
+    ///
+    /// Beside `runs` rather than inside `health`, and for the same reason: it
+    /// owns something outside this process, and health only ever *reports*.
+    pub model: crate::model::Model,
     /// Whether this daemon may write to a repository at all. `R-D19`.
     ///
     /// A `OnceLock` for the same reason `ssh_target` is one: only the code
@@ -494,6 +499,7 @@ impl AppState {
             identity,
             ssh_target: std::sync::OnceLock::new(),
             runs: crate::run::Runs::new(),
+            model: crate::model::Model::new(),
             writes_allowed: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
@@ -525,7 +531,13 @@ impl AppState {
 
     /// What mogeung can currently see, and what it cannot.
     pub async fn health(&self) -> Health {
-        self.health.lock().await.snapshot()
+        let mut h = self.health.lock().await.snapshot();
+        // Folded in here rather than tracked inside `HealthTracker`: that
+        // structure counts what the parsers saw, and the model is a
+        // configuration plus the residue of asks somebody made. Reading it is
+        // free — no call is made — which is ADR-0030 clause 6 in practice.
+        h.model = self.model.health();
+        h
     }
 
     /// Token burn per session/day/repo, the trailing window, and known limit

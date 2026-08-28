@@ -29,6 +29,7 @@ PORT=7717
 NOTIFY=1
 BUILD=1
 FRESH=0
+ALLOW_REMOTE_MODEL=0
 MODE=both
 PUSH_URL=""
 
@@ -45,6 +46,8 @@ Options:
   --no-notify        do not pass --notify to the daemon
   --push-url URL     forward notifications to a URL (ntfy, Pushover, webhook)
   --no-build         skip cargo build; run whatever is already there
+  --allow-remote-model  let the daemon reach a model endpoint that is not
+                     this machine (ADR-0030 clause 3; loopback needs no flag)
   --daemon-only      run just the daemon (used by mprocs.yaml)
   --ui-only          run just the window, waiting for the daemon first
   -h, --help         this
@@ -59,6 +62,7 @@ while [ $# -gt 0 ]; do
         --fresh)       FRESH=1 ;;
         --no-notify)   NOTIFY=0 ;;
         --push-url)    PUSH_URL="${2:?--push-url needs a value}"; shift ;;
+        --allow-remote-model) ALLOW_REMOTE_MODEL=1 ;;
         --no-build)    BUILD=0 ;;
         --daemon-only) MODE=daemon ;;
         --ui-only)     MODE=ui ;;
@@ -90,6 +94,10 @@ ARGS=(--listen "127.0.0.1:$PORT")
 [ -n "$DB" ] && ARGS+=(--db "$DB")
 [ "$NOTIFY" -eq 1 ] && ARGS+=(--notify)
 [ -n "$PUSH_URL" ] && ARGS+=(--push-url "$PUSH_URL")
+# ADR-0030 clause 3: an endpoint that is not this machine is publishing, so
+# consent is typed rather than configured. Passed through rather than defaulted
+# on — a flag this script sets for you is not consent, it is a setting.
+[ "$ALLOW_REMOTE_MODEL" -eq 1 ] && ARGS+=(--allow-remote-model)
 
 # The window, in the foreground. `tauri dev` supervises its own vite server and
 # cargo build, so there is nothing to wait for and nothing to background: the

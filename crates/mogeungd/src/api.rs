@@ -875,6 +875,43 @@ async fn handle(
     }
 
     match cmd {
+        // `R-O5`. Spawned rather than awaited in the read loop: an ask can
+        // take a minute against a cold local model, and a connection that
+        // stopped accepting commands for its duration would freeze the whole
+        // window over one text box. The answer goes down the asking socket's
+        // reply lane whenever it arrives, which is the lane's whole purpose.
+        ClientMsg::ModelChat { id, messages } => {
+            let state = state.clone();
+            let reply = reply.clone();
+            tokio::spawn(async move {
+                let msg = match state.model.chat(&messages).await {
+                    Ok(a) => ServerMsg::ModelReply {
+                        id,
+                        text: Some(a.text),
+                        error: None,
+                        model: a.model,
+                        elapsed_ms: a.elapsed_ms,
+                    },
+                    // A refusal and a failure arrive by the same door. The
+                    // panel has to say *something* — a silent box reads as a
+                    // bug in mogeung rather than as a daemon declining.
+                    Err(e) => ServerMsg::ModelReply {
+                        id,
+                        text: None,
+                        error: Some(e),
+                        model: String::new(),
+                        elapsed_ms: 0,
+                    },
+                };
+                send_reply(&reply, msg);
+                // Health carries the residue of that ask, and the window shows
+                // it in a panel that is probably open — so republish rather
+                // than wait for the next scan to volunteer it.
+                state.broadcast(ServerMsg::Health {
+                    health: Box::new(state.health().await),
+                });
+            });
+        }
         ClientMsg::Subscribe => {
             // Direct, not broadcast: this used to make every *other* window
             // re-ingest the full board whenever any window reconnected —

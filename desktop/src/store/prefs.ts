@@ -21,7 +21,7 @@ export type ThemeMode = "dark" | "light" | "system";
  * things in, because a panel that moves when you add a second one is a panel
  * you have to re-find.
  */
-export const RAIL_TOOLS = ["files", "search", "notes", "bookmarks"] as const;
+export const RAIL_TOOLS = ["files", "search", "notes", "bookmarks", "chat"] as const;
 
 export type RailTool = (typeof RAIL_TOOLS)[number];
 

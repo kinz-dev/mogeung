@@ -224,6 +224,13 @@ fn host(listener: TcpListener) {
                     return;
                 }
             };
+            // A broken file costs its settings, never the daemon — `R-J3`'s rule,
+            // and the warning goes to stderr because this thread has no window
+            // to complain into yet.
+            let (cfg, cfg_warning) = mogeung_core::config::Config::load();
+            if let Some(w) = cfg_warning {
+                eprintln!("{w}");
+            }
             let opts = mogeungd::server::Options {
                 db: mogeungd::server::default_db(),
                 // Off unless asked for, matching `mogeungd`'s own default: the
@@ -233,6 +240,27 @@ fn host(listener: TcpListener) {
                 notify: mogeungd::notify::NotifyConfig {
                     desktop: false,
                     push_url: None,
+                },
+                // Read from the config file, and **only** these two. `R-O1`.
+                //
+                // This hosted daemon has never read `config.toml` — it takes
+                // the defaults for `db`, `poll_ms` and the rest — and widening
+                // that is a separate question with its own consequences. The
+                // model endpoint cannot wait for it: a window that hosts its own
+                // daemon has no argv, so with nothing read here the chat panel
+                // would say *no model configured* for ever and there would be no
+                // way to change its mind.
+                //
+                // `allow_remote` is deliberately **not** read. ADR-0030 clause 3
+                // makes consent to an endpoint elsewhere a flag, and a file this
+                // process cannot be given a flag by is not the place to grant it
+                // — so a hosted daemon reaches loopback endpoints only, and says
+                // so through the health row's refusal. Run `mogeungd` yourself
+                // (which `scripts/start.sh` does) to consent to more.
+                model: mogeung_core::model::ModelSettings {
+                    url: cfg.model_url.clone(),
+                    model: cfg.model_name.clone(),
+                    allow_remote: false,
                 },
                 ..Default::default()
             };

@@ -48,6 +48,15 @@ pub struct Config {
     /// Daemon: announce over mDNS on the local network (`R-I8`). Absent means
     /// no, which is the only safe default for a broadcast.
     pub advertise: Option<bool>,
+    /// Daemon: base URL of an OpenAI-compatible model API — the part before
+    /// `/chat/completions`, e.g. `http://spark-7ecc:8000/v1`. `R-O1`.
+    ///
+    /// The `…/models` URL is accepted too and trimmed, because that is the one
+    /// a human can `curl` and therefore the one that gets pasted here.
+    pub model_url: Option<String>,
+    /// Daemon: which model to ask for, as the endpoint's own `/models` lists
+    /// it. Absent means the endpoint's default.
+    pub model_name: Option<String>,
     /// Window: the global shortcut that raises it. An empty string disables
     /// it, which is the file's way of saying `--no-hotkey`.
     pub hotkey: Option<String>,

@@ -316,12 +316,48 @@ export interface Health {
   /// Every non-Claude agent CLI being watched, one entry each. Replaced the
   /// four flat `codex_*` fields, which could describe exactly one other agent.
   agents?: AgentHealth[];
+  /**
+   * The local model seam, when the daemon has one configured. `R-O1`.
+   *
+   * Absent from a daemon built before pillar `O`. Never a live probe — the
+   * daemon makes no call to fill this in (ADR-0030 clause 6), so `last_error`
+   * is the residue of an ask somebody made, not a reachability check.
+   */
+  model?: ModelHealth | null;
   /// @deprecated Superseded by `agents`. Still sent, so an older client keeps
   /// working; read `agents` instead and get every CLI, not just the second one.
   codex_present?: boolean;
   codex_threads?: number;
   codex_error?: string | null;
   codex_unknown?: [string, number][];
+}
+
+/**
+ * What the daemon was configured to talk to, and whether it may.
+ *
+ * `host` and never the URL: a URL can carry a key in a query string, and this
+ * is rendered in a window and pasted into bug reports.
+ */
+export interface ModelHealth {
+  configured: boolean;
+  host: string | null;
+  model: string | null;
+  /** The endpoint is not this machine — ADR-0030 clause 3 territory. */
+  remote: boolean;
+  /** The settings gate passes: the endpoint may be asked. */
+  allowed: boolean;
+  /** The bind gate passes: the chat panel may ask. ADR-0030 clause 4. */
+  chat_allowed: boolean;
+  /** Why not, when either gate is shut. Rendered verbatim. */
+  refusal: string | null;
+  last_error: string | null;
+  last_ok_ms: number | null;
+}
+
+/** One turn of a chat. Forwarded verbatim to an OpenAI-compatible endpoint. */
+export interface ChatTurn {
+  role: string;
+  content: string;
 }
 
 /// What mogeung can see of one other agent CLI's install.
@@ -952,6 +988,14 @@ export type ClientMsg =
       repo?: string | null;
     }
   | { cmd: "note_delete"; id: string }
+  /**
+   * The one free-form string in this protocol. `R-O5`, ADR-0030 clause 4.
+   *
+   * The whole conversation travels every time and the daemon keeps none of it,
+   * which is what makes the panel ephemeral by construction rather than by a
+   * promise to delete something.
+   */
+  | { cmd: "model_chat"; id: string; messages: ChatTurn[] }
   | { cmd: "git_resolve"; session_id: SessionId; path: string; side: ResolveSide }
   | { cmd: "git_diff_file"; session_id: SessionId; path: string; context?: number | null; ignore_ws?: boolean | null }
   | { cmd: "git_blame"; session_id: SessionId; path: string; rev?: string | null }
@@ -1073,6 +1117,15 @@ export type ServerMsg =
   | { ev: "kit"; entries: KitEntry[] }
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
+  /** `text` or `error`, never both and never neither. */
+  | {
+      ev: "model_reply";
+      id: string;
+      text: string | null;
+      error: string | null;
+      model: string;
+      elapsed_ms: number;
+    }
   | { ev: "git_stash_list"; session_id: SessionId; stashes: StashInfo[] }
   | {
       ev: "git_stash_diff";

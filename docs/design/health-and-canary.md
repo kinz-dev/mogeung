@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-08-27
+updated: 2026-08-28
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -121,6 +121,33 @@ could never fire.
   require a window.
 - **`ServerMsg::Health`** — pushed after every scan, unsolicited. A client
   should never have to ask whether what it is showing is complete.
+
+## The model row (`R-O1`, 2026-08-28)
+
+`Health.model` carries what the daemon was configured to talk to and whether it
+may: `configured`, `host`, `model`, `remote`, `allowed`, `chat_allowed`, a
+`refusal` sentence, and the residue of the last ask (`last_error`,
+`last_ok_ms`).
+
+**It is never a probe.** ADR-0030 clause 6 keeps model calls off the scan tick,
+so nothing here reaches the endpoint to find out whether it is up —
+`last_error` is what an ask somebody made actually did. *Reachable* is
+deliberately not a field: it would be a claim about a moment that has already
+passed by the time it is rendered, which is the failure this whole document is
+written against.
+
+**A refusal is not an error.** Nothing configured is the ordinary state of a
+fresh install; an endpoint elsewhere without `--allow-remote-model` is a
+decision nobody made. Both fill `refusal` and neither touches `last_error`,
+because a health row blaming an endpoint that was never asked is the kind of
+wrong that costs an afternoon.
+
+**The host, never the URL.** A URL can carry a key in a query string, and this
+row is rendered in a window and pasted into bug reports.
+
+It is folded in by `AppState::health` rather than tracked by `HealthTracker`:
+the tracker counts what the parsers saw, and this is a configuration plus a
+residue. Reading it costs nothing.
 
 ## What this does not do
 

@@ -166,6 +166,16 @@ pub struct Health {
     #[serde(default)]
     pub agents: Vec<AgentHealth>,
 
+    /// The local model seam, if one is configured. `R-O1`.
+    ///
+    /// Defaulted, like `agents`, so a snapshot from a daemon built before this
+    /// still parses. Never probed on the scan tick — ADR-0030 clause 6 — so
+    /// `last_error` and `last_ok_ms` are the residue of asks that happened,
+    /// and "reachable" is deliberately not a field: it would be a claim about
+    /// a moment that has passed by the time it is rendered.
+    #[serde(default)]
+    pub model: Option<crate::model::ModelHealth>,
+
     // -- Codex (R-I1). Defaulted so an older daemon's snapshot still parses.
     /// A `~/.codex` install exists and is being watched.
     ///

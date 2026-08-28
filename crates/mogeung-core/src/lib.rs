@@ -11,6 +11,7 @@ pub mod docs;
 pub mod health;
 pub mod insight;
 pub mod kit;
+pub mod model;
 pub mod pricing;
 pub mod review;
 pub mod run;

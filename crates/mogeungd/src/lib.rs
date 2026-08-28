@@ -12,6 +12,7 @@ pub mod insight;
 pub mod kit;
 pub mod health;
 pub mod machine;
+pub mod model;
 pub mod notes;
 pub mod notify;
 pub mod qwen;

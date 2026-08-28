@@ -84,6 +84,30 @@ struct Args {
     /// `R-I10` already demands: two deliberate acts, not one.
     #[arg(long)]
     allow_run: bool,
+
+    /// Base URL of an OpenAI-compatible model API (`R-O1`), e.g.
+    /// http://127.0.0.1:8000/v1 — or `model_url` in ~/.mogeung/config.toml.
+    ///
+    /// The `…/models` URL is accepted and trimmed, because that is the one you
+    /// can curl and therefore the one that gets pasted.
+    #[arg(long, value_name = "URL")]
+    model_url: Option<String>,
+
+    /// Which model to ask for, as the endpoint's own /models lists it.
+    /// Absent means the endpoint's default.
+    #[arg(long, value_name = "NAME")]
+    model_name: Option<String>,
+
+    /// Let this daemon send text to a model endpoint that is **not** on this
+    /// machine. ADR-0030 clause 3.
+    ///
+    /// A model endpoint elsewhere is publishing: what mogeung asks it travels
+    /// off this box, and ADR-0014 draws the line at publishing rather than at
+    /// the network. Loopback needs no flag. Flag-only, with no config-file
+    /// twin — the same shape as --allow-run, so consent is an act rather than
+    /// a setting somebody once wrote and forgot.
+    #[arg(long)]
+    allow_remote_model: bool,
 }
 
 /// Command line over file over default, resolved in one place so the order can
@@ -108,6 +132,11 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             ssh_target: args.ssh_target.or(cfg.ssh_target),
             advertise: args.advertise || cfg.advertise.unwrap_or(false),
             allow_run: args.allow_run,
+            model: mogeung_core::model::ModelSettings {
+                url: args.model_url.or(cfg.model_url),
+                model: args.model_name.or(cfg.model_name),
+                allow_remote: args.allow_remote_model,
+            },
         },
     )
 }
@@ -161,6 +190,9 @@ mod tests {
             ssh_target: None,
             advertise: false,
             allow_run: false,
+            model_url: None,
+            model_name: None,
+            allow_remote_model: false,
         }
     }
 
@@ -197,6 +229,35 @@ mod tests {
         assert_eq!(listen, DEFAULT_LISTEN);
         assert_eq!(o.poll_ms, DEFAULT_POLL_MS);
         assert!(o.token.is_none());
+    }
+
+    /// The endpoint follows the same order as everything else, and the
+    /// **consent does not**: `allow_remote_model` has no config-file twin, so
+    /// there is deliberately nothing here that could grant it from a file.
+    #[test]
+    fn the_model_endpoint_comes_from_the_file_and_the_flag_beats_it() {
+        let cfg = Config {
+            model_url: Some("http://127.0.0.1:8000/v1".into()),
+            model_name: Some("from-file".into()),
+            ..Config::default()
+        };
+        let o = resolve(args(), cfg.clone()).1;
+        assert_eq!(o.model.url.as_deref(), Some("http://127.0.0.1:8000/v1"));
+        assert_eq!(o.model.model.as_deref(), Some("from-file"));
+        assert!(!o.model.allow_remote, "a file cannot consent to a remote endpoint");
+
+        let typed = Args {
+            model_url: Some("http://spark-7ecc:8000/v1".into()),
+            model_name: Some("typed".into()),
+            allow_remote_model: true,
+            ..args()
+        };
+        let o = resolve(typed, cfg).1;
+        assert_eq!(o.model.url.as_deref(), Some("http://spark-7ecc:8000/v1"));
+        assert_eq!(o.model.model.as_deref(), Some("typed"));
+        assert!(o.model.allow_remote);
+
+        assert!(!resolve(args(), Config::default()).1.model.configured());
     }
 
     /// Notifications are opt-in from either side, and neither side can turn

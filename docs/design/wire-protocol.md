@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-26
+updated: 2026-08-28
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -315,6 +315,42 @@ refused.
 `run_configs`, which carries variable *names* only, and unmasking is a per-value
 act — a verb returning the whole block would make *"show me this one"*
 indistinguishable from *"print every secret"*.
+
+## The model (`R-O5`, 2026-08-28)
+
+Two messages, and one of them breaks a rule the rest of this protocol has kept
+since it was written.
+
+| Direction | Message | Notes |
+|---|---|---|
+| → | `model_chat { id, messages }` | The whole conversation, every time |
+| ← | `model_reply { id, text, error, model, elapsed_ms }` | Asking socket only |
+
+**`model_chat` is the only command that carries free-form text.** Everything
+else names a thing the daemon already has — a session, a config id, a path, a
+query — which is the discipline
+[ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) clause 1
+set and the reason a client cannot make this daemon do something arbitrary.
+[ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) clause 4 names this
+as the exception and pays for it at the bind: `chat_allowed` is false on any
+non-loopback listen and there is **no flag** that opens it, because a daemon
+anyone can reach must not become a general-purpose LLM proxy.
+
+**The daemon stores no conversation.** `messages` carries the thread each time
+and nothing is kept, so the panel is ephemeral by construction rather than by a
+promise to delete something — there is no chat table to forget.
+
+**The handler is spawned, not awaited.** A cold local model can take a minute,
+and the read loop awaiting it would stop that connection accepting anything
+else — the whole window frozen on one text box. The answer goes down the reply
+lane (`R-J59`) whenever it arrives, and a `health` broadcast follows it so the
+row carrying `last_error`/`last_ok_ms` is current in a panel that is probably
+open.
+
+**`text` or `error`, never both and never neither.** A refusal — nothing
+configured, an endpoint elsewhere with no `--allow-remote-model`, a public bind
+— arrives as an ordinary `error` rather than as a silence. A panel that shows
+nothing reads as broken and gets reported as a bug in mogeung.
 
 ## Design rules
 

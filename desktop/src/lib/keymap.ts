@@ -400,6 +400,7 @@ export const ACTIONS: Action[] = [
   rail("search", "global search", ["Alt+s"]),
   rail("notes", "notes", ["Alt+n"]),
   rail("bookmarks", "bookmarks", ["Alt+b"]),
+  rail("chat", "the chat panel", ["Alt+j"]),
 
   {
     id: "queue.focus",
@@ -689,6 +690,7 @@ export const MAC_KEYS: Record<string, string[]> = {
   "rail.search": ["Meta+s"],
   "rail.notes": ["Meta+n"],
   "rail.bookmarks": ["Meta+b"],
+  "rail.chat": ["Meta+j"],
   "info.toggle": ["Meta+o"],
   rescan: ["Meta+r"],
   "prefs.export": ["Meta+Shift+e"],
