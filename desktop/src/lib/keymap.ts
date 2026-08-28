@@ -557,6 +557,19 @@ export const ACTIONS: Action[] = [
     run: () => useStore.setState({ showKeymap: true }),
   },
   {
+    id: "config",
+    label: "Configuration file",
+    group: "Windows",
+    // `Alt+,` because comma is what every application on this desk opens its
+    // settings with, and a chord you can guess is one you do not have to look
+    // up. It was tempting to ship this unbound — the palette finds it by name
+    // and this is not a window you open daily — but `rebind.test.ts` holds the
+    // line that an action with no binding is an action nobody discovers, and
+    // it is right.
+    keys: ["Alt+comma"],
+    run: () => useStore.setState({ showConfig: true }),
+  },
+  {
     id: "theme",
     label: "Cycle the theme",
     group: "Windows",
@@ -684,6 +697,9 @@ export const MAC_KEYS: Record<string, string[]> = {
   "dock.git": ["Meta+9"],
   // `⌘0` is reset-zoom, so the digit keeps its `⌥` — respelled to fire.
   "layout.reset": ["Alt+Digit0"],
+  // `⌘,` is the settings chord on macOS and has been for twenty years. This is
+  // the one action here where following the platform costs nothing.
+  config: ["Meta+comma"],
 
   // Letters where `⌘` is free.
   "rail.files": ["Meta+f"],

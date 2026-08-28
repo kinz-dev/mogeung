@@ -348,9 +348,39 @@ row carrying `last_error`/`last_ok_ms` is current in a panel that is probably
 open.
 
 **`text` or `error`, never both and never neither.** A refusal — nothing
-configured, an endpoint elsewhere with no `--allow-remote-model`, a public bind
-— arrives as an ordinary `error` rather than as a silence. A panel that shows
-nothing reads as broken and gets reported as a bug in mogeung.
+configured, an endpoint consent does not cover, a public bind — arrives as an
+ordinary `error` rather than as a silence. A panel that shows nothing reads as
+broken and gets reported as a bug in mogeung.
+
+## The config file (`R-J79`)
+
+`config_get` and `config_save` both answer with one `config` event carrying the
+file, its path, the keys this daemon understands and why it may not be edited.
+Both verbs answer with the same shape on purpose: after a save you are looking
+at what the daemon **re-read**, not at what you sent, so a save that landed
+differently cannot be reported by showing the text that did not.
+
+**Whole-file, not per-key.** The file has comments in it — the shipped ones
+explain what each key costs — and a per-key writer would either drop them or
+have to become a TOML formatter.
+
+**The daemon validates with the parser that will read it.** `Config::check` is
+the same `toml::from_str::<Config>` the daemon runs at start-up, and `Config`
+is `deny_unknown_fields`, so a mistyped key is refused here rather than ignored
+for ever. *It saved and then did not work* is not a state that exists.
+
+**Reading is open; editing is loopback-only.** The file holds `push_url` and
+`model_url`, both outbound, so a daemon a second machine can reconfigure is a
+daemon a second machine can aim at itself. Decided from the bind in
+`server::run` beside the run and chat gates, and — like the chat gate
+([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) — with no
+flag. A read is not refused: a LAN client may see the settings it is being
+served under.
+
+**The three model keys are re-applied on save; everything else needs a
+restart.** Those are exactly the keys the window's hosted daemon reads, and
+they are the reason this verb exists. It is not a general live-reload, and the
+window says which is which rather than implying otherwise.
 
 ## Design rules
 

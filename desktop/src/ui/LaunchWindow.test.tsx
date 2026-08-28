@@ -14,8 +14,8 @@
  * row you were pointing at.
  */
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LaunchWindow } from "@/ui/LaunchWindow";
 import { useStore } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
@@ -27,6 +27,15 @@ function open(favourites: string[] = []) {
   useStore.getState().setScoped({ favouriteDirs: favourites });
   render(<LaunchWindow />);
 }
+
+// The OS picker, which has no OS here. Mocked at the module rather than at the
+// plugin, because `chooseFolder` is the seam: it already decides between a
+// shell picker and a typed prompt, and this window only has to ask it.
+const picked = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("@/lib/tauri", async (orig) => ({
+  ...(await orig<typeof import("@/lib/tauri")>()),
+  chooseFolder: vi.fn(async () => picked.value),
+}));
 
 beforeEach(() => localStorage.clear());
 afterEach(() => {
@@ -261,5 +270,38 @@ describe("headless into a directory codex has not been trusted in", () => {
       target: { value: "/home/kinz/projects/mogeung" },
     });
     expect(screen.queryByText(/has not been trusted/i)).toBeNull();
+  });
+});
+
+/**
+ * Typing an absolute path was the slowest part of this window. `R-J78`.
+ *
+ * Two properties, and the second is the one that fails quietly: the picked
+ * folder has to land in the box *and* a declined picker has to leave what was
+ * already there alone — a cancel that blanks the field is worse than no picker,
+ * because it destroys work in the act of doing nothing.
+ */
+describe("browsing for the folder", () => {
+  it("puts what you picked into the box", async () => {
+    picked.value = "/home/you/projects/foo";
+    open();
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("browse for a folder"));
+    });
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("~/projects/foo")).toHaveValue("/home/you/projects/foo"),
+    );
+  });
+
+  it("leaves the box alone when you cancel", async () => {
+    picked.value = null;
+    open();
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), {
+      target: { value: "/half/typed" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("browse for a folder"));
+    });
+    expect(screen.getByPlaceholderText("~/projects/foo")).toHaveValue("/half/typed");
   });
 });

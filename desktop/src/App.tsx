@@ -37,6 +37,7 @@ import { NoticesWindow, Toasts } from "@/ui/Notices";
 import { Palette } from "@/ui/Palette";
 import { HealthWindow } from "@/ui/HealthWindow";
 import { KeymapWindow } from "@/ui/KeymapWindow";
+import { ConfigWindow } from "@/ui/ConfigWindow";
 import { ConnectionsWindow } from "@/ui/ConnectionsWindow";
 import { PromptWindow } from "@/ui/PromptWindow";
 import { LaunchWindow } from "@/ui/LaunchWindow";
@@ -322,6 +323,7 @@ export default function App() {
         <Palette dock={dockRef} />
         <HealthWindow />
         <KeymapWindow />
+        <ConfigWindow />
       <ConnectionsWindow />
       <PromptWindow />
       <LaunchWindow />

@@ -9,7 +9,7 @@
  * nowhere you can see while using it.
  */
 
-import { Activity, Bell, BellOff, Command, Flag, Keyboard, Moon, RefreshCw, Rocket, ScreenShare, Sun, Monitor, HeartPulse, SquareTerminal } from "lucide-react";
+import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun } from "lucide-react";
 import { useStore } from "@/store";
 import { useChord } from "@/lib/keymap";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
@@ -236,6 +236,15 @@ export function TopBar() {
         </IconButton>
         <IconButton title={`keyboard shortcuts${keymapChord ? `  (${keymapChord})` : ""}`} onClick={() => useStore.setState({ showKeymap: true })}>
           <Keyboard size={13} />
+        </IconButton>
+        {/* The config file. `R-J79`, and here because a settings window
+            reachable only from the palette is one you have to already know
+            about — which is the opposite of what it is for. */}
+        <IconButton
+          title="configuration file (~/.mogeung/config.toml)"
+          onClick={() => useStore.setState({ showConfig: true })}
+        >
+          <Settings size={13} />
         </IconButton>
         <IconButton
           title={`theme: ${prefs.theme}${themeChord ? `  (${themeChord})` : ""}`}

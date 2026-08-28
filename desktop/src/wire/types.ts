@@ -996,6 +996,15 @@ export type ClientMsg =
    * promise to delete something.
    */
   | { cmd: "model_chat"; id: string; messages: ChatTurn[] }
+  /**
+   * The config file. `R-J79`.
+   *
+   * Whole-file, because the file has comments in it and a per-key writer would
+   * either drop them or become a TOML formatter. Editing is loopback-only;
+   * reading is not.
+   */
+  | { cmd: "config_get" }
+  | { cmd: "config_save"; text: string }
   | { cmd: "git_resolve"; session_id: SessionId; path: string; side: ResolveSide }
   | { cmd: "git_diff_file"; session_id: SessionId; path: string; context?: number | null; ignore_ws?: boolean | null }
   | { cmd: "git_blame"; session_id: SessionId; path: string; rev?: string | null }
@@ -1125,6 +1134,22 @@ export type ServerMsg =
       error: string | null;
       model: string;
       elapsed_ms: number;
+    }
+  /**
+   * The config file, in answer to both `config_get` and `config_save` — after
+   * a save you are looking at what the daemon now has, which is the only
+   * version worth showing.
+   */
+  | {
+      ev: "config";
+      path: string;
+      text: string;
+      keys: string[];
+      /** Why it cannot be edited from here. Reading is never refused. */
+      readonly: string | null;
+      /** Why a save was refused; `text` is then still the file on disk. */
+      error: string | null;
+      saved: boolean;
     }
   | { ev: "git_stash_list"; session_id: SessionId; stashes: StashInfo[] }
   | {

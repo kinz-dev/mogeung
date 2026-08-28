@@ -133,15 +133,34 @@ export async function chooseSavePath(suggested: string): Promise<string | null |
  * less pleasant.
  *
  * `null` means you declined, and nothing should happen.
+ *
+ * `startIn` opens the picker where you already are — the folder half-typed in
+ * the box, or the last one you used. A picker that always starts at `$HOME`
+ * makes the second use as long as the first, which is most of what is annoying
+ * about typing the path instead.
+ *
+ * The prompt text is a parameter because this is asked from two places now and
+ * they are asking for different things: one adds a folder to a workspace, the
+ * other picks where a session starts.
  */
-export async function chooseFolder(): Promise<string | null> {
+export async function chooseFolder(
+  prompt = "Absolute path of the folder to add to this workspace",
+  startIn?: string,
+): Promise<string | null> {
   if (!isTauri()) {
-    const typed = window.prompt("Absolute path of the folder to add to this workspace");
+    const typed = window.prompt(prompt, startIn ?? "");
     return typed?.trim() ? typed.trim() : null;
   }
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");
-    const picked = await open({ directory: true, multiple: false });
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      // Undefined rather than an empty string: the plugin treats "" as a path
+      // and opens somewhere unhelpful rather than at the default.
+      defaultPath: startIn && startIn.trim() ? startIn : undefined,
+      title: prompt,
+    });
     return typeof picked === "string" ? picked : null;
   } catch {
     return null;

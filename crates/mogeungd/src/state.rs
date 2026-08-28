@@ -122,6 +122,18 @@ pub struct AppState {
     /// Beside `runs` rather than inside `health`, and for the same reason: it
     /// owns something outside this process, and health only ever *reports*.
     pub model: crate::model::Model,
+    /// Whether the config file may be edited through the wire. `R-J79`.
+    ///
+    /// Loopback and nothing else — **not** `writes_allowed`, which a tokened
+    /// LAN daemon legitimately has. This file holds `push_url` and `model_url`,
+    /// both of which point outward, so a daemon a second machine can
+    /// reconfigure is a daemon a second machine can aim. Same shape as the
+    /// chat refusal (ADR-0031 clause 4) and, for the same reason, no flag.
+    ///
+    /// Unset reads as **allowed**, matching `writes_allowed`: the callers that
+    /// never set it are tests and the window's own hosted daemon, both of which
+    /// are loopback in fact.
+    pub config_editable: std::sync::OnceLock<bool>,
     /// Whether this daemon may write to a repository at all. `R-D19`.
     ///
     /// A `OnceLock` for the same reason `ssh_target` is one: only the code
@@ -501,6 +513,7 @@ impl AppState {
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
             writes_allowed: std::sync::OnceLock::new(),
+            config_editable: std::sync::OnceLock::new(),
             claude_home,
             codex_home,
             qwen_home,

@@ -134,6 +134,44 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// reading everything it should be. Curl-able without a UI, deliberately — the
 /// answer to "is the board empty because nothing is happening, or because
 /// mogeung went blind?" should not require a window.
+/// Why the config file may not be edited from here, if it may not. `R-J79`.
+///
+/// Loopback only, and there is deliberately no flag: the file holds `push_url`
+/// and `model_url`, both of which point outward, so a daemon a second machine
+/// can reconfigure is a daemon a second machine can aim at itself. Reading is
+/// not refused — a LAN client may see the settings it is being served under.
+fn config_refusal(state: &AppState) -> Option<String> {
+    // Unset reads as allowed, matching `writes_allowed`: the callers that never
+    // set it are tests and the window's own hosted daemon, both loopback in
+    // fact.
+    if *state.config_editable.get().unwrap_or(&true) {
+        return None;
+    }
+    Some(
+        "this daemon is reachable beyond loopback, so its config is read-only          here — it holds outbound URLs, and a daemon anyone can reconfigure is          a daemon anyone can aim. Edit ~/.mogeung/config.toml on that machine."
+            .to_string(),
+    )
+}
+
+/// The config file as the editor sees it.
+fn config_msg(state: &AppState, error: Option<String>, saved: bool) -> ServerMsg {
+    let path = mogeung_core::config::Config::path();
+    // A read failure lands in `error` beside empty text rather than as a
+    // separate message: the editor has one place to look for what went wrong.
+    let (text, read_error) = match mogeung_core::config::Config::read_text(&path) {
+        Ok(t) => (t, None),
+        Err(e) => (String::new(), Some(e)),
+    };
+    ServerMsg::Config {
+        path: path.to_string_lossy().into_owned(),
+        text,
+        keys: mogeung_core::config::Config::known_keys(),
+        readonly: config_refusal(state),
+        error: error.or(read_error),
+        saved,
+    }
+}
+
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let h = state.health().await;
     Json(serde_json::json!({
@@ -880,6 +918,53 @@ async fn handle(
         // stopped accepting commands for its duration would freeze the whole
         // window over one text box. The answer goes down the asking socket's
         // reply lane whenever it arrives, which is the lane's whole purpose.
+        // The config file. `R-J79`.
+        //
+        // Both verbs answer with the same message: after a save you are looking
+        // at what the daemon now has, which is the only version worth showing.
+        // On the asking socket rather than broadcast — this is a reply to a
+        // question, and another window's editor should not be scrolled by it.
+        ClientMsg::ConfigGet {} => send_reply(&reply, config_msg(&state, None, false)),
+        ClientMsg::ConfigSave { text } => {
+            let path = mogeung_core::config::Config::path();
+            let msg = match config_refusal(&state) {
+                Some(why) => config_msg(&state, Some(why), false),
+                None => match mogeung_core::config::Config::write_to(&path, &text) {
+                    // Re-read rather than echo what was sent: what is on disk
+                    // is the truth, and a save that half-worked must not be
+                    // reported by showing the text that did not land.
+                    Ok(()) => {
+                        // The three keys a hosted daemon reads are re-applied
+                        // now, so fixing the model endpoint here does not need
+                        // a restart. Everything else does, and the window says
+                        // so — this is not a general live-reload and pretending
+                        // otherwise would be worse than not doing it at all.
+                        if let Ok(c) = mogeung_core::config::Config::check(&text) {
+                            let mut settings = state.model.settings();
+                            settings.url = c.model_url.clone();
+                            settings.model = c.model_name.clone();
+                            // A flag passed on the command line is broader than
+                            // anything the file can say and must not be
+                            // narrowed by editing the file (ADR-0031).
+                            if settings.consent != mogeung_core::model::RemoteConsent::Any {
+                                settings.consent = c.allow_remote_model.clone();
+                            }
+                            state.model.configure(settings);
+                        }
+                        config_msg(&state, None, true)
+                    }
+                    Err(e) => config_msg(&state, Some(e), false),
+                },
+            };
+            send_reply(&reply, msg);
+            // The model row in Health moves when these keys do.
+            let state = state.clone();
+            tokio::spawn(async move {
+                state.broadcast(ServerMsg::Health {
+                    health: Box::new(state.health().await),
+                });
+            });
+        }
         ClientMsg::ModelChat { id, messages } => {
             let state = state.clone();
             let reply = reply.clone();

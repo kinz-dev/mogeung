@@ -44,6 +44,15 @@
  * place under them — nothing is taken away, and a folder you have not kept is
  * still one click from being started and two from being kept.
  *
+ * **A folder picker beside the box, asked for 2026-08-28.** Typing an absolute
+ * path was the slowest part of this window and always had been — the favourites
+ * and recents lists exist because of it, and they only help for somewhere you
+ * have already been. `chooseFolder` had been sitting in `lib/tauri` since
+ * `R-J40` doing exactly this for the Files tool; this window simply never
+ * asked it. It opens at whatever is half-typed in the box, so correcting a
+ * path is not the same length as entering one, and it degrades to a prompt in
+ * a browser tab where there is no shell to ask.
+ *
  * **Headless since `R-J61`**, asked 2026-08-26: starting from here always
  * opened a terminal window too, and for a session you mean to drive from a
  * mogeung pane that window is a thing to go and close. Headless is `yolomo
@@ -55,8 +64,9 @@
  */
 
 import { useMemo, useState } from "react";
-import { Rocket, Star, X } from "lucide-react";
+import { FolderOpen, Rocket, Star, X } from "lucide-react";
 import { useStore } from "@/store";
+import { chooseFolder } from "@/lib/tauri";
 import { addFavourite, isFavourite, normaliseDir, removeFavourite } from "@/lib/favourites";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Checkbox, Dim, IconButton, Input, Mono, Row, Segmented } from "@/ui/primitives";
@@ -212,6 +222,20 @@ export function LaunchWindow() {
               says so instead of offering to keep it a second time — which is
               the only state `addFavourite` has no visible answer for.
             */}
+            {/*
+              Beside the star rather than replacing the box: the box is still
+              the fastest route for a path you can type or paste, and a picker
+              that is the only way in makes that route longer.
+            */}
+            <IconButton
+              title="browse for a folder"
+              onClick={async () => {
+                const picked = await chooseFolder("Folder to start the session in", dir);
+                if (picked) setDir(picked);
+              }}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+            </IconButton>
             <IconButton
               disabled={!typed}
               active={typedIsKept}

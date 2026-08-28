@@ -294,6 +294,26 @@ pub enum ClientMsg {
         messages: Vec<crate::model::ChatTurn>,
     },
 
+    /// Read `~/.mogeung/config.toml`, to show it. `R-J79`.
+    ConfigGet {},
+
+    /// Replace `~/.mogeung/config.toml` wholesale.
+    ///
+    /// Whole-file rather than key-by-key, because the file has **comments in
+    /// it** — the ones shipped with it explain what each key costs — and a
+    /// per-key writer would either drop them or have to become a TOML
+    /// formatter. What arrives is what is written, after it has been proved to
+    /// parse.
+    ///
+    /// This is the one place a client writes daemon configuration, and it is
+    /// refused entirely off loopback: `push_url` and `model_url` are both
+    /// outbound, so a daemon anyone could reconfigure is a daemon anyone could
+    /// point at themselves. Same shape as the chat refusal, and for the same
+    /// reason there is no flag.
+    ConfigSave {
+        text: String,
+    },
+
     /// Resolve one conflicted file. `R-D22`.
     ///
     /// Whole-file, matching what `R-D16`'s three-way view shows. A resolution
@@ -957,6 +977,29 @@ pub enum ServerMsg {
         /// endpoint is free to route `default` wherever it likes.
         model: String,
         elapsed_ms: u64,
+    },
+    /// The config file, and what may be done to it. `R-J79`.
+    ///
+    /// Sent in answer to both `ConfigGet` and `ConfigSave`, so the editor never
+    /// has to hold two shapes in its head — after a save it is looking at what
+    /// the daemon now has, which is the only version worth showing.
+    Config {
+        /// Where it lives, shown because `$MOGEUNG_CONFIG` means the answer is
+        /// not always `~/.mogeung/config.toml` and an editor writing somewhere
+        /// you did not expect is the worst kind of quiet.
+        path: String,
+        text: String,
+        /// The keys this daemon understands, from its own struct.
+        keys: Vec<String>,
+        /// Why this cannot be edited from here, when it cannot. Editing is
+        /// loopback-only; a read is not.
+        readonly: Option<String>,
+        /// Why a save was refused. `text` is then still the file on disk,
+        /// unchanged — the editor keeps what you typed and shows this beside
+        /// it.
+        error: Option<String>,
+        /// This message is the result of a save that worked.
+        saved: bool,
     },
     /// The stash list.
     GitStashList {

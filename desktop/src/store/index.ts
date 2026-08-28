@@ -99,6 +99,23 @@ export interface ChatMessage {
 }
 
 /**
+ * The config file as the editor sees it. `R-J79`.
+ *
+ * `readonly` and `error` are two different silences and both are shown: one
+ * says this daemon will not let you, the other says this text will not parse.
+ */
+export interface ConfigFile {
+  path: string;
+  text: string;
+  /** Every key this daemon understands, from its own struct. */
+  keys: string[];
+  readonly: string | null;
+  error: string | null;
+  /** When a save last worked, local clock. `null` if none has. */
+  savedAt: number | null;
+}
+
+/**
  * A request id for one ask.
  *
  * `randomUUID` is absent on an insecure origin and in some test environments,
@@ -467,6 +484,17 @@ export interface AppState {
    */
   activePane: string | null;
   showKeymap: boolean;
+  /** The config editor. `R-J79`. */
+  showConfig: boolean;
+  /**
+   * What the daemon last said its config file is, or `null` before it has been
+   * asked.
+   *
+   * Held here rather than in the window so a save's answer lands somewhere
+   * even if you closed the dialog while it was in flight — a save that reports
+   * nowhere is a save you repeat.
+   */
+  config: ConfigFile | null;
   /** The daemon switcher. `R-I7`. */
   showConnections: boolean;
   /** The follow-up prompt builder, and what has been flagged for it. */
@@ -691,6 +719,8 @@ export const useStore = create<AppState>((set, get) => ({
   showWall: false,
   activePane: null,
   showKeymap: false,
+  showConfig: false,
+  config: null,
   showConnections: false,
   showPrompt: false,
   flagged: [],
@@ -1121,6 +1151,23 @@ export const useStore = create<AppState>((set, get) => ({
               : m,
           ),
         }));
+        break;
+      case "config":
+        // Replaced wholesale, including after a save: the daemon re-reads the
+        // file rather than echoing what was sent, so this is what is actually
+        // on disk. `savedAt` is local because the message says *that* a save
+        // worked, not when — and the editor shows a moment, not a flag that
+        // never clears.
+        set({
+          config: {
+            path: msg.path,
+            text: msg.text,
+            keys: msg.keys,
+            readonly: msg.readonly ?? null,
+            error: msg.error ?? null,
+            savedAt: msg.saved ? Date.now() : null,
+          },
+        });
         break;
       case "kit":
         set({ kit: msg.entries, kitLoaded: true });
