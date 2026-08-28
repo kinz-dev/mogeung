@@ -25,7 +25,7 @@ import { Bookmark, Folder, MessageSquare, NotebookPen, Search, X } from "lucide-
 import { useStore } from "@/store";
 import { useChord } from "@/lib/keymap";
 import { RAIL_TOOLS, type RailTool } from "@/store/prefs";
-import { closeRail, toggleRail } from "@/lib/rail";
+import { closeRail } from "@/lib/rail";
 import { IconButton, Tooltip } from "@/ui/primitives";
 import { FilesTool } from "@/ui/tools/FilesTool";
 import { SearchTool } from "@/ui/tools/SearchTool";
@@ -155,7 +155,10 @@ export function Rail() {
     window.addEventListener("mouseup", up);
   };
 
-  const show = (tool: RailTool) => setPrefs({ rail: toggleRail(open, tool) });
+  // Through the store rather than `setPrefs` directly, so clicking the strip
+  // icon and pressing the chord do the same thing — including handing the
+  // keyboard to the panel that just opened (`R-J82`).
+  const show = useStore((s) => s.toggleRailTool);
 
   return (
     <div className="flex shrink-0">

@@ -5,9 +5,10 @@
  * `prefs.rail` was a single tool and opening one closed the last.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { closeRail, openRail, toggleRail } from "@/lib/rail";
-import { railList } from "@/store/prefs";
+import { defaultPrefs, railList } from "@/store/prefs";
+import { useStore } from "@/store";
 
 describe("what the rail has open", () => {
   it("adds a tool beside the one already open", () => {
@@ -57,5 +58,41 @@ describe("reading a saved rail", () => {
 
   it("puts a saved stack back in strip order", () => {
     expect(railList(["notes", "files"])).toEqual(["files", "notes"]);
+  });
+});
+
+/**
+ * The store's toggle, which is what both the chord and the strip icon call.
+ * `R-J82`.
+ *
+ * `toggleRail` above decides *which tools are open*; this decides *whether the
+ * one that just opened should take the keyboard*. They are separate because
+ * closing must not aim focus at a panel that is no longer on screen.
+ */
+describe("toggling a rail tool from the store", () => {
+  beforeEach(() => {
+    useStore.setState({ prefs: defaultPrefs(), focusRail: null });
+    useStore.getState().setPrefs({ rail: [] });
+  });
+
+  it("signals the tool it opened", () => {
+    useStore.getState().toggleRailTool("chat");
+    expect(useStore.getState().prefs.rail).toContain("chat");
+    expect(useStore.getState().focusRail).toBe("chat");
+  });
+
+  /**
+   * The half that would be easy to get wrong. Closing a panel has to hand the
+   * keyboard back; signalling here would point it at markup that has just been
+   * unmounted, and on the *next* open the value would already be set and the
+   * consumer would not re-run.
+   */
+  it("says nothing when it closed one", () => {
+    useStore.getState().toggleRailTool("chat");
+    useStore.setState({ focusRail: null });
+
+    useStore.getState().toggleRailTool("chat");
+    expect(useStore.getState().prefs.rail).not.toContain("chat");
+    expect(useStore.getState().focusRail).toBeNull();
   });
 });

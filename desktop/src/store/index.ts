@@ -13,6 +13,7 @@
 
 import { create } from "zustand";
 import { summarize } from "@/store/changes";
+import { toggleRail } from "@/lib/rail";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
@@ -76,6 +77,7 @@ import {
   setZoom,
   successions,
   type Prefs,
+  type RailTool,
   type ScopedPrefs,
 } from "./prefs";
 
@@ -485,6 +487,20 @@ export interface AppState {
    */
   activePane: string | null;
   showKeymap: boolean;
+  /**
+   * A rail tool that was just **opened** and should take the keyboard.
+   * `R-J82`.
+   *
+   * A signal rather than a mount-time `autoFocus`, because those are two
+   * different events: the panel also mounts when the window starts with it
+   * already in `prefs.rail`, and focusing then would take the keyboard away
+   * from the queue every launch. This is set only by the toggle, so it means
+   * *you just asked for this panel* and nothing else.
+   *
+   * Consumed and cleared by whichever tool it names; a tool that ignores it
+   * leaves it set, which costs nothing because it only ever acts on a change.
+   */
+  focusRail: RailTool | null;
   /** The config editor. `R-J79`. */
   showConfig: boolean;
   /**
@@ -548,6 +564,14 @@ export interface AppState {
   send: (msg: ClientMsg) => void;
   /** Ask the daemon's model. `R-O5`. */
   askModel: (text: string) => void;
+  /**
+   * Open or close a rail tool, and remember when it was an *open*. `R-J82`.
+   *
+   * One action for both routes — the chord and the strip icon — so a panel
+   * behaves the same however you reached it, which is not true if the two
+   * call `setPrefs` separately and only one of them signals.
+   */
+  toggleRailTool: (tool: RailTool) => void;
   /** Put the thread away and start a fresh one. `R-O9`. */
   newConversation: () => void;
   /** Open a kept conversation and go on asking in it. `R-O9`. */
@@ -739,6 +763,7 @@ export const useStore = create<AppState>((set, get) => ({
   showWall: false,
   activePane: null,
   showKeymap: false,
+  focusRail: null,
   showConfig: false,
   config: null,
   conversationId: null,
@@ -841,6 +866,15 @@ export const useStore = create<AppState>((set, get) => ({
    * surprise, so this leaves `conversationId` alone — ask again and the thread
    * carries on where it was.
    */
+  toggleRailTool: (tool) => {
+    const { prefs, setPrefs } = get();
+    const opening = !prefs.rail.includes(tool);
+    setPrefs({ rail: toggleRail(prefs.rail, tool) });
+    // Only on the way in. Closing a panel must hand the keyboard back rather
+    // than aim it at something that is no longer on screen.
+    if (opening) set({ focusRail: tool });
+  },
+
   clearChat: () => set({ chat: [] }),
 
   select: (id) => {

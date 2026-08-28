@@ -181,8 +181,10 @@ export function ChatTool() {
   const showHistory = useStore((s) => s.showChatHistory);
   const send = useStore((s) => s.send);
   const health = useStore((s) => s.health);
+  const focusRail = useStore((s) => s.focusRail);
   const [draft, setDraft] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
 
   const model = health?.model ?? null;
   const proxy = health?.proxy ?? null;
@@ -214,6 +216,26 @@ export function ChatTool() {
   useEffect(() => {
     if (unknown) send({ cmd: "fetch_health" });
   }, [unknown, send]);
+
+  /**
+   * Opening the panel puts the cursor in the box. `R-J82`.
+   *
+   * Driven by the store's `focusRail` signal rather than by an `autoFocus` on
+   * the textarea, and the difference is the whole point: the panel also mounts
+   * when the window starts with it already open, and grabbing the keyboard
+   * then would take it from the queue on every launch. This fires only when
+   * the toggle says *you just asked for this*.
+   *
+   * Cleared on the way out so re-opening fires again — without that the value
+   * would already be `"chat"` and the effect would not re-run.
+   */
+  useEffect(() => {
+    if (focusRail !== "chat") return;
+    // Focus lands on a disabled box as a no-op, which is the right outcome
+    // when there is no model: the refusal is what there is to read.
+    box.current?.focus();
+    useStore.setState({ focusRail: null });
+  }, [focusRail]);
 
   useEffect(() => {
     // Not while the list is up: scrolling a thread you are not looking at
@@ -334,6 +356,7 @@ export function ChatTool() {
         }
       >
         <textarea
+          ref={box}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {

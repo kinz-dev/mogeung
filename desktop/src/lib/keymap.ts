@@ -17,7 +17,6 @@ import type { DockviewApi } from "dockview";
 import { currentPlatform, type Platform } from "@/lib/platform";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
-import { toggleRail } from "@/lib/rail";
 import { cursorIn, markFor, setMnemonic, MNEMONICS } from "@/lib/marks";
 import { openFile } from "@/lib/explorer";
 import { exportText } from "@/lib/tauri";
@@ -75,11 +74,11 @@ const rail = (tool: RailTool, label: string, keys: string[]): Action => ({
   group: "Rail",
   keys,
   run: () => {
-    const { prefs, setPrefs } = useStore.getState();
     // One key both ways — reaching a thing and leaving it should not be two
     // chords to learn. Since `R-J33` the opening half **adds**: the chord no
-    // longer takes away the tool you were already reading.
-    setPrefs({ rail: toggleRail(prefs.rail, tool) });
+    // longer takes away the tool you were already reading. Since `R-J82` it
+    // also signals which tool was opened, so the panel can take the keyboard.
+    useStore.getState().toggleRailTool(tool);
   },
 });
 

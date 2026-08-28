@@ -405,3 +405,41 @@ describe("saying where a proxy forwards", () => {
     expect(line()).not.toContain("at 127.0.0.1");
   });
 });
+
+/**
+ * Opening the panel puts the cursor in the box. `R-J82`.
+ *
+ * The second test is the one that matters: the panel also mounts when the
+ * window starts with it already open, and focusing then would take the
+ * keyboard away from the queue on every launch. That is why this is driven by
+ * a signal from the toggle rather than by `autoFocus` on the textarea, and it
+ * is the property an `autoFocus` would silently break.
+ */
+describe("opening the chat panel", () => {
+  beforeEach(() => {
+    useStore.setState({ chat: [], focusRail: null, showChatHistory: false, health: health({}) });
+  });
+
+  it("puts the cursor in the box when the toggle opened it", () => {
+    render(<ChatTool />);
+    expect(document.activeElement).not.toBe(screen.getByLabelText("ask the model"));
+
+    act(() => useStore.setState({ focusRail: "chat" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("ask the model"));
+    // Cleared, or re-opening would not fire again: the value would already be
+    // "chat" and the effect would not re-run.
+    expect(useStore.getState().focusRail).toBeNull();
+  });
+
+  it("does not take the keyboard just because it rendered", () => {
+    render(<ChatTool />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("leaves another tool's turn alone", () => {
+    render(<ChatTool />);
+    act(() => useStore.setState({ focusRail: "files" }));
+    expect(document.activeElement).not.toBe(screen.getByLabelText("ask the model"));
+    expect(useStore.getState().focusRail).toBe("files");
+  });
+});
