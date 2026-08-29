@@ -79,9 +79,13 @@ pub const HANDLED: &[&str] = &[
     // `totalCostUSD` is a *first-party* figure — 58 of those 78 lines carry a
     // non-zero one — where [ADR-0024](../../../docs/decisions/0024-equivalent-cost-in-dollars.md)
     // ships a number mogeung computes and labels *equivalent API cost*. Showing
-    // the CLI's own instead, or beside it, is that ADR's question and not a
-    // parser's; it is filed as `R-J86` rather than settled here by whoever
-    // happened to be adding a match arm.
+    // the CLI's own instead, or beside it, was that ADR's question and not a
+    // parser's. **Answered 2026-08-29 by `R-J86`, and the answer is no**: see
+    // ADR-0024's amendment of that date. Briefly — this figure is per *session*
+    // and cumulative where that view is per model per *day*, only one of the
+    // three agent CLIs publishes it at all, and on a subscription it is `0`,
+    // which is true and useless. Skipping it is one line, so adopting it later
+    // is a change of mind rather than a change of plumbing.
     "cost-state",
     "assistant",
     "user",

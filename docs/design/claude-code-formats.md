@@ -109,7 +109,9 @@ number are two numbers that can disagree. `totalCostUSD` is a **first-party**
 figure — 58 of the 78 lines carry a non-zero one — where
 [ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md) ships a number
 mogeung computes and labels *equivalent API cost*. Which of those a reader
-should see is that ADR's question, filed as `R-J86`.
+should see was that ADR's question, and `R-J86` answered it on 2026-08-29: the
+estimate stays. ADR-0024's amendment of that date carries the reasoning and,
+more usefully, the test for when to reopen it.
 
 **A `cost-state` of all zeros is barren rather than a measurement of zero.** It
 is the first one of every session, and folding it in would report a session that

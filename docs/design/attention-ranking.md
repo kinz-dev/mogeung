@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-08-26
+updated: 2026-08-29
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -75,6 +75,23 @@ Claude Code publishes `status: idle` in its own live registry, so blockage on a
 human is a **fact we are told**, not something inferred. In v0.1 this could only
 be guessed after the fact from permission denials, and it was the largest
 documented gap. See [ADR-0003](../decisions/0003-observe-do-not-spawn.md).
+
+## What is on a `Session` and stays out of the score (2026-08-29)
+
+`R-J63` put `api_ms` and `tool_ms` on `Session` — how long the CLI says a session
+spent waiting on the API and running tools. **Neither is an input here, and that
+is deliberate rather than pending.**
+
+Time on the API is not urgency. A session that has burned an hour of API time
+may be finished, may be looping, and may be doing exactly what it was asked;
+none of that is *needs you*, which is what this ranking answers. Wiring it in
+would denominate attention in a misleading unit, which is the specific mistake
+[ADR-0005](../decisions/0005-tokens-not-dollars.md) made and
+[ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md) kept out of the
+queue when it brought dollars back for one view only.
+
+The numbers are worth having — they answer *where did this session's time go*,
+which nothing else mogeung reads can — and the Info pane is where they belong.
 
 ## Configuration
 

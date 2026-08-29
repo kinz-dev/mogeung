@@ -1,7 +1,7 @@
 ---
 title: Show equivalent API cost in dollars, in one place, labelled
 status: active
-updated: 2026-08-08
+updated: 2026-08-29
 decided: 2026-08-08
 supersedes: ADR-0005
 ---
@@ -113,6 +113,49 @@ maintained. Or if the pricing table is found stale in the wild — the failure
 that argument predicts — in which case the answer is a smaller table, an
 imported one, or a return to tokens.
 
+## Amendment — 2026-08-29: the CLI now publishes a cost, and the estimate stays
+
+**Nothing above changes.** The estimate stays, the price table stays, and the
+three conditions stand. What changes is that this ADR's *Revisit if* has partly
+fired and the answer is **no** — recorded here rather than left for the next
+reader to re-decide from scratch.
+
+Claude Code writes a `cost-state` line carrying `totalCostUSD`, a `modelUsage`
+map with per-model tokens and `costUSD`, and `hasUnknownModelCost`. `R-J63`
+ruled on that line on 2026-08-29: mogeung reads its **timings** and deliberately
+not its money. `R-J86` is the question that raised — whose dollars should a
+reader see — and this is its answer.
+
+**The condition above is narrowly not met, and the narrowness is the point.** It
+says *a cost figure **per message***. This is per **session**, cumulative and
+re-emitted per turn. The number on the Analytics view is per model and per
+**day**, and a cumulative session total cannot be bucketed into days: a session
+spanning midnight carries one figure, and splitting it would be a guess wearing
+a first-party badge — which is worse than an estimate that says it is one.
+
+Two further reasons, both of which would survive the shape being fixed:
+
+- **Only one of the three agent CLIs publishes it.** Codex and Qwen sessions
+  have no first-party cost. Adopting it makes one column first-party for
+  Claude Code and an estimate everywhere else, so a total is neither, and the
+  label that explains it would have to explain two things at once.
+- **On a subscription it is `0`**, which is true and useless. 20 of the 78
+  `cost-state` lines on this machine carry a zero, and those are exactly the
+  sessions a reader most wants a sense of. Replacing a meaningful estimate with
+  a truthful zero is a downgrade that looks like an upgrade.
+
+**What would meet the condition**, stated so the next reader has a test rather
+than a judgement: a figure attributable to a **message or a day** rather than a
+session, present for **every** source mogeung watches, and non-zero under a
+subscription. Any two of those three and this is worth reopening; all three and
+the price table should go, exactly as the original *Revisit if* says.
+
+The reading stays in the parser either way — `cost-state` is `HANDLED` and its
+money is skipped in one line, so adopting it later is a change of mind rather
+than a change of plumbing.
+
 ---
-*ADRs are immutable. To change this decision, write a new ADR that supersedes
-it and set `status: superseded` plus `superseded_by:` here.*
+*ADRs are immutable. A decision that is **narrowed** changes by an
+`## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A
+decision genuinely **reversed** is superseded: write a new ADR and set
+`status: superseded` plus `superseded_by:` here.*
