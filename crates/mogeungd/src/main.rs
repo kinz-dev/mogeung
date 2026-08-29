@@ -156,6 +156,9 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             model: mogeung_core::model::ModelSettings {
                 url: args.model_url.or(cfg.model_url),
                 model: args.model_name.or(cfg.model_name),
+                // File-only: an embedding model is not something you pass on a
+                // launcher's argv, and it shares `model_url`'s host and consent.
+                embed_model: cfg.embed_model.clone(),
                 // The flag is broader than anything the file can say, so it
                 // wins by being checked first — and there is deliberately no
                 // way for the file to *narrow* a flag that was passed. A flag

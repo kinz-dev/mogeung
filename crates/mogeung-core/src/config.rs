@@ -57,6 +57,15 @@ pub struct Config {
     /// Daemon: which model to ask for, as the endpoint's own `/models` lists
     /// it. Absent means the endpoint's default.
     pub model_name: Option<String>,
+    /// Daemon: which embedding model to ask for, on the **same endpoint** as
+    /// `model_url`. `R-O6`. Absent means no embeddings, and every surface that
+    /// would use them says so rather than degrading quietly.
+    ///
+    /// Deliberately not its own URL. A second endpoint would be a second host
+    /// to consent to, and [ADR-0031](../../../docs/decisions/0031-consent-to-a-named-host.md)
+    /// names one — a key that could point transcripts at a different machine
+    /// without asking again would be the gate bypassed by a spelling.
+    pub embed_model: Option<String>,
     /// Daemon: consent to a `model_url` that is not on this machine.
     /// [ADR-0031](../../../docs/decisions/0031-consent-to-a-named-host.md).
     ///

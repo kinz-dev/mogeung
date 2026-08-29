@@ -118,8 +118,10 @@ sentence an agent can act on is still done by hand, in the window, every time.
       existing keyword order over every session on this machine that has a
       diff, and prints where they disagree — built 2026-08-28, and it runs the
       shipped `mogeungd::guide` rather than a copy of it
-- [ ] It reports semantic recall against grep on a fixed query set: hits grep
-      missed, and hits grep found that the index ranked away
+- [x] It reports semantic recall against grep on a **generated** query set —
+      the model paraphrases real corpus lines, which measures this corpus rather
+      than somebody's guesses about it: hits grep missed, and hits grep found
+      that the index ranked away (built 2026-08-29 as `--recall`)
 - [ ] It exits **non-zero when the model is unreachable or returns nothing**,
       so a broken setup can never read as *no findings* — `--bin sweep`'s
       discipline, for the same reason
@@ -256,6 +258,7 @@ never make the poll loop do work).
 | `crates/mogeungd/src/bin/judge.rs` | New — `R-O2`'s harness |
 | `crates/mogeungd/src/why.rs` | New — `R-O4`'s retrieval, prompt and parser, shared with its harness |
 | `crates/mogeungd/src/bin/why.rs` | New — `A36`'s test, `R-O4`'s first commit |
+| `crates/mogeungd/src/embed.rs` | New — embeddings on `model_url`'s own host, cosine, nearest |
 | `desktop/src/panes/ChangesPane.tsx` | The guide, the reason column, the fallback toggle |
 | `desktop/src/ui/DiffView.tsx` | Ask-from-a-hunk, citations that open the Transcript |
 | `crates/mogeungd/src/api.rs` | `ask_about` — the retrieval, the labels, `R-O4` |
@@ -552,3 +555,53 @@ first real question.
 **What is not built:** no REST twin, for `R-O5`'s reason — this is the
 free-form door, and a second way in is surface to delete if the fortnight says
 the pillar goes. And no follow-up question: one ask, one answer, per hunk.
+
+### `A38`'s harness, built 2026-08-29 — `R-O6`'s first commit
+
+**`--bin judge --recall`, in `R-O2`'s own binary**, which closes that row's
+second acceptance line: both halves of the harness now exist, and each was built
+by the row that depends on it rather than as a gate somebody else had to pass.
+
+**The ground truth is generated, not curated.** A checked-in query set would
+measure this machine's corpus against somebody's guesses about it. Instead the
+model paraphrases a real corpus line into a query sharing none of its
+distinctive words, and both engines are asked to find the original — which is
+`A38` stated as an experiment, because a paraphrase is exactly the query
+substring search cannot serve.
+
+**What 337 embedded lines said.** On paraphrases: semantic **7 of 11**, grep
+**0 of 11**. On literal slices of the corpus: grep **10 of 11**, semantic **5**.
+The index ranked away half of what grep already had. **Complementary, and
+neither dominates** — which supports this feature exactly as specified (*beside
+the grep results, never instead of them*) and refutes any version that replaces
+search.
+
+**The reverse direction is not optional**, and it cost three corrections to
+measure honestly — all three showing up as *grep failing to find substrings of
+its own corpus*, which is a harness fault and is now printed as one rather than
+counted as a finding:
+
+1. the literal query was rebuilt from filtered words, so the "quote" appeared
+   nowhere in the text;
+2. it did not survive **JSON encoding** — `search` matches the raw `.jsonl`
+   line, and a slice containing a quote or a non-ASCII character is escaped
+   there;
+3. the match key was the file stem, where `insight::session_id_of` attributes a
+   **subagent** transcript to its parent session — so every subagent hit counted
+   as a miss. That rule is now public, because a caller matching a `SearchHit`
+   back to a file needs *the* rule rather than a second copy of it.
+
+**Two endpoints, deliberately.** The paraphrases are chat and go through
+mogeung's own llmproxy — which is also the only thing that understands
+`model_name = "Auto"` — while the embeddings go to `model_url` itself, because
+llmproxy routes chat and asking a chat route for vectors reports an endpoint
+mistake as a recall failure. Found by running it.
+
+**`embed_model` is file-only and shares `model_url`'s host**, so ADR-0031's
+consent covers embeddings without a second host to name: a key that could point
+67 MB of transcripts at another machine without asking again would be that gate
+bypassed by a spelling. `--embed-model` exists so the measurement could run
+**before** the key is in anybody's config file — `Config` is
+`deny_unknown_fields`, so writing it stops an older installed daemon parsing the
+file at all, and a harness that requires you to break the running product first
+is one nobody runs.

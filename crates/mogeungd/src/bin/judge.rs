@@ -15,7 +15,30 @@
 //! cargo run -q -p mogeungd --bin judge                        # every session's repo
 //! cargo run -q -p mogeungd --bin judge -- --repo .             # one, by path
 //! cargo run -q -p mogeungd --bin judge -- --repo . --base HEAD~1
+//! cargo run -q -p mogeungd --bin judge -- --recall             # A38: embeddings vs grep
 //! ```
+//!
+//! ## `--recall`: the other half, and the other assumption (`R-O6`, `A38`)
+//!
+//! [A38](../../../../docs/product/assumptions.md) — *embeddings find what
+//! substring search missed, often enough to earn a second list* — is the bet
+//! under `R-O6`, and [feature 0017](../../../../docs/features/0017-cross-session.md)
+//! deferred semantic search with a sequence rather than a refusal: *honest
+//! substring search first*. That condition is met, so this measures whether the
+//! second list would earn its place before one is drawn.
+//!
+//! **The ground truth is generated, not curated.** A checked-in query set would
+//! measure this machine's corpus against somebody's guesses about it. Instead
+//! the harness picks real lines from the corpus, asks the model to **paraphrase
+//! each into a query that shares as few of its distinctive words as possible**,
+//! and then asks both engines to find the original from the paraphrase. That is
+//! `A38`'s claim stated as an experiment: a paraphrase is exactly the query
+//! substring search cannot serve, and if embeddings do not win here they will
+//! not win anywhere.
+//!
+//! Both directions are reported, because the assumption's removal condition
+//! names both: hits grep missed, **and** hits grep found that the index ranked
+//! away. A second list that loses what the first one had is not an addition.
 //!
 //! `--base` is what makes this runnable at all. Without it the harness only
 //! has something to judge when a tree happens to be dirty, which is not a
@@ -50,10 +73,16 @@ fn main() {
     };
     let only: Option<PathBuf> = flag("--repo").map(PathBuf::from);
     let base = flag("--base");
+    let recall = args.iter().any(|a| a == "--recall");
 
     let (cfg, warning) = mogeung_core::config::Config::load();
     if let Some(w) = warning {
         eprintln!("{w}");
+    }
+
+    if recall {
+        recall::run(&cfg, &args);
+        return;
     }
 
     // `(repo, base)`. A named base applies to every repo; otherwise each
@@ -87,6 +116,7 @@ fn main() {
         // The harness reads the same consent the daemon does; it does not widen
         // it. An endpoint you have not permitted is a refusal here too.
         consent: cfg.allow_remote_model.clone(),
+        embed_model: cfg.embed_model.clone(),
     });
     model.set_chat_allowed(true);
 
@@ -253,3 +283,337 @@ fn repos_with_sessions() -> Vec<(PathBuf, Option<String>)> {
     out
 }
 
+
+/// `A38`'s measurement: does a semantic list find what grep could not? `R-O6`.
+mod recall {
+    /// `split_whitespace` with the byte offsets it throws away — what makes a
+    /// literal query a real slice of the text rather than a reconstruction.
+    trait WithOffsets {
+        fn split_whitespace_indices(&self) -> Vec<(usize, &str)>;
+    }
+    impl WithOffsets for str {
+        fn split_whitespace_indices(&self) -> Vec<(usize, &str)> {
+            self.split_whitespace()
+                .map(|w| (w.as_ptr() as usize - self.as_ptr() as usize, w))
+                .collect()
+        }
+    }
+
+    use mogeung_core::config::Config;
+    use mogeung_core::model::{ChatTurn, ModelSettings};
+    use mogeungd::{embed, model::Model};
+    use mogeung_core::insight;
+    use mogeungd::insight as scan;
+
+    /// How many corpus lines are embedded. The pool the originals hide in — a
+    /// recall number against ten distractors is a number about nothing.
+    const POOL: usize = 400;
+    /// How many of those become questions.
+    const QUERIES: usize = 12;
+    /// A hit inside this many results counts as found, for both engines. The
+    /// number is the design: a second list nobody scrolls is a list that has to
+    /// be right near the top.
+    const TOP_K: usize = 5;
+
+    pub fn run(cfg: &Config, args: &[String]) {
+        let flag = |name: &str| -> Option<String> {
+            args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
+        };
+        let pool: usize = flag("--pool").and_then(|v| v.parse().ok()).unwrap_or(POOL);
+        let queries: usize = flag("--queries").and_then(|v| v.parse().ok()).unwrap_or(QUERIES);
+        // `--embed-model` exists so this can be measured **before** the key is
+        // in anybody's config file, which matters more than it sounds: `Config`
+        // is `deny_unknown_fields`, so writing `embed_model` into
+        // `~/.mogeung/config.toml` stops an older installed daemon from parsing
+        // it at all. A harness that requires you to break the running product
+        // before it will tell you whether the feature is worth building is not
+        // a harness anybody runs.
+        let embed_model = flag("--embed-model").or_else(|| cfg.embed_model.clone());
+        if embed_model.is_none() {
+            eprintln!(
+                "no embedding model: pass `--embed-model <id>` (as the endpoint's own \
+                 /models lists it), or set `embed_model` in ~/.mogeung/config.toml \
+                 once this build is installed. `--bin sweep`'s rule — a harness that \
+                 shrugs reads as 'no finding'."
+            );
+            std::process::exit(1);
+        }
+
+        // The same home the watcher reads, so the harness and the daemon are
+        // looking at one corpus.
+        let home = mogeungd::watcher::default_home();
+        let projects = home.join("projects");
+        let history = home.join("history.jsonl");
+
+
+        // **Two endpoints, on purpose.** The paraphrases are chat and go where
+        // every other question goes — mogeung's own llmproxy when one is
+        // configured, which is also the only thing that understands
+        // `model_name = "Auto"`. The embeddings go to `model_url` itself:
+        // llmproxy routes *chat*, and asking a chat route for vectors reports
+        // an endpoint mistake as a recall failure. Found by running it.
+        let model = Model::new();
+        model.configure(ModelSettings {
+            url: super::proxy_url(cfg).or_else(|| cfg.model_url.clone()),
+            model: cfg.model_name.clone(),
+            consent: cfg.allow_remote_model.clone(),
+            embed_model: None,
+        });
+        model.set_chat_allowed(true);
+        let embed_settings = ModelSettings {
+            url: cfg.model_url.clone(),
+            model: None,
+            consent: cfg.allow_remote_model.clone(),
+            embed_model,
+        };
+
+        let corpus = scan::corpus_lines(&projects, &history, pool);
+        if corpus.len() < queries * 2 {
+            eprintln!(
+                "only {} corpus line(s) — not enough to hide {queries} answers in. \
+                 Run some sessions first.",
+                corpus.len()
+            );
+            std::process::exit(1);
+        }
+        println!("{} line(s) from {}", corpus.len(), projects.display());
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let texts: Vec<String> = corpus.iter().map(|c| c.text.clone()).collect();
+        let vectors = match rt.block_on(embed::embed(&embed_settings, &texts)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("the embedding endpoint answered nothing: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        // The questions: spread across the pool, so they are not all from one
+        // session, and long enough to be worth paraphrasing.
+        let step = (corpus.len() / queries.max(1)).max(1);
+        let chosen: Vec<usize> = (0..corpus.len())
+            .step_by(step)
+            .filter(|i| corpus[*i].text.chars().count() > 60)
+            .take(queries)
+            .collect();
+
+        let mut asked = 0usize;
+        let mut grep_found = 0usize;
+        let mut semantic_found = 0usize;
+        let mut both = 0usize;
+        let mut neither = 0usize;
+        let mut semantic_only = 0usize;
+        let mut grep_only = 0usize;
+        let mut literal_asked = 0usize;
+        let mut literal_grep = 0usize;
+        let mut literal_semantic = 0usize;
+        let mut ranked_away = 0usize;
+
+        for &i in &chosen {
+            let original = &corpus[i];
+            let ask = format!(
+                "Rewrite the following as a short search query someone might type when \
+                 trying to find it again — one line, at most ten words. Use **different \
+                 words**: no distinctive term from the text may appear in your query. \
+                 Answer with the query and nothing else.\n\n{}",
+                original.text.chars().take(600).collect::<String>()
+            );
+            let paraphrase = match rt.block_on(model.chat(&[ChatTurn::user(ask)])) {
+                Ok(a) => a.text.trim().trim_matches('"').to_string(),
+                Err(e) => {
+                    println!("  model: {e}");
+                    continue;
+                }
+            };
+            if paraphrase.is_empty() {
+                continue;
+            }
+            asked += 1;
+
+            // Grep: the incumbent, called exactly as the search panel calls it.
+            let hits = scan::search(&projects, &history, &paraphrase, 50);
+            // Matched on the pair a hit actually carries — its session and its
+            // line — rather than on a path, which `SearchHit` deliberately does
+            // not expose. A history line is identified by its source instead,
+            // there being one such file.
+            // `insight`'s own rule, not a re-derivation: a subagent transcript
+            // attributes to its **parent** session, so the file stem is the
+            // wrong key for one — which showed up as grep missing substrings of
+            // its own corpus.
+            let session = scan::session_id_of(&original.path);
+            let from_history = original.role == "history";
+            let by_grep = hits.hits.iter().any(|h| {
+                h.line == original.line
+                    && if from_history {
+                        h.source == insight::SearchSource::History
+                    } else {
+                        h.session_id == session
+                    }
+            });
+
+            // Semantic: the challenger, over the same corpus.
+            let qv = match rt.block_on(embed::embed(&embed_settings, &[paraphrase.clone()])) {
+                Ok(v) => v.into_iter().next().unwrap_or_default(),
+                Err(e) => {
+                    println!("  embedding: {e}");
+                    continue;
+                }
+            };
+            let near = embed::nearest(&qv, &vectors, TOP_K);
+            let rank = near.iter().position(|(j, _)| *j == i);
+            let by_semantic = rank.is_some();
+
+            grep_found += by_grep as usize;
+            semantic_found += by_semantic as usize;
+            match (by_grep, by_semantic) {
+                (true, true) => both += 1,
+                (false, true) => semantic_only += 1,
+                (true, false) => grep_only += 1,
+                (false, false) => neither += 1,
+            }
+
+            // **The other direction, and it is not optional.** A paraphrase
+            // shares no distinctive words by construction, so grep must score
+            // zero on it — which means the paraphrase half cannot measure what
+            // a second list would *lose*. A literal query can: words lifted
+            // straight out of the line, which grep is guaranteed to find. If
+            // the index ranks those away, the second list is subtracting.
+            let literal = words_from(&original.text);
+            if !literal.is_empty() {
+                literal_asked += 1;
+                let lit_hits = scan::search(&projects, &history, &literal, 50);
+                let lit_grep = lit_hits.hits.iter().any(|h| {
+                    h.line == original.line
+                        && if from_history {
+                            h.source == insight::SearchSource::History
+                        } else {
+                            h.session_id == session
+                        }
+                });
+                let lit_semantic = match rt.block_on(embed::embed(&embed_settings, &[literal.clone()])) {
+                    Ok(v) => {
+                        let qv = v.into_iter().next().unwrap_or_default();
+                        embed::nearest(&qv, &vectors, TOP_K).iter().any(|(j, _)| *j == i)
+                    }
+                    Err(_) => false,
+                };
+                literal_grep += lit_grep as usize;
+                literal_semantic += lit_semantic as usize;
+                if !lit_grep {
+                    // Grep failing to find a substring of the corpus is a
+                    // harness fault, not a finding — printed so it can never be
+                    // read as one.
+                    println!(
+                        "  literal \"{}\" — grep missed its own text ({}), which is this \
+                         harness, not search",
+                        clip(&literal, 50),
+                        original.role
+                    );
+                }
+                if lit_grep && !lit_semantic {
+                    ranked_away += 1;
+                    println!("  literal \"{}\" — grep found it, semantic did not", clip(&literal, 60));
+                }
+            }
+
+            println!(
+                "\n\"{}\"\n  looking for: {}",
+                clip(&paraphrase, 90),
+                clip(&original.text, 90)
+            );
+            println!(
+                "  grep {:<9} semantic {}",
+                if by_grep { "found" } else { "missed" },
+                match rank {
+                    Some(r) => format!("found at {}", r + 1),
+                    None => "missed".to_string(),
+                }
+            );
+        }
+
+        println!("\n─────────────────────────────────────────────");
+        if asked == 0 {
+            eprintln!(
+                "nothing was asked — the model paraphrased nothing. That is the failure\n\
+                 `--bin sweep` exists to make loud rather than a finding about recall."
+            );
+            std::process::exit(1);
+        }
+        println!("{asked} paraphrased quer{} against {} embedded line(s), top {TOP_K}",
+            if asked == 1 { "y" } else { "ies" }, corpus.len());
+        println!("grep found     {grep_found}/{asked}");
+        println!("semantic found {semantic_found}/{asked}");
+        println!("  both {both} · semantic only {semantic_only} · grep only {grep_only} · neither {neither}");
+        println!(
+            "\nliteral queries (words lifted from the line, which grep must find):\n\
+             grep {literal_grep}/{literal_asked} · semantic {literal_semantic}/{literal_asked} \
+             · ranked away by the index {ranked_away}"
+        );
+        println!(
+            "\nA38 turns on two numbers and they are in different blocks. **semantic\n\
+             only**, above, is what a second list would add. **ranked away**, below, is\n\
+             what it would cost — a list that loses what grep already found is not an\n\
+             addition, and the paraphrase block cannot see that because grep scores zero\n\
+             there by construction. The judgement belongs in the roadmap row rather than\n\
+             in this output."
+        );
+    }
+
+    /// A literal query: a **contiguous slice** of one line of the text.
+    ///
+    /// Contiguous, and sliced out of the original rather than rebuilt from
+    /// words, because the first version did neither and scored grep 0/11 —
+    /// which is impossible for a substring query and was therefore a bug in the
+    /// harness rather than a finding. Two causes, both worth naming: short
+    /// words were filtered out before joining, so the "quote" never existed in
+    /// the text; and the join used single spaces, which a line with a newline
+    /// or a double space in it does not have.
+    ///
+    /// Taken from one line and from its middle: the start of an assistant turn
+    /// is often boilerplate (*"I'll start by…"*) that matches a hundred other
+    /// lines, and a query that matches everything measures nothing.
+    fn words_from(text: &str) -> String {
+        let line = text
+            .lines()
+            .filter(|l| l.split_whitespace().count() >= 10)
+            .max_by_key(|l| l.len())
+            .unwrap_or("");
+        let words: Vec<(usize, &str)> = line.split_whitespace_indices();
+        if words.len() < 10 {
+            return String::new();
+        }
+        // The slice has to survive **JSON encoding**, because `search` matches
+        // the raw `.jsonl` line and the corpus text is the parsed one. A quote,
+        // a backslash or a non-ASCII character is escaped on disk, so a slice
+        // containing one is a query that cannot match a line that does contain
+        // it — which showed up as grep scoring 7/11 on substrings of itself.
+        let quotable = |w: &str| w.is_ascii() && !w.contains(['"', '\\']);
+        for first in (words.len() / 3)..words.len().saturating_sub(5) {
+            let last = first + 5;
+            if !words[first..=last].iter().all(|(_, w)| quotable(w)) {
+                continue;
+            }
+            let start = words[first].0;
+            let end = words[last].0 + words[last].1.len();
+            let slice = &line[start..end];
+            // Single spaces only: any other run of whitespace is a different
+            // string on disk than the one this slice reads as.
+            if slice.split(' ').all(|w| !w.is_empty()) {
+                return slice.to_string();
+            }
+        }
+        String::new()
+    }
+
+    fn clip(s: &str, n: usize) -> String {
+        let one = s.replace('\n', " ");
+        if one.chars().count() <= n {
+            return one;
+        }
+        format!("{}…", one.chars().take(n).collect::<String>())
+    }
+}

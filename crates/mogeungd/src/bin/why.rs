@@ -88,6 +88,7 @@ fn main() {
         url,
         model: cfg.model_name.clone(),
         consent: cfg.allow_remote_model.clone(),
+        embed_model: cfg.embed_model.clone(),
     });
     model.set_chat_allowed(true);
 

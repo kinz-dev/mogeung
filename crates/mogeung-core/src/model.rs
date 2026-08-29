@@ -130,6 +130,13 @@ pub struct ModelSettings {
     /// ADR-0031 clause 3: a non-loopback endpoint is publishing, and needs
     /// consent said out loud — the flag, or the config key that names the host.
     pub consent: RemoteConsent,
+    /// Which embedding model to ask this **same** endpoint for. `R-O6`.
+    ///
+    /// On the settings rather than beside them because it shares the URL and
+    /// therefore the consent: one host is named, and embeddings cannot quietly
+    /// go somewhere else.
+    #[serde(default)]
+    pub embed_model: Option<String>,
 }
 
 impl ModelSettings {
@@ -399,6 +406,7 @@ mod tests {
             url: Some(url.into()),
             model: Some("qwen3.8-sglang".into()),
             consent,
+            embed_model: None,
         }
     }
 

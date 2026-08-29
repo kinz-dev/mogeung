@@ -7,6 +7,7 @@ pub mod codex;
 pub mod detect;
 pub mod discovery;
 pub mod docscan;
+pub mod embed;
 pub mod git;
 pub mod guide;
 pub mod insight;

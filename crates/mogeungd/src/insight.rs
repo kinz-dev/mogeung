@@ -677,6 +677,106 @@ pub fn decision_candidates(transcript_path: &Path) -> Vec<DecisionCandidate> {
 }
 
 // ---------------------------------------------------------------------------
+// The corpus, as text (R-O6)
+// ---------------------------------------------------------------------------
+
+/// One line of the corpus, with enough to find it again.
+///
+/// The unit is a **turn**, not a file and not a session: it is what search
+/// returns, what a reader opens, and therefore what a second list would have to
+/// rank. Anything coarser would measure a different feature than the one `R-O6`
+/// proposes.
+#[derive(Debug, Clone)]
+pub struct CorpusLine {
+    pub path: PathBuf,
+    /// 1-based line in that file, as [`search`] reports it.
+    pub line: u64,
+    /// `user`, `assistant`, or `history` for a prompt from `history.jsonl`.
+    pub role: String,
+    pub text: String,
+}
+
+/// A spread of the corpus as plain text, for embedding. `R-O6`, `A38`'s test.
+///
+/// **Spread rather than the first `cap` lines**, for `--bin why`'s reason: the
+/// top of a transcript is scaffolding, and a sample taken from the front
+/// measures how sessions start. Files are visited in path order and each
+/// contributes a stride of its own turns, so a corpus of 200 sessions is
+/// represented by 200 sessions rather than by the first two.
+pub fn corpus_lines(projects_root: &Path, history_path: &Path, cap: usize) -> Vec<CorpusLine> {
+    let mut out: Vec<CorpusLine> = Vec::new();
+    if cap == 0 {
+        return out;
+    }
+
+    // The prompts you typed, first and whole: they are what most searches are
+    // hunting, and `history.jsonl` is one small file.
+    let mut history: Vec<CorpusLine> = Vec::new();
+    stream_lines(history_path, |line_no, line| {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return true };
+        let text = str_at(&v, "display").unwrap_or_default().trim().to_string();
+        if !text.is_empty() {
+            history.push(CorpusLine {
+                path: history_path.to_path_buf(),
+                line: line_no,
+                role: "history".into(),
+                text,
+            });
+        }
+        true
+    });
+
+    let mut files = Vec::new();
+    collect_jsonl(projects_root, &mut files, 0);
+    files.sort();
+
+    // A share each, so no single long session fills the sample. The history
+    // gets a quarter, being the most concentrated source of real queries.
+    let history_share = (cap / 4).max(1).min(history.len());
+    let step = (history.len() / history_share.max(1)).max(1);
+    out.extend(history.into_iter().step_by(step).take(history_share));
+
+    let per_file = ((cap.saturating_sub(out.len())) / files.len().max(1)).max(1);
+    for f in &files {
+        if out.len() >= cap {
+            break;
+        }
+        let mut here: Vec<CorpusLine> = Vec::new();
+        stream_lines(f, |line_no, line| {
+            let Ok(v) = serde_json::from_str::<Value>(line) else { return true };
+            let (role, text) = if let Some(p) = human_prompt(&v) {
+                ("user", p)
+            } else if let Some(t) = assistant_text(&v) {
+                ("assistant", t)
+            } else {
+                return true;
+            };
+            let text = text.trim().to_string();
+            if text.chars().count() >= 24 {
+                here.push(CorpusLine {
+                    path: f.clone(),
+                    line: line_no,
+                    role: role.into(),
+                    text,
+                });
+            }
+            true
+        });
+        if here.is_empty() {
+            continue;
+        }
+        let step = (here.len() / per_file.max(1)).max(1);
+        for c in here.into_iter().step_by(step).take(per_file) {
+            if out.len() >= cap {
+                break;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Turns near a moment (R-F9)
 // ---------------------------------------------------------------------------
 
@@ -767,7 +867,12 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>, depth: u8) {
 /// The session a transcript belongs to: its file stem, except that subagent
 /// transcripts (`<session>/subagents/agent-*.jsonl`) attribute to the parent
 /// session directory. Same rule as the usage scanner.
-fn session_id_of(path: &Path) -> String {
+///
+/// Public because a caller that needs to match a [`SearchHit`] back to a file
+/// needs *this* rule and not a re-derivation of it — `--bin judge --recall`
+/// used the file stem, counted every subagent hit as a miss, and reported grep
+/// failing to find substrings of its own corpus.
+pub fn session_id_of(path: &Path) -> String {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
