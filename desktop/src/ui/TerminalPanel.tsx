@@ -18,6 +18,8 @@ import { Plus, X, ChevronDown } from "lucide-react";
 import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
+import { CommandBox } from "@/ui/CommandBox";
+import { ptyWrite } from "@/lib/tauri";
 import { hostLabel, reachFor, shellArgs, shellSessionName, spawnAs } from "@/lib/tmux";
 import { cn } from "@/lib/cn";
 import { base } from "@/lib/format";
@@ -131,6 +133,21 @@ export function TerminalPanel() {
           </IconButton>
         </div>
       </div>
+
+      {/*
+        Above the terminal rather than over it: an overlay on the canvas would
+        cover the line you are asking about, and `R-O12`'s harness already
+        refused the version that drew *into* the line.
+      */}
+      <CommandBox
+        repo={current ? current[1] : null}
+        onAccept={(command) => {
+          // Straight into this window's own pty — no daemon, no tmux
+          // paste-buffer, because mogeung holds this one. And **no Enter**:
+          // ADR-0003's amendment one level down.
+          if (current) void ptyWrite(`shell:${current[0]}`, command, "command-box").catch(() => {});
+        }}
+      />
 
       <div className="min-h-0 flex-1 bg-[var(--bg-panel)]">
         {!current ? (

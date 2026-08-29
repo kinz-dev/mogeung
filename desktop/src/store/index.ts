@@ -73,6 +73,7 @@ import {
 } from "@/lib/tauri";
 import { applyAppZoom } from "@/lib/zoom";
 import { draftAsk, type FlaggedHunk } from "@/lib/prompt";
+import { commandAsk, parseCommand } from "@/lib/command";
 import {
   defaultPrefs,
   emptyScoped,
@@ -182,6 +183,25 @@ export interface DiffAnswer {
 /** One question's place: this hunk of this file of this session. */
 export function askKey(sessionId: string, path: string, anchor: string): string {
   return `${sessionId}:${path}:${anchor}`;
+}
+
+/**
+ * A command asked for in words. `R-O12`, `A41`.
+ *
+ * One at a time and not per shell: you ask for a command, you get one, you put
+ * it in the line or you do not. There is no thread here and nothing is kept —
+ * the ask names no conversation, the same way `R-O7`'s draft does not.
+ */
+export interface CommandDraft {
+  /** The ask's id, and how `model_reply` finds its way back here. */
+  id: string;
+  question: string;
+  command: string;
+  pending: boolean;
+  started: number;
+  error: string | null;
+  model: string;
+  elapsed_ms: number;
 }
 
 /**
@@ -657,6 +677,10 @@ export interface AppState {
    * thing being composed in it.
    */
   promptDraft: PromptDraft | null;
+  /** The command box is open (`Alt+Shift+C`). `R-O12`. */
+  showCommandBox: boolean;
+  /** What it has been asked for, and what came back. */
+  commandDraft: CommandDraft | null;
   /**
    * Answers to questions asked of a hunk, keyed by [`askKey`]. `R-O4`.
    *
@@ -726,6 +750,8 @@ export interface AppState {
   draftFollowUp: (note: string) => void;
   /** Ask why a hunk changed, answered from the turns that produced it. `R-O4`. */
   askAboutHunk: (sessionId: SessionId, path: string, anchor: string, question: string) => void;
+  /** Ask for a shell command in words. `R-O12`. */
+  askForCommand: (question: string, repo: string | null, shell: string) => void;
   /** Put the thread away and start a fresh one. `R-O9`. */
   newConversation: () => void;
   /** Open a kept conversation and go on asking in it. `R-O9`. */
@@ -929,6 +955,8 @@ export const useStore = create<AppState>((set, get) => ({
   showPrompt: false,
   flagged: [],
   promptDraft: null,
+  showCommandBox: false,
+  commandDraft: null,
   diffAnswers: {},
   ambient: false,
   showLaunch: false,
@@ -1114,6 +1142,37 @@ export const useStore = create<AppState>((set, get) => ({
       // No conversation: an answer about a hunk is not a thread, and the
       // history is for questions you come back to.
       about: { session_id: sessionId, path, anchor },
+    });
+  },
+
+  /**
+   * Ask for a command in words. `R-O12`, `A41`.
+   *
+   * A `model_chat` with no conversation — ADR-0034's door, for the third time,
+   * and the reason the protocol has not grown a free-form family per feature.
+   * What travels is the sentence you typed; **the line you are editing never
+   * does**, which is the fence this row is built around.
+   */
+  askForCommand: (question, repo, shell) => {
+    const q = question.trim();
+    if (!q) return;
+    const id = chatId();
+    set({
+      commandDraft: {
+        id,
+        question: q,
+        command: "",
+        pending: true,
+        started: Date.now(),
+        error: null,
+        model: "",
+        elapsed_ms: 0,
+      },
+    });
+    get().send({
+      cmd: "model_chat",
+      id,
+      messages: [{ role: "user", content: commandAsk(q, repo, shell) }],
     });
   },
 
@@ -1504,6 +1563,25 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       }
       case "model_reply": {
+        // Fourth destination on one door (`R-O12`), checked with the others: a
+        // command drafted for a terminal must not surface in a conversation,
+        // in a diff, or in the prompt window.
+        const asking = get().commandDraft;
+        if (asking && asking.id === msg.id) {
+          set({
+            commandDraft: {
+              ...asking,
+              pending: false,
+              // Parsed rather than shown raw: what a model wraps in a fence or
+              // prefixes with `$` must not reach a shell line.
+              command: parseCommand(msg.text ?? ""),
+              error: msg.error ?? null,
+              model: msg.model,
+              elapsed_ms: msg.elapsed_ms,
+            },
+          });
+          break;
+        }
         // Third destination on one door (`R-O4`). Checked before the chat for
         // the same reason the draft is: an answer about a hunk must not appear
         // in a conversation somebody is reading.

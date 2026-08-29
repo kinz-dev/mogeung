@@ -495,6 +495,22 @@ export const ACTIONS: Action[] = [
     run: () => useStore.setState({ showTerminal: !useStore.getState().showTerminal }),
   },
   {
+    id: "terminal.command_box",
+    label: "Ask for a shell command in words — it writes it, you run it",
+    group: "Panes",
+    // `Alt+Shift+C` because the letter is free of readline: `Alt+d`, `Alt+u`,
+    // `Alt+b` and `Alt+f` are all word commands a shell already owns, and a
+    // chord fires in this window even when the terminal has focus — `Alt+T`'s
+    // lesson, which took *toggle thinking* away from Claude Code for a week.
+    keys: ["Alt+Shift+c"],
+    run: () => {
+      // It opens the panel it lives in, rather than silently doing nothing
+      // when the panel is hidden: a chord that answers with no visible change
+      // reads as broken.
+      useStore.setState({ showTerminal: true, showCommandBox: true });
+    },
+  },
+  {
     id: "terminal.focus_app",
     label: "Raise the terminal application this session runs in",
     group: "Navigation",
@@ -719,6 +735,9 @@ export const MAC_KEYS: Record<string, string[]> = {
   rescan: ["Meta+r"],
   "prefs.export": ["Meta+Shift+e"],
   "terminal.focus_app": ["Meta+Shift+o"],
+  // Spelled by physical key, because `⌥⇧C` composes a character on macOS and
+  // `leave no Option chord spelled by character` is the test that says so.
+  "terminal.command_box": ["Alt+Shift+KeyC"],
   theme: ["Meta+Shift+t"],
 
   // Letters where `⌘` is spoken for. The mnemonic survives; only the modifier

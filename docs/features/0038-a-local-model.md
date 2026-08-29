@@ -692,61 +692,65 @@ and a cluster of one is not drawn as a cluster, because it joined nothing.
 The literal list underneath is untouched and is what shows without a model —
 the same refusal of a blend the similar list obeys.
 
-### `R-O12`, asked 2026-08-29 — not started
+### `R-O12`, asked and half-refuted and half-built, 2026-08-29
 
 *"AI assisted terminal command auto complete… I am using this wrapping a
-terminal"*, widened the same day into the shape it now has: *"what if I just
-want to ask a quick question in the terminal and let ai write the command?
-'grep xyz and sort by first column'"*. Filed rather than built, and the spec
-above is left as it was — this is a **sixth** candidate arriving after the
-founding five, and the record of what was chosen at the start is worth more than
-a tidy list.
+terminal"*, widened the same day: *"what if I just want to ask a quick question
+in the terminal and let ai write the command? 'grep xyz and sort by first
+column'"*.
 
-**One chord, one box, two kinds of answer.** Type a fragment and you get
-commands from this repo's corpus; type a sentence and the model drafts one
-beside them. Every row says what it rests on — `12× · an agent` is evidence,
-`written by qwen · never run here` is a suggestion — which is `R-O3`'s and
-`R-O4`'s labelling discipline on a third surface. Picking a row pastes it into
-your line **unsubmitted**, through the path `R-B54` already built; you press
-Enter.
+**The harness ran first and killed the half the row was named after.** `--bin
+judge --complete` measured `A40` — that the commands your **agents** ran predict
+what you type next — over 11,359 agent commands against 10,403 shell history
+lines, holding out the last 60 things actually typed:
 
-**Why it is not a shell plugin.** `history.jsonl` is your own typing; every
-`Bash` tool call in every transcript is a command an **agent** ran on your
-behalf, in a named repo — the larger half of what has actually run here, and
-something atuin, fish and `zsh-autosuggestions` have never seen. The model earns
-its place in the **ranking**: *run just the daemon tests* finds
-`cargo test -q -p mogeungd --lib` on a query sharing no prefix with it.
+| prefix | agent corpus | shell history |
+|---|---|---|
+| 3 chars | **0** of 57 | 22 of 57 |
+| 6 chars | **0** of 43 | 27 of 43 |
+| 12 chars | **0** of 29 | 13 of 29 |
 
-**A picker rather than ghost text, and that is a correction.** The row was first
-filed as an inline suggestion. It does not survive contact: it fights the
-shell's own autosuggest for the same line, wants Tab (which belongs to the
-shell's completion), and needs a cursor column mogeung cannot track through a
-multi-line prompt or vi mode. Inline is a second cut, gated on the picker being
-used — recorded here rather than quietly dropped, because the inline version is
-what was asked for first.
+Not worse than the free baseline — **nothing**. One number explains it:
+**11,043 of the 11,359 agent commands are distinct**, a 97% singleton rate,
+because an agent's commands are long, piped and path-specific
+(`cat /tmp/claude-…/task`, `./scripts/check-docs.sh 2>&1 | tail -25`) while what
+a human types into their own shell is `cd scripts` and `clear`. Prediction is
+repetition, and there is none. The doubt was filed with the assumption in
+advance, so this is the ledger working rather than a surprise: `A40` is
+`REFUTED`, and the completion half comes out rather than being tuned. Ghost text
+goes with it — there is nothing honest to draw ahead of the cursor.
 
-**Wrapping a terminal makes it buildable rather than blocking it.**
-[ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md) keeps mogeung
-out of the pty, but the window renders xterm.js and holds the keystrokes it
-sends, so the box needs no interception at all; the overlay lives in mogeung's
-own terminal panel (`R-B33`), never in the Agent pane — that one is an agent's
-TUI, and completing a prompt there is a different feature standing much closer
-to the fence.
+**What is built is the half asked for second.** `Alt+Shift+C` opens a box above
+the terminal panel; a sentence goes in and one command comes back, labelled
+*written by <model> · never run here*. Accepting writes it into the shell's line
+and stops: this window holds that pty itself, so it is `ptyWrite` rather than
+the daemon or a tmux buffer, and there is no Enter in it —
+[ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s 2026-08-29 amendment one
+level down.
 
-**The privacy fence improved when the question mode arrived.** A command line is
-the most secret-carrying text in this corpus — `export TOKEN=…`, hostnames,
-one-off credentials — so it is **never sent**: corpus matching is local, and the
-only thing that leaves the machine is a question you deliberately typed, exactly
-like the chat panel and refused off loopback for the same reason. **It writes;
-it never runs.**
+**Three fences, and the first is the one the row was rebuilt around.** Your
+command line is never read and never sent — a prefix can carry `export TOKEN=…`,
+and only the sentence you deliberately typed leaves the machine, which is the
+chat panel's shape. The ask is a plain `model_chat` composed in the client
+(ADR-0034 clause 1, for the third time), so the protocol still has exactly one
+free-form family. And it writes; it never runs.
 
-**Two assumptions, judged apart.** [A40](../product/assumptions.md) is the
-corpus half and its harness comes first: replay real commands, hide the tail
-after *k* characters, measure top-1 and top-5 against the baseline of your own
-shell history — which is what every existing tool gives you free.
-[A41](../product/assumptions.md) is the drafted half, and its doubt is not
-whether a model can write the command but that the competition is **two panes
-away and already running**: an agent that would write it, run it, read the
-output and fix it. What distinguishes this row is narrow and worth saying out
-loud — you want the command in **your** shell and **your** history, not run
-inside somebody's session.
+**Three things the build decided.** The reply is **parsed** rather than
+rendered, because a fence or a copied `$` must not reach a shell line. **`NO` is
+an answer** — a made-up command is worse than none, and the prompt asks for the
+refusal explicitly. And a line that deletes, overwrites or elevates is
+**marked**, not blocked: a list of patterns is not a security boundary, the code
+says so, and the reason to mark anything is that the hazard of this feature is a
+plausible-looking line one keypress from a real shell.
+
+**Verified live**, and precisely as far as it goes: against a daemon on its own
+database, *"grep xyz and sort by the first column"* came back as
+`grep xyz <file> | sort -k1,1` from the local Qwen — using the placeholder the
+prompt asks for rather than inventing a filename. The **accept** step is covered
+by tests and by construction, being the same `ptyWrite` every keystroke already
+takes, but is not verified in a live pty: a browser tab has none, and installing
+the desktop build is the owner's to run.
+
+`A41` is the surviving bet and no harness can settle it — whether a command
+written to order beats typing it, with an agent open two panes away. It goes to
+the fortnight with the rest.
