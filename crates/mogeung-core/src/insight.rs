@@ -165,6 +165,33 @@ pub struct RecurringFailure {
     pub count: u32,
 }
 
+/// Recurring failures grouped by **meaning** rather than by literal text.
+/// `R-F4` by meaning, `R-O6`, [A38](../../../docs/product/assumptions.md).
+///
+/// The literal list is the incumbent and stays exactly as it is; this is a
+/// second grouping you switch to, never a blend —
+/// [pillar K](../../../docs/product/roadmap.md#k-explicitly-not), for the
+/// reason `--bin judge --recall` measured: the two engines disagree, so a mix
+/// would look authoritative while being neither.
+///
+/// **A cluster is always expandable to what it joined.** That is the row's own
+/// requirement and the only thing that makes the join checkable: a claim that
+/// six errors are the same error is worth nothing if you cannot read the six.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailureCluster {
+    /// The largest member's example, verbatim — the group's face.
+    ///
+    /// Not a model-written summary: a label nobody can check is a claim, and
+    /// `R-N7`'s rule keeps model prose out of a place that reports evidence.
+    pub label: String,
+    /// Every literal group joined into this one, largest first.
+    pub members: Vec<RecurringFailure>,
+    /// Distinct sessions across all members.
+    pub sessions: Vec<String>,
+    /// Total occurrences across all members.
+    pub count: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Prompt library (R-F6)
 // ---------------------------------------------------------------------------

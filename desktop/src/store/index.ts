@@ -44,6 +44,7 @@ import type {
   Health,
   Note,
   PromptCluster,
+  FailureCluster,
   RecurringFailure,
   RefsInfo,
   ReflogEntry,
@@ -384,6 +385,18 @@ export interface InsightState {
   analytics: Analytics | null;
   prompts: PromptCluster[] | null;
   failures: RecurringFailure[] | null;
+  /**
+   * The same failures grouped by **meaning**. `R-F4` by meaning, `R-O6`.
+   *
+   * Held beside `failures` rather than replacing them: the literal list is the
+   * incumbent and is what shows without a model, and the two are never blended
+   * — pillar K, with `--bin judge --recall`'s numbers behind it.
+   */
+  failureClusters: FailureCluster[] | null;
+  failureClustersPending: boolean;
+  /** What grouped them, and why there is nothing when there is nothing. */
+  clusterModel: string;
+  clusterRefusal: string | null;
   decisions: Record<SessionId, DecisionCandidate[]>;
   fileQuery: string;
   fileSessions: [string, FileSession[]] | null;
@@ -408,6 +421,10 @@ const emptyInsight = (): InsightState => ({
   analytics: null,
   prompts: null,
   failures: null,
+  failureClusters: null,
+  failureClustersPending: false,
+  clusterModel: "",
+  clusterRefusal: null,
   decisions: {},
   fileQuery: "",
   fileSessions: null,
@@ -1875,6 +1892,18 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
       }
+      case "failure_clusters":
+        set((st) => ({
+          insight: {
+            ...st.insight,
+            failureClusters: msg.clusters,
+            failureClustersPending: false,
+            clusterModel: msg.model,
+            clusterRefusal: msg.refusal ?? null,
+          },
+        }));
+        break;
+
       case "semantic_results":
         set((st) => ({
           insight: {

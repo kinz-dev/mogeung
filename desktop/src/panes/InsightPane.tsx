@@ -352,6 +352,102 @@ function Analytics() {
 }
 
 
+
+/**
+ * The same failures, grouped by meaning. `R-F4` by meaning, `R-O6`.
+ *
+ * The literal list below this is the incumbent and is untouched — this is a
+ * **second** grouping you switch to, which is
+ * [pillar K](../../../docs/product/roadmap.md#k-explicitly-not)'s refusal of a
+ * blend applied to a list rather than to an ordering.
+ *
+ * What it adds is the join no normalisation can make: `(eval):1: unmatched '`
+ * and `(eval):1: == not found` are one mistake and share not one distinctive
+ * word, so the literal list files them as two failures and a third spelling
+ * makes a third row. `--bin judge --clusters` over 232 literal groups on this
+ * machine put nine spellings of that shell error in one cluster, five of a
+ * browser timeout, four of a two-minute command timeout.
+ *
+ * **Every cluster expands to what it joined**, and that is not a nicety: a
+ * claim that nine errors are one error is worth nothing if you cannot read the
+ * nine. The label is the largest member verbatim rather than a model's summary,
+ * for the same reason.
+ */
+function FailuresByMeaning({ insight }: { insight: InsightState }) {
+  const send = useStore((s) => s.send);
+  const [open, setOpen] = useState<number | null>(null);
+  const clusters = insight.failureClusters;
+
+  const ask = () => {
+    useStore.setState((st) => ({
+      insight: { ...st.insight, failureClustersPending: true },
+    }));
+    send({ cmd: "cluster_failures", min_sessions: 1 });
+  };
+
+  return (
+    <div className="border-b border-[var(--border)] px-2 py-1">
+      <div className="flex items-center gap-2">
+        <Dim className="text-2xs">
+          by meaning — the same failure worded two ways is one row here
+        </Dim>
+        {insight.clusterModel && <Dim className="text-2xs">· {insight.clusterModel}</Dim>}
+        <button
+          type="button"
+          disabled={insight.failureClustersPending}
+          onClick={ask}
+          className={cn(
+            interactive,
+            "ml-auto rounded-sm border border-[var(--border)] px-2 py-0.5 text-2xs disabled:opacity-50",
+          )}
+        >
+          {insight.failureClustersPending
+            ? "grouping…"
+            : clusters
+              ? "regroup"
+              : "group by meaning"}
+        </button>
+      </div>
+      {insight.clusterRefusal && (
+        <Dim className="mt-1 block text-2xs">{insight.clusterRefusal}</Dim>
+      )}
+      {clusters?.map((c, i) => {
+        // A cluster of one joined nothing, and saying so would be claiming
+        // work that was not done. Those stay in the literal list below.
+        if (c.members.length < 2) return null;
+        return (
+          <div key={i} className="mt-1 border-t border-[var(--border)] pt-1">
+            <button
+              type="button"
+              onClick={() => setOpen(open === i ? null : i)}
+              className={cn(interactive, "flex w-full items-center gap-2 rounded-sm text-left")}
+            >
+              <Chip color="var(--red)">×{c.count}</Chip>
+              <Dim className="text-2xs">
+                {c.members.length} wordings · {c.sessions.length} session(s)
+              </Dim>
+              <Mono className="min-w-0 flex-1 truncate text-xs text-[var(--del-fg)]">
+                {oneLine(c.label, 200)}
+              </Mono>
+              <Dim className="text-2xs">{open === i ? "hide" : "what was joined"}</Dim>
+            </button>
+            {open === i && (
+              <div className="mt-1 border-l-2 border-[var(--border)] pl-2">
+                {c.members.map((m, j) => (
+                  <div key={j} className="py-0.5">
+                    <Dim className="text-2xs">×{m.count}</Dim>{" "}
+                    <Mono className="text-2xs">{oneLine(m.example, 200)}</Mono>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * The **similar** list. `R-O6`, and the label is the feature.
  *
@@ -667,6 +763,7 @@ export function InsightPane() {
 
         {view === "failures" && (
           <>
+            <FailuresByMeaning insight={insight} />
             <CountBars
               title="The same error, again"
               hint="the twelve most recurrent, by how many times they appear"

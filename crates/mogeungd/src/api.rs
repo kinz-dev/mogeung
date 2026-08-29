@@ -1321,6 +1321,37 @@ async fn handle(
                 send_reply(&reply, semantic_reply(&state, query).await);
             });
         }
+        // Failures by meaning. `R-F4` by meaning, `R-O6`.
+        //
+        // A second grouping the panel switches to — the literal list is
+        // untouched and is what shows without a model, which is pillar K's
+        // refusal of a blend applied to a list rather than to an ordering.
+        ClientMsg::ClusterFailures { min_sessions } => {
+            let state = state.clone();
+            let reply = reply.clone();
+            tokio::spawn(async move {
+                let root = state.claude_home.join("projects");
+                let min = min_sessions.max(1);
+                let failures =
+                    tokio::task::spawn_blocking(move || crate::insight::recurring_failures(&root, min))
+                        .await
+                        .unwrap_or_default();
+                let settings = state.model.settings();
+                let msg = match crate::embed::cluster_failures(&settings, failures).await {
+                    Ok(clusters) => ServerMsg::FailureClusters {
+                        clusters,
+                        model: settings.embed_model.clone().unwrap_or_default(),
+                        refusal: None,
+                    },
+                    Err(e) => ServerMsg::FailureClusters {
+                        clusters: Vec::new(),
+                        model: String::new(),
+                        refusal: Some(e),
+                    },
+                };
+                send_reply(&reply, msg);
+            });
+        }
         ClientMsg::BuildSemanticIndex {} => {
             let state = state.clone();
             let reply = reply.clone();

@@ -372,6 +372,21 @@ export interface ProxyHealth {
 }
 
 /**
+ * Recurring failures that mean the same thing. `R-F4` by meaning.
+ *
+ * A cluster always carries the literal groups it joined, because a claim that
+ * six errors are one error is worth nothing if you cannot read the six. The
+ * label is the largest member **verbatim**, never a model's summary: a label
+ * nobody can check is a claim rather than evidence.
+ */
+export interface FailureCluster {
+  label: string;
+  members: RecurringFailure[];
+  sessions: string[];
+  count: number;
+}
+
+/**
  * One hit of the semantic list. `R-O6`.
  *
  * Shaped like `SearchHit` so the two lists read as two answers to one question.
@@ -1142,6 +1157,8 @@ export type ClientMsg =
   | { cmd: "semantic_search"; query: string }
   /** Build or rebuild the index — asked for, never automatic. `R-O6`. */
   | { cmd: "build_semantic_index" }
+  /** Recurring failures grouped by meaning. `R-F4` by meaning, `R-O6`. */
+  | { cmd: "cluster_failures"; min_sessions?: number }
   | { cmd: "config_get" }
   | { cmd: "config_save"; text: string }
   | { cmd: "git_resolve"; session_id: SessionId; path: string; side: ResolveSide }
@@ -1281,6 +1298,13 @@ export type ServerMsg =
       model: string;
       built_ms: number;
       stale: boolean;
+      refusal: string | null;
+    }
+  /** Failures grouped by meaning. `R-F4` by meaning. */
+  | {
+      ev: "failure_clusters";
+      clusters: FailureCluster[];
+      model: string;
       refusal: string | null;
     }
   /** One `send_to_session` landed, and where. `R-B54`. */

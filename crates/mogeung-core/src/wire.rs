@@ -368,6 +368,15 @@ pub enum ClientMsg {
     /// question are different acts with different costs: the build embeds
     /// thousands of lines and is asked for, the query embeds one and answers.
     SemanticSearch { query: String },
+    /// Recurring failures grouped by meaning. `R-F4` by meaning, `R-O6`.
+    ///
+    /// A **second** grouping the panel switches to, computed on demand: it
+    /// embeds one text per literal group, which is a model call and therefore
+    /// asked for rather than volunteered.
+    ClusterFailures {
+        #[serde(default)]
+        min_sessions: usize,
+    },
     /// Build or rebuild the index. `R-O6`.
     ///
     /// Never on the scan tick and never on a query — ADR-0031 clause 6 keeps
@@ -1253,6 +1262,18 @@ pub enum ServerMsg {
         built_ms: i64,
         /// The corpus has changed since the index was built.
         stale: bool,
+        refusal: Option<String>,
+    },
+
+    /// Failures grouped by meaning. `R-F4` by meaning.
+    ///
+    /// `refusal` carries why there is nothing — no `embed_model`, or an
+    /// endpoint that would not answer — because an empty list with no reason
+    /// reads as *nothing recurs*, which is a claim rather than a state.
+    FailureClusters {
+        clusters: Vec<crate::insight::FailureCluster>,
+        /// What did the grouping, shown wherever the grouping is.
+        model: String,
         refusal: Option<String>,
     },
 

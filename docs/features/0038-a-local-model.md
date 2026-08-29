@@ -180,7 +180,7 @@ sentence an agent can act on is still done by hand, in the window, every time.
       hits, and says which model produced the index and when it was built
 - [x] An index older than the corpus says so rather than answering as though
       current
-- [ ] Recurring-failure rows (`R-F4`) cluster failures that share meaning
+- [x] Recurring-failure rows (`R-F4`) cluster failures that share meaning
       rather than literal text, and every cluster can be expanded to the
       literal strings that were joined
 
@@ -654,3 +654,38 @@ index sits still, which is exactly what it exists to say.
 **What is not built:** `R-F4`'s clustering of recurring failures by meaning,
 which is `A38`'s other half and still untested. The embeddings are here for it
 now, and it takes its own verdict.
+
+### `R-F4` by meaning, built 2026-08-29 — `A38`'s other half
+
+**Measured before it was drawn, like the rest of the pillar.** `--bin judge
+--clusters` prints every join it would make at three thresholds and counts them,
+and judges nothing: whether a join is *true* is a human's call and belongs in the
+roadmap row.
+
+**What 232 literal groups said.** At `0.85`: 20 clusters joining 32 rows, and
+the joins are the ones no normalisation can make — nine spellings of one shell
+error (`(eval):1: == not found`, `unmatched '`, `==codex.rs not found`), five of
+a browser timeout, four of a two-minute command timeout. They share not one
+distinctive word, which is precisely why the literal list files each as its own
+failure and a fresh wording makes a fresh row.
+
+**The threshold is a finding, not a setting.** At `0.75` the *zsh rejected my
+command* family swallows two different mistakes — a bad glob and an unquoted
+`==` — which is coarser than a panel should assert on its own. At `0.92` almost
+nothing joins and the feature is a rename of the list that already exists. The
+shipped default is `0.85` and the constant says why.
+
+**Greedy single-link against a seed, not agglomerative.** Each group joins the
+first cluster whose *seed* it is close enough to, so a chain of near-misses
+cannot walk a cluster across the space — which is how *timeout* and *permission
+denied* end up in one row and the panel starts lying. There is a test for the
+chain.
+
+**Three honesty rules the panel keeps**: every cluster expands to what it joined
+(a claim that nine errors are one error is worth nothing if you cannot read the
+nine); the label is the largest member **verbatim** rather than a model's
+summary, which is `R-N7`'s rule kept where it would have been easiest to break;
+and a cluster of one is not drawn as a cluster, because it joined nothing.
+
+The literal list underneath is untouched and is what shows without a model —
+the same refusal of a blend the similar list obeys.

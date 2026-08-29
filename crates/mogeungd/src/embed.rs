@@ -331,3 +331,71 @@ pub async fn search_index(
         })
         .collect())
 }
+
+/// How close two failures must be to be called the same failure.
+///
+/// **From the corpus, not from taste.** `--bin judge --clusters` over 232
+/// literal groups on this machine: at `0.75` the *zsh rejected my command*
+/// family merges two different mistakes — a bad glob and an unquoted `==` —
+/// which is a coarser statement than a panel should make on its own. At `0.85`
+/// those separate and the joins that remain are the same failure worded
+/// differently: nine spellings of one shell error, five of a browser timeout,
+/// four of a two-minute command timeout. At `0.92` almost nothing joins and the
+/// feature is a rename of the list that already exists.
+pub const CLUSTER_THRESHOLD: f32 = 0.85;
+
+/// Group recurring failures by meaning. `R-F4` by meaning, `R-O6`.
+///
+/// The literal groups are the input, not the transcripts: `insight`'s
+/// normalisation has already done the cheap, checkable half of the job, and
+/// re-doing it with a model would be spending a model call to reach the same
+/// place. What this adds is the join **between** groups that no normalisation
+/// can make — *(eval):1: unmatched '* and *(eval):1: == not found* are one
+/// mistake and share not one distinctive word.
+pub async fn cluster_failures(
+    settings: &ModelSettings,
+    failures: Vec<mogeung_core::insight::RecurringFailure>,
+) -> Result<Vec<mogeung_core::insight::FailureCluster>, String> {
+    use mogeung_core::insight::FailureCluster;
+    if failures.is_empty() {
+        return Ok(Vec::new());
+    }
+    // The **example** rather than the normalised key: normalisation replaces
+    // the digits and paths, so embedding the key would embed the normaliser.
+    let texts: Vec<String> = failures.iter().map(|f| f.example.clone()).collect();
+    let vectors = embed(settings, &texts).await?;
+    if vectors.len() != failures.len() {
+        return Err(format!(
+            "the endpoint returned {} vectors for {} groups",
+            vectors.len(),
+            failures.len()
+        ));
+    }
+    let mut out: Vec<FailureCluster> = cluster(&vectors, CLUSTER_THRESHOLD)
+        .into_iter()
+        .map(|group| {
+            let mut members: Vec<_> = group.iter().map(|&i| failures[i].clone()).collect();
+            // Largest first, so the face of the cluster is the failure you have
+            // actually been hitting rather than whichever one was seen first.
+            members.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.example.cmp(&b.example)));
+            let mut sessions: Vec<String> =
+                members.iter().flat_map(|m| m.sessions.clone()).collect();
+            sessions.sort();
+            sessions.dedup();
+            FailureCluster {
+                label: members[0].example.clone(),
+                count: members.iter().map(|m| m.count).sum(),
+                sessions,
+                members,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.sessions
+            .len()
+            .cmp(&a.sessions.len())
+            .then_with(|| b.count.cmp(&a.count))
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    Ok(out)
+}
