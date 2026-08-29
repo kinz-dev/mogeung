@@ -433,6 +433,37 @@ Not on the scan tick, and not on selection: the guide is asked for by a button.
 It spends a model call of up to a minute, and ADR-0031 clause 6 keeps model
 work off anything that runs on its own.
 
+## The similar list (`R-O6`)
+
+| Direction | Message | Notes |
+|---|---|---|
+| → | `semantic_search { query }` | one query, embedded and ranked |
+| → | `build_semantic_index {}` | asked for, never automatic |
+| ← | `semantic_results { query, hits, model, built_ms, stale, refusal }` | asking socket only |
+
+**Two commands rather than one**, because building an index and asking it a
+question are different acts with different costs: a build embeds thousands of
+lines and takes minutes, a query embeds one. Neither happens on the scan tick —
+ADR-0031 clause 6, and `R-J8`'s rule that the poll loop does no work.
+
+**The reply carries its own provenance**, and for once that is the feature
+rather than a caution: `model` and `built_ms` say what built the index and when,
+and `stale` says the corpus has grown since. An index is a photograph of
+something that keeps moving, and a list that answered as though current would be
+wrong in the direction nobody checks.
+
+**`refusal` is why there is nothing.** No `embed_model`, no index yet, an
+endpoint that would not answer — each is a sentence, because an empty list with
+no reason reads as *there is nothing similar*, which is a claim rather than a
+state.
+
+`SemanticHit` is shaped like `SearchHit` — same session, same line, same
+timestamp to open the Transcript with — so the two lists read as two answers to
+one question. What it adds is `score`; what it never gets is the word *matches*.
+`--bin judge --recall` is why: over this corpus the index found 7 of 11
+paraphrased queries where grep found 0, and on literal slices grep found 10 of
+11 where the index found 5. Complementary, and neither dominates.
+
 ## The chat history (`R-O9`)
 
 `model_chat` grew a `conversation` field, and omitting it means what it has

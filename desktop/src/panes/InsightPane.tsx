@@ -30,9 +30,11 @@ import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, Empty, Input, Mono, Row } from "@/ui/primitives";
 import { compact, num, oneLine, stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { interactive } from "@/ui/styles";
 import { rank, winner } from "@/lib/search";
 import { costSeries } from "@/lib/cost";
-import type { UsageReport } from "@/wire/types";
+import type { Session, UsageReport } from "@/wire/types";
+import type { InsightState } from "@/store";
 import { KitView } from "@/panes/KitView";
 
 type View =
@@ -349,6 +351,129 @@ function Analytics() {
   );
 }
 
+
+/**
+ * The **similar** list. `R-O6`, and the label is the feature.
+ *
+ * It sits under grep's results and never mixes with them, which is
+ * [pillar K](../../../docs/product/roadmap.md#k-explicitly-not)'s refusal of a
+ * blend — this time with a measurement behind it. `--bin judge --recall` over
+ * 337 lines of this corpus: on paraphrased queries the index found 7 of 11
+ * where grep found 0, and on literal slices grep found 10 of 11 where the index
+ * found 5. **Complementary, and neither dominates** — so a merged list would be
+ * worse than either, and the word *matches* would be a claim the measurement
+ * refutes.
+ *
+ * Three things the row required and the corpus confirmed: the list says which
+ * model built the index and when; an index older than the corpus **says so**
+ * rather than answering as though current; and the score is on the row, because
+ * a list whose fifth hit looks like its first invites trust it has not earned.
+ */
+function SimilarList({
+  insight,
+  sessions,
+  select,
+}: {
+  insight: InsightState;
+  sessions: Record<string, Session>;
+  select: (id: string) => void;
+}) {
+  const send = useStore((s) => s.send);
+  const patch = (p: Partial<InsightState>) =>
+    useStore.setState((st) => ({ insight: { ...st.insight, ...p } }));
+
+  const build = () => {
+    patch({ indexBuilding: true });
+    send({ cmd: "build_semantic_index" });
+  };
+
+  // No index is a state with an action, not an error. The button says what it
+  // costs, because it embeds thousands of lines and takes minutes.
+  if (insight.indexBuiltMs === 0) {
+    return (
+      <div className="border-t border-[var(--border)] px-2 py-2">
+        <Dim className="block text-2xs">
+          similar — a second list beside these, from embeddings. Never instead of them
+        </Dim>
+        <button
+          type="button"
+          disabled={insight.indexBuilding}
+          onClick={build}
+          className={cn(
+            interactive,
+            "mt-1 rounded-sm border border-[var(--border)] px-2 py-0.5 text-2xs disabled:opacity-50",
+          )}
+        >
+          {insight.indexBuilding ? "building the index…" : "build the index"}
+        </button>
+        {insight.similarRefusal && (
+          <Dim className="mt-1 block text-2xs">{insight.similarRefusal}</Dim>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-[var(--border)]">
+      <div className="flex items-center gap-2 px-2 py-1">
+        <Dim className="text-2xs">
+          similar — {insight.similar?.[1].length ?? 0} row(s), by meaning rather than by text
+        </Dim>
+        <Dim className="ml-auto text-2xs">
+          {insight.indexModel}, {stamp(new Date(insight.indexBuiltMs).toISOString())}
+        </Dim>
+        <button
+          type="button"
+          disabled={insight.indexBuilding}
+          title="rebuild from the corpus as it is now"
+          onClick={build}
+          className={cn(interactive, "rounded-sm px-1 text-2xs text-[var(--dim)] disabled:opacity-50")}
+        >
+          {insight.indexBuilding ? "rebuilding…" : "rebuild"}
+        </button>
+      </div>
+      {/*
+        An index is a photograph of a corpus that keeps growing. Saying so is
+        the row's own requirement — a list that answered as though current would
+        be wrong in the direction nobody checks.
+      */}
+      {insight.indexStale && (
+        <div className="px-2 pb-1 text-2xs text-[var(--amber)]">
+          the corpus has changed since this index was built — these are the sessions as
+          they were then
+        </div>
+      )}
+      {insight.similarPending && <Dim className="block px-2 pb-1 text-2xs">looking…</Dim>}
+      {insight.similarRefusal && (
+        <div className="px-2 pb-1 text-2xs text-[var(--dim)]">{insight.similarRefusal}</div>
+      )}
+      {insight.similar?.[1].map((h, i) => (
+        <Row
+          key={`${h.session_id}:${h.line}:${i}`}
+          onClick={() => {
+            if (!sessions[h.session_id]) return;
+            select(h.session_id);
+            useStore.setState({ focusEventTs: h.timestamp });
+          }}
+          className="flex gap-2 border-b border-[var(--border)] py-0.5"
+        >
+          <Dim className="w-10 shrink-0 text-2xs">{h.score.toFixed(2)}</Dim>
+          <Dim className="w-32 shrink-0 truncate text-2xs">
+            {h.session_id.slice(0, 8)} {h.timestamp ? stamp(h.timestamp) : ""}
+          </Dim>
+          <Mono className="min-w-0 flex-1 truncate text-xs">{h.preview}</Mono>
+        </Row>
+      ))}
+      {insight.similar && insight.similar[1].length === 0 && !insight.similarPending && (
+        <Dim className="block px-2 pb-1 text-2xs">
+          nothing in the index is close to that — which is a different answer from grep
+          finding nothing
+        </Dim>
+      )}
+    </div>
+  );
+}
+
 export function InsightPane() {
   const [view, setView] = useState<View>("analytics");
   const insight = useStore((s) => s.insight);
@@ -402,6 +527,13 @@ export function InsightPane() {
                     if (e.key !== "Enter" || !insight.query.trim()) return;
                     patch({ searchPending: true });
                     send({ cmd: "insight_search", query: insight.query.trim() });
+                    // Both engines, one box, two lists. The semantic ask is
+                    // skipped entirely when there is no index rather than sent
+                    // to be refused — a refusal per keystroke is noise.
+                    if (insight.indexBuiltMs > 0) {
+                      patch({ similarPending: true });
+                      send({ cmd: "semantic_search", query: insight.query.trim() });
+                    }
                   }}
                 />
               </div>
@@ -437,6 +569,13 @@ export function InsightPane() {
                   ))}
                 </>
               )}
+              {/*
+                Outside the results branch on purpose: with no index and no
+                search there would otherwise be no way to build one, and a
+                feature you can only reach by already having used it is a
+                feature nobody finds.
+              */}
+              <SimilarList insight={insight} sessions={sessions} select={select} />
             </div>
           </>
         )}

@@ -175,10 +175,10 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O6` — semantic search as a second list**
 
-- [ ] The Insight search panel keeps its grep results, first and unchanged
-- [ ] A second list, labelled **similar** and never *matches*, shows semantic
+- [x] The Insight search panel keeps its grep results, first and unchanged
+- [x] A second list, labelled **similar** and never *matches*, shows semantic
       hits, and says which model produced the index and when it was built
-- [ ] An index older than the corpus says so rather than answering as though
+- [x] An index older than the corpus says so rather than answering as though
       current
 - [ ] Recurring-failure rows (`R-F4`) cluster failures that share meaning
       rather than literal text, and every cluster can be expanded to the
@@ -258,7 +258,8 @@ never make the poll loop do work).
 | `crates/mogeungd/src/bin/judge.rs` | New — `R-O2`'s harness |
 | `crates/mogeungd/src/why.rs` | New — `R-O4`'s retrieval, prompt and parser, shared with its harness |
 | `crates/mogeungd/src/bin/why.rs` | New — `A36`'s test, `R-O4`'s first commit |
-| `crates/mogeungd/src/embed.rs` | New — embeddings on `model_url`'s own host, cosine, nearest |
+| `crates/mogeungd/src/embed.rs` | New — embeddings on `model_url`'s own host, cosine, nearest, the index |
+| `crates/mogeungd/src/store.rs` | `semantic_index` and `semantic_meta` — a cache, replaced wholesale |
 | `desktop/src/panes/ChangesPane.tsx` | The guide, the reason column, the fallback toggle |
 | `desktop/src/ui/DiffView.tsx` | Ask-from-a-hunk, citations that open the Transcript |
 | `crates/mogeungd/src/api.rs` | `ask_about` — the retrieval, the labels, `R-O4` |
@@ -605,3 +606,51 @@ bypassed by a spelling. `--embed-model` exists so the measurement could run
 `deny_unknown_fields`, so writing it stops an older installed daemon parsing the
 file at all, and a harness that requires you to break the running product first
 is one nobody runs.
+
+### `R-O6`'s second list, built 2026-08-29
+
+**The harness wrote the rules, and the panel obeys them.** Every choice below is
+a consequence of `--bin judge --recall` rather than a preference:
+
+- **The two lists never merge.** Grep's results stay first and unchanged;
+  *similar* is a section underneath. The index ranked away half of what grep
+  found on literal queries, so a blend would be worse than either — pillar K's
+  refusal of the middle, this time with numbers behind it.
+- **Labelled `similar`, never *matches*.** The word would be a claim the
+  measurement refutes.
+- **The score is on the row**, because a list whose fifth hit looks like its
+  first invites trust it has not earned.
+- **The model and the build time are stated**, and an index older than the
+  corpus says so rather than answering as though current.
+
+**Two pairs of states that look alike are told apart.** *Nothing in the index is
+close to that* is a different answer from grep finding nothing, and both are
+different from *there is no index yet* — which is a state with a button, not an
+empty list. The daemon's refusals are rendered verbatim, as everywhere else.
+
+**The index is a cache and is treated as one.** It is dropped and rewritten
+wholesale rather than migrated: a half-rebuilt index mixes two models in a space
+the cosine assumes is one, and the only thing lost by deleting it is minutes of
+embedding. Vectors are little-endian `f32` blobs in SQLite; ranking is a
+whole-table scan, because a few thousand cosines is a millisecond and an
+approximate index would be a dependency and a second thing to be wrong about,
+bought for nothing at this size. Built on an explicit click, never on the scan
+tick — ADR-0031 clause 6, and `R-J8`'s rule.
+
+**One thing found by using it:** the build affordance was inside the results
+branch, so the only way to reach it was to have already searched — a feature
+reachable only by having used it is one nobody finds. It now sits outside, and
+the test that pins it renders the pane with nothing searched.
+
+**Verified live** against a daemon on its own database, with `embed_model` in a
+scratch config rather than the real one — `Config` is `deny_unknown_fields`, so
+writing the key would stop the installed daemon parsing the file until it is
+replaced. The index built from the window in about a minute, and *"how do I get
+logs out of a kubernetes pod"* returned **0 grep hits across 247 files and 8
+similar rows**: kubectl prompts sharing almost no words with the query, one of
+them misspelt. The staleness line was correctly on — the corpus moves while an
+index sits still, which is exactly what it exists to say.
+
+**What is not built:** `R-F4`'s clustering of recurring failures by meaning,
+which is `A38`'s other half and still untested. The embeddings are here for it
+now, and it takes its own verdict.

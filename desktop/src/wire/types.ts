@@ -371,6 +371,24 @@ export interface ProxyHealth {
   forwards_to: string[];
 }
 
+/**
+ * One hit of the semantic list. `R-O6`.
+ *
+ * Shaped like `SearchHit` so the two lists read as two answers to one question.
+ * It is **similar**, never *matches* — `--bin judge --recall` measured why: the
+ * index ranked away half of what grep found on literal queries, so a list that
+ * claimed to match would be claiming something it had been shown not to do.
+ */
+export interface SemanticHit {
+  session_id: string;
+  line: number;
+  role: string;
+  timestamp: string | null;
+  preview: string;
+  /** Cosine similarity, shown rather than hidden. */
+  score: number;
+}
+
 /** What an `R-O4` question is about — ids, as this protocol always names things. */
 export interface AskAbout {
   session_id: string;
@@ -1120,6 +1138,10 @@ export type ClientMsg =
    * off loopback with no flag.
    */
   | { cmd: "send_to_session"; session_id: string; text: string }
+  /** The **similar** list, beside grep's. `R-O6`. */
+  | { cmd: "semantic_search"; query: string }
+  /** Build or rebuild the index — asked for, never automatic. `R-O6`. */
+  | { cmd: "build_semantic_index" }
   | { cmd: "config_get" }
   | { cmd: "config_save"; text: string }
   | { cmd: "git_resolve"; session_id: SessionId; path: string; side: ResolveSide }
@@ -1251,6 +1273,16 @@ export type ServerMsg =
    * costs a moment of jitter rather than a corrupted answer, and a client that
    * ignores them entirely still works.
    */
+  /** The **similar** list. `R-O6`. */
+  | {
+      ev: "semantic_results";
+      query: string;
+      hits: SemanticHit[];
+      model: string;
+      built_ms: number;
+      stale: boolean;
+      refusal: string | null;
+    }
   /** One `send_to_session` landed, and where. `R-B54`. */
   | { ev: "sent_to_session"; session_id: string; target: string }
   | { ev: "model_chunk"; id: string; delta: string }

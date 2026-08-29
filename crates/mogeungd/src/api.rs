@@ -432,6 +432,81 @@ fn send_refusal(state: &AppState) -> Option<String> {
     )
 }
 
+/// One answer for the **similar** list, refusals included. `R-O6`.
+///
+/// Every silence is a sentence: no embedding model configured, no index built,
+/// or an endpoint that would not answer. An empty list with no reason is the
+/// shape that gets reported as a bug, and — worse for this feature — the shape
+/// that reads as *there is nothing similar*, which is a claim rather than a
+/// state.
+async fn semantic_reply(state: &Arc<AppState>, query: String) -> ServerMsg {
+    let (model, built_ms) = state.store.semantic_meta().unwrap_or_default();
+    // An index is a photograph of a corpus that keeps growing. Compared against
+    // the newest transcript rather than a count, because a file that grew is a
+    // change the index cannot see and a count would miss.
+    let stale = built_ms > 0 && newest_corpus_ms(&state.claude_home) > built_ms;
+    let settings = state.model.settings();
+    if query.trim().is_empty() {
+        return ServerMsg::SemanticResults {
+            query,
+            hits: Vec::new(),
+            model,
+            built_ms,
+            stale,
+            refusal: None,
+        };
+    }
+    match crate::embed::search_index(&settings, &state.store, &query).await {
+        Ok(hits) => ServerMsg::SemanticResults {
+            query,
+            hits,
+            model,
+            built_ms,
+            stale,
+            refusal: None,
+        },
+        Err(e) => ServerMsg::SemanticResults {
+            query,
+            hits: Vec::new(),
+            model,
+            built_ms,
+            stale,
+            refusal: Some(e),
+        },
+    }
+}
+
+/// The newest modification time anywhere in the corpus, in epoch milliseconds.
+fn newest_corpus_ms(home: &std::path::Path) -> i64 {
+    fn walk(dir: &std::path::Path, depth: u8, newest: &mut i64) {
+        if depth > 4 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let p = e.path();
+            if ft.is_dir() {
+                walk(&p, depth + 1, newest);
+            } else if p.extension().is_some_and(|x| x == "jsonl") {
+                if let Ok(ms) = e.metadata().and_then(|m| m.modified()) {
+                    if let Ok(d) = ms.duration_since(std::time::UNIX_EPOCH) {
+                        *newest = (*newest).max(d.as_millis() as i64);
+                    }
+                }
+            }
+        }
+    }
+    let mut newest = 0i64;
+    walk(&home.join("projects"), 0, &mut newest);
+    if let Ok(m) = std::fs::metadata(home.join("history.jsonl")).and_then(|m| m.modified()) {
+        if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
+            newest = newest.max(d.as_millis() as i64);
+        }
+    }
+    newest
+}
+
 /// The config file as the editor sees it.
 fn config_msg(state: &AppState, error: Option<String>, saved: bool) -> ServerMsg {
     let path = mogeung_core::config::Config::path();
@@ -1232,6 +1307,35 @@ async fn handle(
                 Ok(()) => send_reply(&reply, ServerMsg::SentToSession { session_id, target }),
                 Err(e) => return err(e),
             }
+        }
+        // The second list, and the index behind it. `R-O6`.
+        //
+        // Spawned rather than awaited for `R-O5`'s reason — a build embeds
+        // thousands of lines and a read loop waiting on it would freeze the
+        // window — and **asked for** rather than automatic: ADR-0031 clause 6
+        // keeps model work off anything that runs on its own.
+        ClientMsg::SemanticSearch { query } => {
+            let state = state.clone();
+            let reply = reply.clone();
+            tokio::spawn(async move {
+                send_reply(&reply, semantic_reply(&state, query).await);
+            });
+        }
+        ClientMsg::BuildSemanticIndex {} => {
+            let state = state.clone();
+            let reply = reply.clone();
+            tokio::spawn(async move {
+                let settings = state.model.settings();
+                let root = state.claude_home.join("projects");
+                let history = state.claude_home.join("history.jsonl");
+                match crate::embed::build_index(&settings, &state.store, &root, &history).await {
+                    // Answered with an empty query, so the panel learns what
+                    // the index now is — model, age, size — without having to
+                    // ask a question it does not have yet.
+                    Ok(_) => send_reply(&reply, semantic_reply(&state, String::new()).await),
+                    Err(e) => send_reply(&reply, ServerMsg::Error { message: e }),
+                }
+            });
         }
         ClientMsg::ConfigGet {} => send_reply(&reply, config_msg(&state, None, false)),
         ClientMsg::ConfigSave { text } => {

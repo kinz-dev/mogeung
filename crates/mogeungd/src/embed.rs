@@ -166,3 +166,113 @@ mod tests {
         assert_eq!(clip(&long).chars().count(), MAX_CHARS);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The index (R-O6)
+// ---------------------------------------------------------------------------
+
+/// How much of the corpus is indexed.
+///
+/// A bound rather than everything, and stated where a reader can see it: a
+/// vector is ~4 KB, so this is tens of megabytes of database for a corpus of
+/// hundreds of sessions. The list says how many lines it searched, because a
+/// *similar* list that quietly covers a tenth of the corpus is worse than no
+/// list — it looks like an answer.
+pub const INDEX_LINES: usize = 4_000;
+
+/// The most rows a query answers with.
+pub const TOP_K: usize = 8;
+
+/// Below this a "similar" hit is noise wearing a score.
+///
+/// From the recall run rather than from taste: the answers it found ranked at
+/// 0.6 and above, and everything under that was a different subject with a
+/// shared word.
+pub const FLOOR: f32 = 0.45;
+
+/// Build the index from the corpus, and replace whatever was there. `R-O6`.
+///
+/// Asked for, never automatic — ADR-0031 clause 6, and `R-J8`'s rule that the
+/// scan tick does no work. Returns how many lines were indexed.
+pub async fn build_index(
+    settings: &ModelSettings,
+    store: &crate::store::Store,
+    projects_root: &std::path::Path,
+    history_path: &std::path::Path,
+) -> Result<usize, String> {
+    let model = settings
+        .embed_model
+        .clone()
+        .ok_or("no embed_model is configured, so there is nothing to build with")?;
+    let corpus = crate::insight::corpus_lines(projects_root, history_path, INDEX_LINES);
+    if corpus.is_empty() {
+        return Err("there is nothing in the corpus to index yet".into());
+    }
+    let texts: Vec<String> = corpus.iter().map(|c| c.text.clone()).collect();
+    let vectors = embed(settings, &texts).await?;
+    if vectors.len() != corpus.len() {
+        return Err(format!(
+            "the endpoint returned {} vectors for {} lines",
+            vectors.len(),
+            corpus.len()
+        ));
+    }
+    let rows: Vec<(String, u64, String, Option<String>, String, Vec<f32>)> = corpus
+        .iter()
+        .zip(vectors)
+        .map(|(c, v)| {
+            (
+                crate::insight::session_id_of(&c.path),
+                c.line,
+                c.role.clone(),
+                c.timestamp.map(|t| t.to_rfc3339()),
+                c.text.chars().take(300).collect::<String>(),
+                v,
+            )
+        })
+        .collect();
+    let n = rows.len();
+    let built = chrono::Utc::now().timestamp_millis();
+    store
+        .replace_semantic_index(&rows, &model, built)
+        .map_err(|e| format!("the index could not be written: {e}"))?;
+    Ok(n)
+}
+
+/// Ask the index. `R-O6`.
+pub async fn search_index(
+    settings: &ModelSettings,
+    store: &crate::store::Store,
+    query: &str,
+) -> Result<Vec<mogeung_core::wire::SemanticHit>, String> {
+    let rows = store
+        .semantic_rows()
+        .map_err(|e| format!("the index could not be read: {e}"))?;
+    if rows.is_empty() {
+        return Err("there is no index yet — build one to get a second list".into());
+    }
+    let qv = embed(settings, &[query.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("the endpoint returned no vector for that query")?;
+    let vectors: Vec<Vec<f32>> = rows.iter().map(|r| r.5.clone()).collect();
+    Ok(nearest(&qv, &vectors, TOP_K)
+        .into_iter()
+        .filter(|(_, score)| *score >= FLOOR)
+        .map(|(i, score)| {
+            let (session_id, line, role, ts, preview, _) = &rows[i];
+            mogeung_core::wire::SemanticHit {
+                session_id: session_id.clone(),
+                line: *line,
+                role: role.clone(),
+                timestamp: ts
+                    .as_deref()
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .map(|t| t.with_timezone(&chrono::Utc)),
+                preview: preview.clone(),
+                score,
+            }
+        })
+        .collect())
+}

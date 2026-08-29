@@ -362,6 +362,19 @@ pub enum ClientMsg {
         text: String,
     },
 
+    /// The **similar** list, beside grep's and never instead of it. `R-O6`.
+    ///
+    /// Two commands rather than one because building an index and asking it a
+    /// question are different acts with different costs: the build embeds
+    /// thousands of lines and is asked for, the query embeds one and answers.
+    SemanticSearch { query: String },
+    /// Build or rebuild the index. `R-O6`.
+    ///
+    /// Never on the scan tick and never on a query — ADR-0031 clause 6 keeps
+    /// model work off anything that runs on its own, and `R-J8`'s lesson is
+    /// that the poll loop does no work.
+    BuildSemanticIndex {},
+
     /// Read `~/.mogeung/config.toml`, to show it. `R-J79`.
     ConfigGet {},
 
@@ -810,6 +823,26 @@ pub enum AnswerBasis {
     Unanswered,
 }
 
+/// One hit of the semantic list. `R-O6`.
+///
+/// Shaped like [`SearchHit`](crate::insight::SearchHit) on purpose — same
+/// session, same line, same timestamp to open the Transcript with — so the two
+/// lists read as two answers to one question rather than as two features. What
+/// it adds is `score`, and what it never gets is the word *matches*: it is
+/// **similar**, and the label is the honest part.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticHit {
+    pub session_id: String,
+    pub line: u64,
+    pub role: String,
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub preview: String,
+    /// Cosine similarity, shown rather than hidden: a list whose worst row
+    /// looks like its best row invites the reader to trust the fifth one.
+    pub score: f32,
+}
+
+
 /// One kept conversation, without its turns. `R-O9`.
 ///
 /// The list is a list of *doors*, not of contents: a fortnight of asking
@@ -1201,6 +1234,26 @@ pub enum ServerMsg {
         /// Where it went, as tmux names it — shown, so *sent* can be checked
         /// against the pane the Agent tab is attached to.
         target: String,
+    },
+
+    /// The **similar** list. `R-O6`.
+    ///
+    /// Carries what built it and when, because an index is a photograph of a
+    /// corpus that keeps growing: `stale` says the corpus has moved since, and
+    /// a list that answered as though current would be quietly wrong in the
+    /// direction nobody checks. `refusal` is why there is nothing — no
+    /// `embed_model`, no index yet, or the endpoint said no — and is rendered
+    /// verbatim rather than turned into an empty list.
+    SemanticResults {
+        query: String,
+        hits: Vec<SemanticHit>,
+        /// The embedding model the index was built with.
+        model: String,
+        /// When, in epoch milliseconds. `0` when there is no index.
+        built_ms: i64,
+        /// The corpus has changed since the index was built.
+        stale: bool,
+        refusal: Option<String>,
     },
 
     /// The kept conversations, in answer to `ChatList` and `ChatDelete`.

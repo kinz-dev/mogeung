@@ -19,6 +19,7 @@ import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
   AnswerBasis,
   Citation,
+  SemanticHit,
   GuideFile,
   ChatSummary,
   Analytics,
@@ -358,6 +359,25 @@ export interface InsightState {
   query: string;
   results: [string, SearchResults] | null;
   searchPending: boolean;
+  /**
+   * The **similar** list, and everything needed to say what it is. `R-O6`.
+   *
+   * Held beside `results` rather than merged into it, which is the feature:
+   * `--bin judge --recall` found the index ranks away half of what grep finds
+   * on literal queries, so a blended list would be worse than either — pillar
+   * K's refusal of the middle, with a measurement behind it this time.
+   */
+  similar: [string, SemanticHit[]] | null;
+  similarPending: boolean;
+  /** Why there is no list: no model, no index, or an endpoint that said no. */
+  similarRefusal: string | null;
+  /** What built the index, and when. `0` means there is none. */
+  indexModel: string;
+  indexBuiltMs: number;
+  /** The corpus has grown since the index was built. */
+  indexStale: boolean;
+  /** A build is running — it embeds thousands of lines and takes minutes. */
+  indexBuilding: boolean;
   day: string;
   digest: DayDigest | null;
   digestPending: boolean;
@@ -375,6 +395,13 @@ const emptyInsight = (): InsightState => ({
   query: "",
   results: null,
   searchPending: false,
+  similar: null,
+  similarPending: false,
+  similarRefusal: null,
+  indexModel: "",
+  indexBuiltMs: 0,
+  indexStale: false,
+  indexBuilding: false,
   day: new Date().toISOString().slice(0, 10),
   digest: null,
   digestPending: false,
@@ -1848,6 +1875,27 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
       }
+      case "semantic_results":
+        set((st) => ({
+          insight: {
+            ...st.insight,
+            similarPending: false,
+            indexBuilding: false,
+            // Kept only when it answers the question on screen, the same rule
+            // the grep results follow — an answer to a query you have moved on
+            // from is a list that looks current and is not.
+            similar:
+              msg.query && msg.query === st.insight.query.trim()
+                ? [msg.query, msg.hits]
+                : st.insight.similar,
+            similarRefusal: msg.refusal ?? null,
+            indexModel: msg.model,
+            indexBuiltMs: msg.built_ms,
+            indexStale: msg.stale,
+          },
+        }));
+        break;
+
       case "day_digest_report":
         set((s) => ({
           insight: {

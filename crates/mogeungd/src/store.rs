@@ -124,6 +124,32 @@ impl Store {
             -- every transcript from byte 0 and folded the whole history in
             -- again — new `seq`s, so nothing collided, and both the event log
             -- and every counted field grew by one copy per restart.
+            -- The semantic index (`R-O6`). Rebuildable from the corpus by
+            -- construction, so it is dropped and rewritten wholesale rather
+            -- than migrated: it is a **cache of vectors**, not a record of
+            -- anything, and the only thing that could be lost by deleting it is
+            -- a few minutes of embedding.
+            --
+            -- `vec` is little-endian `f32`s. A BLOB rather than JSON because a
+            -- thousand floats per row as text is roughly ten times the bytes
+            -- and has to be parsed on every query.
+            CREATE TABLE IF NOT EXISTS semantic_index (
+                id         INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                line       INTEGER NOT NULL,
+                role       TEXT NOT NULL,
+                ts         TEXT,
+                preview    TEXT NOT NULL,
+                vec        BLOB NOT NULL
+            );
+            -- What built it and when, so the list can say — and so an index
+            -- older than the corpus can say *that* rather than answering as
+            -- though it were current.
+            CREATE TABLE IF NOT EXISTS semantic_meta (
+                k TEXT PRIMARY KEY,
+                v TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS tail_offsets (
                 path   TEXT PRIMARY KEY,
                 offset INTEGER NOT NULL
@@ -268,6 +294,99 @@ impl Store {
     pub const CHAT_KEEP: usize = 200;
 
     /// Every conversation, newest first, **without** its turns.
+    // -- The semantic index. `R-O6`. ---------------------------------------
+
+    /// Replace the index wholesale. `R-O6`.
+    ///
+    /// Wholesale because a half-rebuilt index is the one state that cannot be
+    /// reasoned about: rows from two models, or from two corpora, ranked
+    /// against each other by a cosine that assumes one vector space. The whole
+    /// thing is a cache — the cost of being wrong is minutes, and the cost of
+    /// being subtly wrong is a list nobody can trust.
+    pub fn replace_semantic_index(
+        &self,
+        rows: &[(String, u64, String, Option<String>, String, Vec<f32>)],
+        model: &str,
+        built_ms: i64,
+    ) -> Result<()> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM semantic_index", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO semantic_index (session_id, line, role, ts, preview, vec)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (session_id, line, role, ts, preview, vec) in rows {
+                let mut bytes = Vec::with_capacity(vec.len() * 4);
+                for f in vec {
+                    bytes.extend_from_slice(&f.to_le_bytes());
+                }
+                stmt.execute(params![session_id, *line as i64, role, ts, preview, bytes])?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO semantic_meta (k, v) VALUES ('model', ?1)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![model],
+        )?;
+        tx.execute(
+            "INSERT INTO semantic_meta (k, v) VALUES ('built_ms', ?1)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![built_ms.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every indexed row, for a query to rank against.
+    ///
+    /// Whole-table rather than a nearest-neighbour query, because SQLite has no
+    /// vector index and a few thousand cosines over 1024 floats is a
+    /// millisecond of arithmetic — an approximate index would be a dependency
+    /// and a second thing to be wrong about, bought for nothing at this size.
+    pub fn semantic_rows(&self) -> Result<Vec<(String, u64, String, Option<String>, String, Vec<f32>)>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare(
+            "SELECT session_id, line, role, ts, preview, vec FROM semantic_index ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let blob: Vec<u8> = r.get(5)?;
+            let vec = blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            Ok((
+                r.get(0)?,
+                r.get::<_, i64>(1)?.max(0) as u64,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                vec,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// What built the index and when, or `None` if there is no index.
+    pub fn semantic_meta(&self) -> Option<(String, i64)> {
+        let c = self.conn.lock().unwrap();
+        let get = |k: &str| -> Option<String> {
+            c.query_row("SELECT v FROM semantic_meta WHERE k = ?1", params![k], |r| r.get(0))
+                .ok()
+        };
+        let model = get("model")?;
+        let built: i64 = get("built_ms")?.parse().ok()?;
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM semantic_index", [], |r| r.get(0))
+            .unwrap_or(0);
+        (n > 0).then_some((model, built))
+    }
+
     pub fn load_chats(&self) -> Result<Vec<mogeung_core::wire::ChatSummary>> {
         let c = self.conn.lock().unwrap();
         let mut stmt = c.prepare(

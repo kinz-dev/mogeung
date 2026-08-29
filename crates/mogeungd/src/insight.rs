@@ -694,6 +694,9 @@ pub struct CorpusLine {
     /// `user`, `assistant`, or `history` for a prompt from `history.jsonl`.
     pub role: String,
     pub text: String,
+    /// The line's own timestamp, when it carried one — what opens the
+    /// Transcript at the moment, the same route every other hit takes.
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 /// A spread of the corpus as plain text, for embedding. `R-O6`, `A38`'s test.
@@ -721,6 +724,7 @@ pub fn corpus_lines(projects_root: &Path, history_path: &Path, cap: usize) -> Ve
                 line: line_no,
                 role: "history".into(),
                 text,
+                timestamp: parse_ts(&v),
             });
         }
         true
@@ -758,6 +762,7 @@ pub fn corpus_lines(projects_root: &Path, history_path: &Path, cap: usize) -> Ve
                     line: line_no,
                     role: role.into(),
                     text,
+                    timestamp: parse_ts(&v),
                 });
             }
             true
