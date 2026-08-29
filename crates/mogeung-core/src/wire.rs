@@ -336,6 +336,32 @@ pub enum ClientMsg {
         id: String,
     },
 
+    /// Deliver text into one session's own tmux pane, and press Enter.
+    /// `R-B54`, [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+    ///
+    /// **The one command in this protocol that reaches an agent's input**, and
+    /// every fence on it is in that ADR rather than here. Three matter at the
+    /// wire:
+    ///
+    /// - it is refused entirely off loopback, with **no flag** — the chat
+    ///   refusal's shape, for a worse consequence: that one risks somebody
+    ///   else's tokens, this one is somebody else typing into your agents;
+    /// - the daemon sends **exactly** `text`, into the pane it resolved for
+    ///   `session_id` and no other, once. It never reads a reply and never
+    ///   sends again — there is no path from an agent's output to an agent's
+    ///   input, which is the thing ADR-0003 was actually about;
+    /// - a session with no tmux pane is refused by name, because there is
+    ///   nothing to aim at ([ADR-0010](../../../docs/decisions/0010-attach-a-terminal-never-own-one.md)).
+    ///
+    /// The client is expected to have shown a human this text and asked them to
+    /// confirm. The daemon cannot verify that and does not pretend to; what it
+    /// can do is refuse every route that is not a client with a person at it,
+    /// which is what the loopback rule is.
+    SendToSession {
+        session_id: SessionId,
+        text: String,
+    },
+
     /// Read `~/.mogeung/config.toml`, to show it. `R-J79`.
     ConfigGet {},
 
@@ -1162,6 +1188,19 @@ pub enum ServerMsg {
         elapsed_ms: u64,
         /// Set instead of the rest when the model could not be asked.
         error: Option<String>,
+    },
+
+    /// One `SendToSession` landed. `R-B54`.
+    ///
+    /// An ack rather than silence, because the whole gesture is invisible: the
+    /// text goes into a pane that may not be on screen, and a button that
+    /// answers a click with nothing reads as broken. A refusal comes back as
+    /// [`ServerMsg::Error`] like every other refusal.
+    SentToSession {
+        session_id: SessionId,
+        /// Where it went, as tmux names it — shown, so *sent* can be checked
+        /// against the pane the Agent tab is attached to.
+        target: String,
     },
 
     /// The kept conversations, in answer to `ChatList` and `ChatDelete`.

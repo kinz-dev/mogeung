@@ -9,7 +9,11 @@ needs attention. **It never starts, steers or stops an agent.**
 - [`docs/product/assumptions.md`](docs/product/assumptions.md) — what we believe
   and have not checked
 - [`docs/decisions/0003-observe-do-not-spawn.md`](docs/decisions/0003-observe-do-not-spawn.md)
-  — the most important decision here, and why v0.1 was thrown away
+  — the most important decision here, and why v0.1 was thrown away. Read it
+  first for the failure it records; then
+  [`0035`](docs/decisions/0035-a-human-may-press-send.md), which supersedes it
+  and carries that finding forward with one word — *steers* — defined rather
+  than dropped
 
 ## Rules for docs
 

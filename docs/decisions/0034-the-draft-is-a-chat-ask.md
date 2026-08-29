@@ -1,6 +1,7 @@
 ---
 title: A model may draft the follow-up prompt; it still leaves only by the clipboard
-status: active
+status: superseded
+superseded_by: ADR-0035
 updated: 2026-08-29
 decided: 2026-08-29
 supersedes: ADR-0008

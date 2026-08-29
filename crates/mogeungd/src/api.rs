@@ -412,6 +412,26 @@ fn config_refusal(state: &AppState) -> Option<String> {
     )
 }
 
+/// Why this daemon will not type into an agent, when it will not. `R-B54`,
+/// [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md) clause 4.
+///
+/// The chat refusal's shape, for a worse consequence. The chat risks somebody
+/// else spending your tokens; this is somebody else **typing into your running
+/// agents**, and the ADR says plainly that no flag opens it. `may_write` is not
+/// the gate here and must not become it: that one accepts a token, and a shared
+/// secret on a LAN is not the same thing as a person at this machine.
+fn send_refusal(state: &AppState) -> Option<String> {
+    if *state.send_allowed.get().unwrap_or(&true) {
+        return None;
+    }
+    Some(
+        "this daemon is reachable beyond loopback, so it will not type into a \
+         session here — that is somebody else's keyboard in your agents. Bind \
+         127.0.0.1 and reach it over ssh, or copy the text and paste it yourself."
+            .to_string(),
+    )
+}
+
 /// The config file as the editor sees it.
 fn config_msg(state: &AppState, error: Option<String>, saved: bool) -> ServerMsg {
     let path = mogeung_core::config::Config::path();
@@ -1183,6 +1203,36 @@ async fn handle(
         // at what the daemon now has, which is the only version worth showing.
         // On the asking socket rather than broadcast — this is a reply to a
         // question, and another window's editor should not be scrolled by it.
+        // The one command that reaches an agent's input. `R-B54`, ADR-0035.
+        //
+        // Everything this does is a refusal until the last line: not off
+        // loopback, not for a session this daemon does not know, not for one
+        // with no pane to aim at, and not with nothing to say. What it never
+        // does is come back for a reply — one shot, and no loop.
+        ClientMsg::SendToSession { session_id, text } => {
+            if let Some(why) = send_refusal(&state) {
+                return err(anyhow::anyhow!(why));
+            }
+            let Some(session) = state.get(&session_id).await else {
+                return err(anyhow::anyhow!("that session is not one this daemon knows"));
+            };
+            let Some(target) = session.tmux_target.clone() else {
+                return err(anyhow::anyhow!(
+                    "that session is not running under tmux, so there is no pane to \
+                     send to — start sessions with `yolomo` for this, or copy the text \
+                     and paste it yourself"
+                ));
+            };
+            // Three subprocesses. Off the reactor like every other shell-out.
+            let t = target.clone();
+            let sent = tokio::task::spawn_blocking(move || crate::send::send(&t, &text))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("the send did not run: {e}")));
+            match sent {
+                Ok(()) => send_reply(&reply, ServerMsg::SentToSession { session_id, target }),
+                Err(e) => return err(e),
+            }
+        }
         ClientMsg::ConfigGet {} => send_reply(&reply, config_msg(&state, None, false)),
         ClientMsg::ConfigSave { text } => {
             let path = mogeung_core::config::Config::path();

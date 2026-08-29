@@ -16,7 +16,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useStore } from "@/store";
-import type { ClientMsg, ModelHealth } from "@/wire/types";
+import type { ClientMsg, ModelHealth, Session } from "@/wire/types";
 import { PromptWindow } from "./PromptWindow";
 
 const sent: ClientMsg[] = [];
@@ -40,6 +40,16 @@ const withModel = (m: ModelHealth | null) =>
   // Only the field the window reads: `Health` is thirty fields wide and a
   // fixture of all of them would pin nothing this test is about.
   ({ model: m } as unknown as NonNullable<ReturnType<typeof useStore.getState>["health"]>);
+
+/** A session as the queue holds it — only the fields the window reads. */
+const session = (over: Partial<Session> = {}): Session =>
+  ({
+    id: "s",
+    cwd: "/w",
+    title: "fix the retries",
+    tmux_target: "%17",
+    ...over,
+  }) as unknown as Session;
 
 const askId = () => {
   const msg = sent.filter((m) => m.cmd === "model_chat").at(-1);
@@ -80,6 +90,7 @@ beforeEach(() => {
     promptDraft: null,
     chat: [],
     conversationId: null,
+    sessions: { s: session() },
     health: withModel(model()),
     flagged: [
       {
@@ -179,5 +190,76 @@ describe("drafting the follow-up prompt", () => {
     );
     expect(screen.getByText("the endpoint refused")).toBeInTheDocument();
     expect(screen.getByText(/1\. `src\/auth\.rs`/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The one gesture in mogeung that reaches an agent's input. `R-B54`,
+ * [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+ *
+ * What is pinned here is the ADR's fences, because they are the whole of why
+ * this is allowed to exist: two deliberate acts and never one, exactly the text
+ * on screen, one unambiguous recipient, and no send at all to a session there
+ * is no pane to aim at.
+ */
+describe("sending it to the session", () => {
+  const flaggedIn = (sessionId: string) => ({
+    sessionId,
+    path: "src/auth.rs",
+    header: "@@ -10,7 +10,9 @@",
+    note: "",
+    body: ["-old", "+new"],
+  });
+
+  /** Clause 1: a click opens a confirmation, and only the confirmation sends. */
+  it("sends nothing on the first click", () => {
+    render(<PromptWindow />);
+    fireEvent.click(screen.getByText("send to session"));
+    expect(sent.some((m) => m.cmd === "send_to_session")).toBe(false);
+    expect(screen.getByText(/press\s+Enter\?/)).toBeInTheDocument();
+  });
+
+  it("sends exactly what is on screen, to the session the flags came from", () => {
+    render(<PromptWindow />);
+    fireEvent.click(screen.getByText("send to session"));
+    fireEvent.click(screen.getByText("send it"));
+
+    const msg = sent.filter((m) => m.cmd === "send_to_session").at(-1);
+    if (!msg || msg.cmd !== "send_to_session") throw new Error("nothing was sent");
+    expect(msg.session_id).toBe("s");
+    expect(msg.text).toContain("@@ -10,7 +10,9 @@");
+  });
+
+  /** Clause 2: an ambiguous recipient is one the clipboard should carry. */
+  it("offers no send when the flags come from two sessions", () => {
+    useStore.setState({ flagged: [flaggedIn("s"), flaggedIn("other")] });
+    render(<PromptWindow />);
+    const button = screen.getByText("send to session").closest("button")!;
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringContaining("2 sessions"));
+  });
+
+  /** Clause 5: no tmux pane, nothing to aim at — ADR-0010's boundary, reused. */
+  it("offers no send to a session that is not under tmux", () => {
+    useStore.setState({ sessions: { s: session({ tmux_target: null }) } } as never);
+    render(<PromptWindow />);
+    const button = screen.getByText("send to session").closest("button")!;
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringContaining("yolomo"));
+  });
+
+  /** Clause 6: the clipboard is not replaced by this, ever. */
+  it("keeps copy working for a session it cannot send to", () => {
+    useStore.setState({ sessions: { s: session({ tmux_target: null }) } } as never);
+    render(<PromptWindow />);
+    fireEvent.click(copyButton());
+    expect(written.at(-1)).toContain("@@ -10,7 +10,9 @@");
+  });
+
+  it("cancels without sending", () => {
+    render(<PromptWindow />);
+    fireEvent.click(screen.getByText("send to session"));
+    fireEvent.click(screen.getByText("cancel"));
+    expect(sent.some((m) => m.cmd === "send_to_session")).toBe(false);
   });
 });

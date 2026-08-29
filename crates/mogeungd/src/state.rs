@@ -139,6 +139,13 @@ pub struct AppState {
     /// never set it are tests and the window's own hosted daemon, both of which
     /// are loopback in fact.
     pub config_editable: std::sync::OnceLock<bool>,
+    /// Whether this daemon may type into a session. `R-B54`, ADR-0035 clause 4.
+    ///
+    /// Its own flag rather than a reuse of `config_editable` or `writes_allowed`
+    /// — one is about outbound URLs and the other accepts a token, and this door
+    /// accepts neither. A gate shared between two doors is a gate that gets
+    /// widened for the wrong one.
+    pub send_allowed: std::sync::OnceLock<bool>,
     /// Whether the chat panel's conversations are kept. `R-O9`, ADR-0032.
     ///
     /// Unset reads as **on**, matching `Options`' default and the config
@@ -526,6 +533,7 @@ impl AppState {
             proxy: crate::llmproxy::Proxy::new(),
             writes_allowed: std::sync::OnceLock::new(),
             config_editable: std::sync::OnceLock::new(),
+            send_allowed: std::sync::OnceLock::new(),
             chat_history: std::sync::OnceLock::new(),
             claude_home,
             codex_home,

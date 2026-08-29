@@ -19,11 +19,12 @@
  */
 
 import { useEffect, useState } from "react";
-import { ClipboardCopy, Wand2, X } from "lucide-react";
+import { ClipboardCopy, SendHorizontal, Wand2, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, IconButton, Input, Mono } from "@/ui/primitives";
 import { buildPrompt } from "@/lib/prompt";
+import { sessionLabel } from "@/wire/types";
 
 export function PromptWindow() {
   const open = useStore((s) => s.showPrompt);
@@ -42,6 +43,18 @@ export function PromptWindow() {
    * from.
    */
   const [view, setView] = useState<"raw" | "drafted">("raw");
+  /**
+   * The confirmation, and the reason it exists. `R-B54`,
+   * [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+   *
+   * mogeung cannot see what the session's screen is showing — a TUI's prompts
+   * never reach the transcript — so an Enter sent on your behalf can land on a
+   * menu. Clause 1 makes sending two deliberate acts, and this is the second
+   * one. It names the session and shows what will be sent, which is what it can
+   * honestly tell you; it cannot tell you what is on the screen.
+   */
+  const [confirming, setConfirming] = useState(false);
+  const sessions = useStore((s) => s.sessions);
 
   /**
    * The seconds a slow draft owes an explanation for. `R-O11`'s lesson, moved.
@@ -63,6 +76,26 @@ export function PromptWindow() {
   if (!open) return null;
   const close = () => useStore.setState({ showPrompt: false });
   const raw = buildPrompt(note, flagged);
+
+  /**
+   * Who this would be sent to. `R-B54`, ADR-0035 clause 2 and clause 5.
+   *
+   * One session or none: flags spanning two sessions have an **ambiguous
+   * recipient**, and a message with an ambiguous recipient is one the clipboard
+   * should carry. And a session with no tmux pane cannot be aimed at at all —
+   * ADR-0010's boundary, reused rather than a new one.
+   */
+  const targets = new Set(flagged.map((f) => f.sessionId));
+  const target = targets.size === 1 ? sessions[[...targets][0]] : undefined;
+  const canSend = !!target?.tmux_target;
+  const whyNotSend =
+    flagged.length === 0
+      ? "flag something first"
+      : targets.size > 1
+        ? `these flags come from ${targets.size} sessions — copy it, and paste it where you mean it to go`
+        : !target
+          ? "that session is not on this daemon any more"
+          : "that session is not running under tmux, so there is no pane to send to — start sessions with `yolomo`, or copy and paste it yourself";
 
   const model = health?.model ?? null;
   // Three different silences, and only one of them is *no*: a daemon that
@@ -185,6 +218,47 @@ export function PromptWindow() {
             : text}
         </pre>
 
+        {confirming && target && (
+          <div className="mt-2 rounded-sm border border-[var(--amber)] px-2 py-1">
+            <div className="text-2xs">
+              Send to <b>{sessionLabel(target)}</b> in <Mono>{target.tmux_target}</Mono>, and press
+              Enter?
+            </div>
+            <Mono className="mt-0.5 block truncate text-2xs text-[var(--dim)]">
+              {text.trim().split("\n")[0]}
+            </Mono>
+            {/*
+              Said plainly rather than buried in an ADR nobody reads at the
+              moment of pressing: this is the one thing the confirmation cannot
+              check for you.
+            */}
+            <Dim className="mt-0.5 block text-2xs">
+              mogeung cannot see that session's screen — if a permission prompt is up, this
+              Enter answers it
+            </Dim>
+            <div className="mt-1 flex items-center gap-1">
+              <Button
+                variant="solid"
+                onClick={() => {
+                  useStore.getState().send({
+                    cmd: "send_to_session",
+                    session_id: target.id,
+                    // Exactly what is on screen — ADR-0035 clause 2. The same
+                    // text the copy button would put on the clipboard.
+                    text,
+                  });
+                  setConfirming(false);
+                }}
+              >
+                send it
+              </Button>
+              <Button variant="outline" onClick={() => setConfirming(false)}>
+                cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
         <div className="mt-2 flex items-center gap-1">
           <Button
             variant="outline"
@@ -215,6 +289,20 @@ export function PromptWindow() {
             }}
           >
             <Wand2 size={11} /> {draft?.pending ? "drafting…" : "draft with the model"}
+          </Button>
+          {/*
+            The one control in mogeung that reaches an agent's input. Two acts,
+            never one: this opens the confirmation, and the confirmation sends.
+            ADR-0035 clause 1 — and clause 7, which is why *draft* and *send*
+            are separate buttons with the text on screen in between.
+          */}
+          <Button
+            variant="outline"
+            disabled={!canSend}
+            title={canSend ? `send it to ${sessionLabel(target!)} and press Enter` : whyNotSend}
+            onClick={() => setConfirming(true)}
+          >
+            <SendHorizontal size={11} /> send to session
           </Button>
           <Button
             variant="outline"

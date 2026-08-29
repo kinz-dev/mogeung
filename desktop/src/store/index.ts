@@ -1892,6 +1892,13 @@ export const useStore = create<AppState>((set, get) => ({
         set((s) => ({ subagents: { ...s.subagents, [msg.session_id]: msg.nodes } }));
         break;
 
+      case "sent_to_session":
+        // A notice rather than a quiet success: the text went into a pane that
+        // may not be on screen, and the one gesture in mogeung that reaches an
+        // agent should say so out loud. `R-B54`, ADR-0035.
+        get().pushNotice(`sent to ${msg.target}`);
+        break;
+
       case "error":
         get().pushError(msg.message);
         break;

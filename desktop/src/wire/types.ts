@@ -1111,6 +1111,15 @@ export type ClientMsg =
    * either drop them or become a TOML formatter. Editing is loopback-only;
    * reading is not.
    */
+  /**
+   * Deliver text into one session's tmux pane and press Enter. `R-B54`.
+   *
+   * The only command that reaches an agent's input, and the window is expected
+   * to have shown a person the text and asked them to confirm — see
+   * [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md). Refused
+   * off loopback with no flag.
+   */
+  | { cmd: "send_to_session"; session_id: string; text: string }
   | { cmd: "config_get" }
   | { cmd: "config_save"; text: string }
   | { cmd: "git_resolve"; session_id: SessionId; path: string; side: ResolveSide }
@@ -1242,6 +1251,8 @@ export type ServerMsg =
    * costs a moment of jitter rather than a corrupted answer, and a client that
    * ignores them entirely still works.
    */
+  /** One `send_to_session` landed, and where. `R-B54`. */
+  | { ev: "sent_to_session"; session_id: string; target: string }
   | { ev: "model_chunk"; id: string; delta: string }
   /** `text` or `error`, never both and never neither. */
   | {

@@ -1,7 +1,8 @@
 ---
 title: Observe sessions, never spawn them
-status: active
-updated: 2026-07-25
+status: superseded
+superseded_by: ADR-0035
+updated: 2026-08-29
 decided: 2026-07-25
 supersedes: The v0.1 spawning model
 ---
