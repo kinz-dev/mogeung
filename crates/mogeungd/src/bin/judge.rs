@@ -17,6 +17,7 @@
 //! cargo run -q -p mogeungd --bin judge -- --repo . --base HEAD~1
 //! cargo run -q -p mogeungd --bin judge -- --recall             # A38: embeddings vs grep
 //! cargo run -q -p mogeungd --bin judge -- --clusters           # A38's other half: R-F4 by meaning
+//! cargo run -q -p mogeungd --bin judge -- --complete           # A40: agent commands vs your shell history
 //! ```
 //!
 //! ## `--recall`: the other half, and the other assumption (`R-O6`, `A38`)
@@ -76,6 +77,7 @@ fn main() {
     let base = flag("--base");
     let recall = args.iter().any(|a| a == "--recall");
     let clusters = args.iter().any(|a| a == "--clusters");
+    let complete = args.iter().any(|a| a == "--complete");
 
     let (cfg, warning) = mogeung_core::config::Config::load();
     if let Some(w) = warning {
@@ -88,6 +90,10 @@ fn main() {
     }
     if clusters {
         clusters::run(&cfg, &args);
+        return;
+    }
+    if complete {
+        complete::run(&args);
         return;
     }
 
@@ -739,5 +745,145 @@ mod clusters {
             return one;
         }
         format!("{}…", one.chars().take(n).collect::<String>())
+    }
+}
+
+/// `A40`: do the commands your **agents** ran predict what you type next,
+/// better than your own shell history does? `R-O12`.
+///
+/// **The baseline is the whole point.** `zsh-autosuggestions`, fish and atuin
+/// already complete from `~/.zsh_history`, instantly and for free. A corpus
+/// that does not beat that file has not earned a panel, and measuring against
+/// *nothing* would let it look useful while being worse than what is already
+/// installed.
+///
+/// The experiment: hold out the most recent commands you actually typed, take
+/// the first `k` characters of each as the prefix a completer would see, and
+/// ask both corpora to produce it. **The held-out commands are removed from the
+/// baseline** — otherwise shell history scores 100% by containing the answer,
+/// which is measuring a file against itself.
+///
+/// It needs no model and sends nothing anywhere: this half of `R-O12` is
+/// arithmetic over text already on this machine, which is the fence rather than
+/// an optimisation.
+mod complete {
+    use mogeungd::{complete as rank, insight as scan};
+
+    /// The prefix lengths tried. Three, because the answer is different at each
+    /// and a single number would hide that: at 3 characters a completer is
+    /// guessing, at 12 it is finishing a thought.
+    const PREFIXES: [usize; 3] = [3, 6, 12];
+
+    pub fn run(args: &[String]) {
+        let flag = |name: &str| -> Option<String> {
+            args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
+        };
+        let held: usize = flag("--held-out").and_then(|v| v.parse().ok()).unwrap_or(60);
+        let hist_path = flag("--history")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                    .join(".zsh_history")
+            });
+
+        let home = mogeungd::watcher::default_home();
+        let agent = scan::agent_commands(&home.join("projects"));
+        let shell = rank::shell_history(&hist_path);
+        if shell.len() < held * 2 {
+            eprintln!(
+                "only {} usable line(s) in {} — not enough to hold {held} out and still have a \
+                 baseline. Pass --history <file> or lower --held-out.",
+                shell.len(),
+                hist_path.display()
+            );
+            std::process::exit(1);
+        }
+        if agent.is_empty() {
+            eprintln!(
+                "no agent-run commands found under {} — there is nothing to measure. That is \
+                 `--bin sweep`'s rule: a harness that shrugs reads as 'no finding'.",
+                home.join("projects").display()
+            );
+            std::process::exit(1);
+        }
+        println!(
+            "{} agent-run command(s), {} shell history line(s), holding out the last {held}",
+            agent.len(),
+            shell.len()
+        );
+
+        // The test set is what **you typed**, most recent last, because that is
+        // what a completer would have been asked for.
+        let split = shell.len() - held;
+        let (baseline, test) = shell.split_at(split);
+
+        for k in PREFIXES {
+            let mut asked = 0usize;
+            let mut agent_top1 = 0usize;
+            let mut agent_top5 = 0usize;
+            let mut shell_top1 = 0usize;
+            let mut shell_top5 = 0usize;
+            let mut only_agent: Vec<String> = Vec::new();
+
+            for (cmd, _) in test {
+                let chars: Vec<char> = cmd.chars().collect();
+                if chars.len() <= k {
+                    continue;
+                }
+                let prefix: String = chars[..k].iter().collect();
+                asked += 1;
+
+                // Both corpora, ranked by the code the panel will use — a
+                // harness grading a different ranking than the one that ships
+                // is measuring a feature that does not exist.
+                let a = rank::candidates(
+                    agent.iter().map(|c| {
+                        (c.command.clone(), c.repo.clone(), c.timestamp, "agent")
+                    }),
+                    "",
+                    &prefix,
+                );
+                let s = rank::candidates(
+                    baseline.iter().map(|(c, t)| (c.clone(), String::new(), *t, "shell")),
+                    "",
+                    &prefix,
+                );
+                let hit = |v: &[rank::Candidate], n: usize| {
+                    v.iter().take(n).any(|c| &c.command == cmd)
+                };
+                let (a1, a5) = (hit(&a, 1), hit(&a, 5));
+                let (s1, s5) = (hit(&s, 1), hit(&s, 5));
+                agent_top1 += a1 as usize;
+                agent_top5 += a5 as usize;
+                shell_top1 += s1 as usize;
+                shell_top5 += s5 as usize;
+                if a5 && !s5 {
+                    only_agent.push(cmd.clone());
+                }
+            }
+
+            println!("\n=== {k}-character prefix — {asked} command(s) asked for ===");
+            println!("  agent corpus   top-1 {agent_top1}/{asked} · top-5 {agent_top5}/{asked}");
+            println!("  shell history  top-1 {shell_top1}/{asked} · top-5 {shell_top5}/{asked}");
+            println!("  found only by the agent corpus: {}", only_agent.len());
+            for c in only_agent.iter().take(6) {
+                println!("    {}", clip(c, 100));
+            }
+        }
+
+        println!("\n─────────────────────────────────────────────");
+        println!(
+            "A40 turns on the gap, not on either row. The agent corpus has to beat the\n\
+             shell history a completer already reads for free — and the *found only by*\n\
+             lines are what a panel would add that nothing installed can. The judgement\n\
+             belongs in the roadmap row rather than in this output."
+        );
+    }
+
+    fn clip(s: &str, n: usize) -> String {
+        if s.chars().count() <= n {
+            return s.to_string();
+        }
+        format!("{}…", s.chars().take(n).collect::<String>())
     }
 }

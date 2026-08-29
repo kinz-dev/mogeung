@@ -4,6 +4,7 @@
 pub mod adapter;
 pub mod api;
 pub mod codex;
+pub mod complete;
 pub mod detect;
 pub mod discovery;
 pub mod docscan;

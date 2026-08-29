@@ -781,6 +781,67 @@ pub fn corpus_lines(projects_root: &Path, history_path: &Path, cap: usize) -> Ve
     out
 }
 
+/// One command an agent ran, and where. `R-O12`, `A40`.
+#[derive(Debug, Clone)]
+pub struct AgentCommand {
+    /// The repository it ran in, as the session recorded its cwd. Empty when
+    /// the transcript never said.
+    pub repo: String,
+    pub command: String,
+    pub timestamp: Option<DateTime<Utc>>,
+}
+
+/// Every command an agent ran on this machine, oldest first. `R-O12`.
+///
+/// **This is the corpus the row is about.** `history.jsonl` is what *you*
+/// typed into Claude Code and the shell's own history is what you typed into a
+/// shell; neither contains the `Bash` calls an agent made on your behalf, which
+/// is the larger half of what has actually run here and the only part no
+/// existing completion tool can see.
+///
+/// The cwd is taken from the session's `Init` line, which is where Claude Code
+/// records it — a command is only worth completing in the repository it belongs
+/// to, and a `cargo test` from another project is noise in this one.
+pub fn agent_commands(projects_root: &Path) -> Vec<AgentCommand> {
+    let mut files = Vec::new();
+    collect_jsonl(projects_root, &mut files, 0);
+    files.sort();
+    let mut out = Vec::new();
+    for f in &files {
+        let mut cwd = String::new();
+        stream_lines(f, |_, line| {
+            let Ok(v) = serde_json::from_str::<Value>(line) else { return true };
+            // The session's own working directory, from whichever line carries
+            // it — `cwd` appears on the init line and often on later ones.
+            if cwd.is_empty() {
+                if let Some(c) = str_at(&v, "cwd") {
+                    cwd = c.to_string();
+                }
+            }
+            for b in tool_use_blocks(&v) {
+                if str_at(b, "name") != Some("Bash") {
+                    continue;
+                }
+                let Some(cmd) = b.get("input").and_then(|i| str_at(i, "command")) else { continue };
+                let cmd = cmd.trim();
+                // A heredoc or an inline script is not a command anybody wants
+                // completed — it is a program that happened to be typed at a
+                // prompt, and offering it back is offering to retype a file.
+                if cmd.is_empty() || cmd.contains('\n') || cmd.chars().count() > 300 {
+                    continue;
+                }
+                out.push(AgentCommand {
+                    repo: cwd.clone(),
+                    command: cmd.to_string(),
+                    timestamp: parse_ts(&v),
+                });
+            }
+            true
+        });
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Turns near a moment (R-F9)
 // ---------------------------------------------------------------------------
