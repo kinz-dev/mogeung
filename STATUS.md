@@ -11,7 +11,7 @@
 
 ## Assumptions
 
-Untested: **17** · At risk: **5** · Supported: 17 · Refuted: 1
+Untested: **18** · At risk: **5** · Supported: 17 · Refuted: 1
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -58,5 +58,5 @@ Untested: **17** · At risk: **5** · Supported: 17 · Refuted: 1
 | [Run and Debug](docs/features/0035-run-and-debug.md) | `active` | [A4, A32, A33, A34] |
 | [Qwen Code adapter](docs/features/0036-qwen-code-adapter.md) | `in-progress` | [A4, A23] |
 | [Performance pass 3 — the chatter, not the disk](docs/features/0037-performance-pass-3.md) | `draft` | [A4] |
-| [A local model beside the agents](docs/features/0038-a-local-model.md) | `in-progress` | [A3, A4, A29, A35, A36, A37, A38, A40] |
+| [A local model beside the agents](docs/features/0038-a-local-model.md) | `in-progress` | [A3, A4, A29, A35, A36, A37, A38, A40, A41] |
 
