@@ -16,6 +16,7 @@
 //! cargo run -q -p mogeungd --bin judge -- --repo .             # one, by path
 //! cargo run -q -p mogeungd --bin judge -- --repo . --base HEAD~1
 //! cargo run -q -p mogeungd --bin judge -- --recall             # A38: embeddings vs grep
+//! cargo run -q -p mogeungd --bin judge -- --clusters           # A38's other half: R-F4 by meaning
 //! ```
 //!
 //! ## `--recall`: the other half, and the other assumption (`R-O6`, `A38`)
@@ -74,6 +75,7 @@ fn main() {
     let only: Option<PathBuf> = flag("--repo").map(PathBuf::from);
     let base = flag("--base");
     let recall = args.iter().any(|a| a == "--recall");
+    let clusters = args.iter().any(|a| a == "--clusters");
 
     let (cfg, warning) = mogeung_core::config::Config::load();
     if let Some(w) = warning {
@@ -82,6 +84,10 @@ fn main() {
 
     if recall {
         recall::run(&cfg, &args);
+        return;
+    }
+    if clusters {
+        clusters::run(&cfg, &args);
         return;
     }
 
@@ -607,6 +613,124 @@ mod recall {
             }
         }
         String::new()
+    }
+
+    fn clip(s: &str, n: usize) -> String {
+        let one = s.replace('\n', " ");
+        if one.chars().count() <= n {
+            return one;
+        }
+        format!("{}…", one.chars().take(n).collect::<String>())
+    }
+}
+
+/// `A38`'s **other** half: do recurring failures cluster better by meaning than
+/// by literal text? `R-F4`, `R-O6`.
+///
+/// The first half — does a semantic list find what grep missed — was measured
+/// by `--recall` and answered *yes, and it loses things too*. This half has a
+/// concrete failure to point at rather than a preference: `R-F4` compares
+/// **literal error text**, so the same failure worded two ways is two rows, and
+/// one worded freshly each time is invisible. Whether embeddings fix that is
+/// not obvious, and this prints the joins so a human can say.
+///
+/// **It judges nothing.** It prints every join it would make, at three
+/// thresholds, and counts them. Which threshold is right — and whether the
+/// joins are *true* — is a judgement, and it belongs in the roadmap row.
+mod clusters {
+    use mogeung_core::config::Config;
+    use mogeung_core::model::ModelSettings;
+    use mogeungd::{embed, insight as scan};
+
+    /// The thresholds printed side by side.
+    ///
+    /// Three rather than one because the number is exactly what is being
+    /// chosen: too low and *timeout* joins *permission denied*, too high and
+    /// nothing joins and the feature is a rename of the list that exists.
+    const THRESHOLDS: [f32; 3] = [0.75, 0.85, 0.92];
+
+    pub fn run(cfg: &Config, args: &[String]) {
+        let flag = |name: &str| -> Option<String> {
+            args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
+        };
+        let min_sessions: usize = flag("--min-sessions").and_then(|v| v.parse().ok()).unwrap_or(1);
+        let embed_model = flag("--embed-model").or_else(|| cfg.embed_model.clone());
+        if embed_model.is_none() {
+            eprintln!("no embedding model: pass `--embed-model <id>` or set `embed_model`.");
+            std::process::exit(1);
+        }
+
+        let home = mogeungd::watcher::default_home();
+        let failures = scan::recurring_failures(&home.join("projects"), min_sessions);
+        if failures.len() < 2 {
+            eprintln!(
+                "only {} literal failure group(s) at --min-sessions {min_sessions} — nothing to \
+                 cluster. Try 1.",
+                failures.len()
+            );
+            std::process::exit(1);
+        }
+        println!(
+            "{} literal group(s), from failures seen in at least {min_sessions} session(s)",
+            failures.len()
+        );
+
+        let settings = ModelSettings {
+            url: cfg.model_url.clone(),
+            model: None,
+            consent: cfg.allow_remote_model.clone(),
+            embed_model,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        // The **example** rather than the normalised key: normalisation has
+        // already replaced the digits and paths that carry meaning, and an
+        // embedding of `connection refused to <path>:#` is an embedding of the
+        // normaliser rather than of the failure.
+        let texts: Vec<String> = failures.iter().map(|f| f.example.clone()).collect();
+        let vectors = match rt.block_on(embed::embed(&settings, &texts)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("the embedding endpoint answered nothing: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        for t in THRESHOLDS {
+            let groups = embed::cluster(&vectors, t);
+            let joined: Vec<&Vec<usize>> = groups.iter().filter(|g| g.len() > 1).collect();
+            let rows_saved: usize = joined.iter().map(|g| g.len() - 1).sum();
+            println!(
+                "\n=== threshold {t:.2} — {} cluster(s), {} of them joining {} row(s) ===",
+                groups.len(),
+                joined.len(),
+                rows_saved
+            );
+            for g in &joined {
+                println!("  ┌ joined {} literal group(s):", g.len());
+                for &i in g.iter() {
+                    println!(
+                        "  │ {:>3}× {}",
+                        failures[i].count,
+                        clip(&failures[i].example, 100)
+                    );
+                }
+            }
+            if joined.is_empty() {
+                println!("  nothing joined — at this threshold the list is what it already is");
+            }
+        }
+
+        println!("\n─────────────────────────────────────────────");
+        println!(
+            "A38's second half turns on whether those joins are **true** — the same\n\
+             failure worded differently — rather than on how many there are. Read them.\n\
+             A threshold that joins timeouts to permission errors is worse than no\n\
+             clustering, because the panel would be asserting a shape that is not there."
+        );
     }
 
     fn clip(s: &str, n: usize) -> String {

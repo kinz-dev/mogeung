@@ -137,6 +137,39 @@ pub fn nearest(query: &[f32], corpus: &[Vec<f32>], k: usize) -> Vec<(usize, f32)
     scored
 }
 
+/// Group vectors that are within `threshold` of each other. `R-F4` by meaning.
+///
+/// **Greedy single-link, and the shape is the honesty.** Each item joins the
+/// first cluster whose *seed* it is close enough to, and seeds are taken in
+/// input order — so the caller decides what leads a cluster by deciding the
+/// order, and the result is reproducible rather than dependent on a random
+/// restart. k-means would need a `k` nobody knows and would move rows between
+/// runs; agglomerative linkage would join two clusters through a chain of
+/// near-misses, which is how *timeout* and *permission denied* end up in one
+/// row and the panel starts lying.
+///
+/// Returns index groups, largest first, each preserving input order.
+pub fn cluster(vectors: &[Vec<f32>], threshold: f32) -> Vec<Vec<usize>> {
+    let mut seeds: Vec<usize> = Vec::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (i, v) in vectors.iter().enumerate() {
+        let mut joined = false;
+        for (g, &seed) in seeds.iter().enumerate() {
+            if cosine(v, &vectors[seed]) >= threshold {
+                groups[g].push(i);
+                joined = true;
+                break;
+            }
+        }
+        if !joined {
+            seeds.push(i);
+            groups.push(vec![i]);
+        }
+    }
+    groups.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a[0].cmp(&b[0])));
+    groups
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +191,28 @@ mod tests {
     fn a_zero_vector_scores_zero_rather_than_nan() {
         assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
         assert!(!cosine(&[0.0, 0.0], &[0.0, 0.0]).is_nan());
+    }
+
+    #[test]
+    fn clustering_joins_the_close_and_leaves_the_far_alone() {
+        let a = vec![1.0, 0.0];
+        let a2 = vec![0.99, 0.14];
+        let b = vec![0.0, 1.0];
+        let groups = cluster(&[a, a2, b], 0.9);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0], vec![0, 1], "the two near vectors join, in input order");
+        assert_eq!(groups[1], vec![2]);
+    }
+
+    /// Single-link through a chain is how *timeout* and *permission denied*
+    /// end up in one row. Each item is compared to the **seed**, so a chain of
+    /// near-misses cannot walk a cluster across the space.
+    #[test]
+    fn a_chain_of_near_misses_does_not_walk_a_cluster() {
+        // Each adjacent pair is close; the ends are not.
+        let v = |x: f32, y: f32| vec![x, y];
+        let groups = cluster(&[v(1.0, 0.0), v(0.8, 0.6), v(0.0, 1.0)], 0.85);
+        assert_eq!(groups.len(), 3, "no cluster spans the ends through the middle");
     }
 
     #[test]

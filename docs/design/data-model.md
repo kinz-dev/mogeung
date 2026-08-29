@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-28
+updated: 2026-08-29
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -58,6 +58,9 @@ SQLite at `~/.mogeung/mogeung.db`:
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
+- `semantic_index(id, session_id, line, role, ts, preview, vec)` and
+  `semantic_meta(k, v)` — the **similar** list's embeddings and what built them
+  (`R-O6`)
 
 **`chats` is the second one that cannot be recomputed, and it is kept
 differently from `notes` on purpose.** A note is written deliberately, one at
@@ -181,6 +184,16 @@ than by guessing:
 The pass ends with `VACUUM` when it dropped anything. Deleting rows frees pages
 inside the file and returns nothing to the disk, so a database bloated by this
 bug would otherwise stay bloated after being fixed.
+
+**`semantic_index` is the opposite kind of table, and is treated as one.** It
+is a **cache**: every row is recomputable from the corpus, so it is dropped and
+rewritten wholesale on a rebuild rather than migrated — a half-rebuilt index
+would mix two models in a vector space the cosine assumes is one, and the only
+thing lost by deleting it is minutes of embedding. `vec` is little-endian
+`f32`s in a BLOB, because a thousand floats as JSON text is roughly ten times
+the bytes and has to be parsed on every query. `semantic_meta` holds the model
+and the build time, which is what lets the panel say *what* answered and
+whether the corpus has moved since.
 
 ## Ephemeral state
 
