@@ -155,6 +155,22 @@ pub struct Session {
     pub tool_calls: u32,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    /// Where this session's time went, from the CLI's own `cost-state`:
+    /// milliseconds waiting on the API, and milliseconds running tools.
+    /// `R-J63`.
+    ///
+    /// **Not derivable from anything else mogeung reads.**
+    /// `last_event_at - started_at` is wall time and answers a different
+    /// question — a session that sat idle for an hour and one that spent an
+    /// hour on the API look identical in it.
+    ///
+    /// Cumulative in the source and re-emitted per turn, so the fold takes the
+    /// **largest** rather than summing. Zero is absent rather than measured:
+    /// the first `cost-state` of a session is all zeros.
+    #[serde(default)]
+    pub api_ms: u64,
+    #[serde(default)]
+    pub tool_ms: u64,
     pub last_activity: Option<String>,
 
     /// Files this session touched, from Edit/Write tool calls and file-history

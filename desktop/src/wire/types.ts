@@ -125,6 +125,16 @@ export interface Session {
   status_since: Timestamp | null;
   turns: number;
   tool_calls: number;
+  /**
+   * Where the session's time went, from the CLI's own `cost-state`. `R-J63`.
+   *
+   * Milliseconds waiting on the API and milliseconds running tools. Not
+   * derivable from anything else: wall time answers a different question, and
+   * a session that idled for an hour looks identical in it to one that spent
+   * the hour on the API. `0` means the CLI has not said.
+   */
+  api_ms?: number;
+  tool_ms?: number;
   tokens_in: number;
   tokens_out: number;
   last_activity: string | null;

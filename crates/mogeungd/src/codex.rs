@@ -382,6 +382,22 @@ pub const KNOWN_ITEMS: &[&str] = &[
     "token_count",
     "item_completed",
     "message",
+    // `0.150`, seen once on 2026-08-27: the thread's settings, applied. Ruled
+    // on 2026-08-29 with `R-J29`'s remainder.
+    //
+    // **The model is taken and the rest deliberately is not.** `turn_context`
+    // already carries the model on every turn, so nothing is lost by ignoring
+    // this — but a settings change lands *here* first, and reading it costs one
+    // line and means a mid-thread model switch is visible before the next turn
+    // rather than after it.
+    //
+    // What is left: `approval_policy` (`never` is Codex's yolo mode) and a
+    // `permission_profile` describing which paths the thread may write. Both
+    // are real and neither is modelled for any agent CLI mogeung watches, so
+    // reading one of them here would be the beginning of a per-CLI permission
+    // model built by accident, in a match arm, for one of the three adapters.
+    // Filed rather than half-read.
+    "thread_settings_applied",
 ];
 
 /// The `item.type` values understood inside an `event_msg/item_completed`.
@@ -812,6 +828,14 @@ fn extract(v: &Value, kind: &str) -> CodexLineOutcome {
                     out.tail = Some(TailEvent::AgentActivity);
                 }
                 "turn_started" => out.tail = Some(TailEvent::TurnStarted),
+                // A settings change, which is where a mid-thread model switch
+                // lands before the next `turn_context` repeats it. `R-J29`.
+                "thread_settings_applied" => {
+                    out.model = payload
+                        .get("thread_settings")
+                        .and_then(|t| str_at(t, "model"))
+                        .map(str::to_string);
+                }
                 // `0.149`'s turn boundary, under new names. `R-J70`.
                 "task_started" => out.tail = Some(TailEvent::TurnStarted),
                 "task_complete" => {
@@ -1474,6 +1498,26 @@ mod tests {
     // these are the *new* names, and a test that would have passed before the
     // rename proves nothing.
     // ---------------------------------------------------------------------
+
+    /// A settings change carries the model, and nothing else this product
+    /// models. `R-J29`, ruled on 2026-08-29 after the sweep raised it.
+    ///
+    /// The `approval_policy` in the same payload is deliberately not read —
+    /// `never` is Codex's yolo mode and it is genuinely interesting, but no
+    /// agent CLI mogeung watches has a permission model here, and starting one
+    /// in a match arm for one of three adapters is how a half-feature is born.
+    #[test]
+    fn a_settings_change_gives_up_the_model_and_not_the_permissions() {
+        let l = r#"{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.6-terra","model_provider_id":"openai","approval_policy":"never","permission_profile":{"type":"managed"}}}}"#;
+        let p = parsed(l);
+        assert_eq!(p.model.as_deref(), Some("gpt-5.6-terra"));
+        // Not classified as drift: the sweep raised this once and it now has a
+        // ruling, which is the whole point of the canary having an answer.
+        assert!(
+            !matches!(parse_rollout_line(l), CodexLineOutcome::Unknown { .. }),
+            "a ruled-on kind is no longer unclassified"
+        );
+    }
 
     /// `turn_started` became `task_started`; the turn boundary must still be
     /// found, or `derive_status` answers `Done` for a session mid-turn and the

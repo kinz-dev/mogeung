@@ -24,6 +24,8 @@ fn home_for(tag: &str) -> PathBuf {
 fn aged_session(id: &str, days_ago: i64, transcript: &str) -> Session {
     let then = chrono::Utc::now() - chrono::Duration::days(days_ago);
     Session {
+        api_ms: 0,
+        tool_ms: 0,
         id: id.into(),
         title: None,
         name: None,

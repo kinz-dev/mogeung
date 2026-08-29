@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-22
+updated: 2026-08-29
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -84,6 +84,7 @@ anything else raises an alert. Counts below are from the author's corpus on
 | `bridge-session` | 47¹ | Ignored — the web/desktop bridge's bookkeeping: `bridgeSessionId`, `lastSequenceNum` |
 | `agent-name` | 249² | **Read** — `agentName`, the session's title under a second name |
 | `atis-latch` | 384² | Ignored — `atis`, and it is the empty string in every one |
+| `cost-state` | 78³ | **Read** — `totalAPIDuration` and `totalToolDuration`. Its `totalCostUSD` and `modelUsage` are deliberately left; see below |
 
 ¹ From a **later** sweep and not comparable with the column above: 2026-08-07,
 across the 60 newest transcripts of a corpus that had grown to 315.
@@ -91,6 +92,30 @@ across the 60 newest transcripts of a corpus that had grown to 315.
 ² From the 2026-08-20 sweep, over 275 transcripts and 99,106 lines — a whole
 corpus rather than a window, so these two are comparable with each other and
 with nothing above them.
+
+³ From the 2026-08-29 sweep, 246 transcripts and 120,949 lines.
+
+**`cost-state` is the CLI's own accounting, and mogeung reads half of it**
+(`R-J63`, ruled on 2026-08-29 after the canary had been raising it since
+2026-08-26). It carries `totalCostUSD`, a `modelUsage` map with per-model tokens
+and `costUSD`, `hasUnknownModelCost`, and three durations. What is read is
+`totalAPIDuration` and `totalToolDuration` — **there is no other source for
+them**, and wall time answers a different question, since a session that idled
+for an hour is indistinguishable in it from one that spent the hour on the API.
+
+What is not read is the money, and deliberately: `modelUsage` duplicates what
+`usage.rs` folds from the `assistant` lines themselves, and two sources for one
+number are two numbers that can disagree. `totalCostUSD` is a **first-party**
+figure — 58 of the 78 lines carry a non-zero one — where
+[ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md) ships a number
+mogeung computes and labels *equivalent API cost*. Which of those a reader
+should see is that ADR's question, filed as `R-J86`.
+
+**A `cost-state` of all zeros is barren rather than a measurement of zero.** It
+is the first one of every session, and folding it in would report a session that
+had spent no time on the API when what happened is that nobody had asked it
+anything yet. The values are running totals re-emitted per turn, so the fold
+takes the largest rather than summing.
 
 `queue-operation`, `pr-link` and `frame-link` were **found by the canary**. They
 existed in real transcripts throughout v0.2 and were swallowed by a catch-all

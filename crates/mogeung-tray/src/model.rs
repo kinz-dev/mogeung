@@ -105,6 +105,8 @@ mod tests {
     fn sess(id: &str) -> Session {
         let now = Utc::now();
         Session {
+            api_ms: 0,
+            tool_ms: 0,
             id: id.into(),
             title: None,
             name: None,

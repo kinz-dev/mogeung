@@ -64,6 +64,25 @@ pub const KNOWN_IGNORED: &[&str] = &[
 /// reported as [`LineClass::Barren`] rather than silently dropped — a spike
 /// there means a shape we depend on has moved.
 pub const HANDLED: &[&str] = &[
+    // The CLI's own accounting of a session: cost, per-model token usage, and
+    // where the time went. **Ruled on 2026-08-29** (`R-J63`), after the canary
+    // had been raising it since 2026-08-26 and reached 78 lines.
+    //
+    // What is taken is the **timings**, which mogeung has no other source for:
+    // how much of a session was spent waiting on the API and how much running
+    // tools is not derivable from a transcript, and `last_event_at - started_at`
+    // answers a different question.
+    //
+    // What is deliberately **not** taken is `totalCostUSD` and `modelUsage`,
+    // and that is a decision rather than an oversight. `modelUsage` duplicates
+    // what `usage.rs` already folds from the assistant lines themselves.
+    // `totalCostUSD` is a *first-party* figure — 58 of those 78 lines carry a
+    // non-zero one — where [ADR-0024](../../../docs/decisions/0024-equivalent-cost-in-dollars.md)
+    // ships a number mogeung computes and labels *equivalent API cost*. Showing
+    // the CLI's own instead, or beside it, is that ADR's question and not a
+    // parser's; it is filed as `R-J86` rather than settled here by whoever
+    // happened to be adding a match arm.
+    "cost-state",
     "assistant",
     "user",
     "ai-title",
@@ -143,6 +162,16 @@ pub struct Parsed {
     /// "Tests pass"-shaped assertions in this line's assistant prose —
     /// `(kind, clipped sentence)`. `R-E3`.
     pub claims: Vec<(VerifyKind, String)>,
+    /// Where this session's time went, from the CLI's own `cost-state`:
+    /// milliseconds waiting on the API, and milliseconds running tools.
+    /// `R-J63`.
+    ///
+    /// **Cumulative and re-emitted**, so a fold takes the largest rather than
+    /// summing — 78 of these lines exist across this machine's corpus for a
+    /// handful of sessions, and adding them up would report a day of API time
+    /// for an afternoon of work.
+    pub api_ms: Option<u64>,
+    pub tool_ms: Option<u64>,
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -556,6 +585,19 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
             out.last_prompt = str_at(&v, "lastPrompt").map(|s| truncate(s, 400));
         }
 
+        // Where the session's time went. `R-J63`, and see `HANDLED` for what
+        // this arm deliberately does not take.
+        //
+        // Zero is read as **absent** rather than as a measurement: the first
+        // `cost-state` of a session carries zeros for every field but
+        // `totalDuration`, and folding those in as data would report a session
+        // that had spent no time on the API when what happened is that nobody
+        // had asked it anything yet.
+        "cost-state" => {
+            out.api_ms = v.get("totalAPIDuration").and_then(Value::as_u64).filter(|n| *n > 0);
+            out.tool_ms = v.get("totalToolDuration").and_then(Value::as_u64).filter(|n| *n > 0);
+        }
+
         // Records a file the session is tracking edits to.
         "file-history-delta" => {
             if let Some(p) = str_at(&v, "trackingPath") {
@@ -748,6 +790,13 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
         && out.error.is_none()
         && out.tokens_out == 0
         && !out.limit_hit
+        // `R-J63`. A `cost-state` carrying only zeros is genuinely barren —
+        // that is the first one of every session — and one carrying timings is
+        // not. Adding the field to the arm without adding it here would have
+        // parsed it into a struct that was then thrown away, which is the
+        // quietest way to build a feature that does nothing.
+        && out.api_ms.is_none()
+        && out.tool_ms.is_none()
     {
         return None;
     }
@@ -768,6 +817,39 @@ mod tests {
 
     fn class(line: &str) -> LineClass {
         parse_line(line).class()
+    }
+
+    /// `cost-state` was the canary's longest-standing unanswered raise —
+    /// 5 lines on 2026-08-26, 78 by the time it was ruled on. `R-J63`.
+    ///
+    /// What it takes and what it leaves are both deliberate, so both are
+    /// pinned: the timings are information mogeung has no other source for,
+    /// and the dollars are ADR-0024's question rather than a parser's.
+    #[test]
+    fn cost_state_gives_up_its_timings_and_not_its_dollars() {
+        let l = r#"{"type":"cost-state","totalCostUSD":0.377,"totalAPIDuration":17488,"totalToolDuration":1371,"totalDuration":144048868,"modelUsage":{"claude-opus-5[1m]":{"inputTokens":512,"outputTokens":874,"costUSD":0.3768}}}"#;
+        let p = parsed(l);
+        assert_eq!(p.api_ms, Some(17_488));
+        assert_eq!(p.tool_ms, Some(1_371));
+        // Not a token of it is folded into the burn: `usage.rs` reads the
+        // assistant lines themselves, and two sources for one number is two
+        // numbers that can disagree.
+        assert_eq!(p.tokens_in, 0);
+        assert_eq!(p.tokens_out, 0);
+    }
+
+    /// The first `cost-state` of every session is all zeros, and it is
+    /// **barren** rather than a measurement of zero — which is the same
+    /// distinction a `last-prompt` with no prompt already makes. Folding it in
+    /// would report a session that spent no time on the API when what happened
+    /// is that nobody had asked it anything yet.
+    #[test]
+    fn a_zeroed_cost_state_is_barren_rather_than_a_measurement() {
+        let l = r#"{"type":"cost-state","totalCostUSD":0,"totalAPIDuration":0,"totalToolDuration":0,"totalDuration":16343979}"#;
+        assert!(
+            matches!(parse_line(l), LineOutcome::Barren { ref event_type } if event_type == "cost-state"),
+            "a zeroed cost-state carries nothing, and says so"
+        );
     }
 
     #[test]

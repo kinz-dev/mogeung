@@ -268,6 +268,8 @@ mod tests {
 
     fn sess(alive: bool, status: Option<LiveStatus>, secs_ago: i64, now: DateTime<Utc>) -> Session {
         Session {
+            api_ms: 0,
+            tool_ms: 0,
             id: format!("s{secs_ago}"),
             title: None,
             name: None,

@@ -44,6 +44,20 @@ export function InfoPane() {
         <Field label="started">{stamp(s.started_at)} <Dim>({fmtDur(secsSince(s.started_at))} ago)</Dim></Field>
         <Field label="last event">{stamp(s.last_event_at)} <Dim>({fmtDur(secsSince(s.last_event_at))} ago)</Dim></Field>
         <Field label="turns">{num(s.turns)} · {num(s.tool_calls)} tool calls</Field>
+        {/*
+          Where the time went, from Claude Code's own accounting (`R-J63`).
+          Shown apart from *started/last event* because it answers the question
+          those two cannot: wall time counts the hour a session sat idle, and
+          this does not. Absent when the CLI has not said — which is every
+          Codex and Qwen session, and every Claude one before 2026-08-26.
+        */}
+        {(s.api_ms ?? 0) + (s.tool_ms ?? 0) > 0 && (
+          <Field label="time in">
+            {fmtDur(Math.round((s.api_ms ?? 0) / 1000))} api ·{" "}
+            {fmtDur(Math.round((s.tool_ms ?? 0) / 1000))} tools
+            <Dim> — the CLI's own count, not wall time</Dim>
+          </Field>
+        )}
         <Field label="tokens">
           {compact(s.tokens_in)} in · {compact(s.tokens_out)} out
           <Dim> — tokens; cost is on Analytics (ADR-0024)</Dim>

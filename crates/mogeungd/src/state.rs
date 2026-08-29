@@ -407,6 +407,8 @@ fn blank_session(
         id,
         title: None,
         name: None,
+        api_ms: 0,
+        tool_ms: 0,
         last_prompt: None,
         cwd: String::new(),
         repo_root: None,
@@ -1617,6 +1619,15 @@ impl AppState {
             s.tool_calls += p.tool_calls;
             s.tokens_in = s.tokens_in.max(p.tokens_in);
             s.tokens_out += p.tokens_out;
+            // `max`, not `+=`: `cost-state` is a running total re-emitted many
+            // times a session, and summing 78 of them would report a day of API
+            // time for an afternoon's work. `R-J63`.
+            if let Some(ms) = p.api_ms {
+                s.api_ms = s.api_ms.max(ms);
+            }
+            if let Some(ms) = p.tool_ms {
+                s.tool_ms = s.tool_ms.max(ms);
+            }
             if p.last_activity.is_some() {
                 s.last_activity = p.last_activity;
             }
@@ -4511,7 +4522,11 @@ fn significant_change(before: &Session, after: &Session) -> bool {
     #[rustfmt::skip]
     let Session {
         turns: _, tool_calls: _, tokens_in: _,
-        tokens_out: _, last_activity: _, last_event_at: _,
+        // `R-J63`'s timings sit with the counters: they climb whenever a
+        // transcript grows, and a broadcast per `cost-state` line would be
+        // `R-J54`'s bug back again — 78 of them exist for a handful of
+        // sessions on this machine.
+        tokens_out: _, api_ms: _, tool_ms: _, last_activity: _, last_event_at: _,
         recent_tools: _, recent_touches: _, touched_files: _,
 
         id, title, name, last_prompt,
