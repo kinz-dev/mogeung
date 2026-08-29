@@ -649,6 +649,24 @@ The keyword ordering is untouched and is what shows without a model. Switching
 the guide off is the old pane exactly — pillar K's refusal of a blend, kept by
 never mixing the two scores.
 
+## The two harnesses, and why they are binaries (`R-O2`, `A36`)
+
+`--bin judge` and `--bin why` are the pillar's measurements, and they are
+programs rather than tests for one reason: their corpus is **this machine's**,
+which no fixture can stand in for and no CI can carry. Each reads the same
+`Config` the daemon reads, resolves the same endpoint including mogeung's own
+llmproxy, and **exits non-zero when nothing answered** — `--bin sweep`'s rule,
+because a broken setup that reads as *no findings* is the failure that costs a
+year.
+
+Neither owns a prompt of its own. `judge` calls `mogeungd::guide` and `why`
+calls `mogeungd::why`, which is what the shipping panel calls: a harness
+grading a different prompt than the one that ships is measuring a feature that
+does not exist. `why` also holds `R-O4`'s two candidate **retrievals** —
+nearest-in-time (`R-F9`'s) and leading-up — because which one the panel uses is
+a finding rather than a preference, and the corpus answered it before the panel
+existed.
+
 ## What is deliberately absent
 
 No supervisor, no child processes, no writes to `~/.claude`. See

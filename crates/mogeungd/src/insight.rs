@@ -719,7 +719,7 @@ pub fn turns_near(transcript_path: &Path, epoch_secs: i64, k: usize) -> Vec<Near
 /// (lossily decoded), and returns `false` to stop early. Lines longer than
 /// [`LINE_CAP`] are counted but not delivered. Returns whether the file
 /// opened at all — an unreadable file delivers nothing and is no error.
-fn stream_lines(path: &Path, mut f: impl FnMut(u64, &str) -> bool) -> bool {
+pub(crate) fn stream_lines(path: &Path, mut f: impl FnMut(u64, &str) -> bool) -> bool {
     let Ok(file) = std::fs::File::open(path) else { return false };
     let mut r = std::io::BufReader::new(file);
     let mut buf: Vec<u8> = Vec::new();
@@ -789,11 +789,11 @@ fn is_subagent(path: &Path) -> bool {
         .is_some_and(|n| n == "subagents")
 }
 
-fn str_at<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+pub(crate) fn str_at<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
 
-fn parse_ts(v: &Value) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_ts(v: &Value) -> Option<DateTime<Utc>> {
     str_at(v, "timestamp")
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         .map(|t| t.with_timezone(&Utc))
@@ -802,7 +802,7 @@ fn parse_ts(v: &Value) -> Option<DateTime<Utc>> {
 /// The line's human prompt, if it is one: a `user` line, not a sidechain,
 /// whose content is a non-empty string or carries `text` blocks. Mirrors the
 /// adapter's turn rule — a `tool_result` carrier is not a human typing.
-fn human_prompt(v: &Value) -> Option<String> {
+pub(crate) fn human_prompt(v: &Value) -> Option<String> {
     if str_at(v, "type") != Some("user") {
         return None;
     }
@@ -824,7 +824,7 @@ fn human_prompt(v: &Value) -> Option<String> {
 }
 
 /// Joined `text` blocks of an assistant line, if any.
-fn assistant_text(v: &Value) -> Option<String> {
+pub(crate) fn assistant_text(v: &Value) -> Option<String> {
     if str_at(v, "type") != Some("assistant") {
         return None;
     }
@@ -838,7 +838,7 @@ fn assistant_text(v: &Value) -> Option<String> {
     if joined.trim().is_empty() { None } else { Some(joined) }
 }
 
-fn tool_use_blocks(v: &Value) -> impl Iterator<Item = &Value> {
+pub(crate) fn tool_use_blocks(v: &Value) -> impl Iterator<Item = &Value> {
     v.get("message")
         .and_then(|m| m.get("content"))
         .and_then(Value::as_array)

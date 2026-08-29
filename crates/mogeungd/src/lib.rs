@@ -26,4 +26,5 @@ pub mod state;
 pub mod store;
 pub mod usage;
 pub mod watcher;
+pub mod why;
 pub mod workspace;

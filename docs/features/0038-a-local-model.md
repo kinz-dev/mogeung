@@ -139,12 +139,19 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O4` — ask the diff, answered from the transcript**
 
+- [x] `cargo run -q -p mogeungd --bin why` asks one question about a real edit
+      moment through both retrievals and prints which turns each answer came
+      from — `A36`'s test, and the row's own first commit rather than a gate
+      belonging to `R-O2` (built 2026-08-29)
 - [ ] From a hunk or a line, a question can be asked and is answered in place
 - [ ] Every answer **cites the turns it used**, and a citation opens the
       Transcript pane at that moment (`R-F9`'s machinery)
 - [ ] When no transcript covers the line, the answer says so and is labelled as
       read from the code alone — an uncited answer is never presented as
       provenance
+- [ ] *No reason in these turns* is a first-class answer rather than an error
+      state, and an answer citing only assistant turns is labelled **narration**
+      rather than rationale (both added by `--bin why`'s first corpus run)
 
 **`R-O5` — the chat panel**
 
@@ -246,6 +253,8 @@ never make the poll loop do work).
 | `crates/mogeung-core/src/review.rs` | Reading-guide ordering beside the keyword one, never blended |
 | `crates/mogeungd/src/api.rs`, `server.rs` | REST twins; the non-loopback refusal |
 | `crates/mogeungd/src/bin/judge.rs` | New — `R-O2`'s harness |
+| `crates/mogeungd/src/why.rs` | New — `R-O4`'s retrieval, prompt and parser, shared with its harness |
+| `crates/mogeungd/src/bin/why.rs` | New — `A36`'s test, `R-O4`'s first commit |
 | `desktop/src/panes/ChangesPane.tsx` | The guide, the reason column, the fallback toggle |
 | `desktop/src/ui/DiffView.tsx` | Ask-from-a-hunk, citations that open the Transcript |
 | `desktop/src/ui/Rail.tsx` + a new rail tool | The chat panel |
@@ -448,3 +457,44 @@ rendered, and editing happens after the paste, exactly as it did before. And
 the draft is not offered when no model is configured: the button is disabled
 carrying the daemon's own refusal as its title, rather than the window
 composing a second opinion about why.
+
+### `A36`'s harness, built 2026-08-29 — `R-O4`'s first commit
+
+**The row's own first commit, not a third half of `R-O2`.** `R-O2` was split so
+that each assumption is tested by the row that depends on it, and `A36` is the
+same shape: `--bin why` measures the retrieval before `R-O4` draws a panel on
+it. That is the doc rule read literally — if an assumption is `UNTESTED`, the
+work is to test it — and the cost of skipping it here would have been an
+L-sized feature built on the wrong end of a conversation.
+
+**It asks one question through two retrievals**, because the doubt `A36` wrote
+down in advance was not *is the reason there* but *are we looking at the wrong
+place*. `nearest-in-time` is `R-F9`'s existing machinery, which `R-O4` would
+have inherited by accident. `leading-up` is the human prompt at or before the
+edit plus everything between. `mogeungd::why` holds both, with the prompt and
+the parser, and the panel will use this code rather than a second copy — the
+rule `R-O3` paid for.
+
+**What 14 edit moments said, asked twice.** A reason was found in **5 of 14**
+either way, so *not in these turns* is the majority outcome and the panel has to
+render it as an answer rather than as a failure. The gap between the shapes is
+where the finding is: nearest-in-time cited **1 human turn against 12 of the
+assistant's** and rested **4 of its 5 answers on the assistant's narration
+alone**; leading-up cited **5 human turns** and produced **none**. `--show`
+makes the mechanism visible in one screen — in a long agent stretch the six
+turns nearest the edit in time are all the assistant talking to itself, so the
+prompt that caused the edit is never in reach.
+
+**So `A36`'s doubt is a fixable design error rather than a failed assumption**,
+which is exactly the distinction the assumption's own row asked for, made before
+anything was built on top of it. The status stays `UNTESTED`: a harness says the
+reason is reachable when it is there, not that the answers are worth the screen
+space, and that is what the fortnight `R-O8` owns is for.
+
+**Two things found by running it.** A reply came back carrying llmproxy's own
+routing classification (`R3_LOCAL <parameter name="reason">…`) rather than an
+answer, so a reply with no `REASON:` label is now counted apart rather than read
+as a reason found — otherwise the number this harness exists to report inflates
+itself. And the same moment can answer *no reason* on one run and narrate on the
+next, so the output says to run it twice: it is the gap between the shapes that
+is stable, not either number alone.
