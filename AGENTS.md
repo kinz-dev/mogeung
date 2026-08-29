@@ -132,6 +132,23 @@ does not typecheck.** Vitest transpiles and never checks types, so a type error
 Learnt on 2026-08-28, from a guard in a test that `tsc` correctly called
 always-true.
 
+**The same hole exists in Rust, and it is wider.** `desktop/src-tauri` is
+[deliberately its own workspace root](../desktop/src-tauri/Cargo.toml) so that a
+missing `libwebkit2gtk-4.1-dev` cannot take down `cargo test --workspace` — a
+good trade that costs this: **nothing in the list above compiles the shell.**
+So a field added to any public `mogeung-core` struct compiles everywhere the
+checklist looks and breaks `install.sh`, which builds the one crate it does not.
+
+> **Change a public type in `mogeung-core`? Run
+> `cargo check --manifest-path desktop/src-tauri/Cargo.toml`.**
+
+It needs the webkit dependency, so it is not on the unconditional list — if you
+cannot run it, say so when handing back rather than leaving it unsaid. Learnt on
+2026-08-29, from `ModelSettings` gaining `embed_model`: the workspace was green,
+both client suites passed, the docs checked, and the install failed on a
+one-field initializer in `daemon.rs`. Same lesson as the paragraph above, one
+language over.
+
 ## Testing
 
 ## Agent skills

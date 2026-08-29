@@ -377,6 +377,10 @@ fn host(listener: TcpListener) {
                     url: cfg.model_url.clone(),
                     model: cfg.model_name.clone(),
                     consent: cfg.allow_remote_model.clone(),
+                    // File-only, like the three above it: a hosted daemon has
+                    // no argv to be given a flag through (ADR-0009), which is
+                    // the whole reason these are read from `config.toml` here.
+                    embed_model: cfg.embed_model.clone(),
                 },
                 ..Default::default()
             };
