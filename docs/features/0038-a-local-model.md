@@ -1,7 +1,7 @@
 ---
 title: A local model beside the agents
 status: in-progress
-updated: 2026-08-28
+updated: 2026-08-29
 roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10, R-O11]
 depends_on: [A3, A4, A29, A35, A36, A37, A38]
 ---
@@ -21,9 +21,18 @@ features that came back out of it sit inside the rules as written.
 here starts, steers or stops an agent.
 [ADR-0019](../decisions/0019-a-viewer-not-an-editor.md) is untouched — nothing
 here writes a worktree file, so the concurrent writer, the cost that decided
-that ADR, is not paid. [ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)
-is untouched — `R-O7` drafts better text into the window that already exists
-and still offers exactly one action.
+that ADR, is not paid.
+
+> **The third claim was wrong, and building `R-O7` is what proved it.** This
+> paragraph said [ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)
+> was untouched too. Its *decision* is — the window still offers exactly one
+> action and nothing is sent to a session — but one sentence of it was
+> *"the daemon never learns a prompt was written"*, and a model cannot draft
+> text it has not been shown. That sentence is replaced by
+> [ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md), which supersedes
+> ADR-0008 and carries the rest of it forward verbatim. Corrected here rather
+> than quietly: *four* of the five needed no fence moved, and the fifth moved a
+> smaller one than it first appears.
 
 That is worth stating plainly because it is evidence about the rules rather
 than about the features: given permission to break them, the work that looked
@@ -105,9 +114,10 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O2` — the harness, before the panels**
 
-- [ ] `cargo run -q -p mogeungd --bin judge` runs the reading guide and the
+- [x] `cargo run -q -p mogeungd --bin judge` runs the reading guide and the
       existing keyword order over every session on this machine that has a
-      diff, and prints where they disagree
+      diff, and prints where they disagree — built 2026-08-28, and it runs the
+      shipped `mogeungd::guide` rather than a copy of it
 - [ ] It reports semantic recall against grep on a fixed query set: hits grep
       missed, and hits grep found that the index ranked away
 - [ ] It exits **non-zero when the model is unreachable or returns nothing**,
@@ -116,16 +126,16 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O3` — the reading guide**
 
-- [ ] For a session with changed files, the Changes pane offers a model
+- [x] For a session with changed files, the Changes pane offers a model
       ordering with a one-line reason per file and a paragraph naming what
       carries the change and what is mechanical
-- [ ] The reason is always visible where the ordering is used — the ranking is
+- [x] The reason is always visible where the ordering is used — the ranking is
       never a black box ([attention-ranking](../design/attention-ranking.md))
-- [ ] The keyword ordering is one click away, unchanged, and is what shows when
+- [x] The keyword ordering is one click away, unchanged, and is what shows when
       no model is configured
-- [ ] The two orderings are never blended. Pillar K allows honest heuristics or
+- [x] The two orderings are never blended. Pillar K allows honest heuristics or
       real analysis and refuses the middle
-- [ ] Nothing here touches the queue's tiers or scores
+- [x] Nothing here touches the queue's tiers or scores
 
 **`R-O4` — ask the diff, answered from the transcript**
 
@@ -166,11 +176,15 @@ sentence an agent can act on is still done by hand, in the window, every time.
 
 **`R-O7` — draft the follow-up prompt**
 
-- [ ] The prompt window offers a drafted instruction composed from the flagged
+- [x] The prompt window offers a drafted instruction composed from the flagged
       hunks and their notes
-- [ ] The raw concatenation is one click away, so what the draft dropped is
+- [x] The raw concatenation is one click away, so what the draft dropped is
       inspectable
-- [ ] The window still offers exactly **one** action: copy
+- [x] The window still offers exactly **one** action: copy, and it copies
+      whichever text is on screen
+- [x] The draft is **asked for** and is **kept nowhere** — the ask names no
+      conversation, and the answer never appears in the chat panel it borrowed
+      the door from (added by the build; ADR-0034 clauses 2 and 5)
 
 **`R-O8` — the verdict**
 
@@ -237,6 +251,7 @@ never make the poll loop do work).
 | `desktop/src/ui/Rail.tsx` + a new rail tool | The chat panel |
 | `desktop/src/panes/InsightPane.tsx` | The second, labelled list |
 | `desktop/src/ui/PromptWindow.tsx` | The draft, and the raw view behind it |
+| `desktop/src/lib/prompt.ts` | `R-O7`'s ask — composed in the client, ADR-0034 |
 
 ### Risks and unknowns
 
@@ -376,3 +391,60 @@ underneath it.
 one; this one is the free-form string, and a second door into it is surface to
 delete if `A37` says the panel goes. Worth revisiting when `R-O3` or `R-O4`
 arrives with an id-carrying command that wants one.
+
+### `R-O7`, built 2026-08-29
+
+**The row said no fence had to move and it was nearly right.** The plan's own
+preamble claimed ADR-0008 was untouched by this row. Its decision is — one
+action, nothing sent to a session — but *"the daemon never learns a prompt was
+written"* is a sentence in that decision, and a model cannot draft text it has
+not been shown. [ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md)
+replaces that one sentence and carries the rest forward verbatim. Worth saying
+plainly: the fence that moved is the one nobody predicted would, which is the
+usual shape.
+
+**The draft is a chat ask, and nothing on the wire is new.** The alternative
+was a `draft_prompt` command carrying hunks and notes to a prompt builder in
+`mogeungd` — the shape `R-O3` uses, and the better one on *"the daemon is the
+product"*. It loses on ADR-0031 clause 2: it would be the **second** free-form
+family on a protocol that carries ids, and the bind refusal protecting the
+first would have to be written again somewhere it can be forgotten silently.
+Riding `model_chat` inherits every gate instead, including the one that
+matters — a daemon bound beyond loopback will not take one at all. The cost is
+recorded rather than waved away: the meta-prompt is TypeScript no Rust harness
+can grade, and a second client would have to compose its own.
+
+**The answer comes back through the chat's door and must not come out of it.**
+`model_reply` is matched by the client's own request id, which is how two chat
+questions in flight already stay apart — so the draft is routed by id before
+the chat reducer sees it. That is the test worth having: a drafted instruction
+appearing in a conversation somebody is reading would be a leak between two
+features that share a wire and share nothing else.
+
+**Bounded by the whole ask, not per hunk.** `R-O3` paid 78 seconds and an empty
+answer to learn that a per-item cap is not a bound while the item count is not.
+Flagging is done by hand and rarely runs past a handful — but *rarely* is not a
+limit, and a draft that fails the day somebody flags forty hunks fails on the
+day it was most wanted. 400 lines shared out, and what was cut is stated in the
+prompt so the model does not draft from a hunk it believes it saw whole.
+
+**The output contract is the load-bearing half of the prompt.** What comes back
+is pasted into an agent's terminal, so a model that opens with *"Here is a
+draft:"* has put a sentence into somebody's session that they did not write.
+The ask says: the instruction and nothing around it, name each file, say only
+what the reviewer's notes ask for, and leave a hunk out rather than inventing a
+reason for it.
+
+**Verified live, not only at the wire** — `R-J38`'s standing warning. Against
+the running daemon and its own llmproxy, in a browser tab: two hunks of
+`docs/client.md` flagged, a note typed, and the draft came back in **5.6s** from
+`claude-sonnet-5` as one instruction naming the file and both changes, with no
+preamble in front of it. The toggle showed the raw concatenation underneath,
+and the chat panel's history still had nothing newer than the day before — the
+ask named no conversation, and the daemon kept none.
+
+**What is not built:** the drafted text is not editable in place — it is
+rendered, and editing happens after the paste, exactly as it did before. And
+the draft is not offered when no model is configured: the button is disabled
+carrying the daemon's own refusal as its title, rather than the window
+composing a second opinion about why.

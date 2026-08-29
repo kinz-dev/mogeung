@@ -1,7 +1,8 @@
 ---
 title: mogeung builds follow-up prompts but never sends them
-status: active
-updated: 2026-07-25
+status: superseded
+superseded_by: ADR-0034
+updated: 2026-08-29
 decided: 2026-07-25
 ---
 

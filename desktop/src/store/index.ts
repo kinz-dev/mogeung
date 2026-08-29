@@ -68,7 +68,7 @@ import {
   type DaemonStatus,
 } from "@/lib/tauri";
 import { applyAppZoom } from "@/lib/zoom";
-import type { FlaggedHunk } from "@/lib/prompt";
+import { draftAsk, type FlaggedHunk } from "@/lib/prompt";
 import {
   defaultPrefs,
   emptyScoped,
@@ -126,6 +126,28 @@ export interface ReadingGuide {
   elapsed_ms: number;
   error: string | null;
   pending: boolean;
+}
+
+/**
+ * A model's draft of the follow-up instruction. `R-O7`, ADR-0034.
+ *
+ * Held beside the chat rather than in it: the answer comes back through
+ * `model_chat` like every other question, but it belongs to the prompt window
+ * and must not appear in the panel a reader is having a conversation in.
+ * `ingest` routes it by id, which is the same mechanism two chat questions in
+ * flight at once already rely on.
+ */
+export interface PromptDraft {
+  /** The ask's id, and how the reply is told from a chat answer. */
+  id: string;
+  /** What the model has written so far, or all of it once `pending` is false. */
+  text: string;
+  pending: boolean;
+  /** When the ask went out, for the seconds a slow model owes an explanation for. */
+  started: number;
+  error: string | null;
+  model: string;
+  elapsed_ms: number;
 }
 
 /**
@@ -552,6 +574,13 @@ export interface AppState {
   /** The follow-up prompt builder, and what has been flagged for it. */
   showPrompt: boolean;
   flagged: FlaggedHunk[];
+  /**
+   * The model's draft of that prompt, or `null` before one is asked for.
+   *
+   * One at a time and not per session: there is one prompt window and one
+   * thing being composed in it.
+   */
+  promptDraft: PromptDraft | null;
   /** The big board for a second monitor. `R-C5`. */
   ambient: boolean;
   /** Start a session in a terminal. `R-B2`. */
@@ -609,6 +638,8 @@ export interface AppState {
   toggleRailTool: (tool: RailTool) => void;
   /** Ask a model to order this session's changed files. `R-O3`. */
   askReadingGuide: (sessionId: SessionId) => void;
+  /** Ask a model to draft the follow-up prompt. `R-O7`. */
+  draftFollowUp: (note: string) => void;
   /** Put the thread away and start a fresh one. `R-O9`. */
   newConversation: () => void;
   /** Open a kept conversation and go on asking in it. `R-O9`. */
@@ -811,6 +842,7 @@ export const useStore = create<AppState>((set, get) => ({
   showConnections: false,
   showPrompt: false,
   flagged: [],
+  promptDraft: null,
   ambient: false,
   showLaunch: false,
   showTerminal: false,
@@ -919,6 +951,41 @@ export const useStore = create<AppState>((set, get) => ({
       },
     }));
     get().send({ cmd: "reading_guide", session_id: sessionId });
+  },
+
+  /**
+   * Ask a model to draft the follow-up instruction. `R-O7`, ADR-0034.
+   *
+   * **This is a chat ask wearing no disguise**, and that is the whole design:
+   * the wire grows nothing, the daemon relays a string it does not keep, and
+   * every refusal the chat panel obeys is obeyed here for free — including the
+   * one that matters, which is that a daemon reachable beyond loopback will not
+   * take free-form text at all.
+   *
+   * `conversation` is **omitted**, which the daemon reads as *do not keep this*.
+   * A draft is a thing you copy, not a conversation you come back to, and
+   * ADR-0008's clipboard boundary is worth more than a row in the history.
+   */
+  draftFollowUp: (note) => {
+    const flagged = get().flagged;
+    if (flagged.length === 0) return;
+    const id = chatId();
+    set({
+      promptDraft: {
+        id,
+        text: "",
+        pending: true,
+        started: Date.now(),
+        error: null,
+        model: "",
+        elapsed_ms: 0,
+      },
+    });
+    get().send({
+      cmd: "model_chat",
+      id,
+      messages: [{ role: "user", content: draftAsk(note, flagged) }],
+    });
   },
 
   toggleRailTool: (tool) => {
@@ -1278,7 +1345,20 @@ export const useStore = create<AppState>((set, get) => ({
       case "notes":
         set({ notes: msg.notes });
         break;
-      case "model_chunk":
+      case "model_chunk": {
+        // The prompt window's draft asks through this same door (`R-O7`,
+        // ADR-0034), so the id decides where the text goes. Checked first
+        // because a draft must never appear in a conversation somebody is
+        // reading.
+        const drafting = get().promptDraft;
+        if (drafting && drafting.id === msg.id && drafting.pending) {
+          set((s) => ({
+            promptDraft: s.promptDraft
+              ? { ...s.promptDraft, text: s.promptDraft.text + msg.delta }
+              : null,
+          }));
+          break;
+        }
         // Appended to the pending turn, which stays pending: the answer is not
         // finished until `model_reply` says so, and the "thinking…" row is
         // what `Turn` shows in its place until there is something to read.
@@ -1293,7 +1373,25 @@ export const useStore = create<AppState>((set, get) => ({
           ),
         }));
         break;
-      case "model_reply":
+      }
+      case "model_reply": {
+        const drafted = get().promptDraft;
+        if (drafted && drafted.id === msg.id) {
+          set({
+            promptDraft: {
+              ...drafted,
+              pending: false,
+              // The whole text replaces the chunks, for the same reason it
+              // does in the chat: they are an early view and this is the
+              // truth. It matters more here — this text gets pasted.
+              text: msg.text ?? "",
+              error: msg.error ?? null,
+              model: msg.model,
+              elapsed_ms: msg.elapsed_ms,
+            },
+          });
+          break;
+        }
         // Matched by id rather than by position: nothing stops a second
         // question being asked while the first is still out, and the answers
         // may come back in either order.
@@ -1316,6 +1414,7 @@ export const useStore = create<AppState>((set, get) => ({
           ),
         }));
         break;
+      }
       case "reading_guide_ready":
         set((st) => ({
           guides: {

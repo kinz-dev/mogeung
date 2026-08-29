@@ -340,6 +340,16 @@ anyone can reach must not become a general-purpose LLM proxy.
 and nothing is kept, so the panel is ephemeral by construction rather than by a
 promise to delete something — there is no chat table to forget.
 
+**Two features ask through this one door, and that is deliberate.** Since
+`R-O7` the prompt window drafts its follow-up instruction by sending a
+`model_chat` with no `conversation`, rather than by adding a `draft_prompt`
+command carrying hunks and notes —
+[ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md) clause 1. The
+exception above therefore stays at exactly one, and the bind refusal that pays
+for it covers the draft without being written a second time. What tells the two
+apart is the client's own request id, which is how a client already tells two
+questions in flight apart.
+
 **The answer streams. `R-O11`.** The request carries `stream: true`, and the
 daemon forwards `model_chunk` events on the asking socket as text arrives,
 always followed by exactly one `model_reply` carrying the **whole** text.

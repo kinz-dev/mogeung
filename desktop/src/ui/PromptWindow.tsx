@@ -6,10 +6,20 @@
  * steering is what made v0.1 worse than the terminal it wrapped. The clipboard
  * is the widest part of this pipe on purpose, because a human is on the far end
  * deciding whether the text is right.
+ *
+ * **Since `R-O7` a model can draft it**, and the boundary above is unchanged —
+ * [ADR-0034](../../../docs/decisions/0034-the-draft-is-a-chat-ask.md) records
+ * what that costs and what it does not. Three properties are held on purpose:
+ *
+ * | | |
+ * | --- | --- |
+ * | **the raw concatenation is one click away** | a draft that drops something has to be catchable, and the only way to catch it is to read what it was drafted from |
+ * | **the draft is asked for, never automatic** | opening this window must not spend a model call, ADR-0031 clause 6 |
+ * | **still exactly one action: copy** | drafting composes text in this window; only the clipboard leaves it |
  */
 
-import { useState } from "react";
-import { ClipboardCopy, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ClipboardCopy, Wand2, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, IconButton, Input, Mono } from "@/ui/primitives";
@@ -18,12 +28,55 @@ import { buildPrompt } from "@/lib/prompt";
 export function PromptWindow() {
   const open = useStore((s) => s.showPrompt);
   const flagged = useStore((s) => s.flagged);
+  const draft = useStore((s) => s.promptDraft);
+  const draftFollowUp = useStore((s) => s.draftFollowUp);
+  const health = useStore((s) => s.health);
   const [note, setNote] = useState("");
   const [copied, setCopied] = useState(false);
+  /**
+   * Which text the preview is showing.
+   *
+   * Raw until a draft is asked for, because that is what exists — and it stays
+   * the thing one click away afterwards, which is the row's own requirement:
+   * what the draft dropped is only inspectable against what it was drafting
+   * from.
+   */
+  const [view, setView] = useState<"raw" | "drafted">("raw");
+
+  /**
+   * The seconds a slow draft owes an explanation for. `R-O11`'s lesson, moved.
+   *
+   * A local model can reason for half a minute before it writes a word, and a
+   * motionless "drafting…" for half a minute reads as a hang rather than as
+   * work. The interval runs only while something is out, so a window sitting
+   * open re-renders never.
+   */
+  const [now, setNow] = useState(() => Date.now());
+  const pending = draft?.pending ?? false;
+  useEffect(() => {
+    if (!pending) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [pending]);
 
   if (!open) return null;
   const close = () => useStore.setState({ showPrompt: false });
-  const text = buildPrompt(note, flagged);
+  const raw = buildPrompt(note, flagged);
+
+  const model = health?.model ?? null;
+  // Three different silences, and only one of them is *no*: a daemon that
+  // predates pillar O sends no row at all, which must not read as a refusal.
+  const usable = !!model && model.configured && model.allowed && model.chat_allowed;
+  const why = model
+    ? (model.refusal ?? "no model configured")
+    : "this daemon does not know about models — it predates pillar O";
+
+  // What copy copies is what you are looking at. Anything else is a window
+  // that puts one thing on screen and another on the clipboard.
+  const showingDraft = view === "drafted" && !!draft && !draft.error;
+  const text = showingDraft ? draft.text : raw;
+  const secs = draft?.started ? Math.floor((now - draft.started) / 1000) : 0;
 
   return (
     <Dialog
@@ -79,9 +132,57 @@ export function PromptWindow() {
           ))}
         </div>
 
-        <Dim className="mt-2 block text-2xs">preview</Dim>
+        <div className="mt-2 flex items-center gap-1">
+          <Dim className="text-2xs">preview</Dim>
+          {/*
+            Only once there is a second thing to look at. Before that a toggle
+            offering "drafted" would be a control that reports a draft exists
+            when none does.
+          */}
+          {draft && (
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                active={view === "drafted"}
+                disabled={!!draft.error}
+                title={draft.error ? "the draft failed — the raw text is what there is" : "the model's instruction"}
+                onClick={() => setView("drafted")}
+              >
+                drafted
+              </Button>
+              <Button
+                size="sm"
+                active={view === "raw"}
+                title="what the draft was written from, unchanged — so what it dropped is visible"
+                onClick={() => setView("raw")}
+              >
+                raw
+              </Button>
+            </div>
+          )}
+          {view === "drafted" && draft && !draft.pending && !draft.error && (
+            <Dim className="ml-auto text-2xs">
+              {draft.model}
+              {draft.elapsed_ms ? ` · ${(draft.elapsed_ms / 1000).toFixed(1)}s` : ""}
+            </Dim>
+          )}
+        </div>
+
+        {/*
+          The failure is shown where the draft would have been rather than
+          instead of the window: what you came here for is the raw text, and
+          it is still underneath.
+        */}
+        {draft?.error && (
+          <div className="mt-1 rounded-sm border border-[var(--red)] px-2 py-1 text-2xs text-[var(--red)]">
+            {draft.error}
+          </div>
+        )}
+
         <pre className="max-h-48 overflow-auto rounded-sm border border-[var(--border)] bg-[var(--bg)] p-1 font-mono text-2xs whitespace-pre-wrap">
-          {text}
+          {showingDraft && draft.pending && !draft.text
+            ? `drafting…${secs > 0 ? ` ${secs}s` : ""}`
+            : text}
         </pre>
 
         <div className="mt-2 flex items-center gap-1">
@@ -95,11 +196,32 @@ export function PromptWindow() {
           >
             <ClipboardCopy size={11} /> {copied ? "copied" : "copy to clipboard"}
           </Button>
+          {/*
+            Asked for, never automatic — ADR-0031 clause 6 keeps model work off
+            anything that happens on its own, and opening this window is
+            something that happens every time you flag a hunk.
+          */}
+          <Button
+            variant="outline"
+            disabled={!usable || flagged.length === 0 || draft?.pending}
+            title={
+              usable
+                ? "compose these into one instruction  (R-O7)"
+                : why
+            }
+            onClick={() => {
+              setView("drafted");
+              draftFollowUp(note);
+            }}
+          >
+            <Wand2 size={11} /> {draft?.pending ? "drafting…" : "draft with the model"}
+          </Button>
           <Button
             variant="outline"
             onClick={() => {
-              useStore.setState({ flagged: [] });
+              useStore.setState({ flagged: [], promptDraft: null });
               setNote("");
+              setView("raw");
               close();
             }}
           >
