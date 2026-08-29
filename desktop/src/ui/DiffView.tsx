@@ -428,7 +428,16 @@ function BlastRadiusPanel({ path, sessionId }: { path: string; sessionId: string
   );
 }
 
-export const FileDiff = React.memo(function FileDiff({ file, sessionId }: { file: FileChange; sessionId: string }) {
+export const FileDiff = React.memo(function FileDiff({
+  file,
+  sessionId,
+  reason,
+}: {
+  file: FileChange;
+  sessionId: string;
+  /** The guide's line for this file, `""` when it ranked nothing here. */
+  reason?: string;
+}) {
   const [open, setOpen] = useState(true);
   const send = useStore((s) => s.send);
   const asked = useStore((s) => s.radius?.path === file.path && s.radius?.session_id === sessionId);
@@ -460,6 +469,18 @@ export const FileDiff = React.memo(function FileDiff({ file, sessionId }: { file
         <FileIcon name={file.path.split("/").pop() ?? file.path} size={12} className="shrink-0" />
         <Mono className="truncate text-sm text-[var(--text-strong)]">{file.path}</Mono>
         {file.old_path && <Dim className="truncate text-2xs">← {file.old_path}</Dim>}
+        {/*
+          The reason travels with the file, which is `attention-ranking.md`'s
+          rule: an ordering whose reason lives somewhere else is a black box.
+          `unranked` is said out loud rather than left blank — a file the model
+          skipped and a guide that is switched off must not look the same.
+        */}
+        {reason !== undefined &&
+          (reason ? (
+            <Dim className="truncate text-2xs italic">— {reason}</Dim>
+          ) : (
+            <Dim className="shrink-0 text-2xs opacity-60">unranked</Dim>
+          ))}
         <Chip color="var(--dim)">{file.status}</Chip>
         <span className="text-2xs text-[var(--add-fg)]">+{file.insertions}</span>
         <span className="text-2xs text-[var(--del-fg)]">−{file.deletions}</span>
@@ -495,7 +516,23 @@ export const FileDiff = React.memo(function FileDiff({ file, sessionId }: { file
   );
 });
 
-export function DiffList({ files, sessionId }: { files: FileChange[]; sessionId: string }) {
+export function DiffList({
+  files,
+  sessionId,
+  reasons,
+}: {
+  files: FileChange[];
+  sessionId: string;
+  /**
+   * One line per file from the reading guide, keyed by path. `R-O3`.
+   *
+   * Absent when the guide is off, which is the ordinary case — this pane is
+   * exactly what it was without it. A file missing from a present map is one
+   * the model did not rank, and it says so rather than showing nothing, since
+   * *the model ignored this* and *the guide is off* must not look alike.
+   */
+  reasons?: Map<string, string>;
+}) {
   const hideReviewed = useStore((s) => s.prefs.hideReviewed);
   const shown = hideReviewed
     ? files.filter((f) => !(f.hunks.length > 0 && f.hunks.every((h) => h.reviewed)))
@@ -503,7 +540,12 @@ export function DiffList({ files, sessionId }: { files: FileChange[]; sessionId:
   return (
     <>
       {shown.map((f) => (
-        <FileDiff key={`${f.path}@${f.old_path ?? ""}`} file={f} sessionId={sessionId} />
+        <FileDiff
+          key={`${f.path}@${f.old_path ?? ""}`}
+          file={f}
+          sessionId={sessionId}
+          reason={reasons ? (reasons.get(f.path) ?? "") : undefined}
+        />
       ))}
     </>
   );

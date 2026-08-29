@@ -17,6 +17,7 @@ import { toggleRail } from "@/lib/rail";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
+  GuideFile,
   ChatSummary,
   Analytics,
   Run,
@@ -109,6 +110,22 @@ export interface ChatMessage {
   /** What actually answered, which may not be what was asked for. */
   model?: string;
   elapsed_ms?: number;
+}
+
+/**
+ * A model's reading order for one session's diff. `R-O3`.
+ *
+ * `pending` is a state of its own rather than an absent entry: ordering a
+ * 40-file diff takes a minute on a local model, and a pane that shows the old
+ * order with no sign anything is happening reads as a button that did nothing.
+ */
+export interface ReadingGuide {
+  files: GuideFile[];
+  summary: string;
+  model: string;
+  elapsed_ms: number;
+  error: string | null;
+  pending: boolean;
 }
 
 /**
@@ -511,6 +528,14 @@ export interface AppState {
    * leaves it set, which costs nothing because it only ever acts on a change.
    */
   focusRail: RailTool | null;
+  /**
+   * A model's reading order per session. `R-O3`.
+   *
+   * Keyed by session and kept until the diff is recomputed, because it is a
+   * reading of *that* diff — a guide left over from a previous one would order
+   * files the reader is no longer looking at.
+   */
+  guides: Record<SessionId, ReadingGuide>;
   /** The config editor. `R-J79`. */
   showConfig: boolean;
   /**
@@ -582,6 +607,8 @@ export interface AppState {
    * call `setPrefs` separately and only one of them signals.
    */
   toggleRailTool: (tool: RailTool) => void;
+  /** Ask a model to order this session's changed files. `R-O3`. */
+  askReadingGuide: (sessionId: SessionId) => void;
   /** Put the thread away and start a fresh one. `R-O9`. */
   newConversation: () => void;
   /** Open a kept conversation and go on asking in it. `R-O9`. */
@@ -773,6 +800,7 @@ export const useStore = create<AppState>((set, get) => ({
   showWall: false,
   activePane: null,
   showKeymap: false,
+  guides: {},
   focusRail: null,
   showConfig: false,
   config: null,
@@ -876,6 +904,23 @@ export const useStore = create<AppState>((set, get) => ({
    * surprise, so this leaves `conversationId` alone — ask again and the thread
    * carries on where it was.
    */
+  askReadingGuide: (sessionId) => {
+    set((st) => ({
+      guides: {
+        ...st.guides,
+        [sessionId]: {
+          files: st.guides[sessionId]?.files ?? [],
+          summary: "",
+          model: "",
+          elapsed_ms: 0,
+          error: null,
+          pending: true,
+        },
+      },
+    }));
+    get().send({ cmd: "reading_guide", session_id: sessionId });
+  },
+
   toggleRailTool: (tool) => {
     const { prefs, setPrefs } = get();
     const opening = !prefs.rail.includes(tool);
@@ -1269,6 +1314,21 @@ export const useStore = create<AppState>((set, get) => ({
                 }
               : m,
           ),
+        }));
+        break;
+      case "reading_guide_ready":
+        set((st) => ({
+          guides: {
+            ...st.guides,
+            [msg.session_id]: {
+              files: msg.files,
+              summary: msg.summary,
+              model: msg.model,
+              elapsed_ms: msg.elapsed_ms,
+              error: msg.error ?? null,
+              pending: false,
+            },
+          },
         }));
         break;
       case "chat_history":

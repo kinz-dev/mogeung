@@ -134,6 +134,51 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// reading everything it should be. Curl-able without a UI, deliberately — the
 /// answer to "is the board empty because nothing is happening, or because
 /// mogeung went blind?" should not require a window.
+/// Order one session's changed files with a model. `R-O3`.
+///
+/// The diff comes from the daemon's own state rather than from the client, so
+/// the guide is about the same change the Changes view is showing. Every
+/// failure arrives as `error` on the same message: a panel that shows nothing
+/// reads as broken, which is `R-O5`'s lesson applied one surface over.
+async fn reading_guide(state: &AppState, session_id: String) -> ServerMsg {
+    let fail = |e: String| ServerMsg::ReadingGuideReady {
+        session_id: session_id.clone(),
+        files: Vec::new(),
+        summary: String::new(),
+        model: String::new(),
+        elapsed_ms: 0,
+        error: Some(e),
+    };
+
+    let Some(change) = state.changes.read().await.get(&session_id).cloned() else {
+        return fail("no diff for that session yet".into());
+    };
+    let asked = crate::guide::askable(&change.files);
+    if asked.is_empty() {
+        return fail("nothing in this diff to order".into());
+    }
+
+    let prompt = crate::guide::prompt(&asked);
+    match state
+        .model
+        .chat(&[mogeung_core::model::ChatTurn::user(prompt)])
+        .await
+    {
+        Ok(a) => {
+            let order = crate::guide::parse_order(&a.text, &asked);
+            ServerMsg::ReadingGuideReady {
+                session_id,
+                files: crate::guide::assemble(&asked, &order),
+                summary: crate::guide::parse_summary(&a.text),
+                model: a.model,
+                elapsed_ms: a.elapsed_ms,
+                error: None,
+            }
+        }
+        Err(e) => fail(e),
+    }
+}
+
 /// Why the chat history is unavailable, if it is. `R-O9`, ADR-0032.
 ///
 /// Two reasons and they are different sentences, because they send you
@@ -1027,6 +1072,19 @@ async fn handle(
                 state.broadcast(ServerMsg::Health {
                     health: Box::new(state.health().await),
                 });
+            });
+        }
+        // The reading guide. `R-O3`.
+        //
+        // Spawned, like the chat: a model ordering a 40-file diff takes a
+        // minute on a local endpoint, and awaiting it here would stop that
+        // connection accepting anything else for the whole of it.
+        ClientMsg::ReadingGuide { session_id } => {
+            let state = state.clone();
+            let reply = reply.clone();
+            tokio::spawn(async move {
+                let msg = reading_guide(&state, session_id).await;
+                send_reply(&reply, msg);
             });
         }
         // The chat history. `R-O9`, ADR-0032.

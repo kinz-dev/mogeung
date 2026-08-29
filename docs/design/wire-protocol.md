@@ -375,6 +375,31 @@ configured, an endpoint consent does not cover, a public bind — arrives as an
 ordinary `error` rather than as a silence. A panel that shows nothing reads as
 broken and gets reported as a bug in mogeung.
 
+## The reading guide (`R-O3`)
+
+`reading_guide` names a **session**, not a diff: the daemon already has the
+change, so the client asks about an id like every family before it. The answer
+is one `reading_guide_ready` carrying every file the guide was asked about.
+
+**Ranked files first, then everything else, marked.** `--bin judge`'s corpus
+run found `claude-opus-5` ranking about sixteen files of sixty and saying
+nothing about the other 44, where a local model ranked 59 of 60. Shortlisting
+is what a reading guide is for; doing it silently hides two thirds of a
+change. So the daemon appends the unranked in keyword order with
+`ranked: false`, and that rule lives in the daemon rather than in each client.
+
+**A second ordering, never a blend.** The keyword order is untouched and is
+what shows without a model. [Pillar K](../product/roadmap.md#k-explicitly-not)
+refuses a weighted mix of the two in advance, because it would look
+authoritative while still being wrong.
+
+**Every failure arrives as `error` on the same message.** A panel that shows
+nothing reads as broken — `R-O5`'s lesson, one surface over.
+
+Not on the scan tick, and not on selection: the guide is asked for by a button.
+It spends a model call of up to a minute, and ADR-0031 clause 6 keeps model
+work off anything that runs on its own.
+
 ## The chat history (`R-O9`)
 
 `model_chat` grew a `conversation` field, and omitting it means what it has

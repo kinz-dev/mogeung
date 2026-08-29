@@ -303,6 +303,14 @@ pub enum ClientMsg {
         conversation: Option<String>,
     },
 
+    /// Ask a model which changed file to read first. `R-O3`.
+    ///
+    /// An id on the wire, as every family before it: the daemon has the diff
+    /// already, so the client names a session rather than sending one.
+    ReadingGuide {
+        session_id: SessionId,
+    },
+
     /// Every kept conversation, newest first. `R-O9`.
     ChatList {},
     /// One conversation's turns, to go on reading or go on asking.
@@ -687,6 +695,23 @@ pub struct WorktreeInfo {
 /// note to one turn of one transcript; a note keeps existing when that session
 /// ends, is forgotten, or the repository moves. A note with neither is a
 /// free-standing document, which is what `R-L2` will be made of.
+/// One file in the reading guide. `R-O3`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuideFile {
+    pub path: String,
+    /// Why it is here, in the model's words. Empty when unranked.
+    pub reason: String,
+    /// Did the model actually name this file?
+    ///
+    /// **The field the corpus bought.** `--bin judge` found that
+    /// `claude-opus-5` ranks about sixteen files of sixty and says nothing
+    /// about the rest, where a local model ranks nearly all of them.
+    /// Shortlisting is what a reading guide is for; doing it silently hides
+    /// two thirds of a change. So everything unranked is appended in keyword
+    /// order and marked, and the window shows the difference.
+    pub ranked: bool,
+}
+
 /// One kept conversation, without its turns. `R-O9`.
 ///
 /// The list is a list of *doors*, not of contents: a fortnight of asking
@@ -1035,6 +1060,24 @@ pub enum ServerMsg {
         model: String,
         elapsed_ms: u64,
     },
+    /// A model's reading order for one session's diff. `R-O3`.
+    ///
+    /// Carries **every** file the guide was asked about, ranked ones first.
+    /// The keyword order is untouched and remains what shows without this —
+    /// [pillar K](../../../docs/product/roadmap.md#k-explicitly-not) refuses a
+    /// blend of the two, so this is a second ordering you switch to.
+    ReadingGuideReady {
+        session_id: SessionId,
+        files: Vec<GuideFile>,
+        /// What carries the change and what is mechanical, in a paragraph.
+        summary: String,
+        /// What answered, which may not be what was asked for.
+        model: String,
+        elapsed_ms: u64,
+        /// Set instead of the rest when the model could not be asked.
+        error: Option<String>,
+    },
+
     /// The kept conversations, in answer to `ChatList` and `ChatDelete`.
     /// `R-O9`.
     ChatHistory {

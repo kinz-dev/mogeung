@@ -400,6 +400,20 @@ export interface ChatTurn {
  * every thread's text on connect would be the largest unasked-for payload in
  * this protocol.
  */
+/**
+ * One file in the reading guide. `R-O3`.
+ *
+ * `ranked: false` means the model did not mention this file. It is still on
+ * the screen — `--bin judge` found `claude-opus-5` ranking sixteen files of
+ * sixty and saying nothing about the rest, and a guide that rendered only its
+ * list would hide two thirds of a change.
+ */
+export interface GuideFile {
+  path: string;
+  reason: string;
+  ranked: boolean;
+}
+
 export interface ChatSummary {
   id: string;
   /** The first thing you asked, trimmed to a line by the daemon. */
@@ -1050,6 +1064,8 @@ export type ClientMsg =
    * panel behaved before there was a history, and the daemon honours it.
    */
   | { cmd: "model_chat"; id: string; messages: ChatTurn[]; conversation?: string }
+  /** Ask a model which changed file to read first. `R-O3`. */
+  | { cmd: "reading_guide"; session_id: SessionId }
   | { cmd: "chat_list" }
   | { cmd: "chat_load"; id: string }
   | { cmd: "chat_delete"; id: string }
@@ -1216,6 +1232,22 @@ export type ServerMsg =
       /** Why a save was refused; `text` is then still the file on disk. */
       error: string | null;
       saved: boolean;
+    }
+  /**
+   * A model's reading order for one session's diff. `R-O3`.
+   *
+   * Carries **every** file it was asked about, ranked first. The keyword order
+   * is untouched and stays what shows without this — pillar K refuses a blend,
+   * so this is a second ordering you switch to.
+   */
+  | {
+      ev: "reading_guide_ready";
+      session_id: SessionId;
+      files: GuideFile[];
+      summary: string;
+      model: string;
+      elapsed_ms: number;
+      error: string | null;
     }
   /** The kept conversations, newest first. `R-O9`. */
   | { ev: "chat_history"; chats: ChatSummary[]; refusal: string | null }

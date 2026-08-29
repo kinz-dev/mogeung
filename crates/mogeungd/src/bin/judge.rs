@@ -38,20 +38,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use mogeung_core::change::{Change, FileChange};
+use mogeung_core::change::FileChange;
 use mogeung_core::model::{ChatTurn, ModelSettings};
-use mogeungd::{git, model::Model, store::Store};
+use mogeungd::{git, guide, model::Model, store::Store};
 
-/// How much of one file's diff the model is shown.
-///
-/// A cap and not the whole thing, and the number is the point of the harness
-/// rather than a detail: the model must order the files from **less** than the
-/// reader has, or it is not saving anybody the scroll it exists to save. Forty
-/// lines is about a screen.
-const DIFF_LINES_PER_FILE: usize = 40;
-/// Files above this are not worth asking about — the reading guide is for the
-/// 22-file diff where three matter, and a 400-file one is a different problem.
-const MAX_FILES: usize = 60;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -114,7 +104,7 @@ fn main() {
 
     for (repo, base) in &repos {
         let change = git::compute_change(repo, base.as_deref(), &HashSet::new());
-        let files = readable(&change);
+        let files = guide::askable(&change.files);
         if files.len() < 2 {
             continue;
         }
@@ -122,7 +112,7 @@ fn main() {
         println!("\n=== {} — {} file(s) ===", repo.display(), files.len());
 
         let keyword: Vec<&FileChange> = files.clone();
-        let prompt = ask_for_order(&files);
+        let prompt = guide::prompt(&files);
         let reply = rt.block_on(model.chat(&[ChatTurn::user(prompt)]));
 
         let text = match reply {
@@ -137,7 +127,7 @@ fn main() {
             }
         };
 
-        let order = parse_order(&text, &files);
+        let order = guide::parse_order(&text, &files);
         if order.is_empty() {
             println!("  the model named no file this diff contains");
             continue;
@@ -208,20 +198,6 @@ fn main() {
     );
 }
 
-/// The files worth asking about: the ones a reader would actually read.
-///
-/// `Noise` is dropped — lockfiles and generated code are already collapsed in
-/// the Changes view, so including them would let the model win by re-deriving
-/// a decision the keyword scorer has already made.
-fn readable(change: &Change) -> Vec<&FileChange> {
-    change
-        .files
-        .iter()
-        .filter(|f| !f.truncated && !f.flags.iter().any(|fl| matches!(fl, mogeung_core::change::RiskFlag::Noise)))
-        .take(MAX_FILES)
-        .collect()
-}
-
 fn short(path: &str) -> String {
     let p = Path::new(path);
     let n = p.components().count();
@@ -229,66 +205,6 @@ fn short(path: &str) -> String {
         return path.to_string();
     }
     format!(".../{}", p.components().skip(n - 3).map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
-}
-
-/// The question, with a bounded excerpt of each file rather than the diff.
-fn ask_for_order(files: &[&FileChange]) -> String {
-    let mut s = String::from(
-        "You are given the changed files of one commit-in-progress. Order them by what a \
-         reviewer should read FIRST to understand what this change does.\n\n\
-         Answer with one line per file, most important first, exactly:\n\
-         <path> | <reason in at most 12 words>\n\n\
-         Rank by what carries the change. Put mechanical edits last: renames, \
-         formatting, generated files, and edits that only follow from another file.\n\n",
-    );
-    for f in files {
-        s.push_str(&format!(
-            "--- {} (+{} -{})\n",
-            f.path, f.insertions, f.deletions
-        ));
-        let mut shown = 0;
-        for h in &f.hunks {
-            for line in h.lines.iter() {
-                if shown >= DIFF_LINES_PER_FILE {
-                    break;
-                }
-                s.push_str(line);
-                s.push('\n');
-                shown += 1;
-            }
-            if shown >= DIFF_LINES_PER_FILE {
-                break;
-            }
-        }
-        s.push('\n');
-    }
-    s
-}
-
-/// Read the model's order back, keeping only files this diff actually has.
-///
-/// A model that invents a path has not ordered *this* change, and silently
-/// accepting one would let the harness report agreement it never measured.
-pub fn parse_order(text: &str, files: &[&FileChange]) -> Vec<(String, String)> {
-    let known: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim().trim_start_matches(['-', '*', '#', ' ']);
-        let (left, why) = match line.split_once('|') {
-            Some((l, r)) => (l.trim(), r.trim()),
-            None => (line, ""),
-        };
-        // Substring rather than equality: a model returns `1. src/foo.rs` and
-        // backticks about as often as it returns the bare path.
-        let Some(hit) = known.iter().find(|k| left.contains(*k)) else {
-            continue;
-        };
-        if seen.insert(hit.to_string()) {
-            out.push((hit.to_string(), why.to_string()));
-        }
-    }
-    out
 }
 
 /// mogeung's own llmproxy, if it is configured and actually answering.
@@ -337,77 +253,3 @@ fn repos_with_sessions() -> Vec<(PathBuf, Option<String>)> {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mogeung_core::change::FileStatus;
-
-    fn file(path: &str) -> FileChange {
-        FileChange {
-            path: path.into(),
-            old_path: None,
-            status: FileStatus::Modified,
-            insertions: 1,
-            deletions: 0,
-            hunks: Vec::new(),
-            flags: Vec::new(),
-            score: 0,
-            truncated: false,
-        }
-    }
-
-    /// The model answers in prose, not in a protocol. These are the shapes it
-    /// actually returns, taken from real runs. `R-O2`.
-    #[test]
-    fn an_order_is_read_out_of_whatever_the_model_wrote() {
-        let files = [file("src/model.rs"), file("src/wire.rs"), file("README.md")];
-        let refs: Vec<&FileChange> = files.iter().collect();
-
-        let text = "1. `src/wire.rs` | adds the chunk event
-- src/model.rs — streams the reply
-  README.md | notes it";
-        let got = parse_order(text, &refs);
-        assert_eq!(
-            got.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
-            ["src/wire.rs", "src/model.rs", "README.md"],
-            "numbering, bullets and backticks are all noise around the path"
-        );
-        assert_eq!(got[0].1, "adds the chunk event");
-        // An em dash is not the separator; that line still ranks, with no reason.
-        assert_eq!(got[1].1, "");
-    }
-
-    /// A model that invents a path has not ordered *this* change, and taking
-    /// it would let the harness report agreement it never measured.
-    #[test]
-    fn a_file_this_diff_does_not_have_is_dropped() {
-        let files = [file("src/model.rs")];
-        let refs: Vec<&FileChange> = files.iter().collect();
-        let got = parse_order("1. src/imaginary.rs | invented
-2. src/model.rs | real", &refs);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].0, "src/model.rs");
-    }
-
-    /// Naming one file twice must not give it two places in the order — the
-    /// second mention would silently push everything after it down one.
-    #[test]
-    fn a_file_named_twice_is_ranked_once() {
-        let files = [file("a.rs"), file("b.rs")];
-        let refs: Vec<&FileChange> = files.iter().collect();
-        let got = parse_order("a.rs | first
-b.rs | second
-a.rs | again", &refs);
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].0, "a.rs");
-    }
-
-    /// Nothing usable is not an empty order silently treated as agreement.
-    #[test]
-    fn prose_with_no_paths_orders_nothing() {
-        let files = [file("a.rs")];
-        let refs: Vec<&FileChange> = files.iter().collect();
-        assert!(parse_order("I am sorry, I cannot help with that.", &refs).is_empty());
-        assert!(parse_order("", &refs).is_empty());
-    }
-}
