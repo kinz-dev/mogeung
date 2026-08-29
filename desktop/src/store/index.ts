@@ -73,7 +73,7 @@ import {
 } from "@/lib/tauri";
 import { applyAppZoom } from "@/lib/zoom";
 import { draftAsk, type FlaggedHunk } from "@/lib/prompt";
-import { commandAsk, parseCommand } from "@/lib/command";
+import { commandAsk, explainAsk, parseCommand, refineAsk } from "@/lib/command";
 import {
   defaultPrefs,
   emptyScoped,
@@ -202,6 +202,18 @@ export interface CommandDraft {
   error: string | null;
   model: string;
   elapsed_ms: number;
+  /** This ask **revised** the command that was already there. `R-O12`. */
+  refined: boolean;
+  /**
+   * The second ask — what does this command do — and its own id, because a
+   * reply has to find its way to the right half of this struct.
+   *
+   * Asked for, never volunteered: a line of prose under every answer would be
+   * a model call paid on every ask by everyone who already reads shell.
+   */
+  explainId: string | null;
+  explanation: string;
+  explainPending: boolean;
 }
 
 /**
@@ -680,6 +692,15 @@ export interface AppState {
   /** The command box is open (`Alt+Shift+M`, rebindable). `R-O12`. */
   showCommandBox: boolean;
   /**
+   * What you have asked this box for, newest last. `R-O12`.
+   *
+   * In memory and never written down, which is the same rule the questions
+   * themselves follow: they are typed at a shell prompt and can name hosts and
+   * paths. Up-arrow walks them, and closing the window is the whole of the
+   * retention policy.
+   */
+  commandHistory: string[];
+  /**
    * A terminal that should take the keyboard, by pane id, with a nonce.
    * `R-O12`.
    *
@@ -764,8 +785,10 @@ export interface AppState {
   draftFollowUp: (note: string) => void;
   /** Ask why a hunk changed, answered from the turns that produced it. `R-O4`. */
   askAboutHunk: (sessionId: SessionId, path: string, anchor: string, question: string) => void;
-  /** Ask for a shell command in words. `R-O12`. */
+  /** Ask for a shell command in words — or refine the one already there. `R-O12`. */
   askForCommand: (question: string, repo: string | null, shell: string) => void;
+  /** Ask what the drafted command actually does. `R-O12`. */
+  explainCommand: (shell: string) => void;
   /** Put the thread away and start a fresh one. `R-O9`. */
   newConversation: () => void;
   /** Open a kept conversation and go on asking in it. `R-O9`. */
@@ -970,6 +993,7 @@ export const useStore = create<AppState>((set, get) => ({
   flagged: [],
   promptDraft: null,
   showCommandBox: false,
+  commandHistory: [],
   commandDraft: null,
   focusTerminal: null,
   diffAnswers: {},
@@ -1172,7 +1196,17 @@ export const useStore = create<AppState>((set, get) => ({
     const q = question.trim();
     if (!q) return;
     const id = chatId();
-    set({
+    // **Refine when there is something to refine.** The second ask of a session
+    // is almost never a different question — it is *without the pipe*, *use
+    // ripgrep* — and making that retype the whole request was the friction this
+    // removes. A fresh question is one Esc away, where a modifier for the
+    // common case would be a thing to remember.
+    const previous = get().commandDraft?.command ?? "";
+    const refined = previous.length > 0;
+    set((s) => ({
+      // Kept in memory only, like the questions themselves: they are typed at a
+      // shell prompt and can name hosts and paths.
+      commandHistory: [...s.commandHistory.filter((h) => h !== q), q].slice(-20),
       commandDraft: {
         id,
         question: q,
@@ -1182,12 +1216,33 @@ export const useStore = create<AppState>((set, get) => ({
         error: null,
         model: "",
         elapsed_ms: 0,
+        refined,
+        explainId: null,
+        explanation: "",
+        explainPending: false,
       },
-    });
+    }));
     get().send({
       cmd: "model_chat",
       id,
-      messages: [{ role: "user", content: commandAsk(q, repo, shell) }],
+      messages: [
+        {
+          role: "user",
+          content: refined ? refineAsk(previous, q, repo, shell) : commandAsk(q, repo, shell),
+        },
+      ],
+    });
+  },
+
+  explainCommand: (shell) => {
+    const draft = get().commandDraft;
+    if (!draft?.command || draft.explainPending) return;
+    const id = chatId();
+    set({ commandDraft: { ...draft, explainId: id, explainPending: true, explanation: "" } });
+    get().send({
+      cmd: "model_chat",
+      id,
+      messages: [{ role: "user", content: explainAsk(draft.command, shell) }],
     });
   },
 
@@ -1582,6 +1637,18 @@ export const useStore = create<AppState>((set, get) => ({
         // command drafted for a terminal must not surface in a conversation,
         // in a diff, or in the prompt window.
         const asking = get().commandDraft;
+        // The explanation is a second ask against the same struct, so it is
+        // matched first — its id is the more specific one.
+        if (asking && asking.explainId === msg.id) {
+          set({
+            commandDraft: {
+              ...asking,
+              explainPending: false,
+              explanation: (msg.text ?? "").trim() || (msg.error ?? ""),
+            },
+          });
+          break;
+        }
         if (asking && asking.id === msg.id) {
           set({
             commandDraft: {

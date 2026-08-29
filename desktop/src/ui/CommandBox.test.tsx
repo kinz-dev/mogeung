@@ -157,6 +157,79 @@ describe("asking for a command in words", () => {
     expect(useStore.getState().chat).toHaveLength(0);
   });
 
+  /**
+   * The second ask of a session is almost never a different question — it is
+   * *without the pipe*, *use ripgrep*. Asked for 2026-08-29.
+   */
+  it("refines the command already there rather than starting over", () => {
+    show();
+    ask("grep xyz");
+    answers("grep xyz . | sort");
+    ask("use ripgrep");
+    const msg = askId();
+    // The previous command travels with the change, and the prompt says to
+    // keep the rest of it.
+    expect(msg.messages[0].content).toContain("grep xyz . | sort");
+    expect(msg.messages[0].content).toContain("use ripgrep");
+    expect(msg.messages[0].content).toContain("Change only what was asked");
+  });
+
+  /** Up-arrow walks what you asked, so a variation is one key rather than a retype. */
+  it("remembers what you asked", () => {
+    show();
+    ask("list the files");
+    answers("ls -la");
+    fireEvent.keyDown(box(), { key: "ArrowUp" });
+    expect(box()).toHaveValue("list the files");
+  });
+
+  /**
+   * A placeholder is the **model** saying the command is unfinished, not
+   * mogeung judging it unsafe — so `Alt+Enter` writes it and does not run it.
+   */
+  it("will not run a command that still has a placeholder", () => {
+    show();
+    ask("grep something and sort it");
+    answers("grep xyz <file> | sort -k1,1");
+    // Said before either key can be pressed, not after.
+    expect(screen.getByText(/fill it in before running/)).toBeInTheDocument();
+    fireEvent.keyDown(box(), { key: "Enter", altKey: true });
+    // Written, not run: `run` is false despite the Alt.
+    expect(accepted).toEqual([["grep xyz <file> | sort -k1,1", false]]);
+  });
+
+  /**
+   * The rule that makes both keys unambiguous, and it was a bug first: with an
+   * answer on screen, Enter accepted the old command instead of asking for the
+   * change that had just been typed.
+   */
+  it("accepts on an empty box and asks on a full one", () => {
+    show();
+    ask("list the files");
+    answers("ls -la");
+    // Something typed: that is the ask, not an accept.
+    fireEvent.change(box(), { target: { value: "with sizes" } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+    expect(accepted).toEqual([]);
+    // Nothing typed: that is the accept.
+    answers("ls -lah");
+    fireEvent.keyDown(box(), { key: "Enter" });
+    expect(accepted).toEqual([["ls -lah", false]]);
+  });
+
+  /** A second model call, so it is asked for rather than volunteered. */
+  it("explains the command only when asked", () => {
+    show();
+    ask("list the files");
+    answers("ls -la");
+    expect(sent.filter((m) => m.cmd === "model_chat")).toHaveLength(1);
+    fireEvent.click(screen.getByText(/what does it do/));
+    const explain = sent.filter((m) => m.cmd === "model_chat").at(-1);
+    if (!explain || explain.cmd !== "model_chat") throw new Error("nothing was asked");
+    expect(explain.messages[0].content).toContain("Explain this bash command");
+    expect(explain.messages[0].content).toContain("ls -la");
+  });
+
   it("is shut, with the daemon's reason, when there is no model", () => {
     useStore.setState({
       health: health(model({ chat_allowed: false, refusal: "not on a public bind" })),

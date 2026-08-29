@@ -85,3 +85,79 @@ export function looksDestructive(command: string): boolean {
     />\s*\/dev\/sd/.test(c)
   );
 }
+
+/**
+ * Revise the command already on screen, rather than starting over. `R-O12`.
+ *
+ * The second ask of a session is almost never a different question — it is
+ * *"without the pipe"*, *"use ripgrep"*, *"case-insensitive"*. Making that
+ * retype the whole request is the friction this removes, and it is why the box
+ * refines whenever there is something to refine: a fresh question is one
+ * <kbd>Esc</kbd> away, where a modifier for the common case would be a thing to
+ * remember.
+ */
+export function refineAsk(
+  previous: string,
+  instruction: string,
+  repo: string | null,
+  shell: string,
+): string {
+  const where = repo ? `\nThe working directory is \`${repo}\`.` : "";
+  return (
+    `Here is a ${shell} command:\n\n${previous}\n\n` +
+    `Change it so that: ${instruction.trim()}${where}\n\n` +
+    "Rules:\n" +
+    "- Answer with the revised command itself and nothing else. No explanation, " +
+    "no backticks, no leading `$`.\n" +
+    "- Change only what was asked. Keep the rest of the command as it is.\n" +
+    "- One line.\n" +
+    "- If the change does not make sense for this command, answer with the single " +
+    "word NO.\n"
+  );
+}
+
+/**
+ * What does this command do? `R-O12`.
+ *
+ * Asked for rather than volunteered: it is a second model call, and a line of
+ * prose under every answer would be paid for on every ask by everyone who
+ * already reads shell.
+ */
+export function explainAsk(command: string, shell: string): string {
+  return (
+    `Explain this ${shell} command in one sentence, for someone who knows the ` +
+    `shell but not this command's flags:\n\n${command}\n\n` +
+    "Answer with the sentence and nothing else. No preamble, no list, no backticks."
+  );
+}
+
+/**
+ * The first `<placeholder>` in a command, as `[start, end)` in characters.
+ *
+ * The prompt asks for `<file>` where a path is needed and not known, so the
+ * answers reliably contain one — and hunting for it with arrow keys was the
+ * most common friction in using this. `null` when there is none.
+ */
+export function placeholderAt(command: string): [number, number] | null {
+  const m = command.match(/<[a-zA-Z][a-zA-Z0-9 _-]*>/);
+  if (!m || m.index === undefined) return null;
+  return [m.index, m.index + m[0].length];
+}
+
+/**
+ * The keystrokes that leave the cursor where the placeholder was, with the
+ * rest of the line intact.
+ *
+ * Left-arrows back to the end of the placeholder, then backspaces to eat it —
+ * **backspace rather than delete**, because `^?` is bound in every shell and
+ * line editor there is, where `ESC[3~` depends on the terminfo the program
+ * happens to be reading. The text is already typed at this point, so the worst
+ * case of getting this wrong is a cursor in an odd place, not a lost command.
+ */
+export function cursorToPlaceholder(command: string): string {
+  const at = placeholderAt(command);
+  if (!at) return "";
+  const [start, end] = at;
+  const len = [...command].length;
+  return "\u001b[D".repeat(len - end) + "\u007f".repeat(end - start);
+}

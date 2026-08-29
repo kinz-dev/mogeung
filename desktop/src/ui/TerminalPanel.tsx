@@ -19,6 +19,7 @@ import { useStore, useSelectedSession } from "@/store";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
 import { CommandBox } from "@/ui/CommandBox";
+import { cursorToPlaceholder } from "@/lib/command";
 import { ptyWrite } from "@/lib/tauri";
 import { hostLabel, reachFor, shellArgs, shellSessionName, spawnAs } from "@/lib/tmux";
 import { cn } from "@/lib/cn";
@@ -162,7 +163,12 @@ export function TerminalPanel() {
           // return into "the user pressed Enter", and it is what xterm sends
           // for that key. `run` is `Alt+Enter` and nothing else — plain Enter
           // still only writes.
-          void ptyWrite(id, run ? `${command}\r` : command, "command-box").catch(() => {});
+          // The command, then — when it carries a `<placeholder>` — the
+          // keystrokes that leave the cursor exactly where the placeholder was,
+          // with the rest of the line intact. Hunting for `<file>` with arrow
+          // keys was the most common friction in using this.
+          const keys = run ? `${command}\r` : command + cursorToPlaceholder(command);
+          void ptyWrite(id, keys, "command-box").catch(() => {});
           // And the keyboard follows the text. Reported 2026-08-29: focus went
           // back to the attention list, so the command was in the shell and the
           // cursor was not, which is the one place it needed to be.

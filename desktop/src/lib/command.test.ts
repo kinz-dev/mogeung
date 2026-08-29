@@ -9,7 +9,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { commandAsk, looksDestructive, parseCommand } from "@/lib/command";
+import {
+  commandAsk,
+  cursorToPlaceholder,
+  looksDestructive,
+  parseCommand,
+  placeholderAt,
+  refineAsk,
+} from "@/lib/command";
 
 describe("what the model is asked for", () => {
   it("carries the question and the directory it runs in", () => {
@@ -76,5 +83,49 @@ describe("marking a command that deletes or elevates", () => {
     // `rm` without a recursive or forced flag is an ordinary edit, and marking
     // everything is the same as marking nothing.
     expect(looksDestructive("rm build.log")).toBe(false);
+  });
+});
+
+/**
+ * Landing the cursor where the placeholder was. `R-O12`, asked for 2026-08-29.
+ *
+ * The prompt asks for `<file>` where a path is needed and not known, so the
+ * answers reliably carry one — and hunting for it with arrow keys was the most
+ * common friction in using this. What is pinned is the arithmetic, because it
+ * is the kind that is wrong by one and looks right.
+ */
+describe("putting the cursor on the placeholder", () => {
+  it("walks back to the placeholder and eats it", () => {
+    const keys = cursorToPlaceholder("grep xyz <file> | sort");
+    const lefts = keys.split("\u001b[D").length - 1;
+    const backspaces = keys.split("\u007f").length - 1;
+    // Seven characters follow `<file>`: a space, a pipe, a space and `sort`.
+    expect(lefts).toBe(" | sort".length);
+    expect(backspaces).toBe("<file>".length);
+  });
+
+  it("does nothing when there is no placeholder", () => {
+    expect(cursorToPlaceholder("ls -la")).toBe("");
+    expect(placeholderAt("ls -la")).toBeNull();
+  });
+
+  /** A redirection is not a placeholder, and eating one would break the line. */
+  it("is not fooled by a redirect or a comparison", () => {
+    expect(placeholderAt("sort < input.txt")).toBeNull();
+    expect(placeholderAt("test 1 < 2")).toBeNull();
+  });
+
+  it("finds the first of several", () => {
+    expect(placeholderAt("cp <src> <dest>")).toEqual([3, 8]);
+  });
+});
+
+describe("refining what is already there", () => {
+  it("carries the command and the change, and asks for the command alone", () => {
+    const ask = refineAsk("grep xyz . | sort", "use ripgrep", "/w", "bash");
+    expect(ask).toContain("grep xyz . | sort");
+    expect(ask).toContain("use ripgrep");
+    expect(ask).toContain("Change only what was asked");
+    expect(ask).toContain("revised command itself and nothing else");
   });
 });
