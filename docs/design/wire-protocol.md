@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-28
+updated: 2026-08-29
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs

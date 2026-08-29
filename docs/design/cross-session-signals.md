@@ -380,7 +380,12 @@ as the blocker was the mechanism.
 The trade that made v0.1 bad is avoided for a specific, checkable reason: an
 attached session is **never trapped in mogeung**. See
 [ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md), and
-`desktop/src/lib/tmux.ts` for the argv, which was ported from the Rust
+`desktop/src/lib/tmux.ts` builds that argv, and since `R-J84` it also hands
+tmux the mouse: `set-option -t <session> mouse on`, per session and never
+globally. Without it tmux enables no mouse reporting, xterm.js falls back to
+alternate-scroll, and the wheel arrives at the shell as Up/Down arrows — the
+command history, with nothing scrolling. See `desktop/src/lib/tmux.ts` for the
+argv, which was ported from the Rust
 faithfully enough to keep its tests.
 
 And then a second correction, 2026-07-29: `R-B31` ships a terminal mogeung

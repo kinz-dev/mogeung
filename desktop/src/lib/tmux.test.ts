@@ -8,7 +8,43 @@ describe("attachArgs", () => {
    * failure available in a tool whose job is telling sessions apart.
    */
   it("keeps tmux's exact-match prefix", () => {
-    expect(attachArgs("mog:0.0")).toEqual(["attach-session", "-t", "=mog:0.0"]);
+    expect(attachArgs("mog:0.0")).toEqual([
+      "set-option",
+      "-t",
+      "mog:0.0",
+      "mouse",
+      "on",
+      ";",
+      "attach-session",
+      "-t",
+      "=mog:0.0",
+    ]);
+  });
+
+  /**
+   * The wheel belongs to tmux. `R-J84`.
+   *
+   * With `mouse off`, tmux enables no mouse reporting, so xterm.js falls back
+   * to alternate-scroll and turns the wheel into **Up/Down arrows** — command
+   * history at a prompt, and nothing scrolling because tmux owns the
+   * scrollback and never heard about it.
+   */
+  it("hands the wheel to tmux before attaching", () => {
+    const args = attachArgs("mog-0");
+    expect(args.slice(0, 6)).toEqual(["set-option", "-t", "mog-0", "mouse", "on", ";"]);
+    // Before the attach, because the attach takes over the client.
+    expect(args.indexOf("attach-session")).toBeGreaterThan(args.indexOf("mouse"));
+  });
+
+  /**
+   * Per session, never `-g`. A global set would reach every tmux session on
+   * the machine, including ones mogeung has nothing to do with.
+   */
+  it("scopes the option to one session", () => {
+    expect(attachArgs("mog-0")).not.toContain("-g");
+    // And the bare name, because `set-option -t` rejects the `=` prefix
+    // outright — it is exact anyway.
+    expect(attachArgs("mog-0")[2]).toBe("mog-0");
   });
 });
 
@@ -26,15 +62,24 @@ describe("shellArgs", () => {
   it("does not borrow attach's exact-match prefix", () => {
     expect(shellArgs("mog-0", "/repo").some((a) => a.startsWith("="))).toBe(false);
   });
+
+  /**
+   * The option goes **after** the session here, unlike `attachArgs`. `-A` may
+   * be creating it in this very invocation, and setting an option on a session
+   * that does not exist yet fails — which would take the whole command with it.
+   */
+  it("sets mouse mode after the session it may be creating", () => {
+    const args = shellArgs("mog-0", "/repo");
+    expect(args.indexOf("mouse")).toBeGreaterThan(args.indexOf("new-session"));
+    expect(args.slice(-6)).toEqual([";", "set-option", "-t", "mog-0", "mouse", "on"]);
+  });
 });
 
 describe("spawnAs", () => {
   it("runs tmux directly when the daemon is on this machine", () => {
     expect(spawnAs({ kind: "local" }, attachArgs("mog:0.0"))).toEqual([
       "tmux",
-      "attach-session",
-      "-t",
-      "=mog:0.0",
+      ...attachArgs("mog:0.0"),
     ]);
   });
 
@@ -53,6 +98,10 @@ describe("spawnAs", () => {
     const argv = spawnAs({ kind: "ssh", dest: "box" }, attachArgs("mog:0.0"));
     expect(argv[3]).toContain("attach-session");
     expect(argv[3]).toContain("=mog:0.0");
+    // The command separator is quoted so the *remote shell* leaves it alone
+    // and hands it to tmux, which is what reads it. Verified against a real
+    // shell: `sh -c "tmux 'set-option' … ';' 'has-session' …"` sets the option.
+    expect(argv[3]).toContain("';'");
   });
 
   /**

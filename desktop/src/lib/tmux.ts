@@ -51,7 +51,40 @@ export function shellQuote(s: string): string {
  * failure available.
  */
 export function attachArgs(target: string): string[] {
-  return ["attach-session", "-t", `=${target}`];
+  return [...mouseOn(target), "attach-session", "-t", `=${target}`];
+}
+
+/**
+ * Hand the mouse wheel to tmux, for the session we are about to show. `R-J84`.
+ *
+ * Reported 2026-08-29: the wheel in a terminal pane **printed command
+ * history** instead of scrolling, and scrolling did not work at all. One
+ * cause. tmux draws on the alternate screen, and with `mouse off` it enables
+ * no mouse reporting — so xterm.js falls back to its alternate-scroll mode and
+ * converts the wheel into **Up/Down arrow keys**, which at a shell prompt is
+ * the history. Nothing scrolls because tmux owns the scrollback and never
+ * heard about the wheel.
+ *
+ * With `mouse on`, tmux enables reporting, xterm forwards the wheel as a real
+ * mouse event, and tmux scrolls its own history — which is the scrollback the
+ * pane exists to show.
+ *
+ * **Per session, never `-g`.** A global set would reach every tmux session on
+ * the machine, including ones mogeung has nothing to do with. Verified that
+ * the option lands on the named session and the global default stays as it
+ * was.
+ *
+ * **The bare name, not `=name`.** `set-option -t` rejects the exact-match
+ * prefix outright — *no such session: =mogtest* — and the bare form is exact
+ * anyway: setting it on `mogtest` was verified to leave `mogtest-2` alone.
+ *
+ * The cost, stated because it is shared: a session is one thing, so a terminal
+ * of your own attached to it also gets mouse reporting, and selecting text
+ * there needs Shift. That is the same trade the pane already makes for any
+ * program that turns reporting on.
+ */
+function mouseOn(target: string): string[] {
+  return ["set-option", "-t", target, "mouse", "on", ";"];
 }
 
 /**
@@ -67,7 +100,11 @@ export function attachArgs(target: string): string[] {
  * behaviour every terminal has.
  */
 export function shellArgs(name: string, cwd: string): string[] {
-  return ["new-session", "-A", "-s", name, "-c", cwd];
+  // The option goes **after** here, not before: `-A` may be creating the
+  // session in this very invocation, and setting an option on a session that
+  // does not exist yet fails. Verified that a command chained after an
+  // attaching `new-session` still runs.
+  return ["new-session", "-A", "-s", name, "-c", cwd, ";", "set-option", "-t", name, "mouse", "on"];
 }
 
 /**

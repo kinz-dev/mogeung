@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-28
+updated: 2026-08-29
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -631,6 +631,23 @@ ADR-0031 clause 3 without asking. mogeung refuses to extend the gate — routing
 is per request, so it could only be sometimes-right — and names the hosts
 instead, read from the config file rather than from the running process so the
 answer survives the proxy being down.
+
+## The reading guide's state (`R-O3`)
+
+The model's ordering lives in the store keyed by session, beside `changes`, and
+is asked for by a button rather than computed on selection — it spends a model
+call of up to a minute, and ADR-0031 clause 6 keeps model work off anything
+that runs on its own.
+
+**The daemon decides what the guide contains, not the client.** It appends
+every file the model did not name, marked `ranked: false`, so no client can
+render a shortlist as though it were the whole diff. `--bin judge` found
+`claude-opus-5` naming about sixteen files of sixty; putting that rule in the
+window would have meant trusting each client to remember it.
+
+The keyword ordering is untouched and is what shows without a model. Switching
+the guide off is the old pane exactly — pillar K's refusal of a blend, kept by
+never mixing the two scores.
 
 ## What is deliberately absent
 
