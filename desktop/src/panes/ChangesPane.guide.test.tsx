@@ -160,3 +160,52 @@ describe("the reading guide in the Changes pane", () => {
     expect(paths()).toEqual(["docs/notes.md", "src/core.rs", "src/tail.rs"]);
   });
 });
+
+/**
+ * The crash this pane shipped with, on 2026-08-29. `R-O3`.
+ *
+ * The guide's two `useMemo`s were written **below** the pane's early returns,
+ * so with no session selected it called three hooks and with one selected it
+ * called five. React's rule is that every hook runs on every path; break it
+ * and it throws *rendered more hooks than during the previous render*, unmounts
+ * the tree, and the pane is blank — permanently, and across restarts, because
+ * it is a code bug rather than state.
+ *
+ * Reported as *"I clicked on one of the sessions and now every time I click on
+ * it, it just gives me a blank screen"*, which is this sequence exactly.
+ */
+describe("selecting a session after none", () => {
+  it("does not change how many hooks the pane runs", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Nothing selected: the pane takes its earliest return.
+    useStore.setState({ selected: null, changes: {} } as never);
+    const { rerender } = render(<ChangesPane />);
+    expect(screen.getByText(/select a session/)).toBeInTheDocument();
+
+    // Now select one. Before the fix this threw and left nothing rendered.
+    useStore.setState({ selected: "s1", changes: { s1: change } } as never);
+    rerender(<ChangesPane />);
+
+    expect(paths()).toEqual(["docs/notes.md", "src/core.rs", "src/tail.rs"]);
+    expect(
+      err.mock.calls.flat().join(" "),
+    ).not.toMatch(/more hooks|Rendered fewer hooks/);
+    err.mockRestore();
+  });
+
+  /** And the other order: a session, then none, then one again. */
+  it("survives losing the selection and getting it back", () => {
+    useStore.setState({ selected: "s1", changes: { s1: change } } as never);
+    const { rerender } = render(<ChangesPane />);
+    expect(paths()).toHaveLength(3);
+
+    useStore.setState({ selected: null } as never);
+    rerender(<ChangesPane />);
+    expect(screen.getByText(/select a session/)).toBeInTheDocument();
+
+    useStore.setState({ selected: "s1" } as never);
+    rerender(<ChangesPane />);
+    expect(paths()).toHaveLength(3);
+  });
+});

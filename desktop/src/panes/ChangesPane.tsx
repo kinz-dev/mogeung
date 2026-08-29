@@ -105,14 +105,6 @@ export function ChangesPane() {
     }
   }, [id, change, summary, send]);
 
-  if (!id) return <Empty>select a session</Empty>;
-  if (!change) return <Empty>computing the diff…</Empty>;
-
-  if (change.error) {
-    return (
-      <Empty hint={change.error}>the diff could not be computed</Empty>
-    );
-  }
 
   /**
    * The reading order, when one has been asked for. `R-O3`.
@@ -126,11 +118,19 @@ export function ChangesPane() {
    * is not politeness: `--bin judge` found `claude-opus-5` ranking sixteen
    * files of sixty and saying nothing about the other 44, so rendering its
    * list as the diff would hide them.
+   *
+   * **Above the early returns, and that is not style.** These were below them
+   * when this shipped, so the pane called three hooks with no session selected
+   * and five with one — React's *rendered more hooks than during the previous
+   * render*, which unmounts the tree and leaves the pane blank for good.
+   * Reported 2026-08-29. Every hook in this component must run on every path.
    */
+  const files = change?.files;
   const ordered = useMemo(() => {
-    if (!guideOn || !guide || guide.files.length === 0) return change.files;
-    const byPath = new Map(change.files.map((f) => [f.path, f]));
-    const out: typeof change.files = [];
+    if (!files) return [];
+    if (!guideOn || !guide || guide.files.length === 0) return files;
+    const byPath = new Map(files.map((f) => [f.path, f]));
+    const out: typeof files = [];
     for (const g of guide.files) {
       const f = byPath.get(g.path);
       if (f) {
@@ -142,13 +142,23 @@ export function ChangesPane() {
     // Dropping them here would hide files for a second, different reason.
     for (const f of byPath.values()) out.push(f);
     return out;
-  }, [guideOn, guide, change.files]);
+  }, [guideOn, guide, files]);
 
   const reasons = useMemo(() => {
     const m = new Map<string, string>();
     for (const g of guide?.files ?? []) if (g.ranked && g.reason) m.set(g.path, g.reason);
     return m;
   }, [guide]);
+
+  if (!id) return <Empty>select a session</Empty>;
+  if (!change) return <Empty>computing the diff…</Empty>;
+
+  if (change.error) {
+    return (
+      <Empty hint={change.error}>the diff could not be computed</Empty>
+    );
+  }
+
 
   const total = change.files.reduce((n, f) => n + f.hunks.length, 0);
   const read = change.files.reduce((n, f) => n + f.hunks.filter((h) => h.reviewed).length, 0);
