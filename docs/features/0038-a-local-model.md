@@ -2,8 +2,8 @@
 title: A local model beside the agents
 status: in-progress
 updated: 2026-08-29
-roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10, R-O11]
-depends_on: [A3, A4, A29, A35, A36, A37, A38]
+roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10, R-O11, R-O12]
+depends_on: [A3, A4, A29, A35, A36, A37, A38, A40]
 ---
 
 # 0038 — A local model beside the agents
@@ -86,6 +86,7 @@ sentence an agent can act on is still done by hand, in the window, every time.
 | [A35](../product/assumptions.md) | `UNTESTED` | The pillar's premise: a local model's reading of mogeung's own evidence is worth the screen space. `R-O2` is its test and it comes first |
 | [A36](../product/assumptions.md) | `UNTESTED` | `R-O4` rests on the rationale for a change being in the transcript and reachable from the line. The links exist (`R-F2`, `R-F9`); that they answer the question is the bet |
 | [A37](../product/assumptions.md) | `UNTESTED` | `R-O5`, and it is [A27](../product/assumptions.md)'s shape exactly — a text box in mogeung competing with a better one already open beside it. A27 is `AT RISK`, which is the precedent to read before building this |
+| [A40](../product/assumptions.md) | `UNTESTED` | `R-O12`, asked for 2026-08-29 and not started: that the commands **agents** ran are worth completing from, more than your own shell history is. Its harness comes first, like the three above it |
 | [A38](../product/assumptions.md) | `UNTESTED` | `R-O6`: that embeddings find what substring search missed **often enough to earn a second list** |
 | [A3](../product/assumptions.md) | `UNTESTED` | `R-O3` is the first real attempt to settle it, in the direction [pillar K](../product/roadmap.md#k-explicitly-not) permits |
 | [A29](../product/assumptions.md) | `SUPPORTED` | `R-O6` extends the search panel A29 settled rather than adding a sixth box |
@@ -689,3 +690,44 @@ and a cluster of one is not drawn as a cluster, because it joined nothing.
 
 The literal list underneath is untouched and is what shows without a model —
 the same refusal of a blend the similar list obeys.
+
+### `R-O12`, asked 2026-08-29 — not started
+
+*"AI assisted terminal command auto complete… I am using this wrapping a
+terminal."* Filed rather than built, and the spec above is left as it was: this
+is a **sixth** candidate arriving after the founding five, and the record of
+what was chosen at the start is worth more than a tidy list.
+
+**Why it is a pillar `O` row rather than a shell plugin.** `history.jsonl` is
+your own typing; every `Bash` tool call in every transcript is a command an
+**agent** ran on your behalf, in a named repo — and that is the larger half of
+what has actually been run on this machine. atuin, fish and
+`zsh-autosuggestions` complete from a shell history that has never seen any of
+it. `R-O6`'s embeddings already index that corpus.
+
+**Wrapping a terminal is what makes it buildable, not what blocks it.**
+[ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md) says mogeung
+never owns a pty — but the window renders xterm.js and holds the keystrokes it
+sends, so the current line is known to the client without reading anything, and
+`tmux capture-pane -p` is the fallback for a line typed from another client
+attached to the same session. The suggestion is an overlay in mogeung's own
+terminal panel (`R-B33`), never in the Agent pane: that one is an agent's TUI,
+and completing a prompt there is a different feature standing much closer to the
+fence.
+
+**It completes; it never executes.** Tab or → accepts into the line, and Enter
+stays yours — ADR-0003's 2026-08-29 amendment restated one level down.
+
+**The hazard is specific enough to shape the first cut.** A command line is the
+most secret-carrying text in this corpus — `export TOKEN=…`, hostnames,
+one-off credentials — and sending each prefix anywhere, even to embed it,
+publishes them. So the first cut has **no model in it**: literal prefix and
+fuzzy match over the indexed corpus, weighted by repo and recency, ranked
+locally, nothing leaving the machine. A model-written completion is a second
+step, gated on the first earning its place.
+
+**And the harness comes first**, as it has for `A35`, `A36` and `A38`: replay
+real commands from the corpus, hide the tail after *k* characters, and measure
+top-1 and top-5 prediction — against the baseline of your own shell history
+alone, which is what every existing tool already gives you for free. [A40](../product/assumptions.md)
+carries the removal condition.
