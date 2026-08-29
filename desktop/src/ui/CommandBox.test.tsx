@@ -19,7 +19,7 @@ import type { ClientMsg, ModelHealth } from "@/wire/types";
 import { CommandBox } from "@/ui/CommandBox";
 
 const sent: ClientMsg[] = [];
-const accepted: string[] = [];
+const accepted: [string, boolean][] = [];
 
 const model = (over: Partial<ModelHealth> = {}): ModelHealth => ({
   configured: true,
@@ -38,7 +38,7 @@ const health = (m: ModelHealth) =>
   ({ model: m }) as unknown as NonNullable<ReturnType<typeof useStore.getState>["health"]>;
 
 const show = () =>
-  render(<CommandBox repo="/w/mogeung" onAccept={(c) => void accepted.push(c)} />);
+  render(<CommandBox repo="/w/mogeung" onAccept={(c, run) => void accepted.push([c, run])} />);
 
 const box = () => screen.getByLabelText("ask for a command");
 
@@ -103,7 +103,7 @@ describe("asking for a command in words", () => {
     ask("list the files");
     answers("ls -la");
     fireEvent.click(screen.getByText(/put it in the line/));
-    expect(accepted).toEqual(["ls -la"]);
+    expect(accepted).toEqual([["ls -la", false]]);
     // Closed, and the draft forgotten — nothing here is kept.
     expect(useStore.getState().showCommandBox).toBe(false);
     expect(useStore.getState().commandDraft).toBeNull();
@@ -114,7 +114,23 @@ describe("asking for a command in words", () => {
     ask("list the files");
     answers("ls -la");
     fireEvent.keyDown(box(), { key: "Enter" });
-    expect(accepted).toEqual(["ls -la"]);
+    expect(accepted).toEqual([["ls -la", false]]);
+  });
+
+  /**
+   * `Alt+Enter` runs it, asked for on 2026-08-29. Two keys rather than one,
+   * and the command has been on screen since before either could be pressed.
+   *
+   * This is not ADR-0003's fence: that one is about text reaching an
+   * **agent's** input, and a shell tab is yours (ADR-0011). What moved is this
+   * box's own sentence, by request.
+   */
+  it("runs it on Alt+Enter, and only then", () => {
+    show();
+    ask("list the files");
+    answers("ls -la");
+    fireEvent.keyDown(box(), { key: "Enter", altKey: true });
+    expect(accepted).toEqual([["ls -la", true]]);
   });
 
   /** Marked, never blocked — mogeung does not run it and cannot make it safe. */

@@ -104,6 +104,7 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
   const theme = useStore((s) => s.prefs.theme);
   const appZoom = useStore((s) => s.prefs.appZoom);
   const pushError = useStore((s) => s.pushError);
+  const focusSignal = useStore((s) => s.focusTerminal);
   const [exited, setExited] = useState(false);
   /** xterm's selection, read when the menu opens — it lives in xterm, not the DOM. */
   const [selection, setSelection] = useState("");
@@ -423,6 +424,20 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
     term.options.theme = themeFor(dark);
     resyncRef.current();
   }, [fontPx, theme]);
+
+  /**
+   * Take the keyboard when something put text in this terminal. `R-O12`.
+   *
+   * Consumed by pane id, so accepting a command in one shell does not steal
+   * focus from another. Cleared on the way out, so the next accept fires it
+   * again — without that the nonce would be the only thing changing, which is
+   * exactly what it is there for.
+   */
+  useEffect(() => {
+    if (!focusSignal || focusSignal.id !== id) return;
+    termRef.current?.focus();
+    useStore.setState({ focusTerminal: null });
+  }, [focusSignal, id]);
 
   if (!isTauri()) {
     return (

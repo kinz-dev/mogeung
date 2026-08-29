@@ -17,8 +17,26 @@
  * | | |
  * | --- | --- |
  * | **your line is never read** | a prefix you are part-way through typing can carry `export TOKEN=…`. Only the sentence you deliberately wrote is sent |
- * | **it writes, it never runs** | accepting puts the text in the shell's line. **You** press Enter — ADR-0003's 2026-08-29 amendment, one level down |
+ * | **it writes; running it is a second, different keypress** | Enter puts the text in the line and stops. <kbd>Alt</kbd>+<kbd>Enter</kbd> puts it in *and* sends the newline, asked for on 2026-08-29 — see below |
  * | **a drafted command says it is drafted** | *written by qwen · never run here* is not decoration: the hazard of this feature is a plausible line one keypress from a real shell |
+ *
+ * **On <kbd>Alt</kbd>+<kbd>Enter</kbd>, and which fence it is not.** This box
+ * writes into **your own shell**, which
+ * [ADR-0011](../../../docs/decisions/0011-own-a-shell-never-an-agent.md) says
+ * is yours — mogeung never starts an agent in one. ADR-0003 and its amendment
+ * are about text reaching an **agent's** input, and nothing here does: running
+ * `ls` in your shell on a chord you pressed is the same act as typing it, with
+ * the typing done for you. So the fence that moved is this module's own
+ * sentence, and it moved by request rather than by drift, which is why it is
+ * rewritten above instead of quietly deleted.
+ *
+ * It stays two keys, not one: plain Enter still only writes, the command is on
+ * screen before either key can be pressed, and a line marked as destructive is
+ * marked before you choose. What is deliberately **not** built is a refusal for
+ * those — a pattern list is not a security boundary, and gating a key on one
+ * would be the sometimes-right guard
+ * [pillar K](../../../docs/product/roadmap.md#k-explicitly-not) forbids: it
+ * would teach you that an unmarked command is safe.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -35,8 +53,8 @@ export function CommandBox({
 }: {
   /** The shell's working directory, for the ask. */
   repo: string | null;
-  /** Put this in the terminal's line — **without** an Enter. */
-  onAccept: (command: string) => void;
+  /** Put this in the terminal's line. `run` also sends the newline. */
+  onAccept: (command: string, run: boolean) => void;
 }) {
   const open = useStore((s) => s.showCommandBox);
   const draft = useStore((s) => s.commandDraft);
@@ -83,7 +101,9 @@ export function CommandBox({
             // continuation of the first and a separate accept key is a thing to
             // learn for no reason.
             if (draft && !draft.pending && draft.command) {
-              onAccept(draft.command);
+              // `Alt` runs it as well. Two keys rather than one, and the
+              // command has been on screen since before either was pressed.
+              onAccept(draft.command, e.altKey);
               close();
               return;
             }
@@ -124,7 +144,7 @@ export function CommandBox({
             <button
               type="button"
               onClick={() => {
-                onAccept(draft.command);
+                onAccept(draft.command, false);
                 close();
               }}
               className={cn(
@@ -148,7 +168,7 @@ export function CommandBox({
           )}
           <Dim className="mt-0.5 block text-2xs">
             written by {draft.model || "the model"} · never run here · Enter puts it in the
-            line, and you press Enter yourself
+            line · Alt+Enter puts it in and runs it
           </Dim>
         </div>
       )}

@@ -679,6 +679,20 @@ export interface AppState {
   promptDraft: PromptDraft | null;
   /** The command box is open (`Alt+Shift+M`, rebindable). `R-O12`. */
   showCommandBox: boolean;
+  /**
+   * A terminal that should take the keyboard, by pane id, with a nonce.
+   * `R-O12`.
+   *
+   * A **signal** rather than a boolean, and the nonce is why: accepting two
+   * commands in a row has to focus twice, and a flag that was already `true`
+   * would fire the effect once. `focusRail` is the same device for the rail —
+   * this one names the pane as well, since there can be several terminals and
+   * only the one you put a command into should take the keyboard.
+   *
+   * Reported 2026-08-29: after accepting, focus went back to the attention
+   * list, so the command was in the shell and the cursor was not.
+   */
+  focusTerminal: { id: string; nonce: number } | null;
   /** What it has been asked for, and what came back. */
   commandDraft: CommandDraft | null;
   /**
@@ -957,6 +971,7 @@ export const useStore = create<AppState>((set, get) => ({
   promptDraft: null,
   showCommandBox: false,
   commandDraft: null,
+  focusTerminal: null,
   diffAnswers: {},
   ambient: false,
   showLaunch: false,

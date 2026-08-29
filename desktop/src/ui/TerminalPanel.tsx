@@ -153,11 +153,20 @@ export function TerminalPanel() {
       */}
       <CommandBox
         repo={current ? current[1] : null}
-        onAccept={(command) => {
+        onAccept={(command, run) => {
           // Straight into this window's own pty — no daemon, no tmux
-          // paste-buffer, because mogeung holds this one. And **no Enter**:
-          // ADR-0003's amendment one level down.
-          if (current) void ptyWrite(`shell:${current[0]}`, command, "command-box").catch(() => {});
+          // paste-buffer, because mogeung holds this one.
+          if (!current) return;
+          const id = `shell:${current[0]}`;
+          // `\r`, not `\n`: a pty's line discipline is what turns a carriage
+          // return into "the user pressed Enter", and it is what xterm sends
+          // for that key. `run` is `Alt+Enter` and nothing else — plain Enter
+          // still only writes.
+          void ptyWrite(id, run ? `${command}\r` : command, "command-box").catch(() => {});
+          // And the keyboard follows the text. Reported 2026-08-29: focus went
+          // back to the attention list, so the command was in the shell and the
+          // cursor was not, which is the one place it needed to be.
+          useStore.setState({ focusTerminal: { id, nonce: Date.now() } });
         }}
       />
 

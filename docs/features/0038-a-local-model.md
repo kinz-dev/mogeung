@@ -728,6 +728,26 @@ the daemon or a tmux buffer, and there is no Enter in it —
 [ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s 2026-08-29 amendment one
 level down.
 
+**Two refinements from use, the same day.** Accepting now gives the keyboard to
+the terminal it wrote into — reported as *"the keyboard focus back to the
+attention list"*, which left the command in the shell and the cursor elsewhere.
+It is a nonced signal keyed by **pane id**: two shells open and only the one
+that received the text takes focus, and accepting twice focuses twice, which a
+boolean could not. And `Alt+Enter` sends the newline as well, so the command
+runs; plain Enter still only writes.
+
+**That second one is not ADR-0003's fence**, and the distinction is worth
+keeping sharp because it is easy to get wrong. ADR-0003 and its amendment are
+about text reaching an **agent's** input. This box writes into your own shell,
+which [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md) says is
+yours — running `ls` there on a chord you pressed is the same act as typing it,
+with the typing done for you. What moved is this feature's own sentence, *it
+writes, it never runs*, and it moved by request rather than by drift, so it is
+rewritten in the module rather than quietly deleted. What is deliberately not
+built is a refusal for the destructive-marked lines: a pattern list is not a
+security boundary, and gating a key on one would teach a reader that an unmarked
+command is safe.
+
 **Three fences, and the first is the one the row was rebuilt around.** Your
 command line is never read and never sent — a prefix can carry `export TOKEN=…`,
 and only the sentence you deliberately typed leaves the machine, which is the
