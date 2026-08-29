@@ -432,13 +432,17 @@ export const FileDiff = React.memo(function FileDiff({
   file,
   sessionId,
   reason,
+  defaultOpen = true,
 }: {
   file: FileChange;
   sessionId: string;
   /** The guide's line for this file, `""` when it ranked nothing here. */
   reason?: string;
+  /** Whether this file starts expanded. `false` on a large diff — see
+   *  `EXPAND_UP_TO`. Clicking the header still opens it, as it always did. */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   const send = useStore((s) => s.send);
   const asked = useStore((s) => s.radius?.path === file.path && s.radius?.session_id === sessionId);
   const risk = riskFromScore(file.score);
@@ -516,6 +520,15 @@ export const FileDiff = React.memo(function FileDiff({
   );
 });
 
+/**
+ * How many files a diff may have before it opens collapsed.
+ *
+ * Twelve is about a screen of header rows: past that you are scanning a list
+ * to decide where to start, which is exactly what the reading guide is for,
+ * and every hunk being in the DOM buys nothing but the wait.
+ */
+const EXPAND_UP_TO = 12;
+
 export function DiffList({
   files,
   sessionId,
@@ -537,6 +550,17 @@ export function DiffList({
   const shown = hideReviewed
     ? files.filter((f) => !(f.hunks.length > 0 && f.hunks.every((h) => h.reviewed)))
     : files;
+  // A big diff opens as a **list**, not as every hunk of every file at once.
+  //
+  // Reported 2026-08-29 as *"the Changes pane is very slow… it shows all the
+  // files all expanded"*. Nothing here is virtualised, so a session whose base
+  // is a few days back can put hundreds of files and every one of their hunks
+  // into the DOM in one go — 280 files was a real one on this machine.
+  //
+  // Above the threshold the header row is still the whole scannable answer:
+  // path, ±, risk, hunks read, and the guide's reason when it is on. Below it,
+  // nothing changes — a handful of files is a diff you came to read.
+  const defaultOpen = shown.length <= EXPAND_UP_TO;
   return (
     <>
       {shown.map((f) => (
@@ -545,6 +569,7 @@ export function DiffList({
           file={f}
           sessionId={sessionId}
           reason={reasons ? (reasons.get(f.path) ?? "") : undefined}
+          defaultOpen={defaultOpen}
         />
       ))}
     </>
