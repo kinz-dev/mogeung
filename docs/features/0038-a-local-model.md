@@ -143,13 +143,14 @@ sentence an agent can act on is still done by hand, in the window, every time.
       moment through both retrievals and prints which turns each answer came
       from — `A36`'s test, and the row's own first commit rather than a gate
       belonging to `R-O2` (built 2026-08-29)
-- [ ] From a hunk or a line, a question can be asked and is answered in place
-- [ ] Every answer **cites the turns it used**, and a citation opens the
-      Transcript pane at that moment (`R-F9`'s machinery)
-- [ ] When no transcript covers the line, the answer says so and is labelled as
+- [x] From a hunk or a line, a question can be asked and is answered in place
+- [x] Every answer **cites the turns it used**, and a citation opens the
+      Transcript pane at that moment (`R-F9`'s machinery — by timestamp, since
+      a transcript line number is not a place a client can navigate to)
+- [x] When no transcript covers the line, the answer says so and is labelled as
       read from the code alone — an uncited answer is never presented as
       provenance
-- [ ] *No reason in these turns* is a first-class answer rather than an error
+- [x] *No reason in these turns* is a first-class answer rather than an error
       state, and an answer citing only assistant turns is labelled **narration**
       rather than rationale (both added by `--bin why`'s first corpus run)
 
@@ -257,6 +258,7 @@ never make the poll loop do work).
 | `crates/mogeungd/src/bin/why.rs` | New — `A36`'s test, `R-O4`'s first commit |
 | `desktop/src/panes/ChangesPane.tsx` | The guide, the reason column, the fallback toggle |
 | `desktop/src/ui/DiffView.tsx` | Ask-from-a-hunk, citations that open the Transcript |
+| `crates/mogeungd/src/api.rs` | `ask_about` — the retrieval, the labels, `R-O4` |
 | `desktop/src/ui/Rail.tsx` + a new rail tool | The chat panel |
 | `desktop/src/panes/InsightPane.tsx` | The second, labelled list |
 | `desktop/src/ui/PromptWindow.tsx` | The draft, and the raw view behind it |
@@ -498,3 +500,55 @@ as a reason found — otherwise the number this harness exists to report inflate
 itself. And the same moment can answer *no reason* on one run and narrate on the
 next, so the output says to run it twice: it is the gap between the shapes that
 is stable, not either number alone.
+
+### `R-O4`'s panel, built 2026-08-29 — and the harness decided its shape
+
+**Every design choice here came from `--bin why` rather than from taste**, which
+is what building the harness first bought:
+
+- **`leading-up` retrieval, not nearest-in-time.** The turns leading to the last
+  edit of the file, six of them — the harness's own shape and its own number, so
+  the panel asks what was measured.
+- **Three answers, drawn three ways.** *The turns say why* carries citations;
+  *the turns do not say why* is stated plainly and is not an error, because it
+  is what most moments produce; *no conversation covers this file* reads the
+  diff and says so. The label is as much of the feature as the answer.
+- **Narration is marked, and the daemon marks it.** An answer whose every
+  citation is the assistant's own is the assistant describing its own work, and
+  it is shown as that. Deciding it in the daemon is `R-O3`'s rule again — the
+  window must not be able to render *the agent said it did this* as *this is why
+  it was done*.
+
+**It rides `model_chat` with an `about` field**, which is
+[ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md)'s *revisit if* answered
+exactly as that ADR said it would be: a purpose on the one free-form message
+rather than a second free-form family. The daemon does the retrieving because it
+holds the transcripts (ADR-0030 clause 1) — a window watching another machine
+has never read that machine's sessions — so what travels is **ids and a
+question**, and the one free-form exception stays at one.
+
+**Citations open the Transcript by timestamp, not by line.** The line number in
+a citation is what the transcript file says and is shown for that reason; `seq`
+is assigned by the daemon on ingest and the two do not correspond, so
+`jumpToMoment` uses the timestamp — the same route the search panel already
+takes to a turn in another session.
+
+**One degrade found by thinking about the shape of the field.** A daemon built
+before this row ignores `about` entirely (`serde(default)`) and answers the
+question as ordinary **chat**, with no transcript behind it — a general answer
+arriving where provenance was promised, which is precisely the failure the
+labels exist to prevent. It is detectable, because such a reply carries no
+`basis`, so the window withholds the text and says why instead of drawing it.
+
+**Verified live** against a second daemon on `127.0.0.1:7795` with its own
+database: asked of a hunk in `tengsyu`'s dashboard code, answered in 4.3s by
+`claude-sonnet-5` — *the displayed storage total only summed chapter files and
+excluded the `.m4b`, so it under-reported 4.7 GB against the housekeeping
+sweep's 7.2 GB* — and the answer arrived **marked as narration**, because its
+only citation was the agent's own turn. Clicking that citation raised the
+Transcript and landed on the moment. The rule the corpus bought, firing on its
+first real question.
+
+**What is not built:** no REST twin, for `R-O5`'s reason — this is the
+free-form door, and a second way in is surface to delete if the fortnight says
+the pillar goes. And no follow-up question: one ask, one answer, per hunk.

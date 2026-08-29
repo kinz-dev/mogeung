@@ -340,15 +340,38 @@ anyone can reach must not become a general-purpose LLM proxy.
 and nothing is kept, so the panel is ephemeral by construction rather than by a
 promise to delete something — there is no chat table to forget.
 
-**Two features ask through this one door, and that is deliberate.** Since
+**Three features ask through this one door, and that is deliberate.** Since
 `R-O7` the prompt window drafts its follow-up instruction by sending a
 `model_chat` with no `conversation`, rather than by adding a `draft_prompt`
 command carrying hunks and notes —
-[ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md) clause 1. The
-exception above therefore stays at exactly one, and the bind refusal that pays
-for it covers the draft without being written a second time. What tells the two
-apart is the client's own request id, which is how a client already tells two
-questions in flight apart.
+[ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md) clause 1. Since `R-O4`
+the same message carries an optional `about { session_id, path, anchor }`, which
+is that ADR's *revisit if* answered as it said it would be: **a purpose on the
+one free-form message, not a second free-form family**. The exception above
+therefore stays at exactly one, and the bind refusal that pays for it covers all
+three without being written again. What tells them apart is the client's own
+request id, which is how a client already tells two questions in flight apart.
+
+**`about` sends ids and a question, never evidence.** The daemon holds the
+transcripts (ADR-0030 clause 1), so it does the retrieving: the turns leading up
+to the last edit of that file, `--bin why`'s own shape and its own count of six.
+A client could not send the turns if it wanted to — a window may be watching
+another machine's sessions — and one that could would be sending an editable
+copy of what is already here.
+
+**The answer carries its provenance, and the daemon decides it.** `model_reply`
+grew `cites`, `basis` and `narration` for `R-O4`, all `#[serde(default)]` and
+all empty for the chat panel. `basis` is `turns`, `code` or `unanswered`, and
+the third is not a failure: `--bin why` found a reason in 5 of 14 edit moments,
+so *the turns do not say why* is the **majority** answer and a client that drew
+it as an error would be reporting a bug that is not there. `narration` — every
+citation is the assistant's own — is computed here rather than in the window, so
+no client can render *the agent said it did this* as *this is why it was done*.
+
+**An older daemon ignores `about` and answers as chat**, which is the one
+degrade in this family that would otherwise be silent: a general answer arriving
+where provenance was promised. It is detectable — no `basis` — and the window
+withholds the text and says why rather than drawing it.
 
 **The answer streams. `R-O11`.** The request carries `stream: true`, and the
 daemon forwards `model_chunk` events on the asking socket as text arrives,

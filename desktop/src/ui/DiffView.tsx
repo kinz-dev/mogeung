@@ -14,15 +14,17 @@
 
 import * as React from "react";
 import { useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, FileText, Flag, Zap } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Flag, MessageCircleQuestion, Zap } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, IconButton, Mono } from "@/ui/primitives";
 import { cn } from "@/lib/cn";
 import { openFile } from "@/lib/explorer";
+import { jumpToMoment } from "@/lib/panes";
 import { FileIcon } from "@/ui/FileIcon";
 import { highlight, hunkStart, pairs, sideBySide, wordDiff, type Tok } from "@/lib/diff";
 import { changedLines } from "@/lib/prompt";
-import { riskFromScore, type FileChange, type Hunk, type RiskLevel } from "@/wire/types";
+import { askKey, type DiffAnswer } from "@/store";
+import { riskFromScore, type Citation, type FileChange, type Hunk, type RiskLevel } from "@/wire/types";
 
 function riskColor(level: RiskLevel): string {
   switch (level) {
@@ -266,8 +268,24 @@ const HunkBlock = React.memo(function HunkBlock({
   const syntax = useStore((s) => s.prefs.syntax);
   const wordDiffOn = useStore((s) => s.prefs.wordDiff);
   const [open, setOpen] = useState(true);
+  /** The ask box, opened by the button. Local: it belongs to this hunk. */
+  const [asking, setAsking] = useState(false);
+  const [question, setQuestion] = useState("");
+  const answer = useStore((s) => s.diffAnswers[askKey(sessionId, path, hunk.anchor)]);
+  const askAboutHunk = useStore((s) => s.askAboutHunk);
+  const model = useStore((s) => s.health?.model ?? null);
+  const canAsk = !!model && model.configured && model.allowed && model.chat_allowed;
   const risk = riskFromScore(hunk.score);
   const paired = useMemo(() => pairs(hunk.lines), [hunk.lines]);
+  // Only while something is out: a diff of forty hunks must not hold forty
+  // intervals open to render a clock nobody is waiting on.
+  const [now, setNow] = useState(() => Date.now());
+  React.useEffect(() => {
+    if (!answer?.pending) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [answer?.pending]);
   const flaggedHere = useStore((s) =>
     s.flagged.some((f) => f.path === path && f.header === hunk.header),
   );
@@ -333,6 +351,24 @@ const HunkBlock = React.memo(function HunkBlock({
           >
             <Flag size={11} />
           </IconButton>
+          {/*
+            Asked for, never automatic — ADR-0031 clause 6, and a diff pane
+            that spent a model call per hunk on open would spend a plan on one
+            scroll. The refusal is the daemon's own sentence when there is no
+            model to ask.
+          */}
+          <IconButton
+            title={
+              canAsk
+                ? "why did this change? — answered from the turns that produced it  (R-O4)"
+                : (model?.refusal ?? "no model configured")
+            }
+            active={asking || !!answer}
+            disabled={!canAsk}
+            onClick={() => setAsking(!asking)}
+          >
+            <MessageCircleQuestion size={11} />
+          </IconButton>
           <IconButton
             title="open this file in the Code pane"
             onClick={() => openFile(sessionId, path, { pin: true })}
@@ -341,6 +377,34 @@ const HunkBlock = React.memo(function HunkBlock({
           </IconButton>
         </div>
       </div>
+      {asking && (
+        <div className="flex items-center gap-1 border-t border-[var(--border)] px-2 py-1">
+          <input
+            autoFocus
+            value={question}
+            spellCheck={false}
+            aria-label={`ask about ${hunk.header}`}
+            placeholder="why did this change?  (Enter to ask)"
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setAsking(false);
+                return;
+              }
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              // An empty box asks the question the button offered. The common
+              // case is one keystroke, and typing out *why did this change* to
+              // ask the thing the tooltip promised is a tax.
+              askAboutHunk(sessionId, path, hunk.anchor, question.trim() || "Why did this change?");
+              setAsking(false);
+              setQuestion("");
+            }}
+            className="h-5 min-w-0 flex-1 rounded-sm border border-[var(--border)] bg-[var(--bg)] px-1 text-2xs outline-none focus:border-[var(--ring)]"
+          />
+        </div>
+      )}
+      {answer && <AskPanel answer={answer} sessionId={sessionId} now={now} />}
       {open && (
         // Split scrolls each half itself, so an outer scroller here would be a
         // second one wrapping the first.
@@ -368,6 +432,115 @@ const HunkBlock = React.memo(function HunkBlock({
     </div>
   );
 });
+
+/**
+ * Why this hunk changed, answered from the turns that produced it. `R-O4`.
+ *
+ * **The label is as much of the feature as the answer.** `--bin why` measured
+ * it before this existed: over 14 edit moments a reason was found in five, and
+ * the retrieval `R-F9` already had rested four of its five answers on the
+ * assistant narrating itself. So three outcomes are drawn three ways and none
+ * of them is an error —
+ *
+ * | | |
+ * | --- | --- |
+ * | the turns say why | the answer, and citations that open the Transcript there |
+ * | the turns do not say | said plainly. The **majority** case, so it is an answer |
+ * | no conversation covers the file | the diff was read, and the line says so |
+ *
+ * A window that rendered the third as the first would be inventing provenance,
+ * which is `A4`'s failure mode with a model in front of it.
+ */
+function AskPanel({
+  answer,
+  sessionId,
+  now,
+}: {
+  answer: DiffAnswer;
+  sessionId: string;
+  now: number;
+}) {
+  if (answer.pending) {
+    const secs = Math.floor((now - answer.started) / 1000);
+    return (
+      <Dim className="block border-t border-[var(--border)] px-2 py-1 text-2xs italic">
+        reading the turns that changed this…{secs > 0 ? ` ${secs}s` : ""}
+      </Dim>
+    );
+  }
+  if (answer.error) {
+    return (
+      <div className="border-t border-[var(--border)] px-2 py-1 text-2xs text-[var(--red)]">
+        {answer.error}
+      </div>
+    );
+  }
+  // A daemon built before `R-O4` ignores `about` — the field is
+  // `#[serde(default)]`, so the question is answered as **chat**, with no
+  // transcript behind it, and arrives with no basis. Rendering that text would
+  // be the exact failure this row's labels exist to prevent: a general answer
+  // presented where provenance is promised. So the text is withheld and the
+  // reason is stated.
+  if (answer.basis === null) {
+    return (
+      <div className="border-t border-[var(--border)] px-2 py-1 text-2xs text-[var(--dim)]">
+        this daemon answered without reading any transcript — it predates `R-O4`, so
+        there is no evidence behind what it said and it is not shown
+      </div>
+    );
+  }
+  return (
+    <div className="border-t border-[var(--border)] bg-[var(--bg)] px-2 py-1">
+      <Dim className="block text-2xs">{answer.question}</Dim>
+      {answer.basis === "unanswered" ? (
+        // Not an error, and not styled as one: this is what most moments
+        // produce, and a panel that cried failure five times out of nine would
+        // be reporting a bug that is not there.
+        <div className="mt-0.5 text-2xs">
+          the turns that produced this change do not say why — only what was done
+        </div>
+      ) : (
+        <div className="mt-0.5 text-2xs whitespace-pre-wrap">{answer.text}</div>
+      )}
+      {answer.basis === "code" && (
+        <Dim className="mt-0.5 block text-2xs">
+          read from the diff alone — no conversation covering this file was found, so
+          this is not why it was changed
+        </Dim>
+      )}
+      {answer.narration && (
+        <div className="mt-0.5 text-2xs text-[var(--amber)]">
+          from the assistant describing its own work, not from anything it was asked —
+          treat it as narration
+        </div>
+      )}
+      {answer.cites.length > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <Dim className="text-2xs">from</Dim>
+          {answer.cites.map((c: Citation) => (
+            <button
+              key={c.line}
+              type="button"
+              title={c.preview}
+              className={cn(
+                "rounded-sm border border-[var(--border)] px-1 text-2xs outline-none",
+                "focus-visible:outline-2 focus-visible:outline-[var(--ring)] hover:border-[var(--border-hover)]",
+                c.role === "user" ? "text-[var(--blue)]" : "text-[var(--dim)]",
+              )}
+              onClick={() => jumpToMoment(sessionId, c.timestamp)}
+            >
+              {c.role === "user" ? "you" : "the agent"} · line {c.line}
+            </button>
+          ))}
+        </div>
+      )}
+      <Dim className="mt-0.5 block text-2xs">
+        {answer.model}
+        {answer.elapsed_ms ? ` · ${(answer.elapsed_ms / 1000).toFixed(1)}s` : ""}
+      </Dim>
+    </div>
+  );
+}
 
 /**
  * Who else touches what this file changed. `R-D9`.

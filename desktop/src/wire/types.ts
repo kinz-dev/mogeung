@@ -371,6 +371,34 @@ export interface ProxyHealth {
   forwards_to: string[];
 }
 
+/** What an `R-O4` question is about — ids, as this protocol always names things. */
+export interface AskAbout {
+  session_id: string;
+  path: string;
+  /** Which hunk, by content hash. Absent asks about the file. */
+  anchor?: string;
+}
+
+/** One turn an answer rests on. `R-O4`. */
+export interface Citation {
+  /** 1-based transcript line. Shown, not navigated by. */
+  line: number;
+  /** `user` or `assistant`. */
+  role: string;
+  /** What opens the Transcript there — `R-F9`'s own route. */
+  timestamp: string;
+  preview: string;
+}
+
+/**
+ * What an `R-O4` answer rests on.
+ *
+ * `unanswered` is not a failure and is the **majority** case: `--bin why` found
+ * a reason in 5 of 14 edit moments, so a panel that rendered *the turns do not
+ * say* as an error would be reporting a bug most of the time.
+ */
+export type AnswerBasis = "turns" | "code" | "unanswered";
+
 export interface ModelHealth {
   configured: boolean;
   host: string | null;
@@ -1063,7 +1091,14 @@ export type ClientMsg =
    * (`R-O9`). Omitting it is a request **not to keep this** — it is how the
    * panel behaved before there was a history, and the daemon honours it.
    */
-  | { cmd: "model_chat"; id: string; messages: ChatTurn[]; conversation?: string }
+  | {
+      cmd: "model_chat";
+      id: string;
+      messages: ChatTurn[];
+      conversation?: string;
+      /** What the question is about, when it is about something. `R-O4`. */
+      about?: AskAbout;
+    }
   /** Ask a model which changed file to read first. `R-O3`. */
   | { cmd: "reading_guide"; session_id: SessionId }
   | { cmd: "chat_list" }
@@ -1216,6 +1251,14 @@ export type ServerMsg =
       error: string | null;
       model: string;
       elapsed_ms: number;
+      /** The turns an `R-O4` answer used. Empty for the chat, and empty for an
+       *  answer read from the code alone — an uncited answer is not provenance. */
+      cites?: Citation[];
+      /** What the answer rests on. Absent for the chat panel. */
+      basis?: AnswerBasis | null;
+      /** Every citation is the assistant narrating itself. The **daemon**
+       *  decides this, so no client can render it as a rationale. */
+      narration?: boolean;
     }
   /**
    * The config file, in answer to both `config_get` and `config_save` — after

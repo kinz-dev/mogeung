@@ -65,6 +65,9 @@ pub struct Turn {
     /// `user` or `assistant`.
     pub role: String,
     pub text: String,
+    /// What opens the Transcript at this moment. A transcript line number is
+    /// not a location any client can use; a timestamp is `R-F9`'s own route.
+    pub timestamp: DateTime<Utc>,
 }
 
 /// Which retrieval produced a set of turns. `A36`'s two candidates.
@@ -185,7 +188,12 @@ fn collect_turns(transcript: &Path) -> Vec<(Turn, DateTime<Utc>)> {
             return true;
         };
         out.push((
-            Turn { line: line_no, role: role.to_string(), text: tail(&text, TURN_CHARS) },
+            Turn {
+                line: line_no,
+                role: role.to_string(),
+                text: tail(&text, TURN_CHARS),
+                timestamp: ts,
+            },
             ts,
         ));
         true
@@ -211,9 +219,13 @@ fn tail(s: &str, n: usize) -> String {
 /// THESE TURNS are an acceptable answer** — `A4`'s mitigation, because a model
 /// summarising a transcript shape the parser silently dropped will otherwise
 /// describe a session confidently and wrongly.
-pub fn prompt(question: &str, path: &str, turns: &[Turn]) -> String {
+pub fn prompt(question: &str, path: &str, hunk_header: Option<&str>, turns: &[Turn]) -> String {
+    let where_ = match hunk_header {
+        Some(h) => format!("`{path}` (the reader is looking at {h})"),
+        None => format!("`{path}`"),
+    };
     let mut s = format!(
-        "Below are turns from the conversation in which a coding agent changed `{path}`.\n\
+        "Below are turns from the conversation in which a coding agent changed {where_}.\n\
          Each turn is labelled with the transcript line it came from.\n\n\
          Answer this question from these turns alone: {question}\n\n\
          Answer in exactly this form and nothing else:\n\n\
@@ -237,6 +249,37 @@ pub fn prompt(question: &str, path: &str, turns: &[Turn]) -> String {
         spent += body.chars().count();
         s.push_str(&format!("--- line {} ({})\n{}\n\n", t.line, t.role, body));
     }
+    s
+}
+
+/// The question, when **no transcript covers the file** and the diff is all
+/// there is. `R-O4`'s labelled fallback.
+///
+/// A separate prompt rather than the same one with an empty turn list, because
+/// the two answers are different in kind and the model should know which it is
+/// being asked for: one is *what were they trying to do*, the other is *what
+/// does this change do*. Passing the second off as the first is the failure the
+/// `basis` label exists to prevent.
+pub fn prompt_from_code(question: &str, path: &str, header: &str, lines: &[String]) -> String {
+    let mut s = format!(
+        "Below is a hunk of a diff to `{path}` ({header}).\n\n\
+         **No conversation covering this file was found**, so answer from the diff \
+         alone: {question}\n\n\
+         Answer in one short paragraph and nothing else. Do not guess at anyone's \
+         intent — you have not been shown it. Say what the change does, and say when \
+         the diff does not tell you why.\n\n```diff\n"
+    );
+    let mut spent = 0usize;
+    for l in lines {
+        if spent >= TOTAL_CHARS {
+            s.push_str("… rest of the hunk omitted\n");
+            break;
+        }
+        spent += l.chars().count();
+        s.push_str(l);
+        s.push('\n');
+    }
+    s.push_str("```\n");
     s
 }
 
@@ -304,6 +347,24 @@ fn strip_label<'a>(line: &'a str, label: &str) -> Option<&'a str> {
     lower.starts_with(&want).then(|| &line[want.len()..])
 }
 
+/// Does this answer rest on the assistant's own narration alone?
+///
+/// The rule `--bin why` bought: nearest-in-time answers cited 1 human turn
+/// against 12 of the assistant's, and *the file was changed because the
+/// assistant then wrote the file* is a sentence rather than a rationale. An
+/// answer with **no** citations is not narration — it is uncited, which the
+/// `basis` label says separately.
+pub fn is_narration<'a>(roles: impl IntoIterator<Item = &'a str>) -> bool {
+    let mut any = false;
+    for r in roles {
+        any = true;
+        if r == "user" {
+            return false;
+        }
+    }
+    any
+}
+
 /// Which side of the conversation an answer leant on. `A36`'s whole question.
 pub fn cited_roles(a: &Answer, shown: &[Turn]) -> (usize, usize) {
     let mut user = 0;
@@ -335,6 +396,17 @@ mod tests {
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn turn(line: u64, role: &str, text: &str) -> Turn {
+        Turn {
+            line,
+            role: role.to_string(),
+            text: text.to_string(),
+            timestamp: DateTime::parse_from_rfc3339("2026-08-01T10:00:00Z")
+                .expect("ts")
+                .with_timezone(&Utc),
         }
     }
 
@@ -417,10 +489,7 @@ mod tests {
 
     #[test]
     fn a_citation_the_reader_cannot_open_is_dropped() {
-        let shown = vec![
-            Turn { line: 1, role: "user".into(), text: "back off the retries".into() },
-            Turn { line: 2, role: "assistant".into(), text: "adding backoff".into() },
-        ];
+        let shown = vec![turn(1, "user", "back off the retries"), turn(2, "assistant", "adding backoff")];
         let a = parse_answer("REASON: the API was being hammered\nCITES: 1, 2, 9999", &shown);
         assert_eq!(a.cites, vec![1, 2], "9999 was never shown; it is not provenance");
         assert!(!a.no_reason);
@@ -429,7 +498,7 @@ mod tests {
 
     #[test]
     fn not_in_these_turns_is_an_answer_and_not_a_failure() {
-        let shown = vec![Turn { line: 1, role: "assistant".into(), text: "done".into() }];
+        let shown = vec![turn(1, "assistant", "done")];
         let a = parse_answer("REASON: NOT IN THESE TURNS\nCITES:", &shown);
         assert!(a.no_reason);
         assert!(a.reason.is_empty());
@@ -440,7 +509,7 @@ mod tests {
     /// *no answer* for a run that had one is how a harness lies.
     #[test]
     fn a_reply_that_ignores_the_form_is_still_a_reason() {
-        let shown = vec![Turn { line: 1, role: "user".into(), text: "x".into() }];
+        let shown = vec![turn(1, "user", "x")];
         let a = parse_answer("They wanted the retries backed off.", &shown);
         assert_eq!(a.reason, "They wanted the retries backed off.");
         assert!(a.cites.is_empty(), "an uncited answer is not provenance");
@@ -451,12 +520,17 @@ mod tests {
     }
 
     #[test]
+    fn narration_is_every_citation_being_the_agent_talking_about_itself() {
+        assert!(is_narration(["assistant", "assistant"]));
+        assert!(!is_narration(["assistant", "user"]), "one human turn is a rationale");
+        assert!(!is_narration([]), "no citations is uncited, which is a different label");
+    }
+
+    #[test]
     fn the_prompt_is_bounded_by_the_whole_conversation() {
         let long = "x".repeat(TOTAL_CHARS);
-        let turns: Vec<Turn> = (1..=6)
-            .map(|i| Turn { line: i, role: "assistant".into(), text: long.clone() })
-            .collect();
-        let p = prompt("why?", "src/a.rs", &turns);
+        let turns: Vec<Turn> = (1..=6).map(|i| turn(i, "assistant", &long)).collect();
+        let p = prompt("why?", "src/a.rs", None, &turns);
         assert!(p.chars().count() < TOTAL_CHARS * 2, "a bound that is not a bound is a 78-second failure");
         assert!(p.contains("earlier turns omitted"), "what was cut has to be visible as a cut");
     }

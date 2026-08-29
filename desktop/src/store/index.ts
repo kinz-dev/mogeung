@@ -17,6 +17,8 @@ import { toggleRail } from "@/lib/rail";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
+  AnswerBasis,
+  Citation,
   GuideFile,
   ChatSummary,
   Analytics,
@@ -148,6 +150,36 @@ export interface PromptDraft {
   error: string | null;
   model: string;
   elapsed_ms: number;
+}
+
+/**
+ * One answer to one question about a hunk. `R-O4`.
+ *
+ * `basis` is the field that matters and it comes from the daemon: *the turns
+ * say why*, *the turns exist and do not say*, and *no transcript covers this
+ * file so the diff was read* are three different answers, and `--bin why`
+ * measured that the second is the most common of them. A panel that showed the
+ * third as though it were the first would be inventing provenance.
+ */
+export interface DiffAnswer {
+  /** The ask's id — how `model_reply` finds its way back here. */
+  id: string;
+  question: string;
+  text: string;
+  pending: boolean;
+  started: number;
+  error: string | null;
+  basis: AnswerBasis | null;
+  cites: Citation[];
+  /** Every citation is the assistant narrating itself. Decided by the daemon. */
+  narration: boolean;
+  model: string;
+  elapsed_ms: number;
+}
+
+/** One question's place: this hunk of this file of this session. */
+export function askKey(sessionId: string, path: string, anchor: string): string {
+  return `${sessionId}:${path}:${anchor}`;
 }
 
 /**
@@ -581,6 +613,14 @@ export interface AppState {
    * thing being composed in it.
    */
   promptDraft: PromptDraft | null;
+  /**
+   * Answers to questions asked of a hunk, keyed by [`askKey`]. `R-O4`.
+   *
+   * Kept per hunk rather than one at a time: reading a diff is reading several
+   * hunks, and an answer that vanished when you asked about the next one would
+   * make the pane a place you cannot compare two things in.
+   */
+  diffAnswers: Record<string, DiffAnswer>;
   /** The big board for a second monitor. `R-C5`. */
   ambient: boolean;
   /** Start a session in a terminal. `R-B2`. */
@@ -640,6 +680,8 @@ export interface AppState {
   askReadingGuide: (sessionId: SessionId) => void;
   /** Ask a model to draft the follow-up prompt. `R-O7`. */
   draftFollowUp: (note: string) => void;
+  /** Ask why a hunk changed, answered from the turns that produced it. `R-O4`. */
+  askAboutHunk: (sessionId: SessionId, path: string, anchor: string, question: string) => void;
   /** Put the thread away and start a fresh one. `R-O9`. */
   newConversation: () => void;
   /** Open a kept conversation and go on asking in it. `R-O9`. */
@@ -843,6 +885,7 @@ export const useStore = create<AppState>((set, get) => ({
   showPrompt: false,
   flagged: [],
   promptDraft: null,
+  diffAnswers: {},
   ambient: false,
   showLaunch: false,
   showTerminal: false,
@@ -985,6 +1028,48 @@ export const useStore = create<AppState>((set, get) => ({
       cmd: "model_chat",
       id,
       messages: [{ role: "user", content: draftAsk(note, flagged) }],
+    });
+  },
+
+  /**
+   * Ask why this hunk changed. `R-O4`, ADR-0034's door.
+   *
+   * The client sends **ids and a question**: it has never read the transcript
+   * and could not send the turns if it wanted to (ADR-0030 clause 1 — the
+   * daemon holds them, and a window may be watching another machine). What
+   * comes back carries its own provenance, which is the whole point of the
+   * feature and the reason nothing here decides what the answer rests on.
+   */
+  askAboutHunk: (sessionId, path, anchor, question) => {
+    const q = question.trim();
+    if (!q) return;
+    const id = chatId();
+    const key = askKey(sessionId, path, anchor);
+    set((s) => ({
+      diffAnswers: {
+        ...s.diffAnswers,
+        [key]: {
+          id,
+          question: q,
+          text: "",
+          pending: true,
+          started: Date.now(),
+          error: null,
+          basis: null,
+          cites: [],
+          narration: false,
+          model: "",
+          elapsed_ms: 0,
+        },
+      },
+    }));
+    get().send({
+      cmd: "model_chat",
+      id,
+      messages: [{ role: "user", content: q }],
+      // No conversation: an answer about a hunk is not a thread, and the
+      // history is for questions you come back to.
+      about: { session_id: sessionId, path, anchor },
     });
   },
 
@@ -1375,6 +1460,32 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       }
       case "model_reply": {
+        // Third destination on one door (`R-O4`). Checked before the chat for
+        // the same reason the draft is: an answer about a hunk must not appear
+        // in a conversation somebody is reading.
+        const answers = get().diffAnswers;
+        const key = Object.keys(answers).find((k) => answers[k].id === msg.id);
+        if (key) {
+          set((s) => ({
+            diffAnswers: {
+              ...s.diffAnswers,
+              [key]: {
+                ...s.diffAnswers[key],
+                pending: false,
+                text: msg.text ?? "",
+                error: msg.error ?? null,
+                // Straight from the daemon, never inferred here: what an answer
+                // rests on is not a thing a client gets to decide.
+                basis: msg.basis ?? null,
+                cites: msg.cites ?? [],
+                narration: msg.narration ?? false,
+                model: msg.model,
+                elapsed_ms: msg.elapsed_ms,
+              },
+            },
+          }));
+          break;
+        }
         const drafted = get().promptDraft;
         if (drafted && drafted.id === msg.id) {
           set({

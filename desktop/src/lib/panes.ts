@@ -521,6 +521,24 @@ export function showPane(id: string, title: string): void {
  * Transcript's scroll effect runs against a pane that is on screen: a
  * virtualised list cannot scroll to an index it is not currently laying out.
  */
+/**
+ * Go to a moment by **time**: its session, the Transcript, that turn. `R-O4`.
+ *
+ * By timestamp rather than by seq, because a citation comes from the transcript
+ * file and a seq is assigned by the daemon on ingest — the two do not
+ * correspond, and a citation that scrolled to the wrong turn would be worse
+ * than one that did nothing. This is the route the search panel already takes
+ * for a turn in another session.
+ *
+ * Same ordering rule as [`jumpToTurn`]: select first (it clears the focus
+ * fields), raise the pane second, publish the moment last.
+ */
+export function jumpToMoment(sessionId: string, timestamp: string): void {
+  useStore.getState().select(sessionId);
+  showPane("transcript", "Transcript");
+  useStore.setState({ focusEventTs: timestamp });
+}
+
 export function jumpToTurn(sessionId: string, seq: number | null): void {
   useStore.getState().select(sessionId);
   showPane("transcript", "Transcript");

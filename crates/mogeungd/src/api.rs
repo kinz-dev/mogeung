@@ -224,6 +224,156 @@ fn chat_history_msg(state: &AppState) -> ServerMsg {
 /// Failures are logged and swallowed: the answer is already on its way to a
 /// panel that is showing it, and losing the *record* of a reply must never
 /// look like losing the reply.
+/// One `R-O4` question, answered from the turns that produced the change.
+///
+/// **The daemon retrieves, because the daemon holds the transcripts.** ADR-0030
+/// clause 1 put the endpoint here for a reason that applies twice over to the
+/// evidence: a window watching another machine has never read that machine's
+/// sessions, so a client that sent turns would be sending a worse copy of what
+/// is already here.
+///
+/// Three answers, and they are told apart on purpose — `--bin why` measured why
+/// that matters. Over 14 edit moments a reason was found in five, and the
+/// nearest-in-time retrieval rested four of its five answers on the assistant's
+/// own narration:
+///
+/// | basis | what it means |
+/// | --- | --- |
+/// | `Turns` | the conversation says why, and the citations open at it |
+/// | `Unanswered` | the turns exist and do not say. The majority case, so it is an answer |
+/// | `Code` | no transcript covers this file; the diff was read, and the label says so |
+async fn ask_about(
+    state: &AppState,
+    id: &str,
+    messages: &[mogeung_core::model::ChatTurn],
+    about: &mogeung_core::wire::AskAbout,
+) -> ServerMsg {
+    use mogeung_core::wire::{AnswerBasis, Citation};
+
+    let fail = |e: String| ServerMsg::ModelReply {
+        id: id.to_string(),
+        text: None,
+        error: Some(e),
+        model: String::new(),
+        elapsed_ms: 0,
+        cites: Vec::new(),
+        basis: None,
+        narration: false,
+    };
+
+    let question = messages
+        .last()
+        .map(|m| m.content.trim().to_string())
+        .unwrap_or_default();
+    if question.is_empty() {
+        return fail("no question was asked".into());
+    }
+    let Some(session) = state.get(&about.session_id).await else {
+        return fail("that session is not one this daemon knows".into());
+    };
+
+    // The hunk the reader is looking at: one line of *where* for the prompt,
+    // and the whole of what there is to read when no transcript covers the file.
+    let hunk = match state.change_for_request(&about.session_id, false).await {
+        Some(change) => change
+            .files
+            .iter()
+            .find(|f| f.path == about.path)
+            .and_then(|f| match &about.anchor {
+                Some(a) => f.hunks.iter().find(|h| &h.anchor == a).cloned(),
+                None => f.hunks.first().cloned(),
+            }),
+        None => None,
+    };
+
+    // Reading a transcript is file work and can be megabytes of it. Off the
+    // reactor, like every other scan this daemon does.
+    let transcript = std::path::PathBuf::from(session.transcript_path.clone());
+    let path = about.path.clone();
+    let turns = tokio::task::spawn_blocking(move || {
+        let moments = crate::why::edit_moments(&transcript, Some(&path));
+        // The **last** edit of this file, not the first: a file written five
+        // times in a session was being worked on, and the reason you are
+        // looking at the diff is the state it ended in.
+        moments.last().map_or_else(Vec::new, |m| {
+            crate::why::turns_for(&transcript, m, crate::why::Shape::LeadingUp, ASK_TURNS)
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    let header = hunk.as_ref().map(|h| h.header.clone());
+    let (prompt, basis) = if !turns.is_empty() {
+        (
+            crate::why::prompt(&question, &about.path, header.as_deref(), &turns),
+            AnswerBasis::Turns,
+        )
+    } else if let Some(h) = &hunk {
+        (
+            crate::why::prompt_from_code(&question, &about.path, &h.header, &h.lines),
+            AnswerBasis::Code,
+        )
+    } else {
+        return fail(
+            "no conversation covers this file and the diff is no longer on disk — \
+             there is nothing here to answer from"
+                .into(),
+        );
+    };
+
+    let answered = state.model.chat(&[mogeung_core::model::ChatTurn::user(prompt)]).await;
+    let a = match answered {
+        Ok(a) => a,
+        Err(e) => return fail(e),
+    };
+
+    // Read from the code alone is prose, not a form: there are no turns to
+    // cite, so there is nothing to parse and nothing to claim.
+    if basis == AnswerBasis::Code {
+        return ServerMsg::ModelReply {
+            id: id.to_string(),
+            text: Some(a.text),
+            error: None,
+            model: a.model,
+            elapsed_ms: a.elapsed_ms,
+            cites: Vec::new(),
+            basis: Some(AnswerBasis::Code),
+            narration: false,
+        };
+    }
+
+    let parsed = crate::why::parse_answer(&a.text, &turns);
+    let cites: Vec<Citation> = parsed
+        .cites
+        .iter()
+        .filter_map(|line| turns.iter().find(|t| t.line == *line))
+        .map(|t| Citation {
+            line: t.line,
+            role: t.role.clone(),
+            timestamp: t.timestamp,
+            preview: t.text.chars().take(160).collect(),
+        })
+        .collect();
+    // Decided here so that no client can render *the agent said it did this* as
+    // *this is why it was done*. `R-N7`'s rule with a measurement behind it.
+    let narration = crate::why::is_narration(cites.iter().map(|c| c.role.as_str()));
+    ServerMsg::ModelReply {
+        id: id.to_string(),
+        text: (!parsed.no_reason).then(|| parsed.reason.clone()),
+        error: None,
+        model: a.model,
+        elapsed_ms: a.elapsed_ms,
+        cites,
+        basis: Some(if parsed.no_reason { AnswerBasis::Unanswered } else { AnswerBasis::Turns }),
+        narration,
+    }
+}
+
+/// How many turns one question is answered from.
+///
+/// `--bin why`'s own number, so the panel is asking what the harness measured.
+const ASK_TURNS: usize = 6;
+
 fn keep_conversation(state: &AppState, id: &str, sent: &[mogeung_core::model::ChatTurn], answer: &str) {
     if chat_refusal(state).is_some() {
         return;
@@ -1111,10 +1261,28 @@ async fn handle(
             id,
             messages,
             conversation,
+            about,
         } => {
             let state = state.clone();
             let reply = reply.clone();
             tokio::spawn(async move {
+                // A question *about* something is a different question through
+                // the same door (`R-O4`, ADR-0034's *revisit if*). The daemon
+                // holds the transcripts, so it does the retrieving; the client
+                // sent ids and a question and cannot have sent the evidence.
+                //
+                // Answered whole rather than streamed, unlike the chat: the
+                // reply is a **form** (`REASON:` / `CITES:`) that is parsed
+                // before it is shown, and streaming the scaffolding into a
+                // panel would put the form on screen instead of the answer.
+                if let Some(about) = about {
+                    let msg = ask_about(&state, &id, &messages, &about).await;
+                    send_reply(&reply, msg);
+                    state.broadcast(ServerMsg::Health {
+                        health: Box::new(state.health().await),
+                    });
+                    return;
+                }
                 // Forwarded as it arrives. `R-O11`: on a route to a large
                 // model this is the difference between one second and forty
                 // before anything appears at all.
@@ -1149,6 +1317,11 @@ async fn handle(
                             error: None,
                             model: a.model,
                             elapsed_ms: a.elapsed_ms,
+                            // The chat rests on nothing this daemon holds, so
+                            // it claims nothing: no citations and no basis.
+                            cites: Vec::new(),
+                            basis: None,
+                            narration: false,
                         }
                     }
                     // A refusal and a failure arrive by the same door. The
@@ -1160,6 +1333,9 @@ async fn handle(
                         error: Some(e),
                         model: String::new(),
                         elapsed_ms: 0,
+                        cites: Vec::new(),
+                        basis: None,
+                        narration: false,
                     },
                 };
                 send_reply(&reply, msg);

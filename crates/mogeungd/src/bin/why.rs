@@ -144,7 +144,12 @@ fn main() {
                     println!("  {:<15}   {} {}", "", t.line, clip(&t.text, 110));
                 }
             }
-            let prompt = why::prompt(question.trim(), &at.path, &turns);
+            // No hunk header, and the difference is stated rather than left
+            // to be discovered: the panel passes the header of the hunk the
+            // reader is looking at, which is one line of *where*. The
+            // retrieval and the answer form — the things being measured — are
+            // identical.
+            let prompt = why::prompt(question.trim(), &at.path, None, &turns);
             let reply = rt.block_on(model.chat(&[ChatTurn::user(prompt)]));
             let text = match reply {
                 Ok(a) => {

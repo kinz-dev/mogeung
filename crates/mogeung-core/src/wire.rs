@@ -301,6 +301,20 @@ pub enum ClientMsg {
         /// **not to keep this**, and the daemon honours it.
         #[serde(default)]
         conversation: Option<String>,
+        /// What this question is about, when it is about something. `R-O4`.
+        ///
+        /// **Present makes this a different question with the same door.** The
+        /// daemon retrieves the turns that produced the change and asks its own
+        /// prompt with the client's question inside it, because the transcripts
+        /// are on the daemon's machine (ADR-0030 clause 1) and a client cannot
+        /// hold what it has never read. Absent, this is `R-O5`'s chat and
+        /// behaves exactly as it always has.
+        ///
+        /// A purpose on the one free-form message rather than a second
+        /// free-form family, which is what ADR-0034's *revisit if* said the
+        /// answer would be when a second feature wanted this door.
+        #[serde(default)]
+        about: Option<AskAbout>,
     },
 
     /// Ask a model which changed file to read first. `R-O3`.
@@ -712,6 +726,64 @@ pub struct GuideFile {
     pub ranked: bool,
 }
 
+/// What an `R-O4` question is about — named by ids, as this protocol always
+/// names things.
+///
+/// The **question** beside this is free-form and the evidence is not: the
+/// daemon holds the transcripts, so a client that could send turns would be
+/// sending back a worse copy of what the daemon already has, and one that could
+/// be edited on the way. [ADR-0034](../../../docs/decisions/0034-the-draft-is-a-chat-ask.md)
+/// clause 1 is why this rides [`ClientMsg::ModelChat`] rather than arriving as
+/// a family of its own: the bind refusal that protects free-form text is
+/// written once, and one door is one place to forget it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AskAbout {
+    pub session_id: SessionId,
+    /// The file, as the diff names it.
+    pub path: String,
+    /// Which hunk the reader is looking at, by content hash. Optional: a
+    /// question about the file as a whole is a fair question.
+    #[serde(default)]
+    pub anchor: Option<String>,
+}
+
+/// One turn an answer rests on. `R-O4`.
+///
+/// Carries the **timestamp** rather than a seq, because that is what opens the
+/// Transcript at a moment (`R-F9`'s own route, the one the search panel uses)
+/// and a transcript line number is not a thing any client can locate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Citation {
+    /// 1-based line in the transcript file. Shown, not navigated by.
+    pub line: u64,
+    /// `user` or `assistant` — the field that decides whether an answer is a
+    /// rationale or a narration, and it is the daemon that decides, not the
+    /// client.
+    pub role: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub preview: String,
+}
+
+/// What an `R-O4` answer rests on. The label **is** the feature.
+///
+/// `--bin why` measured why this exists: over 14 edit moments a reason was
+/// found in five, and the nearest-in-time retrieval rested four of its five
+/// answers on the assistant's own narration. An answer that cannot say what it
+/// rests on is the confidently-wrong shape `A4` warns about, so every answer
+/// says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerBasis {
+    /// The turns that produced the change.
+    Turns,
+    /// No transcript covers this file, so the diff itself was read. Labelled,
+    /// never passed off as provenance.
+    Code,
+    /// The turns exist and do not say why. The **majority** outcome in the
+    /// corpus, and therefore an answer rather than an error.
+    Unanswered,
+}
+
 /// One kept conversation, without its turns. `R-O9`.
 ///
 /// The list is a list of *doors*, not of contents: a fortnight of asking
@@ -1059,6 +1131,20 @@ pub enum ServerMsg {
         /// endpoint is free to route `default` wherever it likes.
         model: String,
         elapsed_ms: u64,
+        /// The turns this answer used, when it was a question *about* something
+        /// (`R-O4`). Empty for the chat panel, and empty for an answer read
+        /// from the code alone — an uncited answer is never provenance.
+        #[serde(default)]
+        cites: Vec<Citation>,
+        /// What the answer rests on. `None` for the chat panel, which rests on
+        /// nothing this daemon holds.
+        #[serde(default)]
+        basis: Option<AnswerBasis>,
+        /// Every citation is the assistant's own narration and none is a human
+        /// turn. Decided here rather than in the client, so no client can
+        /// render *the agent said it did this* as *this is why it was done*.
+        #[serde(default)]
+        narration: bool,
     },
     /// A model's reading order for one session's diff. `R-O3`.
     ///
