@@ -195,7 +195,7 @@ describe("drafting the follow-up prompt", () => {
 
 /**
  * The one gesture in mogeung that reaches an agent's input. `R-B54`,
- * [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+ * [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md).
  *
  * What is pinned here is the ADR's fences, because they are the whole of why
  * this is allowed to exist: two deliberate acts and never one, exactly the text

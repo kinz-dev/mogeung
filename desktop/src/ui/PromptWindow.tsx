@@ -45,7 +45,7 @@ export function PromptWindow() {
   const [view, setView] = useState<"raw" | "drafted">("raw");
   /**
    * The confirmation, and the reason it exists. `R-B54`,
-   * [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+   * [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md).
    *
    * mogeung cannot see what the session's screen is showing — a TUI's prompts
    * never reach the transcript — so an Enter sent on your behalf can land on a
@@ -78,7 +78,7 @@ export function PromptWindow() {
   const raw = buildPrompt(note, flagged);
 
   /**
-   * Who this would be sent to. `R-B54`, ADR-0035 clause 2 and clause 5.
+   * Who this would be sent to. `R-B54`, ADR-0003's amendment, clause 2 and clause 5.
    *
    * One session or none: flags spanning two sessions have an **ambiguous
    * recipient**, and a message with an ambiguous recipient is one the clipboard
@@ -243,7 +243,7 @@ export function PromptWindow() {
                   useStore.getState().send({
                     cmd: "send_to_session",
                     session_id: target.id,
-                    // Exactly what is on screen — ADR-0035 clause 2. The same
+                    // Exactly what is on screen — ADR-0003's amendment, clause 2. The same
                     // text the copy button would put on the clipboard.
                     text,
                   });
@@ -293,7 +293,7 @@ export function PromptWindow() {
           {/*
             The one control in mogeung that reaches an agent's input. Two acts,
             never one: this opens the confirmation, and the confirmation sends.
-            ADR-0035 clause 1 — and clause 7, which is why *draft* and *send*
+            ADR-0003's amendment, clause 1 — and clause 7, which is why *draft* and *send*
             are separate buttons with the text on screen in between.
           */}
           <Button

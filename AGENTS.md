@@ -9,11 +9,9 @@ needs attention. **It never starts, steers or stops an agent.**
 - [`docs/product/assumptions.md`](docs/product/assumptions.md) — what we believe
   and have not checked
 - [`docs/decisions/0003-observe-do-not-spawn.md`](docs/decisions/0003-observe-do-not-spawn.md)
-  — the most important decision here, and why v0.1 was thrown away. Read it
-  first for the failure it records; then
-  [`0035`](docs/decisions/0035-a-human-may-press-send.md), which supersedes it
-  and carries that finding forward with one word — *steers* — defined rather
-  than dropped
+  — the most important decision here, and why v0.1 was thrown away. Read its
+  2026-08-29 amendment too: one word — *steers* — is defined rather than
+  dropped, and a human may now press send
 
 ## Rules for docs
 
@@ -24,7 +22,14 @@ needs attention. **It never starts, steers or stops an agent.**
 - Every doc needs frontmatter with `status` and `updated`.
 - Design docs need `covers:` listing the code paths they describe.
 - Use a skeleton from `docs/_templates/`. Do not invent structure.
-- **ADRs are immutable.** Supersede, never edit.
+- **ADRs are immutable, and change by dated amendment.** Never rewrite what a
+  decision said. Append `## Amendment — YYYY-MM-DD` saying what changed, why,
+  and what it replaces, and bump `updated:`. The ADR stays the one place its
+  decision lives, so a reader lands on one file rather than walking a chain.
+  **`status: superseded` is for a decision genuinely reversed**, not one
+  narrowed — and a supersession that has already happened stays as it is.
+  *(Changed 2026-08-29, after `R-B54` marked the project's keystone ADR
+  superseded over a single word.)*
 - `STATUS.md` is generated. Never hand-edit it.
 - Roadmap items are `R-A1`; assumptions are bare `A1`. Different namespaces —
   they used to collide.

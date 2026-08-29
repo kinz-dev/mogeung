@@ -413,7 +413,7 @@ fn config_refusal(state: &AppState) -> Option<String> {
 }
 
 /// Why this daemon will not type into an agent, when it will not. `R-B54`,
-/// [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md) clause 4.
+/// [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md) clause 4.
 ///
 /// The chat refusal's shape, for a worse consequence. The chat risks somebody
 /// else spending your tokens; this is somebody else **typing into your running
@@ -1203,7 +1203,7 @@ async fn handle(
         // at what the daemon now has, which is the only version worth showing.
         // On the asking socket rather than broadcast — this is a reply to a
         // question, and another window's editor should not be scrolled by it.
-        // The one command that reaches an agent's input. `R-B54`, ADR-0035.
+        // The one command that reaches an agent's input. `R-B54`, ADR-0003's 2026-08-29 amendment.
         //
         // Everything this does is a refusal until the last line: not off
         // loopback, not for a session this daemon does not know, not for one

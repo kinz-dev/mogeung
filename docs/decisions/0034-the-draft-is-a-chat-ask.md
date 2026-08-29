@@ -1,7 +1,6 @@
 ---
 title: A model may draft the follow-up prompt; it still leaves only by the clipboard
-status: superseded
-superseded_by: ADR-0035
+status: active
 updated: 2026-08-29
 decided: 2026-08-29
 supersedes: ADR-0008
@@ -149,6 +148,34 @@ Or if `A37` removes the chat panel. The draft ask travels through chat's door,
 so removing the panel must not remove the door; if that happens, this decision
 is what says the seam stays.
 
+## Amendment — 2026-08-29: the window offers a second action, and it is send
+
+**Clause 6 above and the *Ruled out* line change.** Clause 6 said *still exactly
+one action: copy*, and the ruled-out line said *any code path that sends text to
+a session, by any mechanism*. Both were carried forward from ADR-0008 and both
+were asked about the same day this ADR was written: *"can I directly send it to
+the sessions associated…"*
+
+What replaces them: **the window offers two actions — copy, and send to the
+session the flags came from, on a click and a confirmation.** The argument, the
+fences and what it costs are in
+[ADR-0003's 2026-08-29 amendment](0003-observe-do-not-spawn.md#amendment--2026-08-29-a-human-may-press-send),
+which is where *steers* is defined; they are not repeated here.
+
+**The title above is now historical** — it says *it still leaves only by the
+clipboard*, which was true when this was decided and is what this document is
+for: showing what was believed then. It is left as written rather than tidied,
+which is the whole of the amendment convention.
+
+**Everything else on this page stands**, and clause 7 of that amendment is this
+one restated: drafting and sending are two buttons with the text on screen in
+between, so a model still never composes-and-delivers in one gesture. Clauses 1
+to 5 above — the chat door, the daemon keeping nothing, the raw text one click
+away, the clipboard copying what is on screen, and the draft being asked for
+rather than automatic — are untouched.
+
 ---
-*ADRs are immutable. To change this decision, write a new ADR that supersedes
-it and set `status: superseded` plus `superseded_by:` here.*
+*ADRs are immutable. A decision that is **narrowed** changes by an
+`## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A
+decision genuinely **reversed** is superseded: write a new ADR and set
+`status: superseded` plus `superseded_by:` here.*

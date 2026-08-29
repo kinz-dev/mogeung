@@ -1,5 +1,5 @@
 //! Deliver text into one session's own tmux pane. `R-B54`,
-//! [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+//! [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md).
 //!
 //! **This is the only code in mogeung that reaches an agent's input**, and the
 //! decision that permits it is narrow enough to state here: a human clicks, a
@@ -32,9 +32,9 @@
 //! (Claude Code's, and every shell with one) gets its block, and a program that
 //! has never heard of the sequence is handed plain bytes rather than escape
 //! codes it would print.
-//! | `send-keys -t <pane> Enter` | the commit, separate on purpose — bracketed paste deliberately does not submit, so this is the one line to delete if ADR-0035's *revisit if* ever fires |
+//! | `send-keys -t <pane> Enter` | the commit, separate on purpose — bracketed paste deliberately does not submit, so this is the one line to delete if ADR-0003's amendment's *revisit if* ever fires |
 //!
-//! The hazard ADR-0035 states rather than hides: mogeung cannot see the pane's
+//! The hazard ADR-0003's 2026-08-29 amendment states rather than hides: mogeung cannot see the pane's
 //! screen (a TUI's prompts never reach the transcript), so an `Enter` can land
 //! on a menu. Bracketed paste narrows it to one keystroke's worth of risk; the
 //! window's confirmation carries the rest.
@@ -43,7 +43,7 @@ use anyhow::{Result, bail};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// May a daemon on this address type into a session? ADR-0035 clause 4.
+/// May a daemon on this address type into a session? ADR-0003's amendment, clause 4.
 ///
 /// A pure function of the **bind address**, in the shape `runs_allowed` and
 /// `chat_allowed` already have, so that start-up and the per-request gate cannot
@@ -163,11 +163,11 @@ mod tests {
         // `-t` and not merely present in the line.
         assert!(paste.windows(2).any(|w| w[0] == "-t" && w[1] == "%17"));
         // Separate, and the one line to delete if the confirmation ever stops
-        // being read (ADR-0035's *revisit if*).
+        // being read (ADR-0003's amendment's *revisit if*).
         assert_eq!(enter, ["send-keys", "-t", "%17", "Enter"]);
     }
 
-    /// The gate ADR-0035 clause 4 is, and the reason it is not `may_write`:
+    /// The gate ADR-0003's amendment, clause 4 is, and the reason it is not `may_write`:
     /// that one is satisfied by a token, and this door is not.
     #[test]
     fn only_a_loopback_daemon_may_type_into_a_session() {

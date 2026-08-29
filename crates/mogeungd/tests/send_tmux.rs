@@ -1,5 +1,5 @@
 //! Does the text actually land in the pane, and does Enter actually end the
-//! line? `R-B54`, [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+//! line? `R-B54`, [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md).
 //!
 //! The unit tests in `send.rs` pin the argv, which is the part that is silently
 //! wrong when it is wrong — `-p` and `-d` are one character each. They cannot

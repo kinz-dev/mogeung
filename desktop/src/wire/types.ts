@@ -1116,7 +1116,7 @@ export type ClientMsg =
    *
    * The only command that reaches an agent's input, and the window is expected
    * to have shown a person the text and asked them to confirm — see
-   * [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md). Refused
+   * [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md). Refused
    * off loopback with no flag.
    */
   | { cmd: "send_to_session"; session_id: string; text: string }

@@ -337,7 +337,7 @@ pub enum ClientMsg {
     },
 
     /// Deliver text into one session's own tmux pane, and press Enter.
-    /// `R-B54`, [ADR-0035](../../../docs/decisions/0035-a-human-may-press-send.md).
+    /// `R-B54`, [ADR-0003's amendment](../../../docs/decisions/0003-observe-do-not-spawn.md).
     ///
     /// **The one command in this protocol that reaches an agent's input**, and
     /// every fence on it is in that ADR rather than here. Three matter at the

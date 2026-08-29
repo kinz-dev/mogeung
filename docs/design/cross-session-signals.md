@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-28
+updated: 2026-08-29
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -418,6 +418,36 @@ For a tmux session that limitation no longer bites, because attaching (`R-B18`)
 replaces focusing rather than depending on it. A session started with a bare
 `claude` in an unscriptable terminal remains genuinely unreachable, and mogeung
 says so.
+
+## Sending text into a session (`R-B54`, 2026-08-29)
+
+The one thing in this file that reaches an agent rather than the machine around
+it, and it is here because
+[ADR-0003's 2026-08-29 amendment](../decisions/0003-observe-do-not-spawn.md#amendment--2026-08-29-a-human-may-press-send)
+put it inside the fence rather than outside: a human clicks, confirms, and the
+text they are looking at goes into that session's own tmux pane, once.
+
+`R-B2` above still **types nothing** — it moves your window. This is the
+opposite kind of act and the distinction is worth keeping sharp, because the two
+sit three sections apart and both end at a terminal.
+
+What `state.rs` contributes is the target and the gate:
+
+- **the target** is `tmux_target`, already resolved for the Agent tab by walking
+  process ancestry against `tmux list-panes` (ADR-0010). Nothing new is
+  computed for sending, which is the point — a second way of working out where a
+  session lives would be a second way of being wrong about it;
+- **the gate** is `send_allowed`, set once at start-up from
+  `send::allowed(&addr)` and read per request. Its own flag rather than
+  `writes_allowed` or `config_editable`: those accept a token or describe
+  outbound URLs, and this door takes neither. A shared secret on a LAN is not a
+  person at this machine.
+
+The delivery itself is `send.rs` — `load-buffer` on stdin, `paste-buffer -p -t
+<pane>`, `send-keys Enter` — and its module doc carries what running it
+corrected: tmux returns before the receiver has read, and `-p` inserts
+bracketed-paste markers only when the program in the pane has asked for that
+mode.
 
 ## What the signals do not read (2026-08-28)
 

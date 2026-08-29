@@ -220,7 +220,7 @@ where
     // door: the file it edits holds `push_url` and `model_url`, both outbound.
     // `R-J79`.
     let _ = state.config_editable.set(addr.ip().is_loopback());
-    // ADR-0035 clause 4, computed in the same place as the four above it — and
+    // ADR-0003's amendment, clause 4, computed in the same place as the four above it — and
     // from the **address alone**, deliberately: a token is a shared secret and
     // this door needs a person at this machine.
     let _ = state.send_allowed.set(crate::send::allowed(&addr));

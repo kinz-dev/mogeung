@@ -139,7 +139,7 @@ pub struct AppState {
     /// never set it are tests and the window's own hosted daemon, both of which
     /// are loopback in fact.
     pub config_editable: std::sync::OnceLock<bool>,
-    /// Whether this daemon may type into a session. `R-B54`, ADR-0035 clause 4.
+    /// Whether this daemon may type into a session. `R-B54`, ADR-0003's amendment, clause 4.
     ///
     /// Its own flag rather than a reuse of `config_editable` or `writes_allowed`
     /// — one is about outbound URLs and the other accepts a token, and this door
