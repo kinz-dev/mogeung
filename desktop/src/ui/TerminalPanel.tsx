@@ -23,6 +23,7 @@ import { ptyWrite } from "@/lib/tauri";
 import { hostLabel, reachFor, shellArgs, shellSessionName, spawnAs } from "@/lib/tmux";
 import { cn } from "@/lib/cn";
 import { base } from "@/lib/format";
+import { useChord } from "@/lib/keymap";
 
 const MIN_HEIGHT = 120;
 
@@ -37,6 +38,7 @@ export function TerminalPanel() {
   const [height, setHeight] = useState(260);
 
   const reach = useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
+  const askChord = useChord("terminal.command_box");
   const shells = scoped.shells;
 
   const onDrag = (e: React.MouseEvent) => {
@@ -124,7 +126,17 @@ export function TerminalPanel() {
             {host}
           </Chip>
         )}
-        <div className="ml-auto">
+        {/*
+          The hint, and it reads the **binding** rather than a string. A tooltip
+          that names a chord somebody has rebound is worse than one that says
+          nothing — and on a Mac a hard-coded `Alt+…` would lie to everyone.
+          `useChord` is the same hook the dock strip and the rail use, added
+          after four tooltips were found naming keys that had moved.
+        */}
+        <Dim className="ml-auto hidden text-2xs sm:block">
+          {askChord ? `${askChord} — ask for a command` : ""}
+        </Dim>
+        <div>
           <IconButton
             title="hide the panel — the shells keep running (Ctrl+`)"
             onClick={() => useStore.setState({ showTerminal: false })}

@@ -677,7 +677,7 @@ export interface AppState {
    * thing being composed in it.
    */
   promptDraft: PromptDraft | null;
-  /** The command box is open (`Alt+Shift+C`). `R-O12`. */
+  /** The command box is open (`Alt+Shift+M`, rebindable). `R-O12`. */
   showCommandBox: boolean;
   /** What it has been asked for, and what came back. */
   commandDraft: CommandDraft | null;

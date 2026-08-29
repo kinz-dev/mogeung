@@ -720,7 +720,7 @@ advance, so this is the ledger working rather than a surprise: `A40` is
 `REFUTED`, and the completion half comes out rather than being tuned. Ghost text
 goes with it — there is nothing honest to draw ahead of the cursor.
 
-**What is built is the half asked for second.** `Alt+Shift+C` opens a box above
+**What is built is the half asked for second.** `Alt+Shift+M` opens a box above
 the terminal panel; a sentence goes in and one command comes back, labelled
 *written by <model> · never run here*. Accepting writes it into the shell's line
 and stops: this window holds that pty itself, so it is `ptyWrite` rather than
