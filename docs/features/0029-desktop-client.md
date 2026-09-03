@@ -1219,6 +1219,9 @@ pointer.
 | `desktop/src/lib/clipboard.ts` | the chords, which paste route each takes, and the shell-first write (`R-J87`) |
 | `desktop/src/lib/clipboard.test.ts` | that `Ctrl+C` is never copy, one press is never two pastes, and a write with no gesture still lands |
 | `desktop/src-tauri/capabilities/default.json` | `clipboard-manager:allow-write-text`, and deliberately not `read-text` |
+| `desktop/src/lib/monaco-workers.ts` | which worker each Monaco language gets, and TypeScript kept to syntax (`R-J88`) |
+| `desktop/src/lib/monaco-setup.ts` | the workers wired — JSON, CSS, HTML, TypeScript — where every label got the base one |
+| `desktop/src/lib/symbols.ts` | outlines for SQL, YAML, JSON and CSS (`R-J88`) |
 | `desktop/src/ui/Terminal.tsx` | the handler, and `term.paste` so bracketed paste survives |
 | `desktop/src/ui/KeymapWindow.tsx` | the terminal's chords, listed and marked not rebindable |
 | `desktop/src/index.css` | `--tag-*-bg` in both palettes, and `.mogeung-tag-row` |

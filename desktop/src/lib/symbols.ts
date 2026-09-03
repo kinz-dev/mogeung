@@ -16,6 +16,9 @@
  * symbols are returned, and a name is cut at `MAX_NAME`.
  *
  * An unknown language gets an **empty** outline, never a guess.
+ *
+ * `R-J88` (2026-09-03) added SQL, YAML, JSON and CSS: the languages the ask
+ * named that coloured and folded and showed an empty outline beside it.
  */
 
 export type SymbolKind = "function" | "method" | "type" | "const" | "module" | "heading" | "other";
@@ -90,6 +93,45 @@ const JVM: Rule[] = [
   { re: /^\s{2,}(?:public\s+|private\s+|protected\s+|static\s+|final\s+|synchronized\s+)+[\w<>[\]., ?]+\s+([A-Za-z_]\w*)\s*\(/, kind: "method" },
 ];
 
+/**
+ * The four `R-J88` added on 2026-09-03, for the languages the ask named that
+ * had colouring and nothing else. Same posture as the rest: a declaration
+ * shape per line, nothing that needs to know what came before.
+ */
+const SQL: Rule[] = [
+  // `CREATE [OR REPLACE] [TEMP] TABLE [IF NOT EXISTS] name` and its siblings.
+  // The name may be quoted or schema-qualified; the capture keeps it whole.
+  {
+    re: /^\s*create\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+|unlogged\s+|materialized\s+)?(?:table|view)\s+(?:if\s+not\s+exists\s+)?([\w."`[\]]+)/i,
+    kind: "type",
+  },
+  {
+    re: /^\s*create\s+(?:or\s+replace\s+)?(?:function|procedure|trigger)\s+(?:if\s+not\s+exists\s+)?([\w."`[\]]+)/i,
+    kind: "function",
+  },
+  {
+    re: /^\s*create\s+(?:unique\s+)?index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([\w."`[\]]+)/i,
+    kind: "const",
+  },
+  { re: /^\s*alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?([\w."`[\]]+)/i, kind: "other" },
+];
+
+// A key at the start of a line, with what it introduces. Depth comes from
+// indentation in `outline`, so a nested mapping reads as one — this rule only
+// has to refuse list items and comments.
+const YAML: Rule[] = [{ re: /^\s*(?![-#])([\w.$/-]+|"[^"]+"|'[^']+')\s*:(?:\s|$)/, kind: "other" }];
+
+// A quoted key. Every level matches; the pane's depth rule keeps the top level
+// distinct, which is what a config file's outline is for.
+const JSON_RULES: Rule[] = [{ re: /^\s*"((?:[^"\\]|\\.)+)"\s*:/, kind: "other" }];
+
+// A rule's selector, at the line it opens on. `@media` and friends are
+// modules, so a breakpoint reads as a section.
+const CSS: Rule[] = [
+  { re: /^\s*(@(?:media|supports|keyframes|font-face|layer|container)\b[^{]*)\{?\s*$/, kind: "module" },
+  { re: /^\s*([^\s{}/@][^{}]*?)\s*\{\s*$/, kind: "other" },
+];
+
 const TABLE: Record<string, Rule[]> = {
   rs: RUST,
   py: PYTHON,
@@ -106,6 +148,13 @@ const TABLE: Record<string, Rule[]> = {
   java: JVM,
   kt: JVM,
   kts: JVM,
+  sql: SQL,
+  yaml: YAML,
+  yml: YAML,
+  json: JSON_RULES,
+  css: CSS,
+  scss: CSS,
+  less: CSS,
 };
 
 /** `lang` is a file extension, as `languageOf`'s input is. */
@@ -118,6 +167,9 @@ export function outline(body: string, lang: string): Symbol[] {
   const out: Symbol[] = [];
   const lines = body.split("\n");
   const python = key === "py" || key === "pyi";
+  // Two-space nesting is the convention in both, and the outline of a config
+  // file is worthless without it — every key would be depth 1.
+  const data = key === "yaml" || key === "yml" || key === "json";
 
   for (let i = 0; i < lines.length && out.length < MAX_SYMBOLS; i++) {
     const line = lines[i].slice(0, MAX_LINE);
@@ -132,7 +184,13 @@ export function outline(body: string, lang: string): Symbol[] {
         kind: rule.kind,
         // Indentation is the only nesting signal a line scanner has. It is
         // right for Python by construction and a decent guess elsewhere.
-        depth: python ? Math.floor(indentOf(line) / 4) : indentOf(line) > 0 ? 1 : 0,
+        depth: python
+          ? Math.floor(indentOf(line) / 4)
+          : data
+            ? Math.floor(indentOf(line) / 2)
+            : indentOf(line) > 0
+              ? 1
+              : 0,
       });
       break; // First rule that matches wins: the table is ordered by specificity.
     }

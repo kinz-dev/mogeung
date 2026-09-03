@@ -78,8 +78,48 @@ describe("the outline", () => {
   });
 
   it("gives an unknown language nothing rather than a guess", () => {
-    expect(outline("SELECT 1;", "sql")).toEqual([]);
+    expect(outline("<a href='x'>", "xml")).toEqual([]);
     expect(outline("anything", "")).toEqual([]);
+  });
+
+  /** `R-J88`: the four languages the ask named that had colouring and no outline. */
+  it("reads SQL DDL by what it creates, and not a SELECT", () => {
+    const body = [
+      "SELECT 1;",
+      "create table if not exists orders (id int);",
+      "CREATE OR REPLACE VIEW \"open_orders\" AS SELECT * FROM orders;",
+      "CREATE UNIQUE INDEX CONCURRENTLY orders_id ON orders (id);",
+      "create function md.price(x int) returns int as $$ select x $$;",
+      "ALTER TABLE ONLY orders ADD COLUMN qty int;",
+    ].join("\n");
+    expect(names(body, "sql")).toEqual(["orders", "\"open_orders\"", "orders_id", "md.price", "orders"]);
+    expect(outline(body, "sql").map((s) => s.kind)).toEqual(["type", "type", "const", "function", "other"]);
+  });
+
+  it("nests YAML keys by two spaces and skips list items and comments", () => {
+    const body = ["# top", "services:", "  web:", "    image: nginx", "  - not-a-key", "volumes: {}"].join("\n");
+    expect(outline(body, "yaml").map((s) => [s.name, s.depth])).toEqual([
+      ["services", 0],
+      ["web", 1],
+      ["image", 2],
+      ["volumes", 0],
+    ]);
+  });
+
+  it("reads JSON keys with their depth, quoted keys and all", () => {
+    const body = ['{', '  "name": "x",', '  "scripts": {', '    "test": "vitest"', '  }', '}'].join("\n");
+    expect(outline(body, "json").map((s) => [s.name, s.depth])).toEqual([
+      ["name", 1],
+      ["scripts", 1],
+      ["test", 2],
+    ]);
+  });
+
+  it("reads CSS by selector and at-rule, not by declaration", () => {
+    const body = [".card {", "  color: red;", "}", "@media (max-width: 600px) {", "  .card, .row {", "  }", "}"].join(
+      "\n",
+    );
+    expect(names(body, "css")).toEqual([".card", "@media (max-width: 600px)", ".card, .row"]);
   });
 
   it("clips a pathological file instead of hanging", () => {

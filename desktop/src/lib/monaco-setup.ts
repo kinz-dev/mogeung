@@ -18,20 +18,51 @@
  * Importing this once, before the first render, points the loader at the copy
  * in `node_modules` instead. It costs bundle size, which a desktop application
  * does not care about.
+ *
+ * **The language workers, since `R-J88` (2026-09-03).** The comment that used
+ * to sit below said the services were *"skipped to keep the bundle honest"*.
+ * They were not skipped: `monaco-editor`'s main entry registers them, and the
+ * one thing missing was the worker each one runs in — every label got the
+ * base editor worker, which cannot load a language module and said so in the
+ * console on every JSON file. So JSON, CSS, HTML and TypeScript now get their
+ * own workers, which is what gives a `.json` file its squiggle on a stray
+ * comma and a `.ts` file its syntax errors. Java, Python, SQL, YAML, XML and
+ * the rest have **no** in-browser service to wire; for those, colouring and
+ * folding from the Monarch grammars is all Monaco has, and anything more is a
+ * language server — `R-J88`'s (c), and its own spec.
  */
 
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import CssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
+import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
+import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { TS_DIAGNOSTICS, workerKind } from "@/lib/monaco-workers";
 
-// The base worker only. The language services — TypeScript, JSON, CSS — are
-// what give completions and diagnostics, and this is a **viewer**: it colours
-// and folds, it does not advise. Skipping them keeps the bundle honest about
-// what the pane actually does.
 // `monaco-editor` declares `MonacoEnvironment` globally already, so this
 // assigns to that declaration rather than making a second one.
-(self as unknown as { MonacoEnvironment: { getWorker: () => Worker } }).MonacoEnvironment = {
-  getWorker: () => new EditorWorker(),
+(self as unknown as { MonacoEnvironment: { getWorker: (id: string, label: string) => Worker } }).MonacoEnvironment = {
+  getWorker: (_id, label) => {
+    switch (workerKind(label)) {
+      case "json":
+        return new JsonWorker();
+      case "css":
+        return new CssWorker();
+      case "html":
+        return new HtmlWorker();
+      case "typescript":
+        return new TsWorker();
+      default:
+        return new EditorWorker();
+    }
+  },
 };
+
+// A viewer with no project in front of it: syntax, never semantics. See
+// `TS_DIAGNOSTICS` for why.
+monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(TS_DIAGNOSTICS);
+monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(TS_DIAGNOSTICS);
 
 loader.config({ monaco });
