@@ -1,7 +1,7 @@
 ---
 title: mogeung reads code and never writes it
 status: active
-updated: 2026-08-04
+updated: 2026-09-03
 decided: 2026-08-04
 ---
 
@@ -101,6 +101,22 @@ Concretely:
 - The concurrent-writer problem gets a real answer: file locks the daemon can
   hold, or a session that can be asked to pause. Then the objection this
   decision rests on has gone, and the rest is merely work.
+
+## Amendment — 2026-09-03: a scratch file is the second thing that is not an exception
+
+The window's editor now writes one kind of file: a **scratch file** under
+`~/.mogeung/scratch` (`R-L5`,
+[ADR-0035](0035-the-editor-writes-scratch-files-and-nothing-else.md)). This
+narrows nothing above and is recorded here so that a reader of *"mogeung reads
+code and never writes it"* is not surprised by a writable Monaco.
+
+The clause it sits beside is the third bullet of the Decision — *notes are not
+an exception to this, they are a different thing* — and the argument is the
+same one: a scratch file is under `~/.mogeung`, is the user's own writing, and
+belongs to no repository. The fences ADR-0035 adds are what keep it that way:
+the daemon mints the name, refuses anything that is not a bare file name in
+that directory, and does the write. `readOnly: true` and its message stand for
+every worktree file, and the daemon still has no verb that writes one.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

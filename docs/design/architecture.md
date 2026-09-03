@@ -493,7 +493,11 @@ The window docks things two ways, and which one a thing uses is a decision
 rather than a habit —
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
 
-**Panes** are views of a session. Two *kinds* are left in the centre — **Agent**
+**Panes** are views of a session — with one exception since 2026-09-03, a
+**scratch** pane (`R-L5`), which is a view of a file in `~/.mogeung/scratch`
+and belongs to no session; its id is `scratch:<name>` and, unlike a `file:`
+id, the saved layout keeps it, because it names nothing that can go stale.
+Two *kinds* of session pane are left in the centre — **Agent**
 and **file** — since `R-B45` moved Changes and Transcript down to join Git,
 Insight and Debt in the bottom dock, and Info under the queue. A file is a pane
 per open file since `R-B53`, which collapsed the Code pane's own tab strip and

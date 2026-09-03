@@ -48,6 +48,7 @@ import { WallOverlay } from "@/ui/WallOverlay";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { FilePane } from "@/panes/FilePane";
+import { ScratchPane } from "@/panes/ScratchPane";
 import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
@@ -105,6 +106,9 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // own panel id (`R-B53`), so the registry needs one entry rather than one
   // per file.
   file: pane("file", FilePane, { scale: false }),
+  // A scratch file. Its id is `scratch:<name>` and, unlike `file:`, it is
+  // **kept** by the saved layout: it names nothing that can go stale.
+  scratch: pane("scratch", ScratchPane, { scale: false }),
 };
 
 const LAYOUT_KEY = "mogeung.layout";

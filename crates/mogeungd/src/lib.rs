@@ -24,6 +24,7 @@ pub mod qwen;
 pub mod run;
 pub mod runconfig;
 pub mod runner;
+pub mod scratch;
 pub mod send;
 pub mod server;
 pub mod state;

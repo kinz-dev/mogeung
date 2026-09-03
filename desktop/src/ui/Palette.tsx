@@ -16,6 +16,7 @@ import { useStore } from "@/store";
 import { ACTIONS, bindingsFor, formatChord } from "@/lib/keymap";
 import { scorePath } from "@/lib/search";
 import { openFile } from "@/lib/explorer";
+import { SCRATCH_LANGUAGES, createScratch, openScratch } from "@/lib/scratch";
 import { Dim, Kbd, Mono } from "@/ui/primitives";
 import { FileIcon } from "@/ui/FileIcon";
 import { base, shortDir } from "@/lib/format";
@@ -41,6 +42,13 @@ export function Palette({ dock }: { dock: RefObject<DockviewApi | null> }) {
     patchExplorer(id, { treePending: true });
     send({ cmd: "list_tree", session_id: id });
   }, [open, mode, id, send, patchExplorer]);
+
+  // The scratch list too, for the same reason: files are made and deleted
+  // outside this window, and the daemon's answer is one message.
+  const scratchNames = useStore((s) => s.scratch.names);
+  useEffect(() => {
+    if (open && mode === "scratch") send({ cmd: "scratch_list" });
+  }, [open, mode, send]);
 
   useEffect(() => {
     if (open) setQuery("");
@@ -70,15 +78,23 @@ export function Palette({ dock }: { dock: RefObject<DockviewApi | null> }) {
         onClick={(e) => e.stopPropagation()}
         className="w-[620px] max-w-[92vw] overflow-hidden rounded-md border border-[var(--window-stroke)] bg-[var(--bg-raised)] shadow-[var(--elev-3)]"
       >
-        <Command shouldFilter={mode === "actions"} loop>
+        <Command shouldFilter={mode !== "files"} loop>
           <div className="flex items-center gap-2 border-b border-[var(--border)] px-3">
-            <Dim className="text-2xs tracking-wider uppercase">{mode === "files" ? "file" : "action"}</Dim>
+            <Dim className="text-2xs tracking-wider uppercase">
+              {mode === "files" ? "file" : mode === "scratch" ? "scratch" : "action"}
+            </Dim>
             <Command.Input
               ref={inputRef}
               autoFocus
               value={query}
               onValueChange={setQuery}
-              placeholder={mode === "files" ? "open a file by name…" : "type an action…"}
+              placeholder={
+                mode === "files"
+                  ? "open a file by name…"
+                  : mode === "scratch"
+                    ? "a language for a new scratch file, or one you already have…"
+                    : "type an action…"
+              }
               className="flex-1 bg-transparent py-2.5 text-base outline-none placeholder:text-[var(--dim)]"
               onKeyDown={(e) => {
                 if (e.key === "Escape") close();
@@ -130,6 +146,53 @@ export function Palette({ dock }: { dock: RefObject<DockviewApi | null> }) {
                   ))}
                 </Command.Group>
               ))}
+
+            {mode === "scratch" && (
+              <>
+                <Command.Group
+                  heading="New scratch file"
+                  className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[var(--dim)] [&_[cmdk-group-heading]]:uppercase"
+                >
+                  {SCRATCH_LANGUAGES.map((l) => (
+                    <Command.Item
+                      key={l.ext}
+                      value={`new ${l.label} .${l.ext}`}
+                      onSelect={() => {
+                        close();
+                        createScratch(l.ext);
+                      }}
+                      className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1 text-sm data-[selected=true]:bg-[var(--selection-bg)] data-[selected=true]:text-[var(--text-strong)]"
+                    >
+                      <FileIcon name={`scratch.${l.ext}`} size={12} className="shrink-0" />
+                      <span className="flex-1">{l.label}</span>
+                      <Dim className="text-2xs">.{l.ext}</Dim>
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+                {scratchNames.length > 0 && (
+                  <Command.Group
+                    heading="Open a scratch file"
+                    className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[var(--dim)] [&_[cmdk-group-heading]]:uppercase"
+                  >
+                    {scratchNames.map((n) => (
+                      <Command.Item
+                        key={n}
+                        value={`open ${n}`}
+                        onSelect={() => {
+                          close();
+                          openScratch(n);
+                        }}
+                        className="flex cursor-default items-center gap-1 rounded-sm px-2 py-1 text-sm data-[selected=true]:bg-[var(--selection-bg)] data-[selected=true]:text-[var(--text-strong)]"
+                      >
+                        <FileIcon name={n} size={12} className="shrink-0" />
+                        <Mono className="text-sm">{n}</Mono>
+                        <Dim className="truncate text-2xs">~/.mogeung/scratch</Dim>
+                      </Command.Item>
+                    ))}
+                  </Command.Group>
+                )}
+              </>
+            )}
 
             {mode === "files" &&
               files.map((p) => (

@@ -217,6 +217,11 @@ export function KeymapWindow() {
             <div className="opacity-80">
               These belong to the pane rather than to the keymap, so they are not rebindable here.
             </div>
+            <div className="opacity-80">
+              <Kbd>Ctrl+Alt+Shift+Insert</Kbd> opens a new scratch file (IntelliJ&apos;s chord). A Mac
+              laptop has no Insert key — rebind <em>New scratch file</em> above rather than looking
+              for one.
+            </div>
           </div>
         </div>
 

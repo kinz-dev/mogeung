@@ -115,6 +115,12 @@ pub struct AppState {
     /// `identity` because the constructor is shared with tests that have no
     /// config to read; `server::prepare` fills it in once.
     pub ssh_target: std::sync::OnceLock<String>,
+    /// Where scratch files live. `R-L5`.
+    ///
+    /// Unset means `~/.mogeung/scratch`; a test points it at a directory of
+    /// its own, the way the harness already hands in a Claude home, so no
+    /// test can write into the developer's real scratch folder.
+    pub scratch_dir: std::sync::OnceLock<PathBuf>,
     /// Every run this daemon owns. `R-N4`.
     pub runs: crate::run::Runs,
     /// The local model seam, when one is configured. `R-O1`, ADR-0030.
@@ -530,6 +536,7 @@ impl AppState {
             seqs: Mutex::new(seqs),
             identity,
             ssh_target: std::sync::OnceLock::new(),
+            scratch_dir: std::sync::OnceLock::new(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
             proxy: crate::llmproxy::Proxy::new(),
@@ -3208,6 +3215,14 @@ impl AppState {
     /// Every note. `R-B35`.
     pub async fn notes(&self) -> Result<Vec<mogeung_core::wire::Note>> {
         self.store.load_notes()
+    }
+
+    /// The scratch directory in force. `R-L5`.
+    pub fn scratch_dir(&self) -> PathBuf {
+        self.scratch_dir
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::scratch::default_dir)
     }
 
     /// Create or update a note, and mirror it. `R-B35`.

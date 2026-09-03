@@ -1123,6 +1123,18 @@ export type ClientMsg =
     }
   | { cmd: "note_delete"; id: string }
   /**
+   * Scratch files. `R-L5`, ADR-0035.
+   *
+   * Files, not notes — `scratch-3.java`, opened writable in its own pane and
+   * saved as you type. The daemon mints every name and refuses any that is
+   * not a bare file name in `~/.mogeung/scratch`, which is the one directory
+   * the editor may write to.
+   */
+  | { cmd: "scratch_list" }
+  | { cmd: "scratch_create"; ext: string }
+  | { cmd: "scratch_read"; name: string }
+  | { cmd: "scratch_write"; name: string; content: string }
+  /**
    * The one free-form string in this protocol. `R-O5`, ADR-0030 clause 4.
    *
    * The whole conversation travels every time and the daemon keeps none of it,
@@ -1292,6 +1304,15 @@ export type ServerMsg =
   | { ev: "kit"; entries: KitEntry[] }
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
+  /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
+  | { ev: "scratches"; names: string[] }
+  /**
+   * One scratch file, to the asker. `fresh` is true exactly once, in answer
+   * to the `scratch_create` that made it — that is the one message that
+   * opens a pane, so a read never does.
+   */
+  | { ev: "scratch_content"; name: string; content: string; fresh: boolean }
+  | { ev: "scratch_saved"; name: string }
   /**
    * A piece of an answer as it arrives. `R-O11`.
    *

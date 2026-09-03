@@ -184,6 +184,27 @@ export const ACTIONS: Action[] = [
   },
 
   {
+    id: "scratch.new",
+    label: "New scratch file",
+    group: "Editor",
+    /**
+     * `Ctrl+Alt+Shift+Insert` — IntelliJ's own scratch-file chord, taken as it
+     * is rather than translated. `R-L5`.
+     *
+     * Free in this keymap and free in the terminal: `Ctrl+Insert` is copy
+     * there and `Shift+Insert` paste, and `clipboardIntent` hands any chord
+     * with `Alt` in it straight back, so the window can claim this one and
+     * still leave the pane's two Insert chords alone. **No Mac default**: a
+     * Mac laptop keyboard has no Insert key, so the chord there is a rebind
+     * rather than a spelling nobody can press. The Keyboard window says so.
+     *
+     * Opens the picker rather than creating outright, because the name the
+     * daemon mints is `scratch-<n>.<ext>` and the extension is the language.
+     */
+    keys: ["Control+Alt+Shift+Insert"],
+    run: () => useStore.setState({ paletteOpen: true, paletteMode: "scratch" }),
+  },
+  {
     id: "file.copy_path",
     label: "Copy the full path of the file you are reading",
     group: "Panes",

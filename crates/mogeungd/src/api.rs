@@ -2044,6 +2044,49 @@ async fn handle(
             Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
             Err(e) => err(e),
         },
+        // -- Scratch files. `R-L5`, ADR-0035. The list is broadcast so two
+        // windows agree on what exists; a file's content goes to whoever
+        // asked, because a read must never open a pane somewhere else.
+        ClientMsg::ScratchList => match crate::scratch::list(&state.scratch_dir()) {
+            Ok(names) => state.broadcast(ServerMsg::Scratches { names }),
+            Err(e) => err(e),
+        },
+        ClientMsg::ScratchCreate { ext } => {
+            let dir = state.scratch_dir();
+            match crate::scratch::create(&dir, &ext) {
+                Ok(name) => {
+                    send_reply(
+                        reply,
+                        ServerMsg::ScratchContent {
+                            name,
+                            content: String::new(),
+                            fresh: true,
+                        },
+                    );
+                    if let Ok(names) = crate::scratch::list(&dir) {
+                        state.broadcast(ServerMsg::Scratches { names });
+                    }
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::ScratchRead { name } => match crate::scratch::read(&state.scratch_dir(), &name) {
+            Ok(content) => send_reply(
+                reply,
+                ServerMsg::ScratchContent {
+                    name,
+                    content,
+                    fresh: false,
+                },
+            ),
+            Err(e) => err(e),
+        },
+        ClientMsg::ScratchWrite { name, content } => {
+            match crate::scratch::write(&state.scratch_dir(), &name, &content) {
+                Ok(()) => send_reply(reply, ServerMsg::ScratchSaved { name }),
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitResolve {
             session_id,
             path,

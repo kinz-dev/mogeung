@@ -25,6 +25,10 @@ async fn boot(name: &str) -> Harness {
     // real `~/.claude`, which made these tests a function of the developer's
     // machine — a 139 MB history turns Rescan's first scan into a timeout.
     let state = AppState::with_home(store, dir.join("claude")).unwrap();
+    // Scratch files go under the test's own directory too (`R-L5`): a test
+    // that wrote into `~/.mogeung/scratch` would leave files on the
+    // developer's desk and read the ones already there.
+    state.scratch_dir.set(dir.join("scratch")).unwrap();
     let app = api::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -369,4 +373,79 @@ async fn a_note_reaches_every_client_and_lands_on_disk() {
     .await;
     assert!(gone.is_some(), "the delete came back");
     assert!(named(&id).is_empty(), "the mirror went with it");
+}
+
+/// `R-L5`: the daemon mints the name and answers the asker; the second window
+/// learns the file exists from the broadcast list and can read it, and a name
+/// the daemon never chose is refused rather than created.
+#[tokio::test]
+async fn scratch_files_are_made_named_and_saved_by_the_daemon() {
+    let h = boot("scratch").await;
+    let (mut a, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
+    let (mut b, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
+
+    send(&mut a, ClientMsg::ScratchCreate { ext: "java".into() }).await;
+    let name = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::ScratchContent { name, fresh: true, content } if content.is_empty() => {
+            Some(name.clone())
+        }
+        _ => None,
+    })
+    .await
+    .expect("the asker gets the fresh file back");
+    assert_eq!(name, "scratch-1.java");
+
+    // The other window sees the list, and **not** the fresh content — a
+    // pane opening on someone else's chord would be the wrong kind of shared.
+    let names = wait_for(&mut b, 5, |m| match m {
+        ServerMsg::Scratches { names } => Some(names.clone()),
+        _ => None,
+    })
+    .await
+    .expect("the list is broadcast");
+    assert_eq!(names, vec!["scratch-1.java".to_string()]);
+
+    send(
+        &mut a,
+        ClientMsg::ScratchWrite {
+            name: name.clone(),
+            content: "class A {}\n".into(),
+        },
+    )
+    .await;
+    assert!(wait_for(&mut a, 5, |m| match m {
+        ServerMsg::ScratchSaved { name: n } if *n == name => Some(()),
+        _ => None,
+    })
+    .await
+    .is_some());
+
+    send(&mut b, ClientMsg::ScratchRead { name: name.clone() }).await;
+    let content = wait_for(&mut b, 5, |m| match m {
+        ServerMsg::ScratchContent { name: n, content, fresh: false } if *n == name => {
+            Some(content.clone())
+        }
+        _ => None,
+    })
+    .await
+    .expect("a read answers the asker");
+    assert_eq!(content, "class A {}\n");
+
+    // A name the daemon did not mint is an error, and a path is refused
+    // before it is looked at.
+    send(
+        &mut b,
+        ClientMsg::ScratchWrite {
+            name: "../outside.txt".into(),
+            content: "x".into(),
+        },
+    )
+    .await;
+    let message = wait_for(&mut b, 5, |m| match m {
+        ServerMsg::Error { message } => Some(message.clone()),
+        _ => None,
+    })
+    .await
+    .expect("refused out loud");
+    assert!(message.contains("scratch file name"), "{message}");
 }

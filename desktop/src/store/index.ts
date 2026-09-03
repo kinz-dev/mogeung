@@ -14,6 +14,7 @@
 import { create } from "zustand";
 import { summarize } from "@/store/changes";
 import { toggleRail } from "@/lib/rail";
+import { showScratchPane } from "@/lib/scratch";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
@@ -566,6 +567,18 @@ export interface AppState {
   usage: UsageReport | null;
   notes: Note[];
   /**
+   * Scratch files. `R-L5`.
+   *
+   * `names` is the daemon's list, newest first. `files` holds the body of
+   * each one a pane has asked for; `null` while the read is in flight. `saved`
+   * ticks once per acknowledged write, which is how a pane knows its last
+   * edit landed without holding a copy of what it sent.
+   */
+  scratch: {
+    names: string[];
+    files: Record<string, { content: string | null; saved: number }>;
+  };
+  /**
    * The chat panel's conversation. `R-O5`.
    *
    * **In memory only, and deliberately.** The daemon stores none of it
@@ -630,7 +643,7 @@ export interface AppState {
   notices: Notice[];
   noticesOpen: boolean;
   paletteOpen: boolean;
-  paletteMode: "actions" | "files";
+  paletteMode: "actions" | "files" | "scratch";
   showHealth: boolean;
   /** The wall — every session as a tile, on a chord. `R-B50`. */
   showWall: boolean;
@@ -954,6 +967,7 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  scratch: { names: [], files: {} },
   chat: [],
   kit: [],
   kitDoc: null,
@@ -1602,6 +1616,33 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "notes":
         set({ notes: msg.notes });
+        break;
+      case "scratches":
+        set((s) => ({ scratch: { ...s.scratch, names: msg.names } }));
+        break;
+      case "scratch_content":
+        set((s) => ({
+          scratch: {
+            ...s.scratch,
+            files: {
+              ...s.scratch.files,
+              [msg.name]: { content: msg.content, saved: s.scratch.files[msg.name]?.saved ?? 0 },
+            },
+          },
+        }));
+        // The one message that opens a pane: the answer to *this window's*
+        // create. A read arrives on the same event and must not — it is what
+        // a pane restored from the layout asks for on mount.
+        if (msg.fresh) showScratchPane(msg.name);
+        break;
+      case "scratch_saved":
+        set((s) => {
+          const file = s.scratch.files[msg.name];
+          if (!file) return s;
+          return {
+            scratch: { ...s.scratch, files: { ...s.scratch.files, [msg.name]: { ...file, saved: file.saved + 1 } } },
+          };
+        });
         break;
       case "model_chunk": {
         // The prompt window's draft asks through this same door (`R-O7`,

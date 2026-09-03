@@ -19,6 +19,7 @@ import { Anchor, FolderOpen, GitBranch, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseFilePaneId } from "@/lib/panes";
+import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { hostLabel, reachFor } from "@/lib/tmux";
@@ -54,6 +55,7 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
   const session = useStore((s) => (id ? (s.sessions[id] ?? null) : null));
   const label = useStore((s) => (id ? (s.scoped().labels[id] ?? null) : null));
   const file = fileOf(paneId);
+  const scratch = parseScratchPaneId(paneId);
   // The file's **own** session, which is not necessarily the selected one — a
   // file pane stays put when the queue moves (`R-B53`), so asking `selected`
   // for its root would name the wrong repository the moment you clicked away.
@@ -72,6 +74,13 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
       // *which checkout* — and with two agents in two worktrees of the same
       // repo, `src/lib.rs` is the ambiguous half of the answer.
       hint: `${fullPath(fileRoot, file.path)} — read-only, and bound to the session that opened it`,
+    };
+  }
+  if (scratch) {
+    return {
+      text: scratch,
+      held: false,
+      hint: `${scratchPath(scratch)} — a scratch file, saved as you type (R-L5)`,
     };
   }
   if (kind !== "agent") return { text: fallback, held: false, hint: fallback };
@@ -136,6 +145,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
 
   const { text, held, hint } = usePaneTitle(props.api.id, fallback);
   const file = fileOf(props.api.id);
+  const scratch = parseScratchPaneId(props.api.id);
   const root = useStore((s) => {
     if (!file) return null;
     const owner = s.sessions[file.session];
@@ -153,14 +163,17 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
         exception and always was: it is a document you are finished with, and
         `R-B53` made that a real tab rather than a row in a strip.
       */}
-      {file && (
+      {(file || scratch) && (
         <button
           type="button"
-          title={`close ${file.name}`}
-          aria-label={`close ${file.name}`}
+          title={`close ${file ? file.name : scratch}`}
+          aria-label={`close ${file ? file.name : scratch}`}
           onClick={(e) => {
             e.stopPropagation();
-            closeFile(file.session, file.path, file.rev);
+            // A scratch file is a document too (`R-L5`); it closes through
+            // the dock because nothing in the store holds it open.
+            if (file) closeFile(file.session, file.path, file.rev);
+            else props.api.close();
           }}
           className="ml-1 shrink-0 opacity-60 outline-none transition-opacity duration-[var(--dur-fast)] hover:opacity-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]"
         >
@@ -179,6 +192,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
   return (
     <ContextMenu trigger={tab}>
       <MenuLabel>{file ? file.name : text}</MenuLabel>
+      {scratch && (
+        <>
+          <MenuItem onSelect={() => void copyPath(scratchPath(scratch), "full path")}>Copy full path</MenuItem>
+          <MenuItem onSelect={() => void copyPath(scratch, "file name")}>Copy file name</MenuItem>
+          <MenuSeparator />
+        </>
+      )}
       {file && (
         <>
           <MenuItem onSelect={() => void copyPath(fullPath(root, file.path), "full path")}>

@@ -272,6 +272,26 @@ pub enum ClientMsg {
     },
     NoteDelete { id: String },
 
+    // -- Scratch files. `R-L5`, ADR-0035.
+    //
+    // Files, not notes: a note is markdown the daemon owns and mirrors one
+    // way; a scratch file is `scratch-3.java`, opened in the Code pane and
+    // edited there. They live in `~/.mogeung/scratch`, which is the daemon's
+    // own directory — the one place the editor may write, and the reason
+    // pillar K's *never a worktree file* is untouched. Same gating posture as
+    // notes: not a repository write, so not in the write family.
+    /// Every scratch file's name. Small by nature, so it is not paged.
+    ScratchList,
+    /// Make a new, empty one with this extension. The daemon picks the name
+    /// (`scratch-<n>.<ext>`, first free `n`) and answers the asker with a
+    /// `ScratchContent { fresh: true }` so the window can open it.
+    ScratchCreate { ext: String },
+    /// The whole file, to the asker.
+    ScratchRead { name: String },
+    /// Replace the whole file. The window sends this as you type, debounced;
+    /// the daemon answers the asker with `ScratchSaved`.
+    ScratchWrite { name: String, content: String },
+
     // -- The local model. `R-O5`, ADR-0030.
     /// Ask the configured model a question, and answer on this socket only.
     ///
@@ -1167,6 +1187,22 @@ pub enum ServerMsg {
     /// one daemon cannot drift — which is the property daemon ownership was
     /// chosen for.
     Notes { notes: Vec<Note> },
+
+    /// Every scratch file's name, newest first. `R-L5`.
+    ///
+    /// Broadcast after a create and in answer to a list, so a second window
+    /// on the same daemon sees the file the first one made.
+    Scratches { names: Vec<String> },
+    /// One scratch file, to the asker. `fresh` is true exactly once, in
+    /// answer to the `ScratchCreate` that made it — the window opens a pane
+    /// on that and only that, so a read never opens anything.
+    ScratchContent {
+        name: String,
+        content: String,
+        fresh: bool,
+    },
+    /// The write landed. `R-L5`.
+    ScratchSaved { name: String },
 
     /// A piece of an answer as it arrives. `R-O11`.
     ///

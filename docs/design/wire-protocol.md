@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-08-29
+updated: 2026-09-03
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -255,6 +255,34 @@ the token layer along with everything else when the bind is not loopback.
 
 An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
 it chose, so a client never invents one.
+
+## Scratch files (`R-L5`, 2026-09-03)
+
+`ScratchList`, `ScratchCreate { ext }`, `ScratchRead { name }`,
+`ScratchWrite { name, content }`; answered by `Scratches { names }`,
+`ScratchContent { name, content, fresh }` and `ScratchSaved { name }`.
+
+Files, not notes: nothing is stored, the file in `~/.mogeung/scratch` **is**
+the thing, and the shape is
+[ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md).
+Two rules show in the messages:
+
+- **The daemon mints every name.** A create carries an extension and answers
+  with `scratch-<n>.<ext>`; every other verb carries a name, and a name that
+  is not a bare file name — a separator, a leading dot, `..` — is refused
+  before the filesystem is touched. A write on a name the daemon did not mint
+  is an error, so the write verb cannot place a file.
+- **Content goes to the asker; the list goes to everyone.** `ScratchContent`
+  and `ScratchSaved` come down the reply lane (`R-J59`), and `fresh` is true
+  only on the answer to a create — the one message a window opens a pane on.
+  A read arrives on the same event with `fresh: false`, which is what a pane
+  restored from the layout asks for on mount. `Scratches` is broadcast after a
+  create and in answer to a list, so a second window learns the file exists
+  without a pane appearing on someone else's chord.
+
+Same gating posture as notes: the daemon's own directory rather than a
+repository, so not in the write family; the token layer covers them off
+loopback.
 
 Client-supplied git arguments are shape-checked before git sees them: shas
 must be hex (one trailing `^` allowed — "the parent of"), ref names are

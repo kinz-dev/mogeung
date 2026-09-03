@@ -489,3 +489,9 @@ analytics, subagent trees, decision-candidate extraction (pattern named
 on every row), and prompt-blame for a file from `touched_files` — each
 answer stating how it matched, because A8 says attribution cannot be
 certain and the UI must not pretend otherwise.
+
+---
+
+*2026-09-03: `state.rs` gained `scratch_dir` (`R-L5`), a `OnceLock` a test
+sets so no test writes to the real `~/.mogeung/scratch`. Nothing in the
+signals above reads it; noted so the staleness check stays honest.*
