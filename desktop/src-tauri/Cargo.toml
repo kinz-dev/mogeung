@@ -48,6 +48,14 @@ mogeungd = { path = "../../crates/mogeungd" }
 mogeung-core = { path = "../../crates/mogeung-core" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tauri-plugin-dialog = "2.7.2"
+# The clipboard *write*, and only the write (see `capabilities/default.json`).
+# WebKitGTK lets `navigator.clipboard.writeText` run only inside a user
+# gesture, and an `OSC 52` arrives over the pty long after the mouse-up that
+# caused it — so tmux's copy-on-select reached the window and was refused
+# there. The shell has no such gate. Read stays with the webview on purpose:
+# a pty that could read the clipboard is a remote session reading this
+# machine's (`R-I6`).
+tauri-plugin-clipboard-manager = "2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

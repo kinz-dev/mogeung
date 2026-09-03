@@ -35,6 +35,8 @@
  * than paste in a pane whose job is answering a prompt.
  */
 
+import { isTauri } from "@/lib/tauri";
+
 export type ClipboardIntent =
   /** Copy the terminal's selection ourselves. */
   | "copy"
@@ -83,13 +85,51 @@ export function clipboardIntent(e: KeyboardEvent): ClipboardIntent {
  * Rejects rather than resolving quietly when there is no way to: a copy that
  * silently did nothing is discovered at the paste, in another application,
  * with the thing you meant to copy long gone from the screen.
+ *
+ * **In the shell the write goes through the shell, not the webview.** WebKit
+ * allows `navigator.clipboard.writeText` only inside a user gesture — a
+ * keydown, a click — and refuses everything else with `NotAllowedError`. The
+ * chords qualify; an `OSC 52` does not. It arrives over the pty, in its own
+ * event, long after the mouse-up that made tmux emit it, so copy-on-select in
+ * a pane with the mouse on reached this function and was refused every time
+ * (reported 2026-09-03 as a popup on every drag). The shell's clipboard has
+ * no such gate, so under Tauri it is asked first and the webview is the
+ * fallback — for a shell that lacks the permission, or a plugin that fails
+ * for a reason of its own. A browser tab keeps the webview route, which is
+ * the only one it has.
+ *
+ * Only the *write* is routed this way. Reading stays with the webview, and
+ * the shell is deliberately not granted `read-text`: `decodeOsc52` refuses a
+ * program's read for the reason given there, and a permission the window
+ * does not hold is one no code path can leak.
  */
 export async function writeClipboard(text: string): Promise<void> {
-  if (!navigator.clipboard?.writeText) throw new Error("this webview exposes no clipboard");
-  await navigator.clipboard.writeText(text);
+  let shellError: unknown = null;
+  if (isTauri()) {
+    try {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(text);
+      return;
+    } catch (err) {
+      shellError = err;
+    }
+  }
+  if (!navigator.clipboard?.writeText) {
+    throw shellError ?? new Error("this webview exposes no clipboard");
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    // The shell was the route that should have worked; its refusal is the
+    // one worth reading when both fail.
+    throw shellError ?? err;
+  }
 }
 
-/** Read the clipboard. Rejects for the same reason `writeClipboard` does. */
+/**
+ * Read the clipboard. Rejects for the same reason `writeClipboard` does, and
+ * through the webview only — see there for why the shell is not asked.
+ */
 export async function readClipboard(): Promise<string> {
   if (!navigator.clipboard?.readText) throw new Error("this webview will not read the clipboard");
   return await navigator.clipboard.readText();

@@ -7,8 +7,18 @@
  * when you most need it to work.
  */
 
-import { describe, expect, it } from "vitest";
-import { clipboardIntent, decodeOsc52, type ClipboardIntent } from "@/lib/clipboard";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clipboardIntent,
+  decodeOsc52,
+  writeClipboard,
+  type ClipboardIntent,
+} from "@/lib/clipboard";
+
+const shellWrite = vi.fn<(text: string) => Promise<void>>();
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: (text: string) => shellWrite(text),
+}));
 
 function key(init: Partial<KeyboardEvent> & { key: string }): KeyboardEvent {
   return {
@@ -88,5 +98,79 @@ describe("OSC 52 — the program asking for the clipboard itself", () => {
     expect(decodeOsc52("no-semicolon")).toBeNull();
     expect(decodeOsc52("c;not!valid!base64")).toBeNull();
     expect(decodeOsc52(`c;${"A".repeat(5 * 1024 * 1024)}`)).toBeNull();
+  });
+});
+
+/**
+ * Where a write goes, and why it is not always the webview.
+ *
+ * The case that matters is the first one: it is what a mouse selection in a
+ * pane with tmux's mouse on produced on 2026-09-03 — an `OSC 52` handled with
+ * no gesture in flight, which WebKit refuses. A fix that only worked when a
+ * hand was on the keyboard would pass every chord test above and still show
+ * the popup on every drag.
+ */
+describe("writing to the clipboard from the shell", () => {
+  const notAllowed = () =>
+    Promise.reject(
+      new Error(
+        "NotAllowedError: The request is not allowed by the user agent or the platform in the current context",
+      ),
+    );
+
+  function webview(writeText: ((t: string) => Promise<void>) | undefined) {
+    Object.defineProperty(navigator, "clipboard", {
+      value: writeText ? { writeText } : undefined,
+      configurable: true,
+    });
+  }
+
+  afterEach(() => {
+    shellWrite.mockReset();
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    webview(undefined);
+  });
+
+  it("goes through the shell in the desktop window, where the webview would refuse a write with no gesture", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const webviewWrite = vi.fn(notAllowed);
+    webview(webviewWrite);
+    shellWrite.mockResolvedValue(undefined);
+
+    await expect(writeClipboard("from tmux")).resolves.toBeUndefined();
+    expect(shellWrite).toHaveBeenCalledWith("from tmux");
+    expect(webviewWrite).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the webview when the shell refuses — a build without the permission still copies on a chord", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    const webviewWrite = vi.fn(() => Promise.resolve());
+    webview(webviewWrite);
+    shellWrite.mockRejectedValue(new Error("clipboard-manager.write_text not allowed"));
+
+    await expect(writeClipboard("on a chord")).resolves.toBeUndefined();
+    expect(webviewWrite).toHaveBeenCalledWith("on a chord");
+  });
+
+  it("reports the shell's refusal when both routes fail, since the shell is the one that should have worked", async () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    webview(notAllowed);
+    shellWrite.mockRejectedValue(new Error("clipboard-manager.write_text not allowed"));
+
+    await expect(writeClipboard("x")).rejects.toThrow("write_text not allowed");
+  });
+
+  it("uses the webview in a browser tab, which has no shell to ask", async () => {
+    const webviewWrite = vi.fn(() => Promise.resolve());
+    webview(webviewWrite);
+
+    await writeClipboard("in a tab");
+    expect(webviewWrite).toHaveBeenCalledWith("in a tab");
+    expect(shellWrite).not.toHaveBeenCalled();
+  });
+
+  it("still rejects rather than resolving quietly when nothing can write", async () => {
+    webview(undefined);
+    await expect(writeClipboard("x")).rejects.toThrow("exposes no clipboard");
   });
 });

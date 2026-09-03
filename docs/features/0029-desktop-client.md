@@ -1,7 +1,7 @@
 ---
 title: The React desktop client
 status: shipped
-updated: 2026-08-05
+updated: 2026-09-03
 roadmap: [R-M1, R-M2, R-M3, R-M4]
 depends_on: [A1, A6, A13, A14, A15, A16]
 ---
@@ -1110,6 +1110,23 @@ The price is `^V`: quoted-insert can no longer be typed at a pane. It is
 reachable through tmux's own prefix, and it is much rarer to want than paste in
 a pane whose job is answering a prompt.
 
+**The write is gated too, when no hand is on the keyboard** (`R-J87`, reported
+2026-09-03 as a popup on every mouse drag: *"the session tried to copy and
+could not: NotAllowedError"*). WebKit allows `navigator.clipboard.writeText`
+only inside a user gesture. The chords qualify. An `OSC 52` does not: it
+arrives over the pty in its own event, long after the mouse-up that made tmux
+emit it — the mogeung sessions run with the mouse on and `set-clipboard on`, so
+every drag is a copy-mode selection and every release an `OSC 52` — and the
+handler below refused it, out loud, exactly as it was written to. The fix is
+where the write goes: under Tauri `writeClipboard` asks the shell's clipboard
+first (`tauri-plugin-clipboard-manager`, granted `allow-write-text` and nothing
+else), which has no gesture gate, and falls back to the webview for a build
+without the permission. A browser tab keeps the webview route, the only one it
+has. **Read is not granted to the shell.** `decodeOsc52` refuses a program's
+read so that a pty cannot read this machine's clipboard, and a permission the
+window does not hold is one no code path can leak — the same shape as
+`dialog:allow-save` without the fs plugin.
+
 **The half that is not a keyboard problem** is documented in the Keyboard
 window rather than fixed, because it cannot be fixed from here: Claude Code
 turns on mouse reporting, so a drag is the program's to interpret and xterm
@@ -1199,8 +1216,9 @@ pointer.
 
 | Path | Why |
 |---|---|
-| `desktop/src/lib/clipboard.ts` | the chords, and which paste route each takes |
-| `desktop/src/lib/clipboard.test.ts` | that `Ctrl+C` is never copy, and one press is never two pastes |
+| `desktop/src/lib/clipboard.ts` | the chords, which paste route each takes, and the shell-first write (`R-J87`) |
+| `desktop/src/lib/clipboard.test.ts` | that `Ctrl+C` is never copy, one press is never two pastes, and a write with no gesture still lands |
+| `desktop/src-tauri/capabilities/default.json` | `clipboard-manager:allow-write-text`, and deliberately not `read-text` |
 | `desktop/src/ui/Terminal.tsx` | the handler, and `term.paste` so bracketed paste survives |
 | `desktop/src/ui/KeymapWindow.tsx` | the terminal's chords, listed and marked not rebindable |
 | `desktop/src/index.css` | `--tag-*-bg` in both palettes, and `.mogeung-tag-row` |
