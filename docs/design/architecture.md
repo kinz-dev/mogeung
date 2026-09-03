@@ -103,6 +103,16 @@ nothing. Either way it is not a worktree write and does not touch pillar K —
 the file is a copy of what the daemon already published, going out rather than
 in.
 
+The clipboard is the same shape in the other direction (`R-J87`). A copy the
+*program* asks for — tmux's `OSC 52` on a mouse selection — arrives over the
+pty with no user gesture in flight, and the webview's own clipboard refuses a
+write outside one, so the write goes through the shell:
+`clipboard-manager:allow-write-text` is the only permission added, and
+`read-text` is deliberately not, because a pty that could read the clipboard is
+a remote session reading this machine's. `decodeOsc52` refuses a program's read
+for that reason, and a permission the window does not hold is one no code path
+can leak.
+
 The file explorer (`R-B24`) gives the daemon a second read surface: on request
 it lists and reads files under a session's *own* root — repo when known, cwd
 otherwise. Same shape as everything else: the client asks over the wire and
