@@ -61,16 +61,23 @@ export default function PopoutApp({ popout }: { popout: Popout }) {
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
 
-  // Held, not selected — see the note at the top. Written once the store is up;
-  // `setScoped` keys by machine, so it has to wait for the daemon's identity
-  // rather than run on mount.
-  const machineId = useStore((s) => s.machineId);
+  // **Selected, not held**, and the first cut of this got it backwards.
+  //
+  // A hold looked right — it is what means *"this pane shows this session
+  // whatever the queue says"* — but it is stored in `scoped()`, which keys on
+  // `daemon?.machine_id`. That is not known when the window opens, so a hold
+  // written on mount either never ran or landed under `"unknown"` and was lost
+  // the moment the daemon published its identity. Reported as a popout showing
+  // *"select a session"* forever: no hold, and a `selected` this window never
+  // set.
+  //
+  // Selecting needs nothing but the id, and the reason a hold exists does not
+  // apply here — there is no queue in this window to move the selection off
+  // the session the URL named.
   useEffect(() => {
-    if (!machineId) return;
-    const { scoped, setScoped } = useStore.getState();
-    if (scoped().paneHold[paneId] === popout.session) return;
-    setScoped({ paneHold: { ...scoped().paneHold, [paneId]: popout.session } });
-  }, [machineId, paneId, popout.session]);
+    const { selected, select } = useStore.getState();
+    if (selected !== popout.session) select(popout.session);
+  }, [popout.session]);
 
   const title = session?.title?.trim() || popout.session.slice(0, 8);
 

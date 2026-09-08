@@ -136,3 +136,9 @@ tests pin the name check, first-free numbering, and that a write cannot mint.
   noticing it, and nothing in the checks would ever have failed. What would have
   caught it is a test asserting a bare key survives a writable editor — which
   now exists, and fails without the fix.
+- **The "no list in the window" scope was reopened on 2026-09-08**, by one
+  third and on purpose. `R-L6` adds a rail panel that lists scratch files and
+  opens them — and deliberately no rename, no delete and no search, which are
+  the parts of this spec's exclusion that were about *managing* documents
+  rather than reaching them. The argument that held: a file you made yesterday
+  should not be unreachable without remembering a chord.

@@ -21,13 +21,14 @@
 
 import * as React from "react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Bookmark, Folder, MessageSquare, NotebookPen, Search, X } from "lucide-react";
+import { Bookmark, FileCode2, Folder, MessageSquare, NotebookPen, Search, X } from "lucide-react";
 import { useStore } from "@/store";
 import { useChord } from "@/lib/keymap";
 import { RAIL_TOOLS, type RailTool } from "@/store/prefs";
 import { closeRail } from "@/lib/rail";
 import { IconButton, Tooltip } from "@/ui/primitives";
 import { FilesTool } from "@/ui/tools/FilesTool";
+import { ScratchTool } from "@/ui/tools/ScratchTool";
 import { SearchTool } from "@/ui/tools/SearchTool";
 import { NotesTool } from "@/ui/tools/NotesTool";
 import { BookmarksTool } from "@/ui/tools/BookmarksTool";
@@ -46,6 +47,9 @@ import { ZoomPane } from "@/ui/ZoomPane";
 const TOOLS: Record<RailTool, { label: string; icon: typeof Folder }> = {
   files: { label: "Files", icon: Folder },
   search: { label: "Search", icon: Search },
+  // Beside Files and not inside it, deliberately: Files browses the *session's
+  // worktree*, and a scratch file is in nobody's worktree. `R-L6`.
+  scratch: { label: "Scratch", icon: FileCode2 },
   notes: { label: "Notes", icon: NotebookPen },
   bookmarks: { label: "Bookmarks", icon: Bookmark },
   // *Ask Mogeung* rather than *Chat*, asked for 2026-08-28. "Chat" names the
@@ -58,6 +62,7 @@ const TOOLS: Record<RailTool, { label: string; icon: typeof Folder }> = {
 const BODIES: Record<RailTool, React.FunctionComponent> = {
   files: FilesTool,
   search: SearchTool,
+  scratch: ScratchTool,
   notes: NotesTool,
   bookmarks: BookmarksTool,
   chat: ChatTool,
@@ -77,6 +82,7 @@ export function Rail() {
   const chords: Record<RailTool, string> = {
     files: useChord("rail.files"),
     search: useChord("rail.search"),
+    scratch: useChord("rail.scratch"),
     notes: useChord("rail.notes"),
     bookmarks: useChord("rail.bookmarks"),
     chat: useChord("rail.chat"),

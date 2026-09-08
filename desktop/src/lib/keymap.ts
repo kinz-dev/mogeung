@@ -423,6 +423,9 @@ export const ACTIONS: Action[] = [
 
   rail("files", "the worktree", ["Alt+f"]),
   rail("search", "global search", ["Alt+s"]),
+  // `Alt+p` for the scratch **pad**: `Alt+s` is Search and `Alt+c` is taken, and
+  // of what was left this is the one with a word behind it. `R-L6`.
+  rail("scratch", "scratch files", ["Alt+p"]),
   rail("notes", "notes", ["Alt+n"]),
   rail("bookmarks", "bookmarks", ["Alt+b"]),
   // `Alt+A` at an explicit ask, 2026-08-28, and it cost the Agent pane the
@@ -762,6 +765,11 @@ export const MAC_KEYS: Record<string, string[]> = {
   // Letters where `⌘` is free.
   "rail.files": ["Meta+f"],
   "rail.search": ["Meta+s"],
+  // `⌥` and not `⌘`, because `⌘P` is already *Go to file by name* — the rule's
+  // second half. Spelled by **physical key**, which is the only spelling of an
+  // Option chord that fires on macOS at all: `⌥p` composes `π`, so `Alt+p`
+  // would be matched against a character and quietly never run. `R-L6`.
+  "rail.scratch": ["Alt+KeyP"],
   "rail.notes": ["Meta+n"],
   "rail.bookmarks": ["Meta+b"],
   "pane.agent": ["Meta+g"],

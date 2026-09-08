@@ -153,3 +153,16 @@ already anchored.
   one feature in the project where a browser tab proves *least*, since a tab has
   no shell and therefore no second window at all. `openPopout` returns `false`
   there by design.
+- **The first cut bound the pane with a hold, and that was wrong.** Reported on
+  the first real pop-out: the window showed *"select a session"* and no
+  terminal. A hold is stored in `scoped()`, which keys on `daemon?.machine_id`
+  — unknown when the window opens — so it landed under `"unknown"` and was lost
+  the moment the daemon published its identity; and the effect writing it was
+  gated on `machineId`, which is a **different value with almost the same
+  name** (the shell's local machine id, for `reachFor`). Nothing failed to say
+  so. It selects now, which needs only the id, and the reason a hold exists —
+  a queue that moves the selection — does not exist in this window.
+- **`PopoutApp.test.tsx` is the test that was missing**, and the one worth
+  keeping boots with `daemon: null`: the fault was entirely about state that
+  arrives late, so a test with the daemon already present would have passed
+  against the broken code.
