@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-08-29
+updated: 2026-09-08
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -199,6 +199,19 @@ started in one directory are then tellable apart in `tmux ls`. Claude keeps the
 bare `mogeung-<place>-<stamp>` it has always had — a name already written into
 `tmux attach` lines should not move for a feature that did not touch it.
 Nothing in mogeung parses either; panes are matched by process ancestry.
+
+### And whether it can be found at all (`R-J87`)
+
+Every launch above resolves a program name, and on 2026-09-06 none of them
+could: a bundle started from the Dock gets the launchd `PATH` and no profile is
+read, so `tmux` — the one binary here nobody had written a resolver for — was
+invisible, and `tmux_panes`' forgiving *"no tmux here"* reported it as a
+session not running under tmux. The repair is `env.rs` and belongs to
+[architecture.md](architecture.md#the-path-a-launcher-does-not-give-r-j87);
+what belongs here is the consequence for this file: **`crate::env::command`
+rather than `Command::new` for anything the daemon spawns**, so that the two
+questions a launch asks — where the program is, and what the child's own `PATH`
+will be — are answered together rather than one of them by accident.
 
 ### Handing a folder to the desktop (`R-J34`)
 
