@@ -15,10 +15,11 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, FolderOpen, GitBranch, SquarePlus, X } from "lucide-react";
+import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseFilePaneId } from "@/lib/panes";
+import { openPopout } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
@@ -351,6 +352,37 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         onClick={() => session && send({ cmd: "open_folder", session_id: session.id })}
       >
         <FolderOpen className="h-3.5 w-3.5" />
+      </IconButton>
+      {/*
+        **This pane, in a window of its own.** Asked for 2026-09-08: *"move a
+        session panel out of the current tauri window… and move it around
+        outside the containing window"*. `R-B55`,
+        [ADR-0037](../../../docs/decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md).
+
+        It **moves** rather than copying, which is why the pane closes here. Two
+        tmux clients attached to one session size that session to the smaller of
+        them, and the leftover rows that produces have been reported here
+        before — so a pop-out that left the pane behind would build that pairing
+        in as a feature. Closing the popout brings the pane back, anchored to
+        the same session.
+
+        The close is second and only on success: a pane closed for a window that
+        failed to open is a pane you have simply lost.
+      */}
+      <IconButton
+        title={
+          session
+            ? "move this pane into a window of its own"
+            : "no session to move out — this pane is empty"
+        }
+        disabled={!session}
+        onClick={async () => {
+          if (!session) return;
+          const moved = await openPopout("agent", session.id, sessionLabel(session));
+          if (moved) closeAgentPane(paneId);
+        }}
+      >
+        <PictureInPicture2 className="h-3.5 w-3.5" />
       </IconButton>
       {/*
         **No ceiling since `R-J35`**, asked for 2026-08-20: *"just open the

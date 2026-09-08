@@ -20,6 +20,7 @@
 
 mod connections;
 mod daemon;
+mod popout;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -749,7 +750,8 @@ pub fn run() {
             open_local_url,
             daemon_acquire,
             connections::connections_load,
-            connections::connections_save
+            connections::connections_save,
+            popout::popout_open
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

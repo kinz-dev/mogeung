@@ -53,7 +53,8 @@ import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
-import { closePanesFor, dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
+import { closePanesFor, dropOrphanHolds, filePanes, returnAgentPane, setDock } from "@/lib/panes";
+import { onPopoutClosed } from "@/lib/popout";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
@@ -182,6 +183,25 @@ export default function App() {
   useNotifications();
   // Re-read open files when the window comes forward. `R-J38`.
   useReloadFilesOnFocus();
+
+  // Take a pane back when its own window is closed. `R-B55`.
+  //
+  // Only the shell knows a window has gone, so this is a shell event rather
+  // than anything the two clients arrange between themselves — and it is
+  // listened to here rather than in `onReady` because it is a subscription with
+  // a lifetime, not part of building the dock.
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let dead = false;
+    void onPopoutClosed(({ session }) => returnAgentPane(session)).then((un) => {
+      if (dead) un();
+      else stop = un;
+    });
+    return () => {
+      dead = true;
+      stop?.();
+    };
+  }, []);
 
   // The theme is an attribute on the root, so the CSS variables switch without
   // a re-render of anything that reads them. `system` follows the desktop.

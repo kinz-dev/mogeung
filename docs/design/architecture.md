@@ -12,6 +12,9 @@ covers:
   - desktop/src-tauri/src/lib.rs
   - desktop/src-tauri/src/connections.rs
   - desktop/src/lib/connections.ts
+  - desktop/src-tauri/src/popout.rs
+  - desktop/src/lib/popout.ts
+  - desktop/src/PopoutApp.tsx
   - crates/mogeungd/src/usage.rs
   - crates/mogeungd/src/runner.rs
   - crates/mogeungd/src/insight.rs
@@ -385,6 +388,24 @@ describes a different machine; what the *user* chose — layout, keymap, prefs �
 survives.
 Terminal panes detach rather than close, so tmux keeps their shells alive on the
 machine being left.
+
+**A pane can be moved into a window of its own** (`R-B55`,
+[ADR-0037](../decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md)). The
+detached window loads the **same client** at `index.html?popout=<kind>&session=<id>`
+and is an ordinary client — its own store, its own socket, its own tmux attach,
+and exactly the shell capabilities the main window has and no others. It works
+because three things were already true: the ptys live in the shell rather than
+in a webview, `pty_open` emits **app-wide**, and an Agent pane already keys its
+pty by pane *and* session. The shell composes that URL from a checked kind and a
+checked session id, so the webview never names a page.
+
+It **moves** the pane rather than copying it, and that is tmux's constraint more
+than a preference: tmux sizes a session to its smallest attached client, so two
+attached clients of different sizes is the resize churn that leaves stale rows
+on screen. The pane closes when the window opens and returns, anchored to the
+same session, when the window is destroyed. This is the same multi-window model
+[ADR-0013](../decisions/0013-one-window-one-daemon.md) already implies — one
+window, one daemon, and two windows when you want two views.
 
 **Client state is split by what it is about** (`R-I11`, after
 [ADR-0013](../decisions/0013-one-window-one-daemon.md) settled that a window
