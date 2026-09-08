@@ -10,6 +10,8 @@ covers:
   - desktop/src/store/prefs.ts
   - desktop/src/store/index.ts
   - desktop/src-tauri/src/lib.rs
+  - desktop/src-tauri/src/connections.rs
+  - desktop/src/lib/connections.ts
   - crates/mogeungd/src/usage.rs
   - crates/mogeungd/src/runner.rs
   - crates/mogeungd/src/insight.rs
@@ -357,9 +359,26 @@ start-up refusal and the per-request gate cannot come to disagree. Loopback
 needs no flag, because it is the trust boundary the terminal panel already has.
 See [run-and-debug.md](run-and-debug.md).
 
-**The daemon can be changed without restarting** (`R-I7`). The window keeps a
-saved list — client state, like the keymap — with a name, a URL and an optional
-token each. Switching tears the old connection down before the new one is
+**The daemon can be changed without restarting** (`R-I7`, `R-I16`). The window
+keeps a saved list — client state, like the keymap — with a stable id, a name, a
+URL, an optional token and an optional tunnel command each. **The id is the
+identity, not the URL**, because two entries may reach one daemon by two routes
+and because an address you cannot edit is one you can only forget and retype.
+
+**That list rests in `~/.mogeung/connections.json`, mode `0600`, written by the
+Tauri shell** —
+[ADR-0036](../decisions/0036-the-connection-list-is-the-clients-and-its-file-is-the-shells.md).
+It is still client state and no daemon serves it: you cannot ask a remote daemon
+for the list of remotes, and a daemon holding its peers' addresses and tokens
+would be a lateral-movement store inside a read-only observer. What moved is
+only where the bytes rest, and the token is why — before it had a field, the
+only way to reach a token-gated daemon was to type `?token=…` into the address,
+which put a shared secret into the webview's unencrypted `localStorage`. The
+token is composed into the dialled URL at the moment of connecting and is never
+part of what the panel displays. A browser tab has no shell, so it falls back to
+`localStorage` and the panel says so.
+
+Switching tears the old connection down before the new one is
 dialled, so a window that has moved on cannot be reconnected behind by the
 socket it left. Everything the previous daemon said is then dropped, because it
 describes a different machine; what the *user* chose — layout, keymap, prefs —

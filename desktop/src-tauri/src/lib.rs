@@ -18,6 +18,7 @@
 //! [ADR-0010]: ../../../docs/decisions/0010-attach-a-terminal-never-own-one.md
 //! [ADR-0011]: ../../../docs/decisions/0011-own-a-shell-never-an-agent.md
 
+mod connections;
 mod daemon;
 
 use std::collections::HashMap;
@@ -746,7 +747,9 @@ pub fn run() {
             export_text,
             machine_id,
             open_local_url,
-            daemon_acquire
+            daemon_acquire,
+            connections::connections_load,
+            connections::connections_save
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

@@ -223,6 +223,7 @@ export function Input({
   inputRef,
   mono,
   ariaLabel,
+  secret,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -233,10 +234,17 @@ export function Input({
   inputRef?: React.Ref<HTMLInputElement>;
   mono?: boolean;
   ariaLabel?: string;
+  /**
+   * A shared secret rather than text — masked, and kept out of autofill and
+   * spellcheck. `R-I16`'s connection token is the first of these in the window.
+   */
+  secret?: boolean;
 }) {
   return (
     <input
       ref={inputRef}
+      type={secret ? "password" : "text"}
+      autoComplete={secret ? "off" : undefined}
       value={value}
       autoFocus={autoFocus}
       placeholder={placeholder}
