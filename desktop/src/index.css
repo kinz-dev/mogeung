@@ -1,6 +1,56 @@
 @import "tailwindcss";
 
 /*
+ * The terminal font, carried in the bundle rather than looked up. `R-J89`.
+ *
+ * **WebKit's WebContent process cannot see `~/Library/Fonts`.** Fonts under
+ * `/System/Library/Fonts` and `/Library/Fonts` resolve; a font you installed
+ * for yourself does not — and that is where macOS puts one you double-click.
+ * So the stack below, which asks for `MesloLGS NF` first, silently landed on
+ * **Menlo** in the window while iTerm2 — a native app under no such rule —
+ * used the real thing. Reported 2026-09-06 as *"the font used in the mogeung
+ * session is different from the yolomo started in iTerm2"*, with powerline
+ * glyphs showing as two underscores.
+ *
+ * The two fonts are close enough that only the glyph coverage gives it away:
+ * Meslo LG is derived from Menlo, so the letterforms are identical, but Menlo
+ * carries **2,759** codepoints against this font's **13,828** and none of the
+ * powerline range (`U+E0B0`, `U+E0A0`) or the Nerd Font icons (`U+F00C`) are
+ * among them. `❯` and `✕` are in both, which is why only *some* of the prompt
+ * went missing — the confusing half of the report.
+ *
+ * A web font loaded from our own assets is not a system font lookup, so the
+ * restriction does not apply. It also means a machine with no Nerd Font
+ * installed at all — any Linux box, a fresh Mac — renders an agent's prompt
+ * correctly, which was never true before.
+ *
+ * Regular and bold only. xterm.js asks for italic too, and WebKit synthesises
+ * it by slanting the regular face; a third file to avoid that is 1 MB for a
+ * case terminals barely use.
+ *
+ * `block` and not `swap`: xterm.js measures the character cell when it opens,
+ * and a swap mid-measure is how a terminal ends up with a grid that does not
+ * match its own glyphs. The file is local, so "blocking" is milliseconds.
+ *
+ * See `src/fonts/README.md` for provenance and licence.
+ */
+@font-face {
+  font-family: "MesloLGS NF";
+  src: url("./fonts/MesloLGS-NF-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "MesloLGS NF";
+  src: url("./fonts/MesloLGS-NF-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+/*
  * The palettes, ported verbatim from `crates/mogeung-ui/src/theme.rs`.
  *
  * `R-J6` shipped two hand-written palettes behind one lookup, with contrast
@@ -24,7 +74,12 @@
  * system" looks like from the inside.
  */
 @theme {
-  --font-mono: "MesloLGS NF", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  /* First entry is the bundled `@font-face` above, so it resolves everywhere
+     rather than only where someone installed it system-wide. The rest is the
+     fallback chain for the moment that file fails to load. `SF Mono` sat in
+     this list and never once resolved — WebKit does not expose the SF faces to
+     web content by name — so it is gone rather than left as decoration. */
+  --font-mono: "MesloLGS NF", "JetBrains Mono", Menlo, Consolas, monospace;
 
   /* Type. Six steps, each with a line height, on a 4px rhythm.
      `2xs` is metadata and badges; `sm` is the workhorse row; `base` is what

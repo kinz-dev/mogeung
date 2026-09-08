@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 function sources(dir = "src"): string[] {
@@ -146,5 +146,48 @@ describe("focus", () => {
       }
     }
     expect(bad).toEqual([]);
+  });
+});
+
+/**
+ * The terminal font has to be one we carry. `R-J89`.
+ *
+ * **WebKit's WebContent process cannot see `~/Library/Fonts`.** Naming a font
+ * in `--font-mono` is therefore not the same as having it: the window silently
+ * fell back to Menlo, which carries no powerline glyphs, while iTerm2 on the
+ * same machine used the real font. Nothing errors, and the two faces look
+ * alike enough that only a missing glyph gives it away.
+ *
+ * So the invariant is not "the stack names a nice font" but **"the first thing
+ * it names, we ship"**. This fails on the state that shipped before the fix,
+ * and it fails again the day someone puts a fashionable family at the front of
+ * the stack without putting the file next to it.
+ */
+describe("the terminal font", () => {
+  const css = readFileSync("src/index.css", "utf8");
+
+  /** Every `@font-face` family in the sheet, unquoted. */
+  const faces = new Set(
+    [...css.matchAll(/@font-face\s*\{[^}]*?font-family:\s*(["']?)([^;"']+)\1\s*;/g)].map((m) =>
+      m[2].trim(),
+    ),
+  );
+
+  it("is bundled, not merely named", () => {
+    const stack = css.match(/--font-mono:\s*([^;]+);/);
+    expect(stack, "--font-mono must be defined").not.toBeNull();
+    const first = stack![1].split(",")[0].trim().replace(/^["']|["']$/g, "");
+    expect([...faces]).toContain(first);
+  });
+
+  it("points every face at a file that is actually here", () => {
+    const missing: string[] = [];
+    for (const m of css.matchAll(/url\((["']?)([^)"']+)\1\)/g)) {
+      const ref = m[2];
+      if (ref.startsWith("data:") || /^https?:/.test(ref)) continue;
+      const path = join("src", ref.replace(/^\.\//, ""));
+      if (!existsSync(path)) missing.push(path);
+    }
+    expect(missing).toEqual([]);
   });
 });

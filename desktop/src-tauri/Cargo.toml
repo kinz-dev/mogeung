@@ -24,7 +24,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# `devtools` in release builds too, deliberately. Tauri gates the inspector
+# behind this feature and enables it only for debug builds otherwise — which is
+# right for an app you ship to strangers and wrong for this one. mogeung is a
+# developer tool whose window hosts other developers' terminals; when it draws
+# something wrong, the difference between *looking* and *guessing* was, on
+# 2026-09-06, two reinstalls and an afternoon (`R-J89`).
+tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }

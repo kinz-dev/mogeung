@@ -93,6 +93,30 @@ export interface TerminalProps {
   refusal?: React.ReactNode;
 }
 
+/**
+ * The family the terminal draws in, and the stack behind it. `R-J89`.
+ *
+ * Named here rather than only in CSS because the old code read `--font-mono`
+ * and fell back to bare `"monospace"` when the read came back empty — and
+ * `monospace` on macOS is Courier, which shares none of this font's glyphs and
+ * says nothing about it. A terminal has exactly one font that is right; the
+ * fallback for not finding it should be the same list, not a different font.
+ *
+ * `SF Mono` used to sit in this stack and never once resolved: WebKit does not
+ * expose the SF faces to web content by name. Measured, then removed.
+ */
+const TERMINAL_FAMILY = "MesloLGS NF";
+const TERMINAL_FONT = `"${TERMINAL_FAMILY}", "JetBrains Mono", Menlo, Consolas, monospace`;
+
+/**
+ * The stack the sheet says, or ours. The CSS variable stays authoritative so
+ * a theme can still move it; this only refuses to silently become Courier.
+ */
+function terminalFontStack(): string {
+  const declared = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
+  return declared || TERMINAL_FONT;
+}
+
 export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   /** The geometry the pty was last told about, so a no-op resize stays a no-op. */
@@ -136,7 +160,7 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
       theme === "dark" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: light)").matches);
 
     const term = new Xterm({
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace",
+      fontFamily: terminalFontStack(),
       fontSize: fontPx,
       theme: themeFor(dark),
       cursorBlink: true,
@@ -261,6 +285,32 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
     let unlistenData: (() => void) | null = null;
     let unlistenClosed: (() => void) | null = null;
     let disposed = false;
+
+    // **The font is a web font now, and web fonts arrive late.** `R-J89` bundles
+    // MesloLGS NF because WebKit cannot see `~/Library/Fonts`; that makes the
+    // family exist. This is the other half: xterm measures the character cell
+    // as it opens, and a face that has not arrived by then is measured — and
+    // drawn — as the fallback. Ask for it by name, then measure again.
+    //
+    // The complaint afterwards is the point. The failure it replaces was
+    // *silent*: the pane drew in Menlo, which carries no powerline glyphs, and
+    // said nothing, so the first anyone knew was two underscores where a prompt
+    // should be. A terminal in the wrong font should say which font it got.
+    void document.fonts
+      .load(`${fontPx}px "${TERMINAL_FAMILY}"`)
+      .then(() => {
+        if (disposed || termRef.current !== term) return;
+        safeFit();
+        term.refresh(0, term.rows - 1);
+        const face = [...document.fonts].find((f) => f.family === TERMINAL_FAMILY);
+        if (face?.status !== "loaded") {
+          pushError(
+            `the terminal font ${TERMINAL_FAMILY} did not load (${face?.status ?? "no such @font-face"}) — ` +
+              `powerline glyphs will be missing`,
+          );
+        }
+      })
+      .catch((e) => pushError(`the terminal font could not be loaded: ${String(e)}`));
 
     void (async () => {
       try {
