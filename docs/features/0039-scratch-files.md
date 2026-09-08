@@ -1,7 +1,7 @@
 ---
 title: Scratch files
 status: shipped
-updated: 2026-09-03
+updated: 2026-09-08
 roadmap: [R-L5]
 depends_on: [A27]
 ---
@@ -116,3 +116,10 @@ tests pin the name check, first-free numbering, and that a write cannot mint.
   real editor mounts once; the mock now does too. Worth knowing for the next
   editor test.
 - `Dim` does not forward `data-*` attributes, so the status is a plain span.
+- **Verdict 2026-09-08: kept, on the decision and not on a count.** `R-L5` is
+  closed ✅. The measurement this spec named — `ls ~/.mogeung/scratch` a
+  fortnight on, due **2026-09-17** — has **not** been taken, and the empty
+  directory on the Linux machine is not it: a scratch file is written on **the
+  daemon's machine**, and the reports behind `R-J87`–`R-J89` put mogeung on
+  macOS. Read it there. [A27](../product/assumptions.md) stays `AT RISK` and
+  deliberately did not move with the row.

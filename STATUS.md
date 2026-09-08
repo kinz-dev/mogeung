@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 595 passing |
-| Rust | 43839 lines |
-| Docs | 104 files, 35 ADRs |
+| Tests | 601 passing |
+| Rust | 44064 lines |
+| Docs | 106 files, 36 ADRs |
 
 ## Assumptions
 
@@ -60,4 +60,5 @@ Untested: **17** · At risk: **5** · Supported: 17 · Refuted: 2
 | [Performance pass 3 — the chatter, not the disk](docs/features/0037-performance-pass-3.md) | `draft` | [A4] |
 | [A local model beside the agents](docs/features/0038-a-local-model.md) | `in-progress` | [A3, A4, A29, A35, A36, A37, A38, A40, A41] |
 | [Scratch files](docs/features/0039-scratch-files.md) | `shipped` | [A27] |
+| [A connection manager](docs/features/0040-a-connection-manager.md) | `shipped` | [A24] |
 
