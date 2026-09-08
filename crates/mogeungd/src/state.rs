@@ -3764,7 +3764,7 @@ fn launch_terminal_linux(target: &Path, source: SessionSource, agent: &[String])
     let dir = target.to_string_lossy();
     // tmux preference is decided here, at runtime, and passed into the pure
     // composition so tests can pin both shapes on any machine.
-    let tmux = std::process::Command::new("tmux")
+    let tmux = crate::env::command("tmux")
         .arg("-V")
         .output()
         .map(|o| o.status.success())
@@ -3936,18 +3936,17 @@ fn session_name(dir: &str, stamp: &str, source: SessionSource) -> String {
 /// have your profile — arriving locally, which is the half that was not fixed
 /// then.
 ///
-/// The daemon's own `PATH` is tried first because it was usually started from
-/// a shell that had one, then the places installers actually use. Falling back
-/// to the bare name is deliberate: if none of this finds it, the error should
-/// be git— the *terminal's* own "command not found", which at least names what
-/// it looked for.
+/// The daemon's `PATH` is tried first — [`crate::env::path`]'s repaired one,
+/// so a mogeung launched from the Dock searches the same directories your
+/// shell would (`R-J87`) — then the places installers actually use. Falling
+/// back to the bare name is deliberate: if none of this finds it, the error
+/// should be the *terminal's* own "command not found", which at least names
+/// what it looked for.
 fn claude_binary() -> String {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let cand = dir.join("claude");
-            if cand.is_file() {
-                return cand.to_string_lossy().into_owned();
-            }
+    for dir in std::env::split_paths(crate::env::path()) {
+        let cand = dir.join("claude");
+        if cand.is_file() {
+            return cand.to_string_lossy().into_owned();
         }
     }
     let home = std::env::var("HOME").unwrap_or_default();
@@ -3975,12 +3974,10 @@ fn claude_binary() -> String {
 /// `qwenmo` did, and this is the same list it walks, kept deliberately in
 /// sync with it.
 fn qwen_binary() -> String {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let cand = dir.join("qwen");
-            if cand.is_file() {
-                return cand.to_string_lossy().into_owned();
-            }
+    for dir in std::env::split_paths(crate::env::path()) {
+        let cand = dir.join("qwen");
+        if cand.is_file() {
+            return cand.to_string_lossy().into_owned();
         }
     }
     let home = std::env::var("HOME").unwrap_or_default();
@@ -4057,12 +4054,10 @@ fn agent_command(source: SessionSource) -> Result<Vec<String>> {
 /// not instead of it: same binary, less stable name, reached only when the
 /// symlink is missing.
 fn codex_binary() -> String {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let cand = dir.join("codex");
-            if cand.is_file() {
-                return cand.to_string_lossy().into_owned();
-            }
+    for dir in std::env::split_paths(crate::env::path()) {
+        let cand = dir.join("codex");
+        if cand.is_file() {
+            return cand.to_string_lossy().into_owned();
         }
     }
     let home = std::env::var("HOME").unwrap_or_default();
@@ -4128,7 +4123,7 @@ fn launch_headless(target: &Path, source: SessionSource, agent: &[String]) -> Re
     let stamp = Utc::now().format("%m%d-%H%M%S").to_string();
     let name = session_name(&dir, &stamp, source);
     let cmd = headless_command(&dir, &name, agent);
-    let out = match std::process::Command::new(&cmd[0]).args(&cmd[1..]).output() {
+    let out = match crate::env::command(&cmd[0]).args(&cmd[1..]).output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(anyhow!(
                 "headless needs tmux, and tmux is not installed — with the headless \
@@ -4156,7 +4151,7 @@ fn launch_headless(target: &Path, source: SessionSource, agent: &[String]) -> Re
     // silently never applied, which is the bug `yolomo` carried until
     // 2026-08-25. Advisory: the session is up either way, so a failure here
     // is a log line rather than an error after the fact.
-    match std::process::Command::new("tmux")
+    match crate::env::command("tmux")
         .args(["set-option", "-w", "-t", &format!("={name}:"), "window-size", "latest"])
         .output()
     {
@@ -4441,7 +4436,7 @@ fn linux_focus_pid(pid: u32) -> Result<u32> {
 /// The pids of clients attached to a tmux session. Empty when tmux is absent,
 /// the server is down, or nothing is attached — all ordinary, none an error.
 fn tmux_client_pids(session: &str) -> Vec<u32> {
-    let Ok(out) = std::process::Command::new("tmux")
+    let Ok(out) = crate::env::command("tmux")
         .args(["list-clients", "-t", &format!("={session}"), "-F", "#{client_pid}"])
         .output()
     else {
@@ -4845,7 +4840,7 @@ fn parse_tmux_panes(stdout: &str) -> Vec<(u32, String)> {
 /// Empty when tmux is not installed or no server is running — both ordinary,
 /// neither an error.
 pub fn tmux_panes() -> Vec<(u32, String)> {
-    let Ok(out) = std::process::Command::new("tmux")
+    let Ok(out) = crate::env::command("tmux")
         .args([
             "list-panes",
             "-a",

@@ -41,7 +41,7 @@
 
 use anyhow::{Result, bail};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// May a daemon on this address type into a session? ADR-0003's amendment, clause 4.
 ///
@@ -99,7 +99,7 @@ pub fn send(target: &str, text: &str) -> Result<()> {
     let [load, paste, enter] = argv(target);
 
     // stdin, so the text never becomes an argument or a shell word.
-    let mut child = Command::new("tmux")
+    let mut child = crate::env::command("tmux")
         .args(&load)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -120,14 +120,14 @@ pub fn send(target: &str, text: &str) -> Result<()> {
     // two halves are not the same news: a failed paste left the session
     // untouched, and a failed Enter left your instruction sitting in its input
     // box waiting for you to press it.
-    let pasted = Command::new("tmux").args(&paste).output()?;
+    let pasted = crate::env::command("tmux").args(&paste).output()?;
     if !pasted.status.success() {
         bail!(
             "nothing was sent — tmux refused the paste into {target}: {}",
             tail(&pasted.stderr)
         );
     }
-    let pressed = Command::new("tmux").args(&enter).output()?;
+    let pressed = crate::env::command("tmux").args(&enter).output()?;
     if !pressed.status.success() {
         bail!(
             "the text is in {target}'s input but Enter was refused — press it yourself: {}",

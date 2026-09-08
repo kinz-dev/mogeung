@@ -391,7 +391,16 @@ async fn pty_open(
         })
         .map_err(|e| e.to_string())?;
 
-    let mut cmd = CommandBuilder::new(&command[0]);
+    // Resolved rather than looked up, and with the repaired `PATH` handed on.
+    // `CommandBuilder` does its own `PATH` search, and a window launched from
+    // the Dock has only launchd's `/usr/bin:/bin:/usr/sbin:/sbin` — so a
+    // Homebrew `tmux` is invisible and the pane dies with *"Unable to spawn
+    // tmux because: No viable candidates found in PATH"*. Same cause as
+    // `R-J87` in the daemon, one process over, and it surfaced only once that
+    // fix let a pane get as far as trying: before it, no session ever
+    // resolved a pane to attach to. `mogeungd::env` is shared rather than
+    // copied so the two cannot drift.
+    let mut cmd = CommandBuilder::new(mogeungd::env::which(&command[0]));
     for arg in &command[1..] {
         cmd.arg(arg);
     }
@@ -401,6 +410,10 @@ async fn pty_open(
     // A terminal that does not say what it is gets treated as a dumb one, and
     // Claude Code's TUI is anything but.
     cmd.env("TERM", "xterm-256color");
+    // The child's own environment, which is not the same question as finding
+    // it: the terminal panel's shell, and anything you type into it, inherit
+    // this.
+    cmd.env("PATH", mogeungd::env::path());
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);

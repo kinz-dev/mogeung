@@ -1,10 +1,12 @@
 ---
 title: Architecture
 status: active
-updated: 2026-08-29
+updated: 2026-09-06
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
+  - crates/mogeungd/src/env.rs
+  - crates/mogeungd/src/send.rs
   - desktop/src/store/prefs.ts
   - desktop/src/store/index.ts
   - desktop/src-tauri/src/lib.rs
@@ -726,6 +728,75 @@ memcpy. Two gates, cheapest first:
 
 If the blocking pool refuses, the last known table is served rather than an
 empty one: a spurious "no panes" unhosts every Agent pane for a tick.
+
+## The PATH a launcher does not give (`R-J87`, 2026-09-06)
+
+A mogeung launched from the Dock, Finder or Spotlight is a macOS bundle, and
+macOS hands a bundle the launchd `PATH` — `/usr/bin:/bin:/usr/sbin:/sbin`.
+Nothing in that chain is a login shell, so no profile is read and
+`/opt/homebrew/bin` is simply absent. Started with `./scripts/start.sh` the
+same daemon inherits your shell's `PATH` and behaves perfectly, which is why
+this never appeared in development.
+
+It does not surface as an error, because the code it breaks is written to treat
+a missing tmux as ordinary. `tmux_panes` reads a failed spawn as "no tmux
+here", so an installed mogeung sees every pane list as empty, every live
+session's `tmux_target` resolves to `None`, and the Agent tab says **"This
+session is not running under tmux"** about a session sitting in `tmux ls`.
+Reported 2026-09-06 against a `yolomo` session; the daemon's `PATH` was the
+whole of it.
+
+`env.rs` holds the repair, and it does two things rather than one because a
+child needs two and they are not the same:
+
+- **Finding the program.** `Command::new("tmux")` resolves the name against
+  *this* process's environment — `posix_spawnp` searches the caller's `PATH`,
+  not the one attached to the child — so `.env("PATH", …)` alone would still
+  fail to find it. `env::which` hands over an absolute path.
+- **The child's own environment.** A headless launch creates the tmux
+  *server*, and every agent under it inherits the environment that server was
+  born with. `env::command` gives it the repaired `PATH`, so the agent can find
+  `git`, `node` and the rest.
+
+The variable itself is never written. `setenv` mutates state other threads may
+be reading, and this daemon is routinely hosted in-process by a window with
+plenty of them ([ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md));
+Rust 2024 makes `std::env::set_var` `unsafe` for that reason. The repaired
+value is computed once in a `OnceLock` and passed explicitly.
+
+### The window has the same problem, one process over
+
+The daemon was only half of it. `pty_open` in the shell builds a
+`portable_pty::CommandBuilder`, which does its **own** `PATH` search — and a
+window launched from the Dock has the same launchd `PATH` the daemon did. So an
+Agent pane died with *"Unable to spawn tmux because: No viable candidates found
+in PATH"*.
+
+That second failure was invisible until the first was fixed: before it, no
+session ever resolved a pane, so nothing ever tried to attach to one. Fixing
+the daemon is what let a pane get far enough to fail properly — worth writing
+down, because "the fix revealed a new error" reads like a regression and is the
+opposite.
+
+`CommandBuilder` differs from `std::process::Command` in a way that matters
+here: it searches the **builder's** `PATH`, not the calling process's, so
+`cmd.env("PATH", …)` would have been enough on its own. It gets both anyway —
+an absolute program from `env::which`, which skips the search altogether
+(`cmdbuilder.rs` only searches a *relative* program), and the repaired `PATH`
+for the child, which the terminal panel's shell inherits. The shell calls into
+`mogeungd::env` rather than copying it, so the two cannot drift.
+
+`env::which` hands back a program that already contains a separator untouched,
+which is the rule `execvp` follows: `/bin/zsh` for the terminal panel is a path,
+`tmux` for an Agent pane is a name, and only the second is a `PATH` question.
+
+Directories are **appended**, never prepended, and only when they exist: a
+daemon started from a shell keeps the order its user chose, and the value stays
+honest about the machine. `claude_binary`, `qwen_binary` and `codex_binary`
+stay — they know about paths no `PATH` ever holds, such as
+`~/.claude/local/claude` — but they now walk the repaired list, so the Dock and
+the terminal search the same directories. Those three were this same lesson
+solved one binary at a time; `tmux` is the one nobody wrote a resolver for.
 
 ## What a fold compares (2026-08-26)
 
