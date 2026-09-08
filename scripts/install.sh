@@ -20,10 +20,18 @@
 #      starts the same claude session through `llmproxy --claude`, `qwenmo`
 #      starts qwen and `codexmo` starts codex, each under tmux so mogeung can
 #      host it in a pane rather than only point at it (ADR-0010).
-#   3. **The window**, as a `.deb` installed with `dpkg -i`. That is the whole
-#      reason this script grew: the Tauri bundler already produces a package
-#      that carries the icon and the desktop entry properly, and the last step
-#      — actually installing it — was the one thing left to do by hand.
+#   3. **The window**. On Linux that is a `.deb` installed with `dpkg -i`, which
+#      is the whole reason this script grew: the Tauri bundler already produces
+#      a package that carries the icon and the desktop entry properly, and the
+#      last step — actually installing it — was the one thing left to do by
+#      hand. On macOS it is a `.dmg`, and the script stops once it is built.
+#
+# **The platform is detected, not asked for**, because every difference below
+# follows from it and a wrong guess is a slow failure: `--bundles deb` on macOS
+# builds for minutes and then produces nothing usable. `uname -s` decides the
+# default bundle (`deb` on Linux, `dmg` on macOS), whether root is needed at
+# all, and what the last line tells you to do next. `--bundles` still wins when
+# you pass it.
 #
 # This script used to stop after step 2 and print a note telling you to run the
 # bundler yourself. It does not any more, which makes the default run **slow**:
@@ -46,7 +54,11 @@
 # **invoking** user, and their `$HOME` is what `--prefix` defaults from.
 #
 # On macOS step 3 builds the bundle and stops: the artefact is a `.app` and a
-# `.dmg`, and where those go is a decision this script does not get to make.
+# `.dmg`, and where those go is a decision this script does not get to make. It
+# names both paths rather than the directory, so the next step is a command you
+# can copy rather than a hunt. **No password is asked for there**: `sudo` is for
+# `dpkg` and macOS has no `dpkg`, so a prompt on that platform would be asking
+# for root to do nothing with it.
 #
 # bash 3.2, which is what macOS ships. No `mapfile`, and no expanding an empty
 # array under `set -u`.
@@ -54,6 +66,21 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+
+# ── which machine is this? ───────────────────────────────────────────────────
+#
+# Decided once, here, and every platform question below asks this variable
+# rather than running `uname` again — so the bundle default, the root check and
+# the closing message cannot come to different conclusions about where they are.
+#
+# Anything that is neither is treated as Linux: it is the only other platform
+# this project supports (Windows is descoped, see `R-I3`), and a default that
+# builds the wrong package is a better failure than one that refuses to try.
+case "$(uname -s)" in
+    Darwin) PLATFORM="macos" ;;
+    Linux)  PLATFORM="linux" ;;
+    *)      PLATFORM="linux" ;;
+esac
 
 # ── who is this actually being installed for? ────────────────────────────────
 #
@@ -95,11 +122,24 @@ PREFIX="$HOME/.local/bin"
 BUILD=1
 DESKTOP=1
 UNINSTALL=0
-# `deb` and not `all`: the AppImage is ~90 MB, takes the longest of the three,
-# and needs the network on a cold cache to fetch `linuxdeploy`. None of that
-# earns its place in a script whose job is *install it here*. Pass
-# `--bundles all` when you are making something to hand to someone else.
-BUNDLES="deb"
+# The one bundle this machine can actually use, and no more.
+#
+# On Linux, `deb` and not `all`: the AppImage is ~90 MB, takes the longest of
+# the three, and needs the network on a cold cache to fetch `linuxdeploy`. None
+# of that earns its place in a script whose job is *install it here*.
+#
+# On macOS, `dmg` — asked for 2026-09-06, and the reason is that the previous
+# hardcoded `deb` was not merely useless there but *expensively* useless: the
+# window and the daemon both compile in release first, minutes of work, and
+# only then does the bundler find it has been asked for a Debian package on a
+# Mac. Since the platform is already known, nobody should have to pass this.
+#
+# Pass `--bundles all` when you are making something to hand to someone else.
+if [ "$PLATFORM" = "macos" ]; then
+    BUNDLES="dmg"
+else
+    BUNDLES="deb"
+fi
 
 # The complete list of what this script installs into $PREFIX.
 INSTALLABLES="mogeungd yolomo yolomop qwenmo codexmo"
@@ -122,6 +162,8 @@ DESKTOP_FILE="$DATA_DIR/applications/mogeung.desktop"
 ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/mogeung.png"
 
 DEB_DIR="desktop/src-tauri/target/release/bundle/deb"
+APP_DIR="desktop/src-tauri/target/release/bundle/macos"
+DMG_DIR="desktop/src-tauri/target/release/bundle/dmg"
 
 # Nudge the desktop environment to notice a changed entry or icon. Both tools
 # are optional and their absence is fine — caches rebuild on login anyway.
@@ -215,7 +257,8 @@ Options:
   --prefix DIR       install directory for the binaries (default ~/.local/bin)
   --no-build         skip the builds; install whatever is already built
   --no-desktop       skip the window entirely — daemon and launchers only
-  --bundles LIST     what the Tauri bundler makes (default deb; try all)
+  --bundles LIST     what the Tauri bundler makes (default: dmg on macOS,
+                     deb on Linux; try all)
   --uninstall        remove everything a previous run installed
   -h, --help         this
 EOF
@@ -254,8 +297,11 @@ if [ "$UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
-# Before anything slow. `--no-desktop` needs no root at all, so it is not asked.
-if [ "$DESKTOP" -eq 1 ] && [ "$UNINSTALL" -eq 0 ]; then
+# Before anything slow. `--no-desktop` needs no root at all, so it is not
+# asked — and neither is macOS, where the only thing root was ever for is
+# `dpkg`. Asking there would be a password prompt collected for nothing, which
+# is worse than an unnecessary one: it teaches you to type it without reading.
+if [ "$DESKTOP" -eq 1 ] && [ "$UNINSTALL" -eq 0 ] && [ "$PLATFORM" = "linux" ]; then
     authenticate_early || exit 1
 fi
 
@@ -305,10 +351,20 @@ if [ "$DESKTOP" -eq 1 ]; then
         as_user "cd desktop && npm run tauri build -- --bundles '$BUNDLES'" || exit 1
     fi
 
-    if [ "$(uname -s)" != "Linux" ]; then
+    if [ "$PLATFORM" != "linux" ]; then
+        # Newest first, for the same reason the .deb below is: a rebuild that
+        # bumped `version` must not be reported as whichever name sorts last.
+        APP="$(ls -td "$APP_DIR"/*.app 2>/dev/null | head -1)"
+        DMG="$(ls -t "$DMG_DIR"/*.dmg 2>/dev/null | head -1)"
         echo
-        echo "▸ built, and stopping here: this is $(uname -s), where the bundle is a .app/.dmg"
-        echo "  under desktop/src-tauri/target/release/bundle/ — drag it where you want it."
+        echo "▸ built, and stopping here: on macOS where the bundle goes is your call."
+        [ -n "$DMG" ] && echo "  disk image: $DMG"
+        if [ -n "$APP" ]; then
+            echo "  app:        $APP"
+            echo
+            echo "  to install it over the running one:"
+            echo "    rm -rf /Applications/mogeung.app && cp -R '$APP' /Applications/"
+        fi
         exit 0
     fi
 
