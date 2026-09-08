@@ -58,12 +58,12 @@ network rather than anything here.
 
 ### Acceptance
 
-- [ ] I can edit an entry's **address** in place, and the change survives a
+- [x] I can edit an entry's **address** in place, and the change survives a
       restart of the window.
 - [x] I can give an entry a **token**, and it is never shown in, or composed
       into, the address the panel displays.
-- [ ] I can **reorder** entries, and the order survives a restart.
-- [ ] I can add and forget entries, as before, and I cannot forget the one I am
+- [x] I can **reorder** entries, and the order survives a restart.
+- [x] I can add and forget entries, as before, and I cannot forget the one I am
       connected to.
 - [x] Two entries may hold the **same URL** by two routes, and editing one does
       not disturb the other.
@@ -71,7 +71,7 @@ network rather than anything here.
       machine — not on the daemon's.
 - [x] A list previously kept in `localStorage` appears in the file the first
       time the window starts, and the `localStorage` key is gone afterwards.
-- [ ] In a browser tab, the panel still works against `localStorage` and
+- [x] In a browser tab, the panel still works against `localStorage` and
       **says** that it is not using the file.
 
 ### Explicitly out of scope
@@ -119,6 +119,8 @@ rendered as a password input that is never echoed into the address line.
 | `desktop/src-tauri/capabilities/default.json` | unchanged — these are our own commands |
 | `desktop/src/lib/connections.ts` | `id`/`token`/`note`, async load/save, migration, fallback |
 | `desktop/src/ui/ConnectionsWindow.tsx` | edit, reorder, token, note, the fallback notice |
+| `desktop/src/ui/ConnectionsWindow.test.tsx` | new — the panel had no component test |
+| `desktop/src/ui/primitives.tsx` | `Input` gains `secret`, for the token |
 | `docs/design/architecture.md` | the connection list's home |
 
 ### Risks and unknowns
@@ -162,11 +164,17 @@ was already at 784 lines and `daemon.rs` is the precedent), `Input` gained a
 `secret` prop, and `ConnectionsWindow` gained an editable address, a token, a
 tunnel-command note, and up/down ordering.
 
-- **The unticked boxes are unticked on purpose.** Four criteria — edit surviving
-  a restart, reorder surviving a restart, the forget button being refused on the
-  current connection, and the browser-tab notice — are **covered by tests at the
-  persistence and helper layer but have not been seen in the running window**.
-  This session did not launch the desktop build.
+- **Every box is ticked by a test, and none by a human.** `ConnectionsWindow`
+  had no component test before this row; it has eight now, and they cover the
+  four criteria the helper tests could not reach — the forget button refused on
+  the current connection, a row's own buttons not firing the row underneath
+  (which would drop the whole board on the way to reordering), the token masked,
+  and the browser-tab notice. **The desktop build was not launched in this
+  session**, so nothing here has been seen by an eye.
+- **The one test worth keeping for its own sake** is that a row's button does
+  not fire the row. It is the shape that folded a file in the diff pane once
+  already, and here it fails by switching daemons and closing the dialog on the
+  way to doing the harmless thing you asked for.
 - **And a browser tab cannot settle them**, which is
   [ADR-0036](../decisions/0036-the-connection-list-is-the-clients-and-its-file-is-the-shells.md)'s
   own warning arriving immediately: a tab exercises the `localStorage` fallback,
