@@ -126,3 +126,58 @@ and would bring tab-dragging between windows with it.
 
 Or: the per-window pty broadcast shows up in a profile. The fix is `emit_to`
 and it is not a design change.
+
+## Amendment — 2026-09-08
+
+**The alternative this ADR refused is now the implementation, and the reason it
+was refused turned out to be wrong in a specific and checkable way.**
+
+What changed the question was the next ask, the same day: *"can the pop out
+window be a dockable panel itself? such that I can move another panel and dock
+it there?"* The Decision above cannot answer that at any price. Two windows
+each running their own client are two React trees with two dockviews, and HTML5
+drag-and-drop does not cross OS windows — which is why *"Dragging a tab between
+the two windows"* is in **Ruled out**. Answering the ask means one dockview
+across both documents, and that is `addPopoutGroup`.
+
+**Why the refusal was wrong.** The Alternatives section says `window.open`'s
+behaviour inside a Tauri webview *"is unproven here and differs by platform"*.
+It is not unproven and it does not differ: in Tauri v2 it is **opt-in**.
+`tauri-runtime-wry` installs wry's `with_new_window_req_handler` only when the
+application supplies one, and `WebviewWindowBuilder::on_new_window` is the
+documented public way to supply it — returning `NewWindowResponse::Create {
+window }` to hand back a real Tauri window with capabilities and title syncing.
+mogeung had never called it, so a `window.open` would have done precisely
+nothing. The prediction — *"it would work perfectly at `localhost:1420` and
+could do nothing at all in the app"* — was right about the symptom and wrong
+about the cause, and the cause is a switch rather than a platform.
+
+**What this replaces.** The clause *"that window is an ordinary client with no
+special powers… its own store, its own socket"* no longer holds, and neither
+does **Ruled out**'s first line. A popout is now the **same** client drawing
+into a second document. With it go three things the old shape needed and the
+new one does not: the second React root (`PopoutApp`), the hand-over that closed
+a pane here and reopened it there (`returnAgentPane`, the `popout:closed`
+event), and the `?popout=` URL contract. Net less code.
+
+**What survives unchanged.** The window is still labelled `popout-*` and still
+gets exactly `main`'s capabilities, for exactly the reason recorded above — a
+window matching no capability has no commands and fails as a blank pane. And
+the *decision in the title* is untouched: a pane still pops out into a window of
+its own.
+
+**What this costs, and it is not nothing.** The two windows are now coupled: one
+dockview, one store, one socket, so a popout cannot outlive the main window and
+closing the main window takes the panes with it. The old shape would have
+survived that. It also means the theme has to be carried across by hand —
+dockview copies stylesheets but not the `data-theme` attribute those stylesheets
+read their colours from, so a popout without `mirrorTheme` renders in the wrong
+palette rather than unstyled, which is far easier to mistake for a design.
+
+**Still unverified in the shipped app**, and now that matters more rather than
+less: the whole mechanism rests on `on_new_window` behaving in WebKitGTK and
+WKWebView. `popOutPane` treats a refusal as a first-class outcome — the pane
+stays where it is and the window says so — so the failure is legible rather than
+silent, but it has not been seen. `R-J38` still applies, and a browser tab
+proves less than usual here: a tab has a real `window.open` and will succeed
+whatever the shell does.

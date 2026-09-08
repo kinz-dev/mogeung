@@ -1,99 +1,95 @@
 /**
  * A pane in a window of its own. `R-B55`,
- * [ADR-0037](../../../docs/decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md).
+ * [ADR-0037](../../../docs/decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md)
+ * and its 2026-09-08 amendment.
  *
- * Two halves that never meet: **asking** for a popout, which the main window
- * does, and **being** one, which the second window does. `readPopout` is how a
- * booting client finds out which it is, and it is deliberately a plain read of
- * the query string rather than store state — it has to be answerable before the
- * store exists, because it decides what gets rendered at all.
+ * **dockview owns the window, not us.** `addPopoutGroup` moves a group's DOM
+ * into a second document and keeps *one* dockview across both — which is the
+ * whole reason to prefer it: a pane can be dragged out of the main window and
+ * back, and another pane can be dragged in and docked beside it. The first cut
+ * of this row opened a second client instead, and separate React trees can
+ * never do that.
  *
- * The daemon address is **not** part of this. Both windows load from one
- * origin, so they share `localStorage`, and `defaultUrl` already falls back to
- * `mogeung.url`. Passing it would be a second source of truth, and since
- * `R-I16` an address can carry a token — which would then be in a URL bar.
+ * What this file is left holding is the two things dockview does not do:
+ * carrying the **theme** across, and saying something useful when a popout
+ * cannot be opened at all.
  */
 
-import { isTauri } from "@/lib/tauri";
+import type { DockviewApi } from "dockview";
+import { useStore } from "@/store";
 
-/** The panes that may be detached. Mirrors the shell's own allowlist. */
-export const POPPABLE = ["agent"] as const;
-export type PoppableKind = (typeof POPPABLE)[number];
+/**
+ * Give the popout document the theme attribute the opener has.
+ *
+ * dockview copies the opener's **stylesheets** into the new document, so every
+ * rule arrives — but every colour in them is a `var(--…)` defined under
+ * `:root[data-theme="…"]`, and the attribute lives on `<html>`, which is not a
+ * stylesheet and is not copied. Without this the popout renders with whatever
+ * the bare `:root` block happens to say, which is a window in the wrong palette
+ * rather than an unstyled one, and therefore easy to misread as a design.
+ */
+export function mirrorTheme(target: Window): void {
+  const theme = document.documentElement.getAttribute("data-theme");
+  if (theme) target.document.documentElement.setAttribute("data-theme", theme);
+}
 
-export interface Popout {
-  kind: PoppableKind;
-  session: string;
+/** Every popout document currently open, so a theme change reaches them. */
+const opened = new Set<Window>();
+
+export function trackPopout(target: Window): void {
+  opened.add(target);
+  mirrorTheme(target);
+}
+
+export function forgetPopout(target: Window): void {
+  opened.delete(target);
 }
 
 /**
- * Am I a popout, and of what?
+ * Re-apply the theme to every open popout.
  *
- * Reads the same two parameters the shell wrote, and validates them again on
- * the way in. The shell checked them before building the URL; this checks them
- * because a window is also reachable by hand-editing a query string in the dev
- * tools, and a `kind` that is not a component name would render nothing with no
- * explanation.
+ * Called when the theme changes in the main window: the popouts are the same
+ * dockview but they are not the same document, so the effect that writes
+ * `data-theme` on the opener does not reach them.
  */
-export function readPopout(search: string = window.location.search): Popout | null {
-  const q = new URLSearchParams(search);
-  const kind = q.get("popout");
-  const session = q.get("session");
-  if (!kind || !session) return null;
-  if (!(POPPABLE as readonly string[]).includes(kind)) return null;
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(session)) return null;
-  return { kind: kind as PoppableKind, session };
+export function retheme(): void {
+  for (const w of opened) {
+    try {
+      mirrorTheme(w);
+    } catch {
+      // A window closed between the set and the write. Dropped rather than
+      // guarded with an `is it closed` check, which races the same way.
+      opened.delete(w);
+    }
+  }
 }
 
 /**
- * Open this pane in its own window, and say whether it happened.
+ * Move a pane into a window of its own.
  *
- * `false` in a browser tab, where there is no shell to open a window with. The
- * caller uses that to explain rather than to fail silently: a button that does
- * nothing is worse than one that is not there, and this one *is* there in a tab
- * because the tab is otherwise a real client.
+ * Returns false when the window could not be opened, which in the desktop
+ * build means the shell refused `window.open` — and the caller says so rather
+ * than leaving a control that appears to do nothing. In a browser tab it works,
+ * because a tab has a real `window.open`; it is the *shell* that has to opt in
+ * (`popout.rs`), and that is the one thing about this a tab cannot check.
  */
-export async function openPopout(
-  kind: PoppableKind,
-  session: string,
-  title?: string,
-): Promise<boolean> {
-  if (!isTauri()) return false;
-  const core = await import("@tauri-apps/api/core");
-  await core.invoke<string>("popout_open", { kind, session, title: title ?? null });
-  return true;
-}
-
-/** Close the window I am in. Only ever called from inside a popout. */
-export async function closeThisWindow(): Promise<void> {
-  if (!isTauri()) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().close();
-}
-
-/**
- * Tell me when a popped-out pane's window has gone, so its pane can come back.
- *
- * Only the shell knows a window was destroyed — the popout cannot report its
- * own funeral — so this is a shell event rather than anything the two clients
- * arrange between themselves. Listened to by the **main** window; a popout
- * receives it too, and ignores it, because it is the thing being destroyed.
- */
-export async function onPopoutClosed(
-  cb: (p: Popout) => void,
-): Promise<() => void> {
-  if (!isTauri()) return () => {};
+export async function popOutPane(api: DockviewApi | null, paneId: string): Promise<boolean> {
+  const panel = api?.getPanel(paneId);
+  if (!api || !panel) return false;
   try {
-    const { listen } = await import("@tauri-apps/api/event");
-    return await listen<{ kind: string; session: string }>("popout:closed", ({ payload }) => {
-      const kind = payload?.kind;
-      const session = payload?.session;
-      if (!kind || !session) return;
-      if (!(POPPABLE as readonly string[]).includes(kind)) return;
-      cb({ kind: kind as PoppableKind, session });
+    const ok = await api.addPopoutGroup(panel, {
+      popoutUrl: "/popout.html",
+      onDidOpen: ({ window }) => trackPopout(window),
+      onWillClose: ({ window }) => forgetPopout(window),
     });
+    if (!ok) {
+      useStore
+        .getState()
+        .pushError("this window could not open another — the pane stays where it is");
+    }
+    return ok;
   } catch {
-    // A shell that cannot deliver this is a window that does not take the pane
-    // back, not a window that fails to open.
-    return () => {};
+    useStore.getState().pushError("this window could not open another — the pane stays where it is");
+    return false;
   }
 }

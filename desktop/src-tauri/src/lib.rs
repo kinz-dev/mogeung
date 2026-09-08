@@ -750,10 +750,16 @@ pub fn run() {
             open_local_url,
             daemon_acquire,
             connections::connections_load,
-            connections::connections_save,
-            popout::popout_open
+            connections::connections_save
         ])
         .setup(|app| {
+            // Built here rather than by the config, because `on_new_window` is
+            // a *builder* option and a window Tauri has already made cannot be
+            // given one. `tauri.conf.json` still describes it — it just carries
+            // `"create": false`. This is what makes `window.open` work at all,
+            // and therefore what lets dockview put a group in its own window
+            // (`R-B55`, ADR-0037's 2026-09-08 amendment).
+            popout::build_main(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("mogeung");
             }

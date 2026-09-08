@@ -1,0 +1,29 @@
+<!doctype html>
+<!--
+  The page a dockview popout opens into. `R-B55`.
+
+  Deliberately empty. dockview calls `window.open` on a **same-origin** page and
+  then renders the group's own DOM into it — this file exists to be that origin
+  and nothing else. It carries no script: the popout is not a second client, it
+  is the main window's dockview drawing into a second document, so everything
+  that runs already runs over there.
+
+  The styles are not missing either. dockview copies the opener's stylesheets
+  into this document when it opens (`addStyles` in dockview-core). What it does
+  not copy is the `data-theme` attribute on `<html>`, which is where every one
+  of our CSS variables is switched — so `App` mirrors that across on open. A
+  `color-scheme` here keeps the window's own scrollbars and form controls from
+  flashing light before that lands.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mogeung</title>
+    <style>
+      html { color-scheme: dark light; }
+      body { margin: 0; height: 100vh; overflow: hidden; }
+    </style>
+  </head>
+  <body></body>
+</html>

@@ -232,38 +232,6 @@ export function groupPanes(id: string): string[] {
  * Nothing is written when there is no selection: an anchor needs a session, and
  * holding a pane on "nothing" is not a state — it is the absence of a hold.
  */
-/**
- * Put an Agent pane back, anchored to the session it was watching. `R-B55`.
- *
- * The other half of *moving* a pane into its own window: the pane closed when
- * the popout opened, and this is what happens when that window is closed. It
- * **holds** rather than selecting, because the session it is coming back for is
- * not necessarily the one the queue has moved on to, and a pane that returned
- * showing something else would read as the wrong pane coming back.
- *
- * Does nothing when a pane is already anchored there — closing a popout for a
- * session you have since opened by hand should not give you two of it.
- */
-export function returnAgentPane(sessionId: string): string | null {
-  if (!dock) return null;
-  const { scoped, setScoped } = useStore.getState();
-  const holds = scoped().paneHold;
-  for (const id of agentSlots(dock)) {
-    if (holds[id] === sessionId) return id;
-  }
-  const id = nextAgentSlot(dock);
-  if (!id) return null;
-  const active = dock.activeGroup;
-  dock.addPanel({
-    id,
-    component: "agent",
-    title: "Agent",
-    position: active ? { referenceGroup: active } : undefined,
-  });
-  setScoped({ paneHold: { ...scoped().paneHold, [id]: sessionId } });
-  return id;
-}
-
 export function addAgentPane(): string | null {
   if (!dock) return null;
   const id = nextAgentSlot(dock);

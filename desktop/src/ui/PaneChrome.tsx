@@ -19,7 +19,7 @@ import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from 
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseFilePaneId } from "@/lib/panes";
-import { openPopout } from "@/lib/popout";
+import { popOutPane } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
@@ -356,31 +356,23 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
       {/*
         **This pane, in a window of its own.** Asked for 2026-09-08: *"move a
         session panel out of the current tauri window… and move it around
-        outside the containing window"*. `R-B55`,
-        [ADR-0037](../../../docs/decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md).
+        outside the containing window"*, then *"can the pop out window be a
+        dockable panel itself?"* — which is the question that chose the
+        mechanism. `R-B55`, ADR-0037 and its 2026-09-08 amendment.
 
-        It **moves** rather than copying, which is why the pane closes here. Two
-        tmux clients attached to one session size that session to the smaller of
-        them, and the leftover rows that produces have been reported here
-        before — so a pop-out that left the pane behind would build that pairing
-        in as a feature. Closing the popout brings the pane back, anchored to
-        the same session.
+        **dockview owns the window.** `addPopoutGroup` moves this group's DOM
+        into a second document and keeps one dockview across both, so the pane
+        can be dragged back, and another pane can be dragged in and docked
+        beside it. Nothing here closes or reopens a pane: the group *is* the
+        one in the other window, which is why the first cut's hand-over dance
+        went away entirely.
 
-        The close is second and only on success: a pane closed for a window that
-        failed to open is a pane you have simply lost.
+        The whole **group**, not this panel alone — that is dockview's unit and
+        it is the right one: tabs already sitting together travel together.
       */}
       <IconButton
-        title={
-          session
-            ? "move this pane into a window of its own"
-            : "no session to move out — this pane is empty"
-        }
-        disabled={!session}
-        onClick={async () => {
-          if (!session) return;
-          const moved = await openPopout("agent", session.id, sessionLabel(session));
-          if (moved) closeAgentPane(paneId);
-        }}
+        title="move this pane into a window of its own"
+        onClick={() => void popOutPane(props.containerApi, paneId)}
       >
         <PictureInPicture2 className="h-3.5 w-3.5" />
       </IconButton>

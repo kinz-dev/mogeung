@@ -45,14 +45,13 @@ unnecessary.
 - [x] A control in the Agent pane's header moves that pane into a window of its
       own, which can be moved anywhere on the desktop.
 - [x] The popped-out window shows the same session, with a live terminal.
-- [x] The pane **closes** in the main window when it pops out — it moves rather
-      than duplicating.
-- [x] Closing the popped-out window puts the pane back, anchored to the same
-      session.
-- [x] Asking twice for the same session focuses the window that is already open
-      rather than opening a second.
-- [x] A session id that would not survive a query string is refused rather than
-      escaped, on both sides.
+- [x] The pane **leaves** the main window rather than being duplicated.
+- [x] The popped-out window is itself dockable: another pane can be dragged into
+      it, and a pane can be dragged back. *(Added 2026-09-08 — the ask that
+      changed the mechanism.)*
+- [x] The popout carries the window's theme, not the bare `:root` palette.
+- [x] A shell that has not enabled `window.open` leaves the pane where it is and
+      says so.
 - [x] The popped-out window has exactly the shell permissions the main one has —
       no more, and not fewer, or its terminal cannot open a pty.
 - [x] In a browser tab the control reports that it cannot do this, rather than
@@ -88,14 +87,13 @@ answer decides what a root even is.
 
 | Path | Change |
 | ---- | ------ |
-| `desktop/src-tauri/src/popout.rs` | new — the command, the allowlist, the return event |
+| `desktop/src-tauri/src/popout.rs` | `on_new_window`, and the `popout-*` labels |
+| `desktop/src-tauri/tauri.conf.json` | `"create": false`, so `setup()` can build it |
 | `desktop/src-tauri/capabilities/default.json` | `popout-*` gets what `main` gets |
-| `desktop/src/lib/popout.ts` | new — read the URL, ask the shell, hear the close |
-| `desktop/src/PopoutApp.tsx` | new — what a detached pane renders |
-| `desktop/src/main.tsx` | the branch |
-| `desktop/src/lib/panes.ts` | `returnAgentPane` |
+| `desktop/src/lib/popout.ts` | ask dockview, carry the theme, report a refusal |
+| `desktop/public/popout.html` | the same-origin page dockview opens into |
 | `desktop/src/ui/PaneChrome.tsx` | the control |
-| `desktop/src/App.tsx` | take the pane back when the window goes |
+| `desktop/src/App.tsx` | re-theme the popouts when the theme changes |
 
 ### Risks and unknowns
 
@@ -166,3 +164,33 @@ already anchored.
   keeping boots with `daemon: null`: the fault was entirely about state that
   arrives late, so a test with the daemon already present would have passed
   against the broken code.
+
+### Rebuilt 2026-09-08, on the next ask
+
+> can the pop out window be a dockable panel itself? such that I can move
+> another panel and dock it there?
+
+The shape above could not answer that at any price — two clients are two React
+trees with two dockviews, and HTML5 drag-and-drop does not cross OS windows. So
+the mechanism changed to dockview's own `addPopoutGroup`, which keeps **one**
+dockview across both documents. See
+[ADR-0037's amendment](../decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md).
+
+- **The blocker in the first design was a switch, not a platform.**
+  `window.open` in Tauri v2 is opt-in — `tauri-runtime-wry` installs wry's
+  handler only when the app supplies one, via `on_new_window`. mogeung never
+  had, which is exactly why the original prediction (*"would work in a tab, do
+  nothing in the app"*) was right about the symptom and wrong about the cause.
+- **It deleted more than it added.** `PopoutApp`, the second React root, the
+  `?popout=` URL contract, `returnAgentPane` and the `popout:closed` hand-over
+  are all gone: the group in the other window *is* the group that left, so
+  there is nothing to hand over.
+- **The theme was the trap.** dockview copies stylesheets into the popout
+  document and not the `data-theme` attribute they read their colours from, so
+  the first version of this would have rendered a popout in the wrong palette —
+  which reads as a design decision rather than a bug.
+- **Still unverified in the shipped app**, and now the whole feature rests on
+  `on_new_window` behaving in WebKitGTK and WKWebView rather than on code that
+  could be unit-tested. A refusal is handled as a first-class outcome so the
+  failure is legible. A browser tab proves *less* than ever here: a tab has a
+  real `window.open` and will succeed whatever the shell does.
