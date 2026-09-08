@@ -1,7 +1,7 @@
 ---
 title: The attention queue
 status: active
-updated: 2026-07-25
+updated: 2026-09-08
 ---
 
 # The attention queue
@@ -31,13 +31,21 @@ already done what you asked.
 
 | Key | Does |
 |---|---|
-| `j` / `k` | move down / up the queue |
-| `enter` or `o` | switch to the terminal app that session runs in |
-| `r` | mark everything in its diff read |
-| `s` | snooze 30 minutes, or wake it |
-| `g` | jump to the top of the queue |
-| `/` | jump to the filter box |
-| `esc` | clear the filter, close ambient mode |
+| `↓` / `↑` | move down / up the queue |
+| `[` | collapse or show the queue |
+| `Alt+1` | put the keyboard in the queue |
+| `Alt+Shift+o` | switch to the terminal app that session runs in |
+
+**This table was wrong until 2026-09-08 and is worth a note.** It described the
+egui client and listed five bindings — `o`, `r`, `s`, `g`, `/` — that the
+TypeScript window has never had. `j` and `k` *did* exist and were **removed** on
+2026-09-08, on a report that they could not be typed into a scratch file: a bare
+letter is given to whatever has focus, so a bare letter can be a shortcut or it
+can be a character, and `R-L5` made the second one matter. The arrows do the
+same job and are owned by an editor when one has focus, which is why they never
+had the problem. Every binding is listed, and rebindable, in the shortcuts
+window (`R-B12`) — which is generated from the keymap and was therefore right
+all along.
 
 Keys are ignored while a text box has focus, so typing in the filter does not
 trigger them.

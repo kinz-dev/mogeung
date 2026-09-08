@@ -689,14 +689,22 @@ export const ACTIONS: Action[] = [
     id: "queue.next",
     label: "Next session in the queue",
     group: "Navigation",
-    keys: ["j", "ArrowDown"],
+    // **No bare `j` since 2026-09-08.** It was vim's spelling of this and it
+    // cost more than it bought: a bare letter is given to whatever has focus,
+    // so the moment a Monaco became *editable* (`R-L5`'s scratch files) the
+    // letter was stolen back by the window and could not be typed. The arrows
+    // are in `VIEWER_KEYS`, so they are owned by an editor that has focus and
+    // by the queue everywhere else — which is the behaviour a bare letter was
+    // only ever approximating. Removed on report rather than re-guarded.
+    keys: ["ArrowDown"],
     run: () => moveSelection(1),
   },
   {
     id: "queue.prev",
     label: "Previous session in the queue",
     group: "Navigation",
-    keys: ["k", "ArrowUp"],
+    // See `queue.next`: bare `k` went with bare `j`.
+    keys: ["ArrowUp"],
     run: () => moveSelection(-1),
   },
 ];
@@ -1000,8 +1008,16 @@ const VIEWER_KEYS = new Set([
  *   for selection and clipboard, so the old "is the active element a textarea"
  *   test read the Code pane as *typing* and killed every bare-letter shortcut
  *   in the window for as long as it had focus. It is read-only (ADR-0019):
- *   pressing `c` there cannot mean text, so it means Changes. **If a Monaco
- *   here ever becomes editable, this has to become a per-editor check.**
+ *   pressing `c` there cannot mean text, so it means Changes.
+ * - **A writable editor owns everything**, which is the per-editor check the
+ *   paragraph above said would be needed *"if a Monaco here ever becomes
+ *   editable"*. One did: `R-L5`'s scratch files, on 2026-09-03, and this was
+ *   not revisited with them — so a scratch file could not be typed into
+ *   wherever a bare binding existed. Reported 2026-09-08 as *"I can't type the
+ *   `j` chars"*, which was `queue.next` taking it; `j` and `k` have since been
+ *   dropped as bindings, and this is why `[` did not have to be. The pane
+ *   declares itself with `data-editor="writable"` rather than being sniffed
+ *   from Monaco's DOM, because the pane is what knows.
  * - **A real text box owns everything bare.** Typing `c` into the queue filter
  *   must not throw you into another pane.
  */
@@ -1009,6 +1025,10 @@ function focusOwns(key: string): boolean {
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
   if (el.closest(".xterm")) return true;
+  // Before the viewer check, and that order is the fix: a writable editor is
+  // also a `.monaco-editor`, so asking the general question first would answer
+  // the specific one wrongly.
+  if (el.closest('[data-editor="writable"]')) return true;
   if (el.closest(".monaco-editor")) return VIEWER_KEYS.has(key);
   const tag = el.tagName.toLowerCase();
   return tag === "input" || tag === "textarea" || el.isContentEditable;

@@ -115,7 +115,16 @@ function Scratch({ name }: { name: string }) {
           {pending ? "unsaved — saving as you type" : "saved"}
         </span>
       </div>
-      <div className="min-h-0 flex-1">
+      {/*
+        **This editor is writable, and the keymap has to know.** `focusOwns`
+        gives a read-only Monaco only the navigation keys, so every other bare
+        binding still reaches the window — right for a viewer, and wrong the
+        moment you can type. Marked on the container rather than sniffed from
+        Monaco's internals: it is the pane that knows whether it is an editor,
+        and a `closest()` on a data attribute cannot be broken by a library
+        upgrade. `R-L5`, and the check `keymap.ts` said would be needed.
+      */}
+      <div className="min-h-0 flex-1" data-editor="writable">
         <Editor
           path={`scratch/${name}`}
           language={languageOf(name)}

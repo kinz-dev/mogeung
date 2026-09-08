@@ -123,3 +123,16 @@ tests pin the name check, first-free numbering, and that a write cannot mint.
   daemon's machine**, and the reports behind `R-J87`–`R-J89` put mogeung on
   macOS. Read it there. [A27](../product/assumptions.md) stays `AT RISK` and
   deliberately did not move with the row.
+- **The keymap stole bare letters from this editor for five days**, and
+  `keymap.ts` had predicted it in a comment: *"if a Monaco here ever becomes
+  editable, this has to become a per-editor check."* This feature made one
+  editable and did not go back for it. Reported 2026-09-08 as not being able to
+  type `j` — `queue.next`. Fixed twice over: `j`/`k` removed as bindings at the
+  user's ask, and `focusOwns` now gives a writable editor **every** bare key, so
+  `[` is safe in a Java or JSON scratch file too. The pane says what it is with
+  `data-editor="writable"`; Monaco's own DOM is not asked.
+- **The lesson worth keeping is about the comment, not the keymap.** A note
+  saying *"if X happens, do Y"* is only as good as the person who does X
+  noticing it, and nothing in the checks would ever have failed. What would have
+  caught it is a test asserting a bare key survives a writable editor — which
+  now exists, and fails without the fix.
