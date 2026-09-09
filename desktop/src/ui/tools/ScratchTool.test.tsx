@@ -213,3 +213,106 @@ describe("the scratch files panel", () => {
     expect(screen.queryByLabelText("new name")).not.toBeInTheDocument();
   });
 });
+
+describe("driving the panel from the keyboard", () => {
+  /**
+   * `R-L8`, asked 2026-09-09. The claim in `data-owns-keys` is the load-bearing
+   * part: window-wide `F2` is *Label the selected session*, and `focusOwns`
+   * hands bare keys to whatever has focus — a `div` is not a text box, so
+   * without the claim this panel's `F2` would open the session label dialog.
+   * The keymap listens in **capture**, so the panel cannot win by stopping
+   * propagation; it has to be granted the key.
+   */
+  it("claims F2 and Delete from the window", () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    const { container } = render(<ScratchTool />);
+
+    const claim = container.querySelector("[data-owns-keys]");
+    expect(claim?.getAttribute("data-owns-keys")).toBe("F2 Delete");
+  });
+
+  it("renames the selected file on F2", () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java", "b.sql"], open: {} } as never });
+    render(<ScratchTool />);
+
+    const row = screen.getByText("scratch-1.java");
+    fireEvent.focus(row.closest("[role=option]")!);
+    fireEvent.keyDown(row.closest("[role=option]")!, { key: "F2" });
+
+    expect(screen.getByLabelText("new name")).toHaveValue("scratch-1.java");
+  });
+
+  it("asks before deleting on Delete, and sends only on confirm", () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    const row = screen.getByText("scratch-1.java").closest("[role=option]")!;
+    fireEvent.focus(row);
+    fireEvent.keyDown(row, { key: "Delete" });
+
+    expect(sent).not.toContainEqual({ cmd: "scratch_delete", name: "scratch-1.java" });
+
+    fireEvent.click(screen.getByText("delete"));
+    expect(sent).toContainEqual({ cmd: "scratch_delete", name: "scratch-1.java" });
+  });
+
+  /**
+   * The `j` lesson, one key over: the rename box lives inside the container
+   * that handles these keys, so a `Delete` pressed while editing text would
+   * otherwise delete the file you are renaming.
+   */
+  it("does not treat Delete inside the rename box as a delete", () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    const row = screen.getByText("scratch-1.java").closest("[role=option]")!;
+    fireEvent.focus(row);
+    fireEvent.keyDown(row, { key: "F2" });
+
+    const box = screen.getByLabelText("new name");
+    fireEvent.keyDown(box, { key: "Delete" });
+
+    expect(screen.queryByText("delete")).not.toBeInTheDocument();
+    expect(sent.some((m) => (m as { cmd?: string }).cmd === "scratch_delete")).toBe(false);
+  });
+
+  /** Nor F2, which would stack a second rename on the one being typed. */
+  it("does not restart a rename from inside the rename box", () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    const row = screen.getByText("scratch-1.java").closest("[role=option]")!;
+    fireEvent.focus(row);
+    fireEvent.keyDown(row, { key: "F2" });
+
+    const box = screen.getByLabelText("new name");
+    fireEvent.change(box, { target: { value: "half-typed" } });
+    fireEvent.keyDown(box, { key: "F2" });
+
+    expect(screen.getByLabelText("new name")).toHaveValue("half-typed");
+  });
+
+  it("moves the selection with the arrows", () => {
+    useStore.setState({ scratch: { names: ["a.java", "b.sql"], open: {} } as never });
+    render(<ScratchTool />);
+
+    const first = screen.getByText("a.java").closest("[role=option]")!;
+    fireEvent.focus(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByText("b.sql").closest("[role=option]")!, { key: "F2" });
+
+    expect(screen.getByLabelText("new name")).toHaveValue("b.sql");
+  });
+
+  /** Arrowing past a file must not open it — that would fill the dock. */
+  it("does not open a file the selection merely passes over", () => {
+    useStore.setState({ scratch: { names: ["a.java", "b.sql"], open: {} } as never });
+    render(<ScratchTool />);
+
+    const first = screen.getByText("a.java").closest("[role=option]")!;
+    fireEvent.focus(first);
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+
+    expect(opened).toEqual([]);
+  });
+});

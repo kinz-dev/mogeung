@@ -469,7 +469,13 @@ export function Row({
 }: {
   selected?: boolean;
   children: React.ReactNode;
-} & React.ComponentPropsWithoutRef<"div">) {
+  // `WithRef`, not `WithoutRef`. The comment below has claimed the ref was
+  // forwarded since this was written and it was not: the prop type excluded
+  // it, so Radix's `Slot` had nowhere to put one and every `asChild` trigger
+  // has been losing it quietly. React 19 passes `ref` as an ordinary prop, so
+  // `...rest` carries it once the type stops forbidding it. Found by `R-L8`,
+  // which needed to focus a row.
+} & React.ComponentPropsWithRef<"div">) {
   return (
     // `...rest` and the forwarded `ref` are both load-bearing, not tidiness:
     // Radix's `asChild` clones this element with merged props — the

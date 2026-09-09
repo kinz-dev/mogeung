@@ -222,6 +222,18 @@ export function KeymapWindow() {
               laptop has no Insert key — rebind <em>New scratch file</em> above rather than looking
               for one.
             </div>
+            <div>
+              {/*
+                Listed here rather than in the table above because they are not
+                `ACTIONS`: they belong to the Scratch panel and only fire while
+                it has focus. `F2` is claimed from the window, where it means
+                *Label the selected session* — see `data-owns-keys`. `R-L8`.
+              */}
+              In the <em>Scratch</em> panel, with a file selected: <Kbd>F2</Kbd> renames it,{" "}
+              <Kbd>Delete</Kbd> asks before removing it, <Kbd>↑</Kbd> <Kbd>↓</Kbd> move the
+              selection and <Kbd>Enter</Kbd> opens. These work only while that panel has focus —
+              <Kbd>F2</Kbd> elsewhere still labels the selected session.
+            </div>
           </div>
         </div>
 

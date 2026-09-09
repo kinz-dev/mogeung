@@ -1,7 +1,7 @@
 ---
 title: Scratch files
 status: shipped
-updated: 2026-09-08
+updated: 2026-09-09
 roadmap: [R-L5]
 depends_on: [A27]
 ---
@@ -154,3 +154,11 @@ tests pin the name check, first-free numbering, and that a write cannot mint.
 - **The two tests that pinned the absences were deleted, not skipped.** A test
   asserting the opposite of the current requirement is stale rather than a
   regression guard, and a skipped one would have left the argument looking live.
+- **And the keyboard reached the panel on 2026-09-09** (`R-L8`): `F2` renames,
+  `Delete` asks, the arrows move a selection and `Enter` opens. The part worth
+  reading twice is that **`F2` had to be granted**. It is *Label the selected
+  session* window-wide, `focusOwns` gives bare keys to whatever has focus, and a
+  row is a `div` rather than a text box — so the panel would have opened the
+  label dialog. The keymap listens in *capture*, so stopping propagation was
+  never available; `focusOwns` gained `data-owns-keys` instead, which is
+  `R-L5`'s `data-editor="writable"` fix generalised from one surface to any.

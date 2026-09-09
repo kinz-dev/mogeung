@@ -1017,6 +1017,13 @@ const VIEWER_KEYS = new Set([
  *   test read the Code pane as *typing* and killed every bare-letter shortcut
  *   in the window for as long as it had focus. It is read-only (ADR-0019):
  *   pressing `c` there cannot mean text, so it means Changes.
+ * - **A surface may claim named keys**, with `data-owns-keys`. The scratch
+ *   panel claims `F2` and `Delete` (`R-L8`): `F2` is *Label the selected
+ *   session* window-wide, and in a list of files it has to be rename — the
+ *   same collision `j` had, one key over. A claim is checked *before* the
+ *   viewer rule below, because it is the more specific statement, and it is
+ *   declared on the component rather than listed here so the claim lives beside
+ *   the thing making it.
  * - **A writable editor owns everything**, which is the per-editor check the
  *   paragraph above said would be needed *"if a Monaco here ever becomes
  *   editable"*. One did: `R-L5`'s scratch files, on 2026-09-03, and this was
@@ -1033,6 +1040,9 @@ function focusOwns(key: string): boolean {
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
   if (el.closest(".xterm")) return true;
+  // A surface that has named this key wins it. `R-L8`.
+  const claim = el.closest<HTMLElement>("[data-owns-keys]");
+  if (claim?.dataset.ownsKeys?.split(/\s+/).includes(key)) return true;
   // Before the viewer check, and that order is the fix: a writable editor is
   // also a `.monaco-editor`, so asking the general question first would answer
   // the specific one wrongly.

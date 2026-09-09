@@ -136,3 +136,75 @@ describe("the queue's own navigation", () => {
     expect(ACTIONS.find((a) => a.id === "queue.next")?.keys).toContain("ArrowDown");
   });
 });
+
+describe("a surface that claims named keys", () => {
+  /**
+   * `R-L8`. The scratch panel needs `F2` to mean *rename this file*, and
+   * window-wide `F2` is *Label the selected session*. It cannot take the key by
+   * stopping propagation — the keymap listens in **capture**, so it has already
+   * run — so `focusOwns` has to grant it. That is what `data-owns-keys` does.
+   */
+  function claiming(keys: string): HTMLElement {
+    const el = document.createElement("div");
+    el.setAttribute("data-owns-keys", keys);
+    return el;
+  }
+
+  /**
+   * Focus a **non-text** element inside `wrapper`.
+   *
+   * `focusInside` above puts a `textarea` there, which owns every bare key on
+   * its own — so using it here would have proved nothing in either direction.
+   * The real panel focuses a row, which is a `div` with a tabindex.
+   */
+  function focusRowInside(wrapper: HTMLElement): () => void {
+    const row = document.createElement("div");
+    row.tabIndex = 0;
+    wrapper.appendChild(row);
+    document.body.appendChild(wrapper);
+    row.focus();
+    return () => wrapper.remove();
+  }
+
+  beforeEach(() => {
+    useStore.setState({ prefs: defaultPrefs(), notices: [], labelEditing: null } as never);
+  });
+
+  /** The control: unclaimed, the window takes it and complains about sessions. */
+  it("leaves an unclaimed key to the window", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const done = focusRowInside(document.createElement("div"));
+
+    press("F2");
+
+    const said = useStore.getState().notices.map((n) => n.text).join(" ");
+    expect(said).toMatch(/pick a session first/i);
+    done();
+  });
+
+  it("gives a claimed key to the surface that claimed it", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const done = focusRowInside(claiming("F2 Delete"));
+
+    press("F2");
+
+    expect(useStore.getState().notices).toHaveLength(0);
+    expect(useStore.getState().labelEditing).toBeNull();
+    done();
+  });
+
+  /** A claim is for the keys it names and not a blanket. */
+  it("does not claim a key it did not name", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const done = focusRowInside(claiming("Delete"));
+
+    press("F2");
+
+    const said = useStore.getState().notices.map((n) => n.text).join(" ");
+    expect(said).toMatch(/pick a session first/i);
+    done();
+  });
+});
