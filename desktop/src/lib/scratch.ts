@@ -127,3 +127,31 @@ export function forgetScratch(name: string): void {
   delete files[name];
   useStore.setState({ scratch: { ...scratch, files } });
 }
+
+/**
+ * Close the panes of scratch files that are no longer on disk. `R-L7`.
+ *
+ * Called with each `scratches` broadcast, which is the daemon's answer to a
+ * rename, a delete, or another window doing either — and to `rm`, once
+ * something asks for the list again. A pane whose file has gone is worse than
+ * an absent one: it looks editable, and the next keystroke autosaves into a
+ * `scratch_write` the daemon refuses, because *"a write is an edit, never a
+ * create"* (ADR-0035).
+ *
+ * **Renaming is a close, not a follow.** The pane's id carries the name, so
+ * there is nothing to rename in place; and the file under the new name is the
+ * one the panel now lists, one click away. Following it would also be a guess —
+ * the broadcast says what exists, never what became what.
+ */
+export function closeMissingScratchPanes(names: readonly string[]): void {
+  const dock = getDock();
+  if (!dock) return;
+  const alive = new Set(names);
+  for (const panel of dock.panels) {
+    const name = parseScratchPaneId(panel.id);
+    if (name && !alive.has(name)) {
+      panel.api.close();
+      forgetScratch(name);
+    }
+  }
+}

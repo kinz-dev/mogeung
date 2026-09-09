@@ -14,7 +14,7 @@
 import { create } from "zustand";
 import { summarize } from "@/store/changes";
 import { toggleRail } from "@/lib/rail";
-import { showScratchPane } from "@/lib/scratch";
+import { showScratchPane, closeMissingScratchPanes } from "@/lib/scratch";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
@@ -1619,6 +1619,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "scratches":
         set((s) => ({ scratch: { ...s.scratch, names: msg.names } }));
+        // A pane whose file has gone — renamed, deleted, or `rm`'d from
+        // another window — must not stay open looking editable. `R-L7`.
+        closeMissingScratchPanes(msg.names);
         break;
       case "scratch_content":
         set((s) => ({

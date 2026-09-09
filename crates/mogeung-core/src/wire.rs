@@ -291,6 +291,18 @@ pub enum ClientMsg {
     /// Replace the whole file. The window sends this as you type, debounced;
     /// the daemon answers the asker with `ScratchSaved`.
     ScratchWrite { name: String, content: String },
+    /// Rename one. `R-L7`. The **only** verb where the window chooses a name —
+    /// see ADR-0035's 2026-09-09 amendment, which is where that concession is
+    /// argued. Refused when the target already exists rather than replacing it.
+    ScratchRename { name: String, to: String },
+    /// Delete one. `R-L7`. Deleting a file that is already gone is not an
+    /// error: two windows listing one directory will race, and the outcome is
+    /// what was asked for either way.
+    ScratchDelete { name: String },
+    /// Copy one to a fresh, **daemon-minted** name with the same extension.
+    /// `R-L7`. Answers the asker with `ScratchContent { fresh: true }`, exactly
+    /// as `ScratchCreate` does, so the window opens the copy.
+    ScratchDuplicate { name: String },
 
     // -- The local model. `R-O5`, ADR-0030.
     /// Ask the configured model a question, and answer on this socket only.

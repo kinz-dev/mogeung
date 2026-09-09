@@ -1135,6 +1135,19 @@ export type ClientMsg =
   | { cmd: "scratch_read"; name: string }
   | { cmd: "scratch_write"; name: string; content: string }
   /**
+   * Rename one. `R-L7`. The **only** verb where the window chooses a name —
+   * ADR-0035's 2026-09-09 amendment is where that concession is argued. The
+   * daemon refuses a target that already exists rather than replacing it.
+   */
+  | { cmd: "scratch_rename"; name: string; to: string }
+  /** Delete one. `R-L7`. Deleting one that has already gone is not an error. */
+  | { cmd: "scratch_delete"; name: string }
+  /**
+   * Copy one to a fresh, **daemon-minted** name with the same extension.
+   * `R-L7`. Answers with `scratch_content { fresh: true }`, as create does.
+   */
+  | { cmd: "scratch_duplicate"; name: string }
+  /**
    * The one free-form string in this protocol. `R-O5`, ADR-0030 clause 4.
    *
    * The whole conversation travels every time and the daemon keeps none of it,

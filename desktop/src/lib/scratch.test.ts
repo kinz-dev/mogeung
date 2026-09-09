@@ -18,6 +18,7 @@ vi.mock("@/lib/scratch", async (importOriginal) => {
 import { useStore } from "@/store";
 import {
   SCRATCH_LANGUAGES,
+  closeMissingScratchPanes,
   createScratch,
   fetchScratch,
   forgetScratch,
@@ -25,6 +26,7 @@ import {
   scratchPaneId,
   scratchPath,
 } from "@/lib/scratch";
+import { setDock } from "@/lib/panes";
 
 const send = vi.fn();
 
@@ -101,5 +103,42 @@ describe("what the daemon says", () => {
     ingest({ ev: "scratch_saved", name: "scratch-1.java" });
     ingest({ ev: "scratch_saved", name: "scratch-1.java" });
     expect(useStore.getState().scratch.files["scratch-1.java"]?.saved).toBe(2);
+  });
+});
+
+describe("a pane whose file has gone", () => {
+  /**
+   * `R-L7` made rename and delete reachable from the panel, so a file can
+   * disappear from under an open pane — and another window, or `rm`, could
+   * always do it. A pane left open looks editable and autosaves into a
+   * `scratch_write` the daemon refuses, because a write is an edit and never
+   * a create (ADR-0035).
+   */
+  it("is closed when the list no longer names it", () => {
+    const closed: string[] = [];
+    const panels = [
+      { id: scratchPaneId("gone.java"), api: { close: () => closed.push("gone.java") } },
+      { id: scratchPaneId("kept.sql"), api: { close: () => closed.push("kept.sql") } },
+      { id: "agent", api: { close: () => closed.push("agent") } },
+    ];
+    setDock({ panels } as never);
+
+    closeMissingScratchPanes(["kept.sql"]);
+
+    expect(closed).toEqual(["gone.java"]);
+  });
+
+  /** Nothing else in the dock is a scratch file, and must not be closed. */
+  it("leaves every other pane alone", () => {
+    const closed: string[] = [];
+    const panels = [
+      { id: "agent", api: { close: () => closed.push("agent") } },
+      { id: "file:abc:src/main.rs", api: { close: () => closed.push("file") } },
+    ];
+    setDock({ panels } as never);
+
+    closeMissingScratchPanes([]);
+
+    expect(closed).toEqual([]);
   });
 });

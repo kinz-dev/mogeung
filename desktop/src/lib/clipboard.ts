@@ -179,3 +179,23 @@ export function decodeOsc52(data: string): Osc52 {
     return null;
   }
 }
+
+/**
+ * Copy a path (or a name) and say so. `R-J34`, and since `R-L7` the scratch
+ * panel's menu too.
+ *
+ * The notice is the point rather than politeness: a context menu closes on
+ * click, so without it the only way to know whether the menu did anything is
+ * to go and paste somewhere. Lifted out of `PaneChrome` when a second menu
+ * wanted it — two copies would have drifted on the wording, which is the whole
+ * of what this does.
+ */
+export async function copyPath(text: string, what: string): Promise<void> {
+  const { pushNotice, pushError } = await import("@/store").then((m) => m.useStore.getState());
+  try {
+    await writeClipboard(text);
+    pushNotice(`${what} copied — ${text}`);
+  } catch (e) {
+    pushError(`could not copy: ${String(e)}`);
+  }
+}

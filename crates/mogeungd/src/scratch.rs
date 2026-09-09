@@ -147,6 +147,82 @@ pub fn write(dir: &Path, name: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
+/// Rename a scratch file. `R-L7`.
+///
+/// **This is the verb that hands the window naming power**, which
+/// [ADR-0035](../../../docs/decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)
+/// deliberately withheld: its rule 1 says *"the daemon mints every name"*, so
+/// that a window could not place a file of its choosing even inside this
+/// directory. A rename is exactly that power, and the fences are what make it
+/// bearable — `check_name` still governs the target, so no separator, no
+/// leading dot and no `..` can be spelled; and an existing target is refused
+/// rather than replaced, so a rename can never destroy a file you did not name.
+///
+/// It cannot create, either: the source has to be a file that is already here.
+pub fn rename(dir: &Path, name: &str, to: &str) -> Result<()> {
+    check_name(name)?;
+    check_name(to)?;
+    if name == to {
+        return Ok(());
+    }
+    let from = dir.join(name);
+    if !from.is_file() {
+        bail!("{name} is not a scratch file here");
+    }
+    let target = dir.join(to);
+    // Checked rather than clobbered. `std::fs::rename` replaces silently on
+    // Unix, and silently replacing a file the user did not name is the one
+    // outcome a rename must not have.
+    if target.exists() {
+        bail!("{to} is already here — pick another name");
+    }
+    std::fs::rename(&from, &target).with_context(|| format!("renaming {name} to {to}"))?;
+    Ok(())
+}
+
+/// Delete a scratch file. `R-L7`.
+///
+/// ADR-0035 said deleting one was `rm` and meant it: *"they are the user's, on
+/// the user's disk, in a folder any tool can open — and it is also the limit."*
+/// The limit moved on 2026-09-09 (see that ADR's amendment). What did not move
+/// is where it may point: `check_name` first, and the join is to this directory
+/// only, so the verb cannot be aimed at anything else on the machine.
+///
+/// A file that is already gone is **not** an error. Two windows listing the
+/// same directory will race, and "delete something that is not there" is the
+/// outcome you asked for.
+pub fn delete(dir: &Path, name: &str) -> Result<()> {
+    check_name(name)?;
+    let path = dir.join(name);
+    if !path.exists() {
+        return Ok(());
+    }
+    if !path.is_file() {
+        bail!("{name} is not a file");
+    }
+    std::fs::remove_file(&path).with_context(|| format!("deleting {name}"))?;
+    Ok(())
+}
+
+/// Copy a scratch file to a new, daemon-minted name. `R-L7`.
+///
+/// The name is **minted here**, not asked for, which keeps ADR-0035's rule 1
+/// intact for the one operation that creates a file: duplicating
+/// `query.sql` gives `scratch-<n>.sql`, the same shape [`create`] produces.
+pub fn duplicate(dir: &Path, name: &str) -> Result<String> {
+    check_name(name)?;
+    let from = dir.join(name);
+    if !from.is_file() {
+        bail!("{name} is not a scratch file here");
+    }
+    let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("txt");
+    check_ext(ext)?;
+    let fresh = create(dir, ext)?;
+    let bytes = std::fs::read(&from).with_context(|| format!("reading {name}"))?;
+    std::fs::write(dir.join(&fresh), bytes).with_context(|| format!("writing {fresh}"))?;
+    Ok(fresh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +289,115 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         write(&d, &a, "newer").unwrap();
         assert_eq!(list(&d).unwrap(), vec![a, b]);
+    }
+
+    // -- Managing the files rather than their contents. `R-L7`.
+
+    #[test]
+    fn a_rename_moves_the_file_and_keeps_the_content() {
+        let d = fresh("rename");
+        std::fs::create_dir_all(&d).unwrap();
+        let name = create(&d, "sql").unwrap();
+        write(&d, &name, "select 1").unwrap();
+
+        rename(&d, &name, "query.sql").unwrap();
+
+        assert!(!d.join(&name).exists(), "the old name is gone");
+        assert_eq!(read(&d, "query.sql").unwrap(), "select 1");
+    }
+
+    /// `std::fs::rename` replaces silently on Unix, and silently destroying a
+    /// file the user did not name is the one outcome a rename must not have.
+    #[test]
+    fn a_rename_onto_an_existing_file_is_refused() {
+        let d = fresh("clobber");
+        std::fs::create_dir_all(&d).unwrap();
+        let a = create(&d, "sql").unwrap();
+        let b = create(&d, "sql").unwrap();
+        write(&d, &a, "keep me").unwrap();
+        write(&d, &b, "and me").unwrap();
+
+        assert!(rename(&d, &b, &a).is_err());
+        assert_eq!(read(&d, &a).unwrap(), "keep me");
+        assert_eq!(read(&d, &b).unwrap(), "and me");
+    }
+
+    /// The verb that hands the window a name is the verb most worth fencing.
+    #[test]
+    fn a_rename_cannot_spell_a_path() {
+        let d = fresh("escape");
+        std::fs::create_dir_all(&d).unwrap();
+        let name = create(&d, "txt").unwrap();
+
+        for bad in ["../escaped.txt", "sub/dir.txt", ".hidden", "with space"] {
+            assert!(rename(&d, &name, bad).is_err(), "{bad} should be refused");
+        }
+        assert!(d.join(&name).is_file(), "the file did not move");
+    }
+
+    #[test]
+    fn renaming_to_the_same_name_is_a_no_op() {
+        let d = fresh("same");
+        std::fs::create_dir_all(&d).unwrap();
+        let name = create(&d, "txt").unwrap();
+        write(&d, &name, "body").unwrap();
+
+        rename(&d, &name, &name).unwrap();
+
+        assert_eq!(read(&d, &name).unwrap(), "body");
+    }
+
+    #[test]
+    fn a_delete_removes_it_from_the_list() {
+        let d = fresh("delete");
+        std::fs::create_dir_all(&d).unwrap();
+        let a = create(&d, "txt").unwrap();
+        let b = create(&d, "txt").unwrap();
+
+        delete(&d, &a).unwrap();
+
+        let names = list(&d).unwrap();
+        assert!(!names.contains(&a));
+        assert!(names.contains(&b));
+    }
+
+    /// Two windows list one directory and will race. Deleting something that
+    /// is already gone is the outcome that was asked for.
+    #[test]
+    fn deleting_what_is_not_there_is_not_an_error() {
+        let d = fresh("gone");
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(delete(&d, "never-existed.txt").is_ok());
+    }
+
+    #[test]
+    fn a_delete_cannot_be_aimed_outside_the_directory() {
+        let d = fresh("aim");
+        std::fs::create_dir_all(&d).unwrap();
+        let outside = d.parent().unwrap().join("mogeung-scratch-bystander.txt");
+        std::fs::write(&outside, "not yours").unwrap();
+
+        assert!(delete(&d, "../mogeung-scratch-bystander.txt").is_err());
+
+        assert!(outside.is_file(), "a file outside the directory was deleted");
+        std::fs::remove_file(&outside).ok();
+    }
+
+    /// The copy gets a name the **daemon** minted, which is how ADR-0035's
+    /// rule 1 survives the one operation here that creates a file.
+    #[test]
+    fn a_duplicate_is_a_fresh_daemon_minted_name_with_the_same_content() {
+        let d = fresh("dup");
+        std::fs::create_dir_all(&d).unwrap();
+        let name = create(&d, "java").unwrap();
+        write(&d, &name, "class A {}").unwrap();
+
+        let copy = duplicate(&d, &name).unwrap();
+
+        assert_ne!(copy, name);
+        assert!(copy.starts_with("scratch-"), "{copy} was not minted here");
+        assert!(copy.ends_with(".java"), "{copy} lost the extension");
+        assert_eq!(read(&d, &copy).unwrap(), "class A {}");
+        assert_eq!(read(&d, &name).unwrap(), "class A {}", "the original is untouched");
     }
 }

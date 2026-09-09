@@ -2087,6 +2087,58 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
+        // The three that manage the files rather than their contents. `R-L7`.
+        // Each **broadcasts** the new list, like `ScratchCreate` does: two
+        // windows on one daemon share this directory, and a panel still
+        // offering a file that another window deleted is worse than a panel
+        // that flickers.
+        ClientMsg::ScratchRename { name, to } => {
+            let dir = state.scratch_dir();
+            match crate::scratch::rename(&dir, &name, &to) {
+                Ok(()) => {
+                    if let Ok(names) = crate::scratch::list(&dir) {
+                        state.broadcast(ServerMsg::Scratches { names });
+                    }
+                    send_reply(reply, ServerMsg::ScratchSaved { name: to });
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::ScratchDelete { name } => {
+            let dir = state.scratch_dir();
+            match crate::scratch::delete(&dir, &name) {
+                Ok(()) => {
+                    if let Ok(names) = crate::scratch::list(&dir) {
+                        state.broadcast(ServerMsg::Scratches { names });
+                    }
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::ScratchDuplicate { name } => {
+            let dir = state.scratch_dir();
+            match crate::scratch::duplicate(&dir, &name) {
+                Ok(fresh) => {
+                    match crate::scratch::read(&dir, &fresh) {
+                        Ok(content) => send_reply(
+                            reply,
+                            ServerMsg::ScratchContent {
+                                name: fresh,
+                                content,
+                                // The window opens a duplicate the same way it
+                                // opens a new file — it is one.
+                                fresh: true,
+                            },
+                        ),
+                        Err(e) => err(e),
+                    }
+                    if let Ok(names) = crate::scratch::list(&dir) {
+                        state.broadcast(ServerMsg::Scratches { names });
+                    }
+                }
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::GitResolve {
             session_id,
             path,

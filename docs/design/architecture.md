@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-08
+updated: 2026-09-09
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -543,7 +543,8 @@ rather than a habit —
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
 
 **Panes** are views of a session — with one exception since 2026-09-03, a
-**scratch** pane (`R-L5`), which is a view of a file in `~/.mogeung/scratch`
+**scratch** pane (`R-L5`; managed from the rail since `R-L6` and `R-L7`), which
+is a view of a file in `~/.mogeung/scratch`
 and belongs to no session; its id is `scratch:<name>` and, unlike a `file:`
 id, the saved layout keeps it, because it names nothing that can go stale.
 Two *kinds* of session pane are left in the centre — **Agent**

@@ -27,7 +27,7 @@ import { hostLabel, reachFor } from "@/lib/tmux";
 import { closeFile, revealInFiles } from "@/lib/explorer";
 import { closeAllTabs, closeOtherTabs, closeTab } from "@/lib/closeTabs";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
-import { writeClipboard } from "@/lib/clipboard";
+import { copyPath } from "@/lib/clipboard";
 
 /**
  * What a pane's tab should read, whether it is held, and what to say on hover.
@@ -238,16 +238,6 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
  * window with no visible result at all, so without it the only way to know
  * whether the menu did anything is to go and paste somewhere.
  */
-async function copyPath(text: string, what: string): Promise<void> {
-  const { pushNotice, pushError } = useStore.getState();
-  try {
-    await writeClipboard(text);
-    pushNotice(`${what} copied — ${text}`);
-  } catch (e) {
-    pushError(`could not copy: ${String(e)}`);
-  }
-}
-
 /**
  * The session a pane is showing: the one it is held on, else the selected one.
  *

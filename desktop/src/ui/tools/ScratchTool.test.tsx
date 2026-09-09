@@ -5,16 +5,20 @@
  * current files panel didn't show it."* Files is right not to — it browses the
  * session's worktree, and a scratch file is in nobody's worktree.
  *
- * The interesting assertions here are the **absences**. Feature 0039 put a
- * list, search or delete out of scope on the argument that anything more turns
- * these into documents, and this row reopened only the first of those three.
- * A test that pins what is deliberately missing is worth more than one that
- * pins what is there, because the missing half is what a later change will
- * quietly add.
+ * **These pinned absences until 2026-09-09**, when the next ask reversed the
+ * line: *"enhance the scratch path panel with right-click menu to support all
+ * file related operations."* So `offers no delete and no rename` is gone rather
+ * than amended — a test asserting the opposite of the current requirement is
+ * not a regression test, it is a stale one, and leaving it skipped would have
+ * left the argument looking live.
+ *
+ * What replaces it is the fence that *did* survive: the daemon still checks
+ * every name, delete still asks first, and rename is the one verb where the
+ * window proposes a name. See `R-L7` and ADR-0035's 2026-09-09 amendment.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useStore } from "@/store";
 import { ScratchTool } from "@/ui/tools/ScratchTool";
 
@@ -92,17 +96,120 @@ describe("the scratch files panel", () => {
     expect(sent).not.toContainEqual(expect.objectContaining({ cmd: "scratch_create" }));
   });
 
-  /**
-   * The line feature 0039 drew, and the one this row deliberately did not
-   * cross. `rm` deletes a scratch file; a delete button here is the first step
-   * to these being documents, which is what ADR-0035 is about.
-   */
-  it("offers no delete and no rename", () => {
+  // -- The right-click menu. `R-L7`.
+
+  it("offers the file operations on a right-click", async () => {
     useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
     render(<ScratchTool />);
 
-    expect(screen.queryByTitle(/delete|remove|forget/i)).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/rename/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+
+    for (const label of [/^Open$/, /^Rename…$/, /^Duplicate$/, /Copy full path/, /Copy file name/, /^Delete…$/]) {
+      expect(await screen.findByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("duplicates through the daemon rather than minting a name", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Duplicate"));
+
+    expect(sent).toContainEqual({ cmd: "scratch_duplicate", name: "scratch-1.java" });
+  });
+
+  /**
+   * The one irreversible thing in this panel. Before `R-L7` the delete was
+   * `rm`, which at least makes you type the name.
+   */
+  it("asks before deleting, and does not send until you say so", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Delete…"));
+
+    expect(sent).not.toContainEqual({ cmd: "scratch_delete", name: "scratch-1.java" });
+
+    fireEvent.click(screen.getByText("delete"));
+    expect(sent).toContainEqual({ cmd: "scratch_delete", name: "scratch-1.java" });
+  });
+
+  it("keeps the file when the confirmation is declined", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Delete…"));
+    fireEvent.click(screen.getByText("keep"));
+
+    expect(sent).not.toContainEqual({ cmd: "scratch_delete", name: "scratch-1.java" });
+    expect(screen.getByText("scratch-1.java")).toBeInTheDocument();
+  });
+
+  it("renames in place, on Enter", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Rename…"));
+
+    const box = screen.getByLabelText("new name");
+    fireEvent.change(box, { target: { value: "Gateway.java" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(sent).toContainEqual({
+      cmd: "scratch_rename",
+      name: "scratch-1.java",
+      to: "Gateway.java",
+    });
+  });
+
+  it("sends nothing when the name is unchanged", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Rename…"));
+    fireEvent.keyDown(screen.getByLabelText("new name"), { key: "Enter" });
+
+    expect(sent.some((m) => (m as { cmd?: string }).cmd === "scratch_rename")).toBe(false);
+  });
+
+  it("abandons a rename on Escape", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Rename…"));
+
+    const box = screen.getByLabelText("new name");
+    fireEvent.change(box, { target: { value: "other.java" } });
+    fireEvent.keyDown(box, { key: "Escape" });
+
+    expect(sent.some((m) => (m as { cmd?: string }).cmd === "scratch_rename")).toBe(false);
+    expect(screen.getByText("scratch-1.java")).toBeInTheDocument();
+  });
+
+  /**
+   * Another window deletes the file — or `rm` does — while a rename box is
+   * open over it. An editor for a file that is not there is worse than a list
+   * that changed under you.
+   */
+  it("closes the rename box when the file goes away", async () => {
+    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    const { rerender } = render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("scratch-1.java"));
+    fireEvent.click(await screen.findByText("Rename…"));
+    expect(screen.getByLabelText("new name")).toBeInTheDocument();
+
+    act(() => {
+      useStore.setState({ scratch: { names: [], open: {} } as never });
+    });
+    rerender(<ScratchTool />);
+
+    expect(screen.queryByLabelText("new name")).not.toBeInTheDocument();
   });
 });

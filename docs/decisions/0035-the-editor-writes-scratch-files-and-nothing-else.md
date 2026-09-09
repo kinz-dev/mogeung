@@ -1,7 +1,7 @@
 ---
 title: The editor writes under ~/.mogeung/scratch and nowhere else
 status: active
-updated: 2026-09-03
+updated: 2026-09-09
 decided: 2026-09-03
 ---
 
@@ -91,3 +91,63 @@ where the name comes from rather than by a flag in the pane:
 - Scratch files turn out to want a list, a search or a delete in the window.
   Any of those is a sign they are becoming documents, and `R-L2`'s store is
   where documents live.
+
+## Amendment — 2026-09-09
+
+**The *Revisit if* below fired, twice in two days, and the remedy it prescribed
+does not fit.** Scratch files were given a list in the window on 2026-09-08
+(`R-L6`), and a right-click menu with rename, duplicate and delete on
+2026-09-09 (`R-L7`), at *"enhance the scratch path panel with right-click menu
+to support all file related operations."*
+
+The condition said any of those *"is a sign they are becoming documents, and
+`R-L2`'s store is where documents live."* The first half was right and the
+second half turns out to be unusable: **a note is markdown by definition**, and
+what these files are for is Java, SQL and JSON with colouring. There is no
+migration to offer. So the prediction was a good one that pointed at a door
+which is not there, and the honest move is to widen this ADR rather than to
+send the user somewhere that cannot hold their file.
+
+**What changed.** Three verbs — `ScratchRename`, `ScratchDelete`,
+`ScratchDuplicate` — and the *Consequences* line saying *"deleting one is `rm`.
+That is the point… and it is also the limit"* no longer holds. The limit moved.
+
+**What did not change, and is the whole reason this is an amendment rather than
+a supersession.** Rules 2, 4 and 5 stand untouched: `check_name` governs every
+verb, so no separator, leading dot or `..` can be spelled; the daemon does every
+write, atomically, in the directory it owns; and none of this is behind
+`may_write`, because it is still not a repository. Rule 3 — *"a write is an
+edit, never a create"* — also stands: `ScratchWrite` still refuses a name the
+daemon did not mint, and `ScratchDuplicate` mints its own.
+
+**The concession, stated plainly.** Rule 1 said *"the daemon mints every name…
+the window never proposes a name."* **`ScratchRename` breaks that**, and it is
+the only verb that does. It exists because a file called `scratch-3.java` is a
+file you cannot find again, which is the same argument that got these files a
+list. The fences it comes with: the target is checked exactly as any other
+name, and a target that **already exists is refused rather than replaced** —
+`std::fs::rename` would silently destroy it, and silently destroying a file the
+user did not name is the one outcome a rename must not have.
+
+**What it costs.** The window can now name a file inside this directory, so the
+argument that *"a path cannot be spelled"* is doing more work than it was: it is
+now the only thing between a rename and an arbitrary write, where before it was
+the second line after minting. That is a smaller margin, and it is why the
+name check has its own test asserting `../`, `sub/dir`, a leading dot and a
+space are all refused **by rename specifically**.
+
+**A new consequence.** A file can now vanish from under an open pane, which
+before took `rm` in another terminal. Every `Scratches` broadcast closes the
+panes of files it no longer names, because a pane whose file has gone looks
+editable and autosaves into a write the daemon refuses.
+
+## Revisit if — 2026-09-09
+
+The original two conditions are spent. What would move this line again:
+
+- **Scratch files want folders.** A directory inside the scratch directory is a
+  path, and every fence here is built on there not being one.
+- **Something outside the panel wants to name a file** — a template, an import,
+  a "save this transcript as". Rule 1 survived this amendment with one
+  exception; a second exception is not an exception any more, and at that point
+  the honest question is whether the daemon should mint names at all.

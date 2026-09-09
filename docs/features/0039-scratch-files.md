@@ -142,3 +142,15 @@ tests pin the name check, first-free numbering, and that a write cannot mint.
   the parts of this spec's exclusion that were about *managing* documents
   rather than reaching them. The argument that held: a file you made yesterday
   should not be unreachable without remembering a chord.
+- **And the rest of that scope was reopened on 2026-09-09** (`R-L7`), at
+  *"enhance the scratch path panel with right-click menu to support all file
+  related operations."* Rename, duplicate, delete, copy path — so the exclusion
+  this spec wrote is now spent in full, and
+  [ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)
+  carries the argument in a dated amendment. **The prediction was good and its
+  remedy was not**: the ADR said wanting a delete meant these were becoming
+  documents and should move to notes, but a note is markdown and these files are
+  Java and SQL. There was nowhere to send them.
+- **The two tests that pinned the absences were deleted, not skipped.** A test
+  asserting the opposite of the current requirement is stale rather than a
+  regression guard, and a skipped one would have left the argument looking live.

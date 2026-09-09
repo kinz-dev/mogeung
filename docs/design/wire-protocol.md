@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-03
+updated: 2026-09-09
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -256,29 +256,42 @@ the token layer along with everything else when the bind is not loopback.
 An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
 it chose, so a client never invents one.
 
-## Scratch files (`R-L5`, 2026-09-03)
+## Scratch files (`R-L5`, 2026-09-03; `R-L7`, 2026-09-09)
 
 `ScratchList`, `ScratchCreate { ext }`, `ScratchRead { name }`,
-`ScratchWrite { name, content }`; answered by `Scratches { names }`,
-`ScratchContent { name, content, fresh }` and `ScratchSaved { name }`.
+`ScratchWrite { name, content }`, and since `R-L7` the three that manage the
+files rather than their contents — `ScratchRename { name, to }`,
+`ScratchDelete { name }`, `ScratchDuplicate { name }`; answered by
+`Scratches { names }`, `ScratchContent { name, content, fresh }` and
+`ScratchSaved { name }`.
 
 Files, not notes: nothing is stored, the file in `~/.mogeung/scratch` **is**
 the thing, and the shape is
 [ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md).
 Two rules show in the messages:
 
-- **The daemon mints every name.** A create carries an extension and answers
-  with `scratch-<n>.<ext>`; every other verb carries a name, and a name that
-  is not a bare file name — a separator, a leading dot, `..` — is refused
-  before the filesystem is touched. A write on a name the daemon did not mint
-  is an error, so the write verb cannot place a file.
+- **The daemon mints every name — with one exception since `R-L7`.** A create
+  carries an extension and answers with `scratch-<n>.<ext>`; a duplicate mints
+  the same way. Every other verb carries a name, and a name that is not a bare
+  file name — a separator, a leading dot, `..` — is refused before the
+  filesystem is touched. A write on a name the daemon did not mint is an error,
+  so the write verb cannot place a file. **`ScratchRename` is the exception**:
+  it is the one verb where the window proposes a name, argued in ADR-0035's
+  2026-09-09 amendment and fenced by the same check plus a refusal to replace an
+  existing target — `std::fs::rename` clobbers silently, and a rename that
+  destroys a file the user did not name is the outcome it must not have.
 - **Content goes to the asker; the list goes to everyone.** `ScratchContent`
   and `ScratchSaved` come down the reply lane (`R-J59`), and `fresh` is true
   only on the answer to a create — the one message a window opens a pane on.
   A read arrives on the same event with `fresh: false`, which is what a pane
-  restored from the layout asks for on mount. `Scratches` is broadcast after a
-  create and in answer to a list, so a second window learns the file exists
-  without a pane appearing on someone else's chord.
+  restored from the layout asks for on mount. A **duplicate** answers with
+  `fresh: true`, because a copy is a new file and opening it is what you meant.
+  `Scratches` is broadcast after a create and in answer to a list, so a second
+  window learns the file exists without a pane appearing on someone else's
+  chord — and since `R-L7` after a rename or a delete too, which is how a
+  window learns to **close a pane whose file has gone**. That matters more than
+  it reads: a pane left open on a deleted file looks editable and autosaves
+  into a write the daemon refuses.
 
 Same gating posture as notes: the daemon's own directory rather than a
 repository, so not in the write family; the token layer covers them off
