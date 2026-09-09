@@ -33,7 +33,7 @@ export interface ScratchLanguage {
 }
 
 /**
- * Ordered by the ask (`R-J88`: Java first, then the rest), then by what a
+ * Ordered by the ask (`R-J91`: Java first, then the rest), then by what a
  * scratch file is usually for. Plain text is last rather than first: the
  * point of picking is the colouring.
  */

@@ -732,7 +732,7 @@ pub fn run() {
         // instead would have given the webview a general write verb, where this
         // way the only file it can write is one you named in a native picker.
         .plugin(tauri_plugin_dialog::init())
-        // The clipboard, write-only (`R-J87`). The webview's own clipboard
+        // The clipboard, write-only (`R-J90`). The webview's own clipboard
         // refuses a write made outside a user gesture, and a program's `OSC 52`
         // — tmux copying a mouse selection — is exactly that. Reading is not
         // granted: `decodeOsc52` refuses a read for the same reason the fs

@@ -1110,7 +1110,7 @@ The price is `^V`: quoted-insert can no longer be typed at a pane. It is
 reachable through tmux's own prefix, and it is much rarer to want than paste in
 a pane whose job is answering a prompt.
 
-**The write is gated too, when no hand is on the keyboard** (`R-J87`, reported
+**The write is gated too, when no hand is on the keyboard** (`R-J90`, reported
 2026-09-03 as a popup on every mouse drag: *"the session tried to copy and
 could not: NotAllowedError"*). WebKit allows `navigator.clipboard.writeText`
 only inside a user gesture. The chords qualify. An `OSC 52` does not: it
@@ -1216,12 +1216,12 @@ pointer.
 
 | Path | Why |
 |---|---|
-| `desktop/src/lib/clipboard.ts` | the chords, which paste route each takes, and the shell-first write (`R-J87`) |
+| `desktop/src/lib/clipboard.ts` | the chords, which paste route each takes, and the shell-first write (`R-J90`) |
 | `desktop/src/lib/clipboard.test.ts` | that `Ctrl+C` is never copy, one press is never two pastes, and a write with no gesture still lands |
 | `desktop/src-tauri/capabilities/default.json` | `clipboard-manager:allow-write-text`, and deliberately not `read-text` |
-| `desktop/src/lib/monaco-workers.ts` | which worker each Monaco language gets, and TypeScript kept to syntax (`R-J88`) |
+| `desktop/src/lib/monaco-workers.ts` | which worker each Monaco language gets, and TypeScript kept to syntax (`R-J91`) |
 | `desktop/src/lib/monaco-setup.ts` | the workers wired — JSON, CSS, HTML, TypeScript — where every label got the base one |
-| `desktop/src/lib/symbols.ts` | outlines for SQL, YAML, JSON and CSS (`R-J88`) |
+| `desktop/src/lib/symbols.ts` | outlines for SQL, YAML, JSON and CSS (`R-J91`) |
 | `desktop/src/ui/Terminal.tsx` | the handler, and `term.paste` so bracketed paste survives |
 | `desktop/src/ui/KeymapWindow.tsx` | the terminal's chords, listed and marked not rebindable |
 | `desktop/src/index.css` | `--tag-*-bg` in both palettes, and `.mogeung-tag-row` |

@@ -107,7 +107,7 @@ nothing. Either way it is not a worktree write and does not touch pillar K —
 the file is a copy of what the daemon already published, going out rather than
 in.
 
-The clipboard is the same shape in the other direction (`R-J87`). A copy the
+The clipboard is the same shape in the other direction (`R-J90`). A copy the
 *program* asks for — tmux's `OSC 52` on a mouse selection — arrives over the
 pty with no user gesture in flight, and the webview's own clipboard refuses a
 write outside one, so the write goes through the shell:

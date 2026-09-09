@@ -1,5 +1,5 @@
 /**
- * Which worker a Monaco language asks for. `R-J88`.
+ * Which worker a Monaco language asks for. `R-J91`.
  *
  * Monaco's bundle registers four language *services* — JSON, CSS, HTML and
  * TypeScript/JavaScript — and each runs in a worker of its own. The editor
@@ -39,7 +39,7 @@ export function workerKind(label: string): WorkerKind {
 }
 
 /**
- * What the TypeScript service is allowed to say about a file. `R-J88`.
+ * What the TypeScript service is allowed to say about a file. `R-J91`.
  *
  * **Syntax only.** A worktree file is read here without its `tsconfig`, its
  * `node_modules` or the rest of its project, so semantic checking would

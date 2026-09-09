@@ -19,7 +19,7 @@
  * in `node_modules` instead. It costs bundle size, which a desktop application
  * does not care about.
  *
- * **The language workers, since `R-J88` (2026-09-03).** The comment that used
+ * **The language workers, since `R-J91` (2026-09-03).** The comment that used
  * to sit below said the services were *"skipped to keep the bundle honest"*.
  * They were not skipped: `monaco-editor`'s main entry registers them, and the
  * one thing missing was the worker each one runs in — every label got the
@@ -29,7 +29,7 @@
  * comma and a `.ts` file its syntax errors. Java, Python, SQL, YAML, XML and
  * the rest have **no** in-browser service to wire; for those, colouring and
  * folding from the Monarch grammars is all Monaco has, and anything more is a
- * language server — `R-J88`'s (c), and its own spec.
+ * language server — `R-J91`'s (c), and its own spec.
  */
 
 import * as monaco from "monaco-editor";

@@ -17,7 +17,7 @@
  *
  * An unknown language gets an **empty** outline, never a guess.
  *
- * `R-J88` (2026-09-03) added SQL, YAML, JSON and CSS: the languages the ask
+ * `R-J91` (2026-09-03) added SQL, YAML, JSON and CSS: the languages the ask
  * named that coloured and folded and showed an empty outline beside it.
  */
 
@@ -94,7 +94,7 @@ const JVM: Rule[] = [
 ];
 
 /**
- * The four `R-J88` added on 2026-09-03, for the languages the ask named that
+ * The four `R-J91` added on 2026-09-03, for the languages the ask named that
  * had colouring and nothing else. Same posture as the rest: a declaration
  * shape per line, nothing that needs to know what came before.
  */

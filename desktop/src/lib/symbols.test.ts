@@ -82,7 +82,7 @@ describe("the outline", () => {
     expect(outline("anything", "")).toEqual([]);
   });
 
-  /** `R-J88`: the four languages the ask named that had colouring and no outline. */
+  /** `R-J91`: the four languages the ask named that had colouring and no outline. */
   it("reads SQL DDL by what it creates, and not a SELECT", () => {
     const body = [
       "SELECT 1;",
