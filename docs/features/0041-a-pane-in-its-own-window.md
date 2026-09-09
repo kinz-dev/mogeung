@@ -194,3 +194,30 @@ dockview across both documents. See
   could be unit-tested. A refusal is handled as a first-class outcome so the
   failure is legible. A browser tab proves *less* than ever here: a tab has a
   real `window.open` and will succeed whatever the shell does.
+
+### The first bug from real use, 2026-09-09
+
+> when I type in that panel, it is not able to show the update. But when I
+> switch the focus to another app and switch it back to mogeung, I can see the
+> word that I typed just now.
+
+**The keystrokes were never lost; the painting was.** The React tree runs in the
+opener's context while the DOM lives in the popout — that *is* the mechanism —
+and xterm and Monaco both schedule painting on `requestAnimationFrame` of the
+window they were built against. Focusing the popout unfocuses the opener, whose
+frames are then throttled, so nothing repaints until the opener is focused again
+and every deferred paint arrives together. React commits the whole time, because
+its scheduler is not rAF-based, which is what makes this look like a refresh
+fault rather than dropped input.
+
+Checked rather than assumed: every `requestAnimationFrame` in xterm's bundle
+goes through `_coreBrowserService.window`, and that window comes from
+`ownerDocument.defaultView` at `open()`.
+
+The fix is to **rebuild a pane when it changes window** — the one thing that
+makes both libraries read the document they are now in — and to do that *only*
+then. `onDidLocationChange` fires on every group change, so gating on the event
+rather than on `getWindow()` would detach and reattach tmux on an ordinary drag
+between splits. Both panes are safe to rebuild: the scratch pane flushes pending
+text on unmount, and the terminal's close-then-open is a tmux detach and
+reattach.

@@ -73,7 +73,11 @@ import { useReloadFilesOnFocus } from "@/lib/explorer";
  *   the queue has not selected (`R-B49`). Without it every pane resolves
  *   `selected` and two Agent panes are two views of one session.
  */
-const pane =
+// Exported for its own test. The rule it encodes — rebuild on a window change,
+// and *not* on an ordinary regroup — is the fix for a reported bug and is worth
+// pinning against the real closure rather than against a copy of it in a test
+// file, which would drift silently. `R-B55`.
+export const pane =
   (
     kind: string,
     Body: React.FunctionComponent,
@@ -89,8 +93,50 @@ const pane =
       const d = props.api.onDidVisibilityChange((e) => setVisible(e.isVisible));
       return () => d.dispose();
     }, [props.api]);
+
+    // **Remount when the pane changes window.** `R-B55`, reported 2026-09-09:
+    // *"when I type in that panel, it is not able to show the update… switch
+    // the focus to another app and switch it back to mogeung, I can see the
+    // word that I typed just now."*
+    //
+    // dockview moves a group's **DOM** into the popout document; the React
+    // tree, and every listener in it, keeps running in the *opener's* context.
+    // That is what makes one dockview across two windows possible, and it is
+    // also the trap: xterm and Monaco both drive painting from
+    // `requestAnimationFrame` on the window they captured when they were
+    // constructed — the main one. Focus the popout and the opener is no longer
+    // the focused window, so WebKit throttles its animation frames and nothing
+    // repaints. Alt-tabbing away and back focuses the main window again, the
+    // frames resume, and every deferred paint lands at once. The keystrokes
+    // were never lost; the painting was.
+    //
+    // React commits fine throughout, because its scheduler is not rAF-based —
+    // which is exactly why this looks like a refresh bug rather than a dropped
+    // input.
+    //
+    // Remounting rebuilds the editor and the terminal against the document
+    // they are now in. Safe for both by construction: the scratch pane flushes
+    // pending text on unmount, and the terminal's close-then-open is a tmux
+    // detach and reattach, which redraws from tmux's own buffer.
+    // Gated on the **window**, not on the event. `onDidLocationChange` also
+    // fires when a pane simply moves between splits in the same window — every
+    // group change fires it — and remounting there would detach and reattach
+    // tmux on an ordinary drag, which is a visible redraw for no reason.
+    const [generation, setGeneration] = React.useState(0);
+    const windowRef = React.useRef<Window | null>(null);
+    React.useEffect(() => {
+      windowRef.current = props.api.getWindow();
+      const d = props.api.onDidLocationChange(() => {
+        const next = props.api.getWindow();
+        if (next === windowRef.current) return;
+        windowRef.current = next;
+        setGeneration((g) => g + 1);
+      });
+      return () => d.dispose();
+    }, [props.api]);
+
     return (
-      <PaneScope id={props.api.id} visible={visible}>
+      <PaneScope key={generation} id={props.api.id} visible={visible}>
         <ZoomPane name={kind} scale={opts.scale}>
           <Body />
         </ZoomPane>
