@@ -102,11 +102,11 @@ of files.
 - [x] A turn, or a whole conversation, can be copied into a note of its own —
       the note keeps the words rather than pointing at them, and a copied
       conversation states what it left behind rather than looking complete
-- [ ] A `- [ ]` line in any document appears in a task list, and ticking it in
+- [x] A `- [ ]` line in any document appears in a task list, and ticking it in
       either place agrees in both
-- [ ] "What did I close today" is answerable, and the answer survives the
+- [x] "What did I close today" is answerable, and the answer survives the
       checkbox being ticked and unticked
-- [ ] Dropping the derived table and restarting loses the history and nothing
+- [x] Dropping the derived table and restarting loses the history and nothing
       else
 
 ### Explicitly out of scope
@@ -209,3 +209,36 @@ webview offering to write the window to disk as an `.html` file, and a stray
 `Ctrl+S` that did that would be worse than one that quietly did nothing.
 
 *Filled during implementation.*
+
+### `R-L3` built 2026-09-09
+
+The checklist half, three years of project-manager features later than it could
+have been and none of them present. A task is a `- [ ]` line, `note_tasks`
+caches where those lines are, and `task_events` remembers the transitions.
+
+- **The parser is the risk this spec named**, and it is fenced accordingly:
+  fenced code blocks are excluded (a note holding a README must not sprout that
+  README's checklist), **block quotations** are too — `R-L2`'s copy-a-turn puts
+  an agent's words in verbatim, so a quoted `- [ ]` is somebody else's plan —
+  and four-space indentation reads as a code block while two reads as a nested
+  task, which is a real case. Thirteen tests.
+- **`ord` is the address, not the line number.** A line number moves when
+  anything above it is edited; `ord` only moves when a *checkbox* above it does,
+  which is what a tick can safely be aimed at. Ticking rewrites the box and
+  nothing else — not the indent, the bullet or the text — so it cannot reformat
+  a line you wrote.
+- **History is keyed by the task's words**, because that is the only identity a
+  line in a document has. Rewrite the words and it is a different task, which is
+  the honest reading of a line that no longer says what it said.
+- **`closed_since` counts closures, not closed tasks.** Ticking, unticking and
+  ticking again is one job done, and unticking does not un-close what happened.
+- **The drop-and-rebuild property has the test the risks list asked for.** It
+  drops both tables, reopens, rebuilds from the documents, and asserts every
+  task returns and only the history is thinner. `prepare` rebuilds at startup,
+  which is what makes the claim true rather than aspirational.
+- **The one open question this leaves** is the one the risks list raised and
+  did not answer: ticking a box rewrites a document that may be open in the
+  Notes editor at the time. Today the editor holds its own draft and will
+  overwrite on the next save. Not solved, and not pretended otherwise — it is
+  the same class as `R-D21`'s branch-switch, which was answered by warning
+  rather than by guessing.

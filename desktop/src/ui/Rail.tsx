@@ -21,7 +21,7 @@
 
 import * as React from "react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Bookmark, FileCode2, Folder, MessageSquare, NotebookPen, Search, X } from "lucide-react";
+import { Bookmark, FileCode2, Folder, ListChecks, MessageSquare, NotebookPen, Search, X } from "lucide-react";
 import { useStore } from "@/store";
 import { useChord } from "@/lib/keymap";
 import { RAIL_TOOLS, type RailTool } from "@/store/prefs";
@@ -29,6 +29,7 @@ import { closeRail } from "@/lib/rail";
 import { IconButton, Tooltip } from "@/ui/primitives";
 import { FilesTool } from "@/ui/tools/FilesTool";
 import { ScratchTool } from "@/ui/tools/ScratchTool";
+import { TasksTool } from "@/ui/tools/TasksTool";
 import { SearchTool } from "@/ui/tools/SearchTool";
 import { NotesTool } from "@/ui/tools/NotesTool";
 import { BookmarksTool } from "@/ui/tools/BookmarksTool";
@@ -51,6 +52,10 @@ const TOOLS: Record<RailTool, { label: string; icon: typeof Folder }> = {
   // worktree*, and a scratch file is in nobody's worktree. `R-L6`.
   scratch: { label: "Scratch", icon: FileCode2 },
   notes: { label: "Notes", icon: NotebookPen },
+  // Beside Notes and not inside it: a task lives *in* a document, and the
+  // panel that lists them across every document is a different question from
+  // the one that edits one. `R-L3`.
+  tasks: { label: "Tasks", icon: ListChecks },
   bookmarks: { label: "Bookmarks", icon: Bookmark },
   // *Ask Mogeung* rather than *Chat*, asked for 2026-08-28. "Chat" names the
   // widget; this names what it is for, and in a rail whose other four headers
@@ -64,6 +69,7 @@ const BODIES: Record<RailTool, React.FunctionComponent> = {
   search: SearchTool,
   scratch: ScratchTool,
   notes: NotesTool,
+  tasks: TasksTool,
   bookmarks: BookmarksTool,
   chat: ChatTool,
 };
@@ -84,6 +90,7 @@ export function Rail() {
     search: useChord("rail.search"),
     scratch: useChord("rail.scratch"),
     notes: useChord("rail.notes"),
+    tasks: useChord("rail.tasks"),
     bookmarks: useChord("rail.bookmarks"),
     chat: useChord("rail.chat"),
   };

@@ -449,3 +449,75 @@ async fn scratch_files_are_made_named_and_saved_by_the_daemon() {
     .expect("refused out loud");
     assert!(message.contains("scratch file name"), "{message}");
 }
+
+/// A task is a checkbox in a document, and ticking one rewrites the document.
+/// `R-L3`, ADR-0015.
+///
+/// The property this pins over the wire is the **direction**: the client never
+/// says "this row is done", it says "tick the third box in that document", and
+/// what comes back is the document plus a view derived from it. A protocol that
+/// let a client set task state directly would be the second source of truth the
+/// ADR refuses, and it would be invisible in any test that only read the list.
+#[tokio::test]
+async fn a_task_is_a_checkbox_and_ticking_one_rewrites_the_document() {
+    let h = boot("tasks").await;
+    let (mut a, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
+
+    send(
+        &mut a,
+        ClientMsg::NoteSave {
+            id: String::new(),
+            body: "# Plan\n\n- [ ] first\n- [ ] second\n".into(),
+            session_id: None,
+            seq: None,
+            repo: None,
+        },
+    )
+    .await;
+    let note_id = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::Notes { notes } => notes.first().map(|n| n.id.clone()),
+        _ => None,
+    })
+    .await
+    .expect("the note is saved");
+
+    // Derived from the document without being asked for.
+    let tasks = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::Tasks { tasks, .. } if tasks.len() == 2 => Some(tasks.clone()),
+        _ => None,
+    })
+    .await
+    .expect("saving a document derives its tasks");
+    assert_eq!(tasks[0].text, "first");
+    assert!(!tasks[1].done);
+
+    send(
+        &mut a,
+        ClientMsg::TaskSet {
+            note_id: note_id.clone(),
+            ord: 1,
+            done: true,
+        },
+    )
+    .await;
+
+    // **The document changed**, which is the whole point.
+    let body = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::Notes { notes } => notes.first().map(|n| n.body.clone()),
+        _ => None,
+    })
+    .await
+    .expect("the note comes back rewritten");
+    assert_eq!(body, "# Plan\n\n- [ ] first\n- [x] second\n");
+
+    // And the count a checkbox cannot keep.
+    let closed = wait_for(&mut a, 5, |m| match m {
+        ServerMsg::Tasks { closed_today, tasks } if tasks.iter().any(|t| t.done) => {
+            Some(*closed_today)
+        }
+        _ => None,
+    })
+    .await
+    .expect("the derived view follows the document");
+    assert_eq!(closed, 1, "closing one is one closure today");
+}

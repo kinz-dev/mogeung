@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-08-29
+updated: 2026-09-09
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -55,6 +55,10 @@ SQLite at `~/.mogeung/mogeung.db`:
 - `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
 - `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
   writing (`R-B35`)
+- `note_tasks(note_id, ord, text, done)` — a **cache** of where the `- [ ]`
+  lines in each document are (`R-L3`)
+- `task_events(note_id, text, done, at)` — append-only, the history a checkbox
+  cannot keep (`R-L3`)
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
@@ -78,6 +82,15 @@ whole and sent whole, so a row per turn would be normalisation nothing queries
 anyway. `n_turns` is stored rather than derived with `json_array_length`,
 which a test caught erroring the **entire listing** when any single row's JSON
 is malformed; one bad row must cost one door, not the history.
+
+**The two task tables are the opposite case, and equally deliberate.**
+`note_tasks` is a cache of something the documents already say and
+`task_events` is its history; both are droppable by design, which is
+[ADR-0015](../decisions/0015-markdown-is-the-truth.md)'s rule 3 and the whole
+defence against a task existing in two places. Delete them, restart, and
+`prepare` rebuilds every task from the markdown — the only casualty is *when*
+things were closed, and the ADR names that as the acceptable loss. A test drops
+both tables and asserts exactly that.
 
 **`notes` is the odd one, and deliberately.** Everything else here is derived:
 lose it and a rescan of `~/.claude` and git rebuilds it. A note cannot be

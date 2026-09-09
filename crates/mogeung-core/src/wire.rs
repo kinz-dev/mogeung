@@ -281,6 +281,16 @@ pub enum ClientMsg {
     // pillar K's *never a worktree file* is untouched. Same gating posture as
     // notes: not a repository write, so not in the write family.
     /// Every scratch file's name. Small by nature, so it is not paged.
+    /// Every task in every document, and how many were closed today. `R-L3`.
+    TaskList,
+    /// Tick or untick one. `R-L3`. **This rewrites the document** — the only
+    /// direction that writes, per ADR-0015 rule 3 — and the derived table is
+    /// then rebuilt from what the document now says.
+    TaskSet {
+        note_id: String,
+        ord: u32,
+        done: bool,
+    },
     ScratchList,
     /// Make a new, empty one with this extension. The daemon picks the name
     /// (`scratch-<n>.<ext>`, first free `n`) and answers the asker with a
@@ -915,6 +925,20 @@ pub struct ChatSummary {
     pub updated: i64,
 }
 
+/// One checkbox line, as the panel sees it. `R-L3`, ADR-0015.
+///
+/// Addressed by the document it is in and its position among that document's
+/// checkboxes — there is no task id, because a task has no existence outside
+/// the line, and an id would be the second source of truth the ADR refuses.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Task {
+    pub note_id: String,
+    /// Which checkbox in the document, counting from zero.
+    pub ord: u32,
+    pub text: String,
+    pub done: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
@@ -1215,6 +1239,14 @@ pub enum ServerMsg {
     ///
     /// Broadcast after a create and in answer to a list, so a second window
     /// on the same daemon sees the file the first one made.
+    /// Every task, broadcast. `R-L3`. Small by nature, like the notes they
+    /// come from, so it is not paged.
+    Tasks {
+        tasks: Vec<Task>,
+        /// Closures since local midnight — the question a checkbox cannot
+        /// answer, which is why the derived half exists at all.
+        closed_today: u32,
+    },
     Scratches {
         names: Vec<String>,
         /// Every folder in the tree, so one you have not put a file in yet is

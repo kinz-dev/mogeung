@@ -71,7 +71,10 @@ export function NotesTool() {
   const send = useStore((s) => s.send);
   const sessions = useStore((s) => s.sessions);
   const selected = useStore((s) => s.selected);
-  const [openId, setOpenId] = useState<string | null>(null);
+  // Store state since `R-L3`: the Tasks panel opens a document from outside
+  // this component, so which note is open cannot be its private business.
+  const openId = useStore((s) => s.noteOpenId);
+  const setOpenId = (id: string | null) => useStore.setState({ noteOpenId: id });
   const [draft, setDraft] = useState("");
   const [filter, setFilter] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);

@@ -965,6 +965,20 @@ export interface ContentMatch {
   text: string;
 }
 
+/**
+ * One checkbox line. `R-L3`, ADR-0015.
+ *
+ * Addressed by its document and its position among that document's checkboxes.
+ * There is no task id, because a task has no existence outside the line — an id
+ * would be the second source of truth the ADR refuses.
+ */
+export interface Task {
+  note_id: string;
+  ord: number;
+  text: string;
+  done: boolean;
+}
+
 export interface Note {
   id: string;
   /** Markdown. Empty is legal and means a plain bookmark. */
@@ -1130,6 +1144,14 @@ export type ClientMsg =
    * not a bare file name in `~/.mogeung/scratch`, which is the one directory
    * the editor may write to.
    */
+  /** Every task in every document, and today's closures. `R-L3`. */
+  | { cmd: "task_list" }
+  /**
+   * Tick or untick one. `R-L3`. **This rewrites the document** — the only
+   * direction that writes, per ADR-0015 — and the derived table is then
+   * rebuilt from what the document now says.
+   */
+  | { cmd: "task_set"; note_id: string; ord: number; done: boolean }
   | { cmd: "scratch_list" }
   /** `folder` omitted means the root. `R-L9`. The daemon still picks the
    *  name — the window may say where, never what. */
@@ -1324,6 +1346,7 @@ export type ServerMsg =
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
+  | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }
   /**
    * One scratch file, to the asker. `fresh` is true exactly once, in answer

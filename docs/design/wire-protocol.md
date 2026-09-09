@@ -256,6 +256,28 @@ the token layer along with everything else when the bind is not loopback.
 An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
 it chose, so a client never invents one.
 
+## Tasks (`R-L3`, 2026-09-09)
+
+`TaskList` and `TaskSet { note_id, ord, done }`; answered by
+`Tasks { tasks, closed_today }`, broadcast — and broadcast again after any
+`NoteSave` or `NoteDelete`, because a checkbox typed into a document has to
+appear in the list without being asked for.
+
+**A task is addressed by document and position, and has no id.** There is no
+task outside a `- [ ]` line and no field on one that is not written on the line
+([ADR-0015](../decisions/0015-markdown-is-the-truth.md)), so an id would be a
+second source of truth wearing a key.
+
+**`TaskSet` rewrites the markdown.** That is the only direction that writes:
+the daemon ticks the box in the document, saves it the ordinary way — mirror
+and all — and re-derives. There is deliberately no verb that marks a task
+without touching the document it lives in, which is the shape the ADR's rule 3
+takes on the wire.
+
+`closed_today` counts **closures** since local midnight rather than tasks
+currently closed. It is the one thing the markdown cannot answer, since a
+ticked box has no memory of when.
+
 ## Scratch files (`R-L5`, 2026-09-03; `R-L7` and `R-L9`, 2026-09-09)
 
 `ScratchList`, `ScratchCreate { ext }`, `ScratchRead { name }`,

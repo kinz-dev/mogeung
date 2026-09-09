@@ -137,6 +137,14 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
         let _ = state.ssh_target.set(target);
     }
 
+    // Rebuild the derived task cache from the documents. `R-L3`, ADR-0015.
+    //
+    // Cheap — the notes are small by nature — and it is what makes the claim
+    // *"delete the derived table and lose nothing but history"* true rather
+    // than aspirational. Without it, a dropped table would stay dropped until
+    // each document happened to be saved again.
+    state.rederive_all_tasks();
+
     state.model.configure(opts.model.clone());
     if opts.model.configured() {
         // Said out loud at start-up, because "which model am I talking to"

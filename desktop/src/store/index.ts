@@ -44,6 +44,7 @@ import type {
   FileSession,
   Health,
   Note,
+  Task,
   PromptCluster,
   FailureCluster,
   RecurringFailure,
@@ -567,6 +568,19 @@ export interface AppState {
   usage: UsageReport | null;
   notes: Note[];
   /**
+   * Which note the Notes tool has open, or `null`.
+   *
+   * In the store rather than in `NotesTool` since `R-L3`, because the Tasks
+   * panel points at a document it does not own — the same reason
+   * `revealSession` is not the queue's private business.
+   */
+  noteOpenId: string | null;
+  /** Every checkbox in every document. `R-L3`. Derived by the daemon from the
+   *  markdown, never edited here — ticking one sends `task_set`. */
+  tasks: Task[];
+  /** Closures since local midnight — the question a checkbox cannot answer. */
+  closedToday: number;
+  /**
    * Scratch files. `R-L5`.
    *
    * `names` is the daemon's list, newest first. `files` holds the body of
@@ -976,6 +990,9 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  noteOpenId: null,
+  tasks: [],
+  closedToday: 0,
   scratch: { names: [], folders: [], files: {} },
   chat: [],
   kit: [],
@@ -1626,6 +1643,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "notes":
         set({ notes: msg.notes });
+        break;
+      case "tasks":
+        set({ tasks: msg.tasks, closedToday: msg.closed_today });
         break;
       case "scratches":
         set((s) => ({

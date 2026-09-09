@@ -3259,6 +3259,11 @@ impl AppState {
             repo,
         };
         self.store.save_note(&note)?;
+        // The document is the truth and this is where it lands, so this is
+        // where the derived half is rebuilt from it. `R-L3`, ADR-0015 rule 3.
+        if let Err(e) = self.store.rederive_tasks(&note.id, &note.body) {
+            tracing::warn!("could not derive tasks for note {}: {e}", note.id);
+        }
         if let Err(e) = crate::notes::mirror(&note) {
             // Worth saying once, and worth not failing over.
             tracing::warn!("could not mirror note {} to disk: {e}", note.id);
@@ -3266,11 +3271,77 @@ impl AppState {
         self.store.load_notes()
     }
 
+    /// Every task, and the count a checkbox cannot keep. `R-L3`.
+    pub fn tasks(&self) -> Result<(Vec<mogeung_core::wire::Task>, u32)> {
+        let tasks = self
+            .store
+            .load_tasks()?
+            .into_iter()
+            .map(|(note_id, ord, text, done)| mogeung_core::wire::Task {
+                note_id,
+                ord,
+                text,
+                done,
+            })
+            .collect();
+        Ok((tasks, self.store.closed_since(start_of_today())?))
+    }
+
+    /// Tick or untick a checkbox by rewriting the document it lives in.
+    /// `R-L3`.
+    ///
+    /// **The only direction that writes.** There is no path that marks the
+    /// derived row and leaves the markdown alone: that would be the second
+    /// source of truth ADR-0015 exists to refuse. The document is rewritten,
+    /// saved the ordinary way — mirror and all — and the cache is rebuilt from
+    /// what it now says.
+    pub async fn set_task(&self, note_id: &str, ord: u32, done: bool) -> Result<Vec<mogeung_core::wire::Note>> {
+        let note = self
+            .store
+            .load_notes()?
+            .into_iter()
+            .find(|n| n.id == note_id)
+            .ok_or_else(|| anyhow::anyhow!("no note {note_id}"))?;
+        let Some(body) = crate::notes::set_task(&note.body, ord as usize, done) else {
+            anyhow::bail!("that task is no longer in the document");
+        };
+        self.save_note(
+            note.id.clone(),
+            body,
+            note.session_id.clone(),
+            note.seq,
+            note.repo.clone(),
+        )
+        .await
+    }
+
+    /// Rebuild every document's tasks. `R-L3`.
+    ///
+    /// Run at startup, which is what makes the derived tables **droppable**:
+    /// delete them, restart, and every task is back from the documents. Only
+    /// the history is gone, and ADR-0015 says that is the acceptable loss.
+    pub fn rederive_all_tasks(&self) {
+        let notes = match self.store.load_notes() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("could not read notes to derive tasks: {e}");
+                return;
+            }
+        };
+        for n in &notes {
+            if let Err(e) = self.store.rederive_tasks(&n.id, &n.body) {
+                tracing::warn!("could not derive tasks for note {}: {e}", n.id);
+            }
+        }
+    }
+
     /// Forget a note. The one destructive verb over content nothing can
     /// recompute, so it takes the mirror with it — a file left behind would
     /// read as a live note to everything that is not mogeung.
     pub async fn delete_note(&self, id: &str) -> Result<Vec<mogeung_core::wire::Note>> {
         self.store.delete_note(id)?;
+        // Its tasks go with it; what you closed stays. That happened.
+        let _ = self.store.forget_tasks(id);
         crate::notes::unmirror(id);
         self.store.load_notes()
     }
@@ -6318,4 +6389,19 @@ mod perf_gate_tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+}
+
+/// Local midnight, as unix seconds. `R-L3`.
+///
+/// Local rather than UTC, because *"what did I close today"* is a question
+/// about your day: closing something at 11pm and asking at 11:30pm must not
+/// answer zero because a different timezone has already rolled over.
+fn start_of_today() -> i64 {
+    use chrono::{Local, TimeZone};
+    let now = Local::now();
+    Local
+        .from_local_datetime(&now.date_naive().and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .map(|d| d.timestamp())
+        .unwrap_or(0)
 }

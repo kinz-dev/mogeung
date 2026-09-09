@@ -427,6 +427,8 @@ export const ACTIONS: Action[] = [
   // of what was left this is the one with a word behind it. `R-L6`.
   rail("scratch", "scratch files", ["Alt+p"]),
   rail("notes", "notes", ["Alt+n"]),
+  // `Alt+T` for tasks. Free, and the initial of the word. `R-L3`.
+  rail("tasks", "tasks", ["Alt+t"]),
   rail("bookmarks", "bookmarks", ["Alt+b"]),
   // `Alt+A` at an explicit ask, 2026-08-28, and it cost the Agent pane the
   // chord it had held — see `pane("agent", …)` below, which moved to `Alt+G`.
@@ -771,6 +773,10 @@ export const MAC_KEYS: Record<string, string[]> = {
   // would be matched against a character and quietly never run. `R-L6`.
   "rail.scratch": ["Alt+KeyP"],
   "rail.notes": ["Meta+n"],
+  // `⌥` and not `⌘`: `⌘T` is already *git fetch*. Spelled by physical key,
+  // which is the only spelling of an Option chord that fires on macOS —
+  // `⌥t` composes `†`. `R-L3`.
+  "rail.tasks": ["Alt+KeyT"],
   "rail.bookmarks": ["Meta+b"],
   "pane.agent": ["Meta+g"],
   "info.toggle": ["Meta+o"],

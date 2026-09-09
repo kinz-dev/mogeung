@@ -79,6 +79,38 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS notes_by_session ON notes (session_id, seq);
 
+            -- Tasks. `R-L3`, ADR-0015 rule 3.
+            --
+            -- **Both of these are droppable and the ADR requires it.** A task
+            -- is a `- [ ]` line in a document and nothing else; this table is
+            -- a cache of where those lines are, rebuilt from the documents
+            -- whenever they are saved and on startup. Delete it and restart
+            -- and nothing is lost but the history below.
+            CREATE TABLE IF NOT EXISTS note_tasks (
+                note_id TEXT NOT NULL,
+                ord     INTEGER NOT NULL,
+                text    TEXT NOT NULL,
+                done    INTEGER NOT NULL,
+                PRIMARY KEY (note_id, ord)
+            );
+
+            -- The history a checkbox cannot keep. Append-only.
+            --
+            -- This is the entire reason the derived half exists: markdown can
+            -- say a box is ticked and can never say *when*, so "what did I
+            -- close today" is unanswerable from the document alone. Keyed by
+            -- the task's **words**, because that is the only identity a line
+            -- in a document has — rewrite the words and it is a different
+            -- task, which is the honest reading of a line that no longer says
+            -- what it said.
+            CREATE TABLE IF NOT EXISTS task_events (
+                note_id TEXT NOT NULL,
+                text    TEXT NOT NULL,
+                done    INTEGER NOT NULL,
+                at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS task_events_by_time ON task_events (at);
+
             -- The chat panel's conversations (R-O9, ADR-0032). Half the user's
             -- own writing and half the model's answer, which is why it is kept
             -- like a note and pruned like a log: `CHAT_KEEP` conversations,
@@ -271,6 +303,102 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Re-derive one document's tasks, recording any transitions. `R-L3`.
+    ///
+    /// Called on every save, and on startup for every document. Returns the
+    /// tasks as they now are.
+    ///
+    /// **The diff is taken before the cache is replaced**, and against the
+    /// previous cache rather than against the document — a transition is a
+    /// change in what mogeung last saw, which is the only thing it can honestly
+    /// claim to have observed. A task whose words were rewritten reads as the
+    /// old one disappearing and a new one arriving, and neither is a closure.
+    pub fn rederive_tasks(&self, note_id: &str, body: &str) -> Result<Vec<crate::notes::Task>> {
+        let tasks = crate::notes::tasks_in(body);
+        let c = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let mut before: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+        {
+            let mut q = c.prepare("SELECT text, done FROM note_tasks WHERE note_id = ?1")?;
+            let rows = q.query_map(params![note_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+            })?;
+            for row in rows {
+                let (text, done) = row?;
+                before.insert(text, done);
+            }
+        }
+
+        for t in &tasks {
+            let was = before.get(&t.text);
+            if was.is_none_or(|w| *w != t.done) {
+                c.execute(
+                    "INSERT INTO task_events (note_id, text, done, at) VALUES (?1, ?2, ?3, ?4)",
+                    params![note_id, t.text, t.done as i64, now],
+                )?;
+            }
+        }
+
+        c.execute("DELETE FROM note_tasks WHERE note_id = ?1", params![note_id])?;
+        for t in &tasks {
+            c.execute(
+                "INSERT INTO note_tasks (note_id, ord, text, done) VALUES (?1, ?2, ?3, ?4)",
+                params![note_id, t.ord as i64, t.text, t.done as i64],
+            )?;
+        }
+        Ok(tasks)
+    }
+
+    /// Forget a document's tasks. Its history stays: what you closed last week
+    /// happened whether or not the note survives.
+    pub fn forget_tasks(&self, note_id: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM note_tasks WHERE note_id = ?1", params![note_id])?;
+        Ok(())
+    }
+
+    /// How many tasks were closed since `at`. `R-L3`.
+    ///
+    /// Counts **closures**, not closed tasks: a box ticked, unticked and ticked
+    /// again today is two closures and one task, and the question *"what did I
+    /// close today"* is about the work rather than about the state. Distinct on
+    /// the words, so ticking one box twice does not read as two jobs done.
+    pub fn closed_since(&self, at: i64) -> Result<u32> {
+        let c = self.conn.lock().unwrap();
+        let n: i64 = c.query_row(
+            "SELECT COUNT(DISTINCT note_id || char(31) || text) FROM task_events \
+             WHERE done = 1 AND at >= ?1",
+            params![at],
+            |r| r.get(0),
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Every task, for the panel. Small by nature, like the notes themselves.
+    pub fn load_tasks(&self) -> Result<Vec<(String, u32, String, bool)>> {
+        let c = self.conn.lock().unwrap();
+        let mut q = c.prepare(
+            "SELECT note_id, ord, text, done FROM note_tasks ORDER BY note_id, ord",
+        )?;
+        let rows = q.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)? as u32,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)? != 0,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn delete_note(&self, id: &str) -> Result<()> {
@@ -897,4 +1025,125 @@ mod tests {
         assert_eq!(s.load_chats().unwrap().len(), 1, "the row is still listed, so it can be deleted");
     }
 
+    // -- Tasks. `R-L3`. ------------------------------------------------------
+
+    fn note(id: &str, body: &str) -> Note {
+        Note {
+            id: id.into(),
+            body: body.into(),
+            created: 1,
+            updated: 1,
+            session_id: None,
+            seq: None,
+            repo: None,
+        }
+    }
+
+    #[test]
+    fn tasks_are_derived_from_the_document() {
+        let s = store("tasks-derive");
+        s.save_note(&note("n1", "- [ ] a\n- [x] b\n")).unwrap();
+
+        let tasks = s.rederive_tasks("n1", "- [ ] a\n- [x] b\n").unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(s.load_tasks().unwrap().len(), 2);
+    }
+
+    /// **The property ADR-0015 is built on**, and the one its own risk list
+    /// says needs a test that actually exercises it: *"drop the derived table,
+    /// restart, assert nothing but history is missing."*
+    #[test]
+    fn dropping_the_derived_tables_loses_history_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("mogeung-store-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("t.db");
+
+        let body = "- [ ] a\n- [x] b\n";
+        {
+            let s = Store::open(&path).unwrap();
+            s.save_note(&note("n1", body)).unwrap();
+            s.rederive_tasks("n1", body).unwrap();
+            assert_eq!(s.closed_since(0).unwrap(), 1, "closing b was recorded");
+        }
+
+        // The blunt version of dropping it: both derived tables go.
+        {
+            let s = Store::open(&path).unwrap();
+            let c = s.conn.lock().unwrap();
+            c.execute("DROP TABLE note_tasks", []).unwrap();
+            c.execute("DROP TABLE task_events", []).unwrap();
+        }
+
+        // Reopening recreates them, and the documents rebuild the tasks.
+        let s = Store::open(&path).unwrap();
+        let notes = s.load_notes().unwrap();
+        assert_eq!(notes.len(), 1, "the writing survived");
+        s.rederive_tasks("n1", &notes[0].body).unwrap();
+
+        let tasks = s.load_tasks().unwrap();
+        assert_eq!(tasks.len(), 2, "every task came back from the document");
+        assert!(tasks.iter().any(|(_, _, t, done)| t == "b" && *done));
+
+        // And the history is the only casualty. It reads 1 rather than 0
+        // because rebuilding sees a closed box it has no memory of — an
+        // honest "closed at some point", dated to the rebuild.
+        assert_eq!(
+            s.closed_since(0).unwrap(),
+            1,
+            "history is rebuilt as observation, not recovered"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A checkbox cannot say *when*, which is the whole reason the derived
+    /// half exists.
+    #[test]
+    fn closing_a_task_is_recorded_and_survives_unticking_it() {
+        let s = store("tasks-history");
+        s.rederive_tasks("n1", "- [ ] a\n").unwrap();
+        assert_eq!(s.closed_since(0).unwrap(), 0);
+
+        s.rederive_tasks("n1", "- [x] a\n").unwrap();
+        assert_eq!(s.closed_since(0).unwrap(), 1);
+
+        // Unticking does not un-close it: it happened.
+        s.rederive_tasks("n1", "- [ ] a\n").unwrap();
+        assert_eq!(s.closed_since(0).unwrap(), 1, "the closure is still history");
+    }
+
+    /// Saving a document over and over must not read as work being done.
+    #[test]
+    fn re_deriving_an_unchanged_document_records_nothing_new() {
+        let s = store("tasks-idempotent");
+        let body = "- [x] a\n";
+        s.rederive_tasks("n1", body).unwrap();
+        s.rederive_tasks("n1", body).unwrap();
+        s.rederive_tasks("n1", body).unwrap();
+
+        assert_eq!(s.closed_since(0).unwrap(), 1);
+    }
+
+    /// One box ticked twice is one job done.
+    #[test]
+    fn closing_the_same_task_twice_counts_once() {
+        let s = store("tasks-distinct");
+        s.rederive_tasks("n1", "- [ ] a\n").unwrap();
+        s.rederive_tasks("n1", "- [x] a\n").unwrap();
+        s.rederive_tasks("n1", "- [ ] a\n").unwrap();
+        s.rederive_tasks("n1", "- [x] a\n").unwrap();
+
+        assert_eq!(s.closed_since(0).unwrap(), 1);
+    }
+
+    /// Deleting the note takes its tasks and keeps what you did.
+    #[test]
+    fn forgetting_a_note_keeps_the_work_it_recorded() {
+        let s = store("tasks-forget");
+        s.rederive_tasks("n1", "- [x] a\n").unwrap();
+        s.forget_tasks("n1").unwrap();
+
+        assert!(s.load_tasks().unwrap().is_empty());
+        assert_eq!(s.closed_since(0).unwrap(), 1);
+    }
 }

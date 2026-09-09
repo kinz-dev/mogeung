@@ -2042,6 +2042,26 @@ async fn handle(
             Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
             Err(e) => err(e),
         },
+        // Tasks. `R-L3`, ADR-0015. A save re-derives them, so the note
+        // handlers below broadcast both — a checkbox typed into a document has
+        // to appear in the list without asking for it.
+        ClientMsg::TaskList => match state.tasks() {
+            Ok((tasks, closed_today)) => state.broadcast(ServerMsg::Tasks { tasks, closed_today }),
+            Err(e) => err(e),
+        },
+        ClientMsg::TaskSet { note_id, ord, done } => {
+            match state.set_task(&note_id, ord, done).await {
+                Ok(notes) => {
+                    // Both, and in this order: the document changed, and the
+                    // derived view of it changed with it.
+                    state.broadcast(ServerMsg::Notes { notes });
+                    if let Ok((tasks, closed_today)) = state.tasks() {
+                        state.broadcast(ServerMsg::Tasks { tasks, closed_today });
+                    }
+                }
+                Err(e) => err(e),
+            }
+        }
         ClientMsg::NoteSave {
             id,
             body,
@@ -2049,11 +2069,21 @@ async fn handle(
             seq,
             repo,
         } => match state.save_note(id, body, session_id, seq, repo).await {
-            Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
+            Ok(notes) => {
+                state.broadcast(ServerMsg::Notes { notes });
+                if let Ok((tasks, closed_today)) = state.tasks() {
+                    state.broadcast(ServerMsg::Tasks { tasks, closed_today });
+                }
+            }
             Err(e) => err(e),
         },
         ClientMsg::NoteDelete { id } => match state.delete_note(&id).await {
-            Ok(notes) => state.broadcast(ServerMsg::Notes { notes }),
+            Ok(notes) => {
+                state.broadcast(ServerMsg::Notes { notes });
+                if let Ok((tasks, closed_today)) = state.tasks() {
+                    state.broadcast(ServerMsg::Tasks { tasks, closed_today });
+                }
+            }
             Err(e) => err(e),
         },
         // -- Scratch files. `R-L5`, ADR-0035. The list is broadcast so two

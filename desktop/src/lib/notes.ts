@@ -16,6 +16,7 @@
 
 import type { Session, TranscriptEvent } from "@/wire/types";
 import { sessionLabel } from "@/wire/types";
+import { useStore } from "@/store";
 
 /** How a turn is labelled in a note. Short, because it prefixes every block. */
 function speaker(ev: TranscriptEvent): string {
@@ -216,4 +217,35 @@ export function noteFromConversation(session: Session | null, events: Transcript
   );
 
   return [...head, "", ...blocks].join("\n");
+}
+
+/**
+ * Put a document on screen, wherever it is. `R-L3`.
+ *
+ * The Tasks panel lists checkboxes and the documents they live in are
+ * elsewhere, so "where did I write this" has to be one click. Opens the Notes
+ * tool if it is shut rather than assuming it — a click that silently sets state
+ * behind a closed panel is the *"clicking the queue appears to do nothing"*
+ * failure `R-J31` was about, one panel over.
+ */
+export function openNote(id: string): void {
+  const { prefs, setPrefs } = useStore.getState();
+  useStore.setState({ noteOpenId: id });
+  if (!prefs.rail.includes("notes")) {
+    setPrefs({ rail: [...prefs.rail, "notes"] });
+  }
+}
+
+/**
+ * A document's first line, as a label. `R-L3`.
+ *
+ * The same answer the daemon's `slug` reaches for and for the same reason: a
+ * document has no title field — ADR-0015 says there is no field on a note that
+ * is not written in the note — so the first thing you wrote is the closest
+ * thing to a name it has. The leading `#` of a heading comes off, because a
+ * label is not a rendering.
+ */
+export function noteTitle(body: string): string {
+  const first = body.split("\n").find((l) => l.trim().length > 0) ?? "";
+  return first.replace(/^#{1,6}\s*/, "").trim();
 }

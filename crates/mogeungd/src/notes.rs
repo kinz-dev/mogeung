@@ -257,3 +257,243 @@ mod tests {
         assert!(!a.is_empty() && a.contains('-'));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tasks. `R-L3`, ADR-0015.
+// ---------------------------------------------------------------------------
+
+/// One checkbox line found in a document.
+///
+/// **There is no task outside a document, and no field on a task that is not
+/// written in the document** — ADR-0015 rule 2. So this carries no id of its
+/// own, no due date and no assignee: it is a *position* and the words on the
+/// line, and everything else about it is derived by looking again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Task {
+    /// Which checkbox in this document, counting from zero in document order.
+    ///
+    /// The address, deliberately, rather than the line number: a line number
+    /// changes when anything above it is edited, and this only changes when a
+    /// *checkbox* above it is added or removed. It is what a tick is aimed at.
+    pub ord: usize,
+    /// The line's own index in the body, for the rewriter. Not an identity.
+    pub line: usize,
+    /// The words after the box, trimmed. This is the task's identity for
+    /// history — see [`Store::record_task_transitions`]. Rewriting the words
+    /// makes it a different task, which is the honest reading of a line that
+    /// no longer says what it said.
+    pub text: String,
+    pub done: bool,
+}
+
+/// Every checkbox in a document, in order.
+///
+/// # What is deliberately not a task
+///
+/// [Feature 0026](../../../docs/features/0026-notes-and-tasks.md) names the
+/// risk: *"`- [ ]` appears in ordinary prose, including in any note that quotes
+/// this spec. A parser that is too eager turns a quotation into a task."*
+///
+/// - **Inside a fenced code block.** ``` and `~~~`, closed by a fence of at
+///   least the same length. The spec calls this the minimum and it is: a note
+///   holding a snippet of a `README` should not sprout that README's checklist.
+/// - **Inside a block quotation.** `R-L2`'s copy-a-turn gesture puts an agent's
+///   words into a note **verbatim**, so a `> - [ ] …` is something somebody
+///   else wrote and is being quoted — reporting it as your task is how a
+///   checklist fills with other people's.
+/// - **Indented four spaces or more**, which is an indented code block in
+///   markdown. A nested list item under a task is not, because it indents by
+///   two — and that case is a real one, so the boundary is drawn at four.
+pub fn tasks_in(body: &str) -> Vec<Task> {
+    let mut out = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+
+    for (line, raw) in body.lines().enumerate() {
+        let trimmed = raw.trim_start();
+        let indent = raw.len() - trimmed.len();
+
+        // A fence closes only on the same character and at least the same run
+        // length, which is what lets a ```` ``` ```` sit inside a ```` ~~~ ````
+        // block without ending it.
+        if let Some(marker) = fence_run(trimmed) {
+            match fence {
+                Some((ch, len)) if ch == marker.0 && marker.1 >= len => fence = None,
+                Some(_) => {}
+                None => fence = Some(marker),
+            }
+            continue;
+        }
+        if fence.is_some() || indent >= 4 || trimmed.starts_with('>') {
+            continue;
+        }
+
+        let Some((done, text)) = checkbox(trimmed) else {
+            continue;
+        };
+        out.push(Task {
+            ord: out.len(),
+            line,
+            text: text.to_string(),
+            done,
+        });
+    }
+    out
+}
+
+/// `(character, length)` when this line opens or closes a code fence.
+fn fence_run(trimmed: &str) -> Option<(char, usize)> {
+    let ch = trimmed.chars().next()?;
+    if ch != '`' && ch != '~' {
+        return None;
+    }
+    let len = trimmed.chars().take_while(|c| *c == ch).count();
+    (len >= 3).then_some((ch, len))
+}
+
+/// `(done, text)` when this line is a checkbox item.
+fn checkbox(trimmed: &str) -> Option<(bool, &str)> {
+    let rest = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))?;
+    let rest = rest.trim_start();
+    let (mark, after) = if let Some(a) = rest.strip_prefix("[ ]") {
+        (false, a)
+    } else if let Some(a) = rest.strip_prefix("[x]").or_else(|| rest.strip_prefix("[X]")) {
+        (true, a)
+    } else {
+        return None;
+    };
+    // A box has to be followed by a space or end the line: `- [x]done` is not
+    // a checkbox in any renderer, and treating it as one would make a task out
+    // of something nobody will see a box beside.
+    if !after.is_empty() && !after.starts_with(' ') {
+        return None;
+    }
+    Some((mark, after.trim()))
+}
+
+/// Tick or untick the `ord`th checkbox, returning the new body.
+///
+/// **The document is the only thing that is written** — ADR-0015 rule 3. A tick
+/// in the task list comes here, rewrites the line, and the derived table is
+/// then rebuilt from the result. There is no path that updates the cache and
+/// leaves the markdown alone, because that is precisely the second source of
+/// truth the ADR refuses.
+///
+/// Rewrites the **box** and nothing else: the indent, the bullet character and
+/// the text are all left exactly as they were, so a tick cannot reformat a
+/// line you wrote.
+pub fn set_task(body: &str, ord: usize, done: bool) -> Option<String> {
+    let task = tasks_in(body).into_iter().find(|t| t.ord == ord)?;
+    let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+    let line = lines.get_mut(task.line)?;
+    let at = line.find("[ ]").or_else(|| line.find("[x]")).or_else(|| line.find("[X]"))?;
+    line.replace_range(at..at + 3, if done { "[x]" } else { "[ ]" });
+    let mut out = lines.join("\n");
+    // `lines()` drops a trailing newline; putting it back keeps a tick from
+    // silently reflowing the end of the file.
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    fn texts(body: &str) -> Vec<(bool, String)> {
+        tasks_in(body).into_iter().map(|t| (t.done, t.text)).collect()
+    }
+
+    #[test]
+    fn a_checkbox_line_is_a_task_and_nothing_else_is() {
+        let body = "# Plan\n\n- [ ] open one\n- [x] closed one\n- an ordinary bullet\n\nprose\n";
+        assert_eq!(
+            texts(body),
+            vec![(false, "open one".into()), (true, "closed one".into())]
+        );
+    }
+
+    #[test]
+    fn the_box_may_be_upper_case_and_the_bullet_any_of_three() {
+        assert_eq!(texts("* [X] a\n+ [ ] b\n- [x] c\n").len(), 3);
+    }
+
+    /// The minimum feature 0026 named: a note holding a snippet of a README
+    /// must not sprout that README's checklist.
+    #[test]
+    fn a_checkbox_inside_a_fence_is_not_a_task() {
+        let body = "- [ ] real\n\n```md\n- [ ] not this one\n```\n\n- [x] also real\n";
+        assert_eq!(texts(body), vec![(false, "real".into()), (true, "also real".into())]);
+    }
+
+    #[test]
+    fn a_tilde_fence_closes_only_on_tildes() {
+        let body = "~~~\n- [ ] inside\n```\n- [ ] still inside\n~~~\n- [ ] outside\n";
+        assert_eq!(texts(body), vec![(false, "outside".into())]);
+    }
+
+    /// `R-L2` copies an agent's words in verbatim, so a quoted checkbox is
+    /// something somebody else wrote.
+    #[test]
+    fn a_quoted_checkbox_is_somebody_elses() {
+        let body = "> - [ ] the agent's plan\n\n- [ ] mine\n";
+        assert_eq!(texts(body), vec![(false, "mine".into())]);
+    }
+
+    /// Four spaces is an indented code block; two is a nested list item, and
+    /// that is a real case rather than a curiosity.
+    #[test]
+    fn indentation_decides_between_a_nested_task_and_a_code_block() {
+        let body = "- [ ] top\n  - [ ] nested\n\n    - [ ] indented code\n";
+        assert_eq!(texts(body), vec![(false, "top".into()), (false, "nested".into())]);
+    }
+
+    #[test]
+    fn a_box_must_be_followed_by_a_space_or_the_end_of_the_line() {
+        assert_eq!(texts("- [x]squashed\n"), Vec::new());
+        assert_eq!(texts("- [ ]\n"), vec![(false, String::new())]);
+    }
+
+    #[test]
+    fn ord_counts_checkboxes_and_not_lines() {
+        let body = "prose\n\n- [ ] first\n\nmore prose\n\n- [ ] second\n";
+        let tasks = tasks_in(body);
+        assert_eq!(tasks[0].ord, 0);
+        assert_eq!(tasks[1].ord, 1);
+        assert_eq!(tasks[1].line, 6, "the line is where it really is");
+    }
+
+    // -- The rewriter, which is the only thing that writes. ------------------
+
+    #[test]
+    fn ticking_rewrites_the_box_and_leaves_the_line_alone() {
+        let body = "  - [ ]   spaced   out  \n";
+        let out = set_task(body, 0, true).unwrap();
+        assert_eq!(out, "  - [x]   spaced   out  \n");
+    }
+
+    #[test]
+    fn unticking_is_the_same_in_reverse() {
+        assert_eq!(set_task("- [x] a\n", 0, false).unwrap(), "- [ ] a\n");
+    }
+
+    #[test]
+    fn ticking_aims_at_the_checkbox_and_not_the_line_number() {
+        let body = "```\n- [ ] decoy\n```\n- [ ] real\n";
+        let out = set_task(body, 0, true).unwrap();
+        assert_eq!(out, "```\n- [ ] decoy\n```\n- [x] real\n", "the fenced line is untouched");
+    }
+
+    #[test]
+    fn a_body_without_a_trailing_newline_keeps_not_having_one() {
+        assert_eq!(set_task("- [ ] a", 0, true).unwrap(), "- [x] a");
+    }
+
+    #[test]
+    fn ticking_a_task_that_is_not_there_changes_nothing() {
+        assert!(set_task("- [ ] a\n", 7, true).is_none());
+    }
+}
