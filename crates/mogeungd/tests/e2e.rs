@@ -384,7 +384,7 @@ async fn scratch_files_are_made_named_and_saved_by_the_daemon() {
     let (mut a, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
     let (mut b, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
 
-    send(&mut a, ClientMsg::ScratchCreate { ext: "java".into() }).await;
+    send(&mut a, ClientMsg::ScratchCreate { ext: "java".into(), folder: None }).await;
     let name = wait_for(&mut a, 5, |m| match m {
         ServerMsg::ScratchContent { name, fresh: true, content } if content.is_empty() => {
             Some(name.clone())
@@ -398,7 +398,7 @@ async fn scratch_files_are_made_named_and_saved_by_the_daemon() {
     // The other window sees the list, and **not** the fresh content — a
     // pane opening on someone else's chord would be the wrong kind of shared.
     let names = wait_for(&mut b, 5, |m| match m {
-        ServerMsg::Scratches { names } => Some(names.clone()),
+        ServerMsg::Scratches { names, .. } => Some(names.clone()),
         _ => None,
     })
     .await

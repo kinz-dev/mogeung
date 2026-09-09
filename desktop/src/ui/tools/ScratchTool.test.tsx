@@ -35,7 +35,7 @@ beforeEach(() => {
   sent.length = 0;
   opened.length = 0;
   useStore.setState({
-    scratch: { names: [], open: {} } as never,
+    scratch: { names: [], folders: [], open: {} } as never,
     activePane: null,
     paletteOpen: false,
     send: ((m: unknown) => sent.push(m)) as never,
@@ -59,7 +59,7 @@ describe("the scratch files panel", () => {
   });
 
   it("lists what there is, in the order the daemon gave", () => {
-    useStore.setState({ scratch: { names: ["scratch-2.sql", "scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-2.sql", "scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const rows = screen.getAllByText(/^scratch-\d+\./).map((el) => el.textContent);
@@ -67,7 +67,7 @@ describe("the scratch files panel", () => {
   });
 
   it("opens one when it is clicked", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.click(screen.getByText("scratch-1.java"));
@@ -76,7 +76,7 @@ describe("the scratch files panel", () => {
   });
 
   it("names the language beside the file", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
     expect(screen.getByText("java")).toBeInTheDocument();
   });
@@ -99,7 +99,7 @@ describe("the scratch files panel", () => {
   // -- The right-click menu. `R-L7`.
 
   it("offers the file operations on a right-click", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -110,7 +110,7 @@ describe("the scratch files panel", () => {
   });
 
   it("duplicates through the daemon rather than minting a name", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -124,7 +124,7 @@ describe("the scratch files panel", () => {
    * `rm`, which at least makes you type the name.
    */
   it("asks before deleting, and does not send until you say so", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -137,7 +137,7 @@ describe("the scratch files panel", () => {
   });
 
   it("keeps the file when the confirmation is declined", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -149,7 +149,7 @@ describe("the scratch files panel", () => {
   });
 
   it("renames in place, on Enter", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -167,7 +167,7 @@ describe("the scratch files panel", () => {
   });
 
   it("sends nothing when the name is unchanged", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -178,7 +178,7 @@ describe("the scratch files panel", () => {
   });
 
   it("abandons a rename on Escape", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -198,7 +198,7 @@ describe("the scratch files panel", () => {
    * that changed under you.
    */
   it("closes the rename box when the file goes away", async () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     const { rerender } = render(<ScratchTool />);
 
     fireEvent.contextMenu(screen.getByText("scratch-1.java"));
@@ -206,7 +206,7 @@ describe("the scratch files panel", () => {
     expect(screen.getByLabelText("new name")).toBeInTheDocument();
 
     act(() => {
-      useStore.setState({ scratch: { names: [], open: {} } as never });
+      useStore.setState({ scratch: { names: [], folders: [], open: {} } as never });
     });
     rerender(<ScratchTool />);
 
@@ -224,7 +224,7 @@ describe("driving the panel from the keyboard", () => {
    * propagation; it has to be granted the key.
    */
   it("claims F2 and Delete from the window", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     const { container } = render(<ScratchTool />);
 
     const claim = container.querySelector("[data-owns-keys]");
@@ -232,7 +232,7 @@ describe("driving the panel from the keyboard", () => {
   });
 
   it("renames the selected file on F2", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java", "b.sql"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java", "b.sql"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const row = screen.getByText("scratch-1.java");
@@ -243,7 +243,7 @@ describe("driving the panel from the keyboard", () => {
   });
 
   it("asks before deleting on Delete, and sends only on confirm", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const row = screen.getByText("scratch-1.java").closest("[role=option]")!;
@@ -262,7 +262,7 @@ describe("driving the panel from the keyboard", () => {
    * otherwise delete the file you are renaming.
    */
   it("does not treat Delete inside the rename box as a delete", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const row = screen.getByText("scratch-1.java").closest("[role=option]")!;
@@ -278,7 +278,7 @@ describe("driving the panel from the keyboard", () => {
 
   /** Nor F2, which would stack a second rename on the one being typed. */
   it("does not restart a rename from inside the rename box", () => {
-    useStore.setState({ scratch: { names: ["scratch-1.java"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["scratch-1.java"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const row = screen.getByText("scratch-1.java").closest("[role=option]")!;
@@ -293,7 +293,7 @@ describe("driving the panel from the keyboard", () => {
   });
 
   it("moves the selection with the arrows", () => {
-    useStore.setState({ scratch: { names: ["a.java", "b.sql"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["a.java", "b.sql"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const first = screen.getByText("a.java").closest("[role=option]")!;
@@ -306,7 +306,7 @@ describe("driving the panel from the keyboard", () => {
 
   /** Arrowing past a file must not open it — that would fill the dock. */
   it("does not open a file the selection merely passes over", () => {
-    useStore.setState({ scratch: { names: ["a.java", "b.sql"], open: {} } as never });
+    useStore.setState({ scratch: { names: ["a.java", "b.sql"], folders: [], open: {} } as never });
     render(<ScratchTool />);
 
     const first = screen.getByText("a.java").closest("[role=option]")!;
@@ -314,5 +314,144 @@ describe("driving the panel from the keyboard", () => {
     fireEvent.keyDown(first, { key: "ArrowDown" });
 
     expect(opened).toEqual([]);
+  });
+});
+
+describe("folders", () => {
+  /** `R-L9`, asked 2026-09-09: add a folder, remove one, move files between. */
+  const withTree = () =>
+    useStore.setState({
+      scratch: { names: ["root.txt", "sql/query.sql"], folders: ["sql"], open: {} } as never,
+    });
+
+  it("draws the tree with folders above files", () => {
+    withTree();
+    render(<ScratchTool />);
+
+    // The row shows the leaf, not the whole path — the folder above it says
+    // where it is.
+    expect(screen.getByLabelText("folder sql")).toBeInTheDocument();
+    expect(screen.getByText("query.sql")).toBeInTheDocument();
+    expect(screen.getByText("root.txt")).toBeInTheDocument();
+  });
+
+  it("makes a folder at the top level", () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.click(screen.getByText(/new folder/i));
+    const box = screen.getByLabelText("new name");
+    fireEvent.change(box, { target: { value: "notes" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(sent).toContainEqual({ cmd: "scratch_mkdir", path: "notes" });
+  });
+
+  it("makes a folder inside another", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByLabelText("folder sql"));
+    fireEvent.click(await screen.findByText("New folder here…"));
+    const box = screen.getByLabelText("new name");
+    fireEvent.change(box, { target: { value: "reports" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(sent).toContainEqual({ cmd: "scratch_mkdir", path: "sql/reports" });
+  });
+
+  /** The most destructive verb in the window, so it says what goes with it. */
+  it("asks before removing a folder, and names how many files go too", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByLabelText("folder sql"));
+    fireEvent.click(await screen.findByText("Delete folder…"));
+
+    expect(screen.getByText(/and 1 file/)).toBeInTheDocument();
+    expect(sent).not.toContainEqual({ cmd: "scratch_rmdir", path: "sql" });
+
+    fireEvent.click(screen.getByText("delete"));
+    expect(sent).toContainEqual({ cmd: "scratch_rmdir", path: "sql" });
+  });
+
+  /**
+   * A move **is** a rename, which is why there is no move verb: the daemon's
+   * rename takes a path, so another folder is another path.
+   */
+  it("moves a file into a folder by renaming it", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("root.txt"));
+    fireEvent.click(await screen.findByText("Move to sql"));
+
+    expect(sent).toContainEqual({
+      cmd: "scratch_rename",
+      name: "root.txt",
+      to: "sql/root.txt",
+    });
+  });
+
+  it("moves a file back to the top level", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("query.sql"));
+    fireEvent.click(await screen.findByText("Move to the top level"));
+
+    expect(sent).toContainEqual({
+      cmd: "scratch_rename",
+      name: "sql/query.sql",
+      to: "query.sql",
+    });
+  });
+
+  /** Offering to move a file where it already is would be a no-op menu item. */
+  it("does not offer the folder the file is already in", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByText("query.sql"));
+    await screen.findByText("Open");
+
+    expect(screen.queryByText("Move to sql")).not.toBeInTheDocument();
+  });
+
+  it("collapses a folder, hiding what is in it", () => {
+    withTree();
+    render(<ScratchTool />);
+    expect(screen.getByText("query.sql")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("folder sql"));
+
+    expect(screen.queryByText("query.sql")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("folder sql")).toBeInTheDocument();
+  });
+
+  /**
+   * A folder rename would be a move of everything under it, and the daemon has
+   * no single verb for that — so the panel does not offer a gesture it cannot
+   * honour.
+   */
+  it("does not offer to rename a folder", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByLabelText("folder sql"));
+    await screen.findByText("Delete folder…");
+
+    expect(screen.queryByText("Rename…")).not.toBeInTheDocument();
+  });
+
+  it("makes a new file in the folder you asked from", async () => {
+    withTree();
+    render(<ScratchTool />);
+
+    fireEvent.contextMenu(screen.getByLabelText("folder sql"));
+    fireEvent.click(await screen.findByText("New scratch file here…"));
+
+    expect(useStore.getState().paletteMode).toBe("scratch");
+    expect(useStore.getState().scratchFolder).toBe("sql");
   });
 });

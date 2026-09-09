@@ -22,7 +22,7 @@ function open(names: string[] = []) {
     prefs: defaultPrefs(),
     paletteOpen: true,
     paletteMode: "scratch",
-    scratch: { names, files: {} },
+    scratch: { names, folders: [], files: {} },
   });
   setDock({ getPanel: () => undefined, panels: [], addPanel, activeGroup: undefined } as never);
   return render(<Palette dock={{ current: null }} />);
@@ -45,7 +45,7 @@ describe("the scratch picker", () => {
   it("picking a language creates a file with that extension and closes", () => {
     open();
     fireEvent.click(screen.getByText("SQL"));
-    expect(send).toHaveBeenCalledWith({ cmd: "scratch_create", ext: "sql" });
+    expect(send).toHaveBeenCalledWith({ cmd: "scratch_create", ext: "sql" , folder: null });
     expect(useStore.getState().paletteOpen).toBe(false);
     // Not opened here: the name is the daemon's to choose.
     expect(addPanel).not.toHaveBeenCalled();

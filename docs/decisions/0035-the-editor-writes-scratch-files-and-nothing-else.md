@@ -151,3 +151,68 @@ The original two conditions are spent. What would move this line again:
   a "save this transcript as". Rule 1 survived this amendment with one
   exception; a second exception is not an exception any more, and at that point
   the honest question is whether the daemon should mint names at all.
+
+## Amendment — 2026-09-09 (second)
+
+**The condition written this morning fired this afternoon.** *Revisit if* said
+the line would move again if *"scratch files want folders: a directory inside
+the scratch directory is a path, and every fence here is built on there not
+being one."* Asked the same day: *"add more feature in the Scratch panel like
+adding folder, removing folder and I can move the files in between different
+folder."*
+
+So the fence changes **shape** rather than stretching, and this is the part of
+the ADR that matters most.
+
+**The old rule was `check_name`: a name is a bare file name.** No separator, no
+leading dot, no `..`. It was one string check and it made a path unspellable.
+
+**The new rule is `check_path`: a path is a sequence of bare names.** The same
+guarantee, said once per segment, plus a depth cap of eight. `..` still cannot
+be spelled, because a segment is checked by `check_name` and a leading dot is
+refused outright; an absolute path still cannot, because an empty first segment
+is refused; a backslash is still not a separator, because the character set
+refuses it rather than treating it as one.
+
+**And a second fence exists now that did not before, because it has to.** A
+string rule cannot see a **symlink**. A directory created inside the scratch
+folder by hand — or by an agent with a shell, which is the whole context this
+product lives in — pointing at `$HOME` turns an impeccable `notes/secrets.txt`
+into a write outside the folder. So `resolve` joins the checked path,
+canonicalizes it, and requires the result to be under the canonical scratch
+directory; for a path that does not exist yet it canonicalizes the *parent*,
+which is what a symlink would have to be. Every verb goes through it. The
+listing refuses to follow a link out for the same reason, judged by
+`symlink_metadata` rather than by what the link points at.
+
+**What this costs, stated plainly.** Rule 2 was once checkable by reading a
+single function; it is now two functions and a filesystem call, and the
+filesystem call is the one that actually protects you. That is a worse
+property — a rule you can no longer verify by inspection alone — and it is the
+price of folders. It has the most tests of anything in this module, including
+two that build a real symlink and try to write through it.
+
+**What did not change.** Rule 1 still holds where it counted: the daemon mints
+every **name**, and the window now says only *where*. `ScratchCreate` takes an
+optional folder and still answers with `scratch-<n>.<ext>`, numbered per folder.
+`ScratchDuplicate` mints beside the original. `ScratchRename` remains the one
+verb where the window proposes a name — and is now also how a file **moves**,
+because a rename to a path in another folder is a move and a second verb would
+have been the same power under a second name.
+
+**New verbs**: `ScratchMkdir`, and `ScratchRmdir` which is recursive and is the
+most destructive thing this daemon does. Three things stand between it and a
+mistake: `resolve` proves containment after following links, a link is refused
+as *"not a folder here"* rather than followed, and the window asks first and
+names how many files go with it.
+
+## Revisit if — 2026-09-09 (second)
+
+- **Anything outside the scratch directory wants this treatment.** `resolve` is
+  written against one root on purpose. A second root is a general filesystem
+  API in the daemon, which is [ADR-0019](0019-a-viewer-not-an-editor.md)'s
+  question and not this one's.
+- **A folder rename is asked for.** Deliberately absent: it is a move of
+  everything beneath it, the daemon has no single verb for that, and the panel
+  does not offer a gesture it cannot honour. The honest version is a verb that
+  renames a directory, with the same containment proof on both paths.

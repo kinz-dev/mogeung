@@ -61,7 +61,7 @@ function open(content: string | null = "") {
   useStore.setState({
     send,
     prefs: defaultPrefs(),
-    scratch: { names: [NAME], files: content === null ? {} : { [NAME]: { content, saved: 0 } } },
+    scratch: { names: [NAME], folders: [], files: content === null ? {} : { [NAME]: { content, saved: 0 } } },
   });
   return render(
     <PaneScope id={scratchPaneId(NAME)}>

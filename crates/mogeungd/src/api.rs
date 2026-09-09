@@ -1238,6 +1238,18 @@ async fn after_ref_change(state: &Arc<AppState>, session_id: String) {
     rebroadcast_status(state, session_id).await
 }
 
+/// The scratch tree as one message. `R-L9`.
+///
+/// Built in one place so the file list and the folder list cannot be broadcast
+/// out of step — a folder missing from a message whose files reference it is a
+/// panel that cannot draw the row it was told about.
+fn scratches(dir: &std::path::Path) -> ServerMsg {
+    ServerMsg::Scratches {
+        names: crate::scratch::list(dir).unwrap_or_default(),
+        folders: crate::scratch::folders(dir).unwrap_or_default(),
+    }
+}
+
 async fn handle(
     state: &Arc<AppState>,
     cmd: ClientMsg,
@@ -2048,12 +2060,12 @@ async fn handle(
         // windows agree on what exists; a file's content goes to whoever
         // asked, because a read must never open a pane somewhere else.
         ClientMsg::ScratchList => match crate::scratch::list(&state.scratch_dir()) {
-            Ok(names) => state.broadcast(ServerMsg::Scratches { names }),
+            Ok(_) => state.broadcast(scratches(&state.scratch_dir())),
             Err(e) => err(e),
         },
-        ClientMsg::ScratchCreate { ext } => {
+        ClientMsg::ScratchCreate { ext, folder } => {
             let dir = state.scratch_dir();
-            match crate::scratch::create(&dir, &ext) {
+            match crate::scratch::create_in(&dir, folder.as_deref(), &ext) {
                 Ok(name) => {
                     send_reply(
                         reply,
@@ -2063,9 +2075,7 @@ async fn handle(
                             fresh: true,
                         },
                     );
-                    if let Ok(names) = crate::scratch::list(&dir) {
-                        state.broadcast(ServerMsg::Scratches { names });
-                    }
+                    state.broadcast(scratches(&dir));
                 }
                 Err(e) => err(e),
             }
@@ -2096,9 +2106,7 @@ async fn handle(
             let dir = state.scratch_dir();
             match crate::scratch::rename(&dir, &name, &to) {
                 Ok(()) => {
-                    if let Ok(names) = crate::scratch::list(&dir) {
-                        state.broadcast(ServerMsg::Scratches { names });
-                    }
+                    state.broadcast(scratches(&dir));
                     send_reply(reply, ServerMsg::ScratchSaved { name: to });
                 }
                 Err(e) => err(e),
@@ -2108,10 +2116,24 @@ async fn handle(
             let dir = state.scratch_dir();
             match crate::scratch::delete(&dir, &name) {
                 Ok(()) => {
-                    if let Ok(names) = crate::scratch::list(&dir) {
-                        state.broadcast(ServerMsg::Scratches { names });
-                    }
+                    state.broadcast(scratches(&dir));
                 }
+                Err(e) => err(e),
+            }
+        }
+        // Folders. `R-L9`. Both broadcast, because a folder another window
+        // makes has to appear in this one's tree without a reload.
+        ClientMsg::ScratchMkdir { path } => {
+            let dir = state.scratch_dir();
+            match crate::scratch::mkdir(&dir, &path) {
+                Ok(()) => state.broadcast(scratches(&dir)),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::ScratchRmdir { path } => {
+            let dir = state.scratch_dir();
+            match crate::scratch::rmdir(&dir, &path) {
+                Ok(()) => state.broadcast(scratches(&dir)),
                 Err(e) => err(e),
             }
         }
@@ -2132,9 +2154,7 @@ async fn handle(
                         ),
                         Err(e) => err(e),
                     }
-                    if let Ok(names) = crate::scratch::list(&dir) {
-                        state.broadcast(ServerMsg::Scratches { names });
-                    }
+                    state.broadcast(scratches(&dir));
                 }
                 Err(e) => err(e),
             }

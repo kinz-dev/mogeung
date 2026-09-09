@@ -38,21 +38,33 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FilePlus2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FilePlus2, FolderPlus } from "lucide-react";
 import { useStore } from "@/store";
 import { Button, Dim, Empty, Input, Mono, Row } from "@/ui/primitives";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
+import { movedInto, moveTargets, treeRows } from "@/lib/scratchTree";
 import { copyPath } from "@/lib/clipboard";
 import { openScratch, scratchPaneId, scratchPath } from "@/lib/scratch";
 // `languageOf` is the explorer's — one answer to "what language is this file"
 // for every pane that asks, rather than a scratch-shaped copy of it.
 import { languageOf } from "@/lib/explorer";
 
-/** Which row, if any, is being renamed or is asking before it is deleted. */
-type Busy = { name: string; kind: "rename" | "delete" } | null;
+/**
+ * Which row, if any, is mid-operation.
+ *
+ * `newFolder` names the **parent** the folder will be made in rather than a
+ * row that exists, which is why it is here rather than in a separate piece of
+ * state: only one of these can be true at a time, and three booleans that must
+ * not both be set is a bug waiting to be written.
+ */
+type Busy =
+  | { name: string; kind: "rename" | "delete" | "rmdir" }
+  | { name: string; kind: "newFolder" }
+  | null;
 
 export function ScratchTool() {
   const names = useStore((s) => s.scratch.names);
+  const folders = useStore((s) => s.scratch.folders);
   const send = useStore((s) => s.send);
   const activePane = useStore((s) => s.activePane);
   const [busy, setBusy] = useState<Busy>(null);
@@ -66,7 +78,12 @@ export function ScratchTool() {
    * fill the dock.
    */
   const [cursor, setCursor] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const rowRefs = useRef(new Map<string, HTMLElement>());
+
+  // The rows actually on screen, which is also the order the arrows walk.
+  const rows = treeRows(names, folders, collapsed);
+  const paths = rows.map((r) => r.path);
 
   useEffect(() => {
     send({ cmd: "scratch_list" });
@@ -76,14 +93,22 @@ export function ScratchTool() {
   // `rm`'d — has to land somewhere real, or `F2` renames nothing and says
   // nothing about why.
   useEffect(() => {
-    if (cursor && !names.includes(cursor)) setCursor(names[0] ?? null);
-  }, [names, cursor]);
+    if (cursor && !paths.includes(cursor)) setCursor(paths[0] ?? null);
+  }, [paths, cursor]);
 
   // A row that goes away under an open rename box — another window deleted it,
   // or `rm` did — leaves an editor for a file that is not there.
   useEffect(() => {
-    if (busy && !names.includes(busy.name)) setBusy(null);
-  }, [names, busy]);
+    // `newFolder` names a parent that may be the root (`""`), and a `rmdir`
+    // names a folder rather than a file — so this asks about the rows, and
+    // lets the root through.
+    if (!busy) return;
+    if (busy.kind === "newFolder") {
+      if (busy.name !== "" && !folders.includes(busy.name)) setBusy(null);
+      return;
+    }
+    if (!paths.includes(busy.name)) setBusy(null);
+  }, [paths, folders, busy]);
 
   const startRename = useCallback((name: string) => {
     setDraft(name);
@@ -93,13 +118,13 @@ export function ScratchTool() {
   /** Move the cursor, and take the DOM focus with it so the keys keep arriving. */
   const move = useCallback(
     (from: string | null, step: number) => {
-      if (names.length === 0) return;
-      const at = from ? names.indexOf(from) : -1;
-      const next = names[Math.min(Math.max(at + step, 0), names.length - 1)] ?? names[0];
+      if (paths.length === 0) return;
+      const at = from ? paths.indexOf(from) : -1;
+      const next = paths[Math.min(Math.max(at + step, 0), paths.length - 1)] ?? paths[0];
       setCursor(next);
       rowRefs.current.get(next)?.focus();
     },
-    [names],
+    [paths],
   );
 
   /**
@@ -123,15 +148,26 @@ export function ScratchTool() {
       move(cursor, -1);
     } else if (e.key === "Enter" && cursor) {
       e.preventDefault();
-      openScratch(cursor);
+      if (folders.includes(cursor)) toggle(cursor);
+      else openScratch(cursor);
     } else if (e.key === "F2" && cursor) {
       e.preventDefault();
-      startRename(cursor);
+      // Only files are renamed here: a folder rename is a move of everything
+      // under it, which the daemon has no single verb for, so the panel does
+      // not offer a gesture it cannot honour.
+      if (!folders.includes(cursor)) startRename(cursor);
     } else if (e.key === "Delete" && cursor) {
       e.preventDefault();
-      setBusy({ name: cursor, kind: "delete" });
+      setBusy({ name: cursor, kind: folders.includes(cursor) ? "rmdir" : "delete" });
     }
   };
+
+  const toggle = (folder: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(folder)) next.add(folder);
+      return next;
+    });
 
   const commitRename = () => {
     if (!busy) return;
@@ -143,13 +179,30 @@ export function ScratchTool() {
     send({ cmd: "scratch_rename", name: busy.name, to });
   };
 
+  const startNewFolder = (parent: string) => {
+    setDraft("");
+    setBusy({ name: parent, kind: "newFolder" });
+  };
+
+  const commitNewFolder = () => {
+    if (busy?.kind !== "newFolder") return;
+    const leaf = draft.trim();
+    const parent = busy.name;
+    setBusy(null);
+    if (!leaf) return;
+    send({ cmd: "scratch_mkdir", path: parent === "" ? leaf : `${parent}/${leaf}` });
+  };
+
   const newFile = (
-    <div className="border-b border-[var(--border)] px-2 py-1">
+    <div className="flex items-center gap-1 border-b border-[var(--border)] px-2 py-1">
       <Button
         variant="outline"
         onClick={() => useStore.setState({ paletteOpen: true, paletteMode: "scratch" })}
       >
         <FilePlus2 size={11} /> new scratch file
+      </Button>
+      <Button variant="outline" onClick={() => startNewFolder("")}>
+        <FolderPlus size={11} /> new folder
       </Button>
     </div>
   );
@@ -178,7 +231,24 @@ export function ScratchTool() {
     >
       {newFile}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {names.map((name) => {
+        {/*
+          A new folder at the **root** has no row to appear under — the root is
+          not a row — so its editor is drawn here. Missed on the first pass and
+          caught by the test: the button opened nothing at all.
+        */}
+        {busy?.kind === "newFolder" && busy.name === "" && (
+          <RenameRow
+            value={draft}
+            onChange={setDraft}
+            onCommit={commitNewFolder}
+            onCancel={() => setBusy(null)}
+            hint="Enter makes the folder, Escape leaves it."
+          />
+        )}
+        {rows.map((row) => {
+          const name = row.path;
+          const indent = { paddingLeft: `${row.depth * 12 + 8}px` };
+
           if (busy?.name === name && busy.kind === "rename") {
             return (
               <RenameRow
@@ -187,17 +257,37 @@ export function ScratchTool() {
                 onChange={setDraft}
                 onCommit={commitRename}
                 onCancel={() => setBusy(null)}
+                hint="Enter renames, Escape leaves it. The daemon refuses a name that is already here."
               />
             );
           }
-          if (busy?.name === name && busy.kind === "delete") {
+
+          // Deleting a file, and removing a folder, ask the same way and mean
+          // very different things — so the folder's question names the count.
+          if (busy?.name === name && (busy.kind === "delete" || busy.kind === "rmdir")) {
+            const inside = names.filter((n) => n.startsWith(`${name}/`)).length;
             return (
-              <div key={name} className="flex items-center gap-2 border-b border-[var(--border)] px-2 py-1">
-                <Mono className="min-w-0 flex-1 truncate text-xs">{name}</Mono>
+              <div
+                key={name}
+                className="flex items-center gap-2 border-b border-[var(--border)] py-1 pr-2"
+                style={indent}
+              >
+                <Mono className="min-w-0 flex-1 truncate text-xs">
+                  {row.name}
+                  {busy.kind === "rmdir" && (
+                    <Dim className="ml-1 text-2xs">
+                      {inside === 0 ? "(empty)" : `and ${inside} file${inside === 1 ? "" : "s"}`}
+                    </Dim>
+                  )}
+                </Mono>
                 <Button
                   variant="outline"
                   onClick={() => {
-                    send({ cmd: "scratch_delete", name });
+                    send(
+                      busy.kind === "rmdir"
+                        ? { cmd: "scratch_rmdir", path: name }
+                        : { cmd: "scratch_delete", name },
+                    );
                     setBusy(null);
                   }}
                 >
@@ -210,6 +300,77 @@ export function ScratchTool() {
             );
           }
 
+          const children =
+            busy?.kind === "newFolder" && busy.name === name ? (
+              <RenameRow
+                key={`${name}/+`}
+                value={draft}
+                onChange={setDraft}
+                onCommit={commitNewFolder}
+                onCancel={() => setBusy(null)}
+                hint="Enter makes the folder, Escape leaves it."
+                indent={row.depth + 1}
+              />
+            ) : null;
+
+          if (row.kind === "folder") {
+            const shut = collapsed.has(name);
+            return (
+              <div key={name}>
+                <ContextMenu
+                  trigger={
+                    <Row
+                      aria-label={`folder ${name}`}
+                      onClick={() => {
+                        setCursor(name);
+                        toggle(name);
+                      }}
+                      className={`flex items-center gap-1 py-1 pr-2 outline-none${
+                        cursor === name ? " ring-1 ring-inset ring-[var(--ring)]" : ""
+                      }`}
+                      style={indent}
+                      tabIndex={cursor === name || (cursor === null && paths[0] === name) ? 0 : -1}
+                      onFocus={() => setCursor(name)}
+                      ref={(el: HTMLElement | null) => {
+                        if (el) rowRefs.current.set(name, el);
+                        else rowRefs.current.delete(name);
+                      }}
+                    >
+                      {shut ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                      <Mono className="min-w-0 flex-1 truncate text-xs">{row.name}</Mono>
+                    </Row>
+                  }
+                >
+                  <MenuLabel>{name}</MenuLabel>
+                  <MenuItem onSelect={() => startNewFolder(name)}>New folder here…</MenuItem>
+                  <MenuItem
+                    onSelect={() =>
+                      useStore.setState({
+                        paletteOpen: true,
+                        paletteMode: "scratch",
+                        scratchFolder: name,
+                      })
+                    }
+                  >
+                    New scratch file here…
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuItem onSelect={() => void copyPath(scratchPath(name), "full path")}>
+                    Copy full path
+                  </MenuItem>
+                  <MenuSeparator />
+                  {/* The most destructive thing in the window, so it asks and
+                      says how many files go with it. */}
+                  <MenuItem danger onSelect={() => setBusy({ name, kind: "rmdir" })}>
+                    Delete folder…
+                  </MenuItem>
+                </ContextMenu>
+                {children}
+              </div>
+            );
+          }
+
+          const targets = moveTargets(folders, name);
           return (
             <ContextMenu
               key={name}
@@ -218,25 +379,26 @@ export function ScratchTool() {
                   // The pane id is what the centre calls this file, so a scratch
                   // file already open reads as selected here without a second
                   // source of truth about which one you are looking at. The
-                  // **cursor** is a different question — see `cursor` above —
-                  // and shows as a ring rather than as a fill, so a file that is
-                  // open and a file you are about to rename do not look alike.
+                  // **cursor** is a different question and shows as a ring, so a
+                  // file that is open and a file you are about to rename do not
+                  // look alike.
                   selected={activePane === scratchPaneId(name)}
                   onClick={() => {
                     setCursor(name);
                     openScratch(name);
                   }}
-                  className={`flex items-center gap-2 px-2 py-1 outline-none${
+                  className={`flex items-center gap-2 py-1 pr-2 outline-none${
                     cursor === name ? " ring-1 ring-inset ring-[var(--ring)]" : ""
                   }`}
-                  tabIndex={cursor === name || (cursor === null && names[0] === name) ? 0 : -1}
+                  style={indent}
+                  tabIndex={cursor === name || (cursor === null && paths[0] === name) ? 0 : -1}
                   onFocus={() => setCursor(name)}
                   ref={(el: HTMLElement | null) => {
                     if (el) rowRefs.current.set(name, el);
                     else rowRefs.current.delete(name);
                   }}
                 >
-                  <Mono className="min-w-0 flex-1 truncate text-xs">{name}</Mono>
+                  <Mono className="min-w-0 flex-1 truncate text-xs">{row.name}</Mono>
                   <Dim className="shrink-0 text-2xs">{languageOf(name)}</Dim>
                 </Row>
               }
@@ -247,6 +409,26 @@ export function ScratchTool() {
               <MenuItem onSelect={() => send({ cmd: "scratch_duplicate", name })}>
                 Duplicate
               </MenuItem>
+              {targets.length > 0 && <MenuSeparator />}
+              {/*
+                **A move is a rename**, which is why there is no move verb: the
+                daemon's rename takes a path, so putting a file in another folder
+                is renaming it to a path in that folder. Listed rather than
+                dragged because a drop target inside a rail panel is a much
+                bigger thing to get right, and this works from the keyboard.
+              */}
+              {targets.map((folder) => {
+                const to = movedInto(name, folder);
+                if (!to) return null;
+                return (
+                  <MenuItem
+                    key={folder || "/"}
+                    onSelect={() => send({ cmd: "scratch_rename", name, to })}
+                  >
+                    Move to {folder === "" ? "the top level" : folder}
+                  </MenuItem>
+                );
+              })}
               <MenuSeparator />
               <MenuItem onSelect={() => void copyPath(scratchPath(name), "full path")}>
                 Copy full path
@@ -281,11 +463,17 @@ function RenameRow({
   onChange,
   onCommit,
   onCancel,
+  hint,
+  indent = 0,
 }: {
   value: string;
   onChange: (v: string) => void;
   onCommit: () => void;
   onCancel: () => void;
+  /** What Enter and Escape will do — different for a rename and a new folder. */
+  hint: string;
+  /** Depth, so a new folder's box appears under the folder it will go in. */
+  indent?: number;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -294,7 +482,10 @@ function RenameRow({
   }, []);
 
   return (
-    <div className="border-b border-[var(--border)] px-2 py-1">
+    <div
+      className="border-b border-[var(--border)] py-1 pr-2"
+      style={{ paddingLeft: `${indent * 12 + 8}px` }}
+    >
       <Input
         inputRef={ref}
         value={value}
@@ -311,9 +502,7 @@ function RenameRow({
           }
         }}
       />
-      <Dim className="mt-0.5 block text-2xs">
-        Enter renames, Escape leaves it. The daemon refuses a name that is already here.
-      </Dim>
+      <Dim className="mt-0.5 block text-2xs">{hint}</Dim>
     </div>
   );
 }

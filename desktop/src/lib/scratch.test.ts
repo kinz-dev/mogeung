@@ -33,7 +33,7 @@ const send = vi.fn();
 beforeEach(() => {
   send.mockReset();
   showScratchPane.mockReset();
-  useStore.setState({ send, scratch: { names: [], files: {} } });
+  useStore.setState({ send, scratch: { names: [], folders: [], files: {} } });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -61,7 +61,7 @@ describe("naming", () => {
 describe("asking the daemon", () => {
   it("create sends the extension and opens nothing — the name is the daemon's", () => {
     createScratch("java");
-    expect(send).toHaveBeenCalledWith({ cmd: "scratch_create", ext: "java" });
+    expect(send).toHaveBeenCalledWith({ cmd: "scratch_create", ext: "java", folder: null });
     expect(showScratchPane).not.toHaveBeenCalled();
   });
 

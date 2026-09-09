@@ -77,7 +77,11 @@ export function scratchPath(name: string): string {
  * choose, and a pane opened on a guessed name would be a pane on nothing.
  */
 export function createScratch(ext: string): void {
-  useStore.getState().send({ cmd: "scratch_create", ext });
+  // `scratchFolder` says *where*; the daemon still says *what*. `R-L9`. Read
+  // here rather than passed in so every caller — the chord, the palette, the
+  // panel's *New scratch file here…* — goes through one answer.
+  const { send, scratchFolder } = useStore.getState();
+  send({ cmd: "scratch_create", ext, folder: scratchFolder });
 }
 
 /** Open an existing one, or bring its pane forward. */

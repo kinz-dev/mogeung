@@ -65,7 +65,9 @@ export function Palette({ dock }: { dock: RefObject<DockviewApi | null> }) {
     return scored.slice(0, 100).map((x) => x.p);
   }, [mode, tree, query]);
 
-  const close = () => useStore.setState({ paletteOpen: false });
+  // `scratchFolder` is cleared with the palette, so the next chord means the
+  // root again rather than wherever you last right-clicked. `R-L9`.
+  const close = () => useStore.setState({ paletteOpen: false, scratchFolder: null });
 
   if (!open) return null;
 

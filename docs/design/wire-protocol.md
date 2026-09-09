@@ -256,7 +256,7 @@ the token layer along with everything else when the bind is not loopback.
 An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
 it chose, so a client never invents one.
 
-## Scratch files (`R-L5`, 2026-09-03; `R-L7`, 2026-09-09)
+## Scratch files (`R-L5`, 2026-09-03; `R-L7` and `R-L9`, 2026-09-09)
 
 `ScratchList`, `ScratchCreate { ext }`, `ScratchRead { name }`,
 `ScratchWrite { name, content }`, and since `R-L7` the three that manage the
@@ -265,11 +265,26 @@ files rather than their contents — `ScratchRename { name, to }`,
 `Scratches { names }`, `ScratchContent { name, content, fresh }` and
 `ScratchSaved { name }`.
 
+**Since `R-L9` a name is a path**, relative to the scratch folder —
+`sql/query.sql` — and two more verbs manage the folders themselves:
+`ScratchMkdir { path }` and `ScratchRmdir { path }`, the second recursive.
+`ScratchCreate` gained an optional `folder`, and `Scratches` gained `folders`
+so a folder with no files in it is still on screen. There is no move verb: a
+rename to a path in another folder **is** the move, and a second verb would be
+the same power under a second name.
+
 Files, not notes: nothing is stored, the file in `~/.mogeung/scratch` **is**
 the thing, and the shape is
 [ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md).
 Two rules show in the messages:
 
+- **A path is a sequence of bare names, and containment is proved on the
+  filesystem.** `check_path` applies the old bare-name rule once per segment,
+  with a depth cap; `resolve` then joins, canonicalizes and requires the result
+  to be under the canonical scratch directory. The second is not belt-and-braces:
+  a symlinked directory inside the folder is invisible to any string rule, and
+  is how an impeccable-looking path writes outside the tree. See ADR-0035's
+  second 2026-09-09 amendment.
 - **The daemon mints every name — with one exception since `R-L7`.** A create
   carries an extension and answers with `scratch-<n>.<ext>`; a duplicate mints
   the same way. Every other verb carries a name, and a name that is not a bare

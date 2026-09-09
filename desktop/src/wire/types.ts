@@ -1131,7 +1131,9 @@ export type ClientMsg =
    * the editor may write to.
    */
   | { cmd: "scratch_list" }
-  | { cmd: "scratch_create"; ext: string }
+  /** `folder` omitted means the root. `R-L9`. The daemon still picks the
+   *  name — the window may say where, never what. */
+  | { cmd: "scratch_create"; ext: string; folder?: string | null }
   | { cmd: "scratch_read"; name: string }
   | { cmd: "scratch_write"; name: string; content: string }
   /**
@@ -1147,6 +1149,10 @@ export type ClientMsg =
    * `R-L7`. Answers with `scratch_content { fresh: true }`, as create does.
    */
   | { cmd: "scratch_duplicate"; name: string }
+  /** Make a folder, and every folder above it. `R-L9`. */
+  | { cmd: "scratch_mkdir"; path: string }
+  /** Remove a folder **and everything in it**. `R-L9`. */
+  | { cmd: "scratch_rmdir"; path: string }
   /**
    * The one free-form string in this protocol. `R-O5`, ADR-0030 clause 4.
    *
@@ -1318,7 +1324,7 @@ export type ServerMsg =
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
-  | { ev: "scratches"; names: string[] }
+  | { ev: "scratches"; names: string[]; folders?: string[] }
   /**
    * One scratch file, to the asker. `fresh` is true exactly once, in answer
    * to the `scratch_create` that made it — that is the one message that

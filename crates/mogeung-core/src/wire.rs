@@ -285,7 +285,13 @@ pub enum ClientMsg {
     /// Make a new, empty one with this extension. The daemon picks the name
     /// (`scratch-<n>.<ext>`, first free `n`) and answers the asker with a
     /// `ScratchContent { fresh: true }` so the window can open it.
-    ScratchCreate { ext: String },
+    /// `folder` is `None` for the root. `R-L9`. The daemon still picks the
+    /// **name** — the window may say where, never what.
+    ScratchCreate {
+        ext: String,
+        #[serde(default)]
+        folder: Option<String>,
+    },
     /// The whole file, to the asker.
     ScratchRead { name: String },
     /// Replace the whole file. The window sends this as you type, debounced;
@@ -303,6 +309,11 @@ pub enum ClientMsg {
     /// `R-L7`. Answers the asker with `ScratchContent { fresh: true }`, exactly
     /// as `ScratchCreate` does, so the window opens the copy.
     ScratchDuplicate { name: String },
+    /// Make a folder, and every folder above it. `R-L9`.
+    ScratchMkdir { path: String },
+    /// Remove a folder **and everything in it**. `R-L9`. The most destructive
+    /// verb here; the window asks first and names the count.
+    ScratchRmdir { path: String },
 
     // -- The local model. `R-O5`, ADR-0030.
     /// Ask the configured model a question, and answer on this socket only.
@@ -1204,7 +1215,14 @@ pub enum ServerMsg {
     ///
     /// Broadcast after a create and in answer to a list, so a second window
     /// on the same daemon sees the file the first one made.
-    Scratches { names: Vec<String> },
+    Scratches {
+        names: Vec<String>,
+        /// Every folder in the tree, so one you have not put a file in yet is
+        /// still on screen. `R-L9`. Empty before that row, and `#[serde(default)]`
+        /// so an older client reading a newer daemon still parses.
+        #[serde(default)]
+        folders: Vec<String>,
+    },
     /// One scratch file, to the asker. `fresh` is true exactly once, in
     /// answer to the `ScratchCreate` that made it — the window opens a pane
     /// on that and only that, so a read never opens anything.

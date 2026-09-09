@@ -575,7 +575,10 @@ export interface AppState {
    * edit landed without holding a copy of what it sent.
    */
   scratch: {
+    /** Paths relative to the scratch folder — `a.java`, `sql/query.sql`. `R-L9`. */
     names: string[];
+    /** Every folder, including ones with no files in them yet. `R-L9`. */
+    folders: string[];
     files: Record<string, { content: string | null; saved: number }>;
   };
   /**
@@ -644,6 +647,12 @@ export interface AppState {
   noticesOpen: boolean;
   paletteOpen: boolean;
   paletteMode: "actions" | "files" | "scratch";
+  /**
+   * The folder a new scratch file will be made in, or `null` for the root.
+   * `R-L9`. Set by the panel's *New scratch file here…*, and cleared when the
+   * palette closes so the next chord means the root again.
+   */
+  scratchFolder: string | null;
   showHealth: boolean;
   /** The wall — every session as a tile, on a chord. `R-B50`. */
   showWall: boolean;
@@ -967,7 +976,7 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
-  scratch: { names: [], files: {} },
+  scratch: { names: [], folders: [], files: {} },
   chat: [],
   kit: [],
   kitDoc: null,
@@ -990,6 +999,7 @@ export const useStore = create<AppState>((set, get) => ({
   noticesOpen: false,
   paletteOpen: false,
   paletteMode: "actions",
+  scratchFolder: null,
   showHealth: false,
   showWall: false,
   activePane: null,
@@ -1618,7 +1628,9 @@ export const useStore = create<AppState>((set, get) => ({
         set({ notes: msg.notes });
         break;
       case "scratches":
-        set((s) => ({ scratch: { ...s.scratch, names: msg.names } }));
+        set((s) => ({
+          scratch: { ...s.scratch, names: msg.names, folders: msg.folders ?? [] },
+        }));
         // A pane whose file has gone — renamed, deleted, or `rm`'d from
         // another window — must not stay open looking editable. `R-L7`.
         closeMissingScratchPanes(msg.names);
