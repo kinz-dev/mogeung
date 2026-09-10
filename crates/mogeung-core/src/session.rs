@@ -225,6 +225,16 @@ pub struct Session {
     /// never has to work out the mapping for itself. `R-B18`.
     #[serde(default)]
     pub tmux_target: Option<String>,
+    /// This is a **tmux pane running an agent that has not written anything**,
+    /// not a conversation mogeung has read. `R-J75`,
+    /// [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+    ///
+    /// Its counts are zero because they are, and its id is `pane:%12` rather
+    /// than anything a CLI issued. A window must say so rather than render the
+    /// zeroes as facts about a conversation — and must not moor anything to the
+    /// id, which does not outlive the pane.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provisional: bool,
 
     /// Recent `tool:path` keys, newest last, capped. Feeds loop detection.
     #[serde(default)]

@@ -152,6 +152,18 @@ export interface Session {
   loop_signal: string | null;
   recent_touches: Touch[];
   tmux_target: string | null;
+  /**
+   * This is a **tmux pane running an agent that has written nothing**, not a
+   * conversation mogeung has read. `R-J75`,
+   * [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+   *
+   * Its counts are zero because they are. Its id is `pane:%12` and does not
+   * outlive the pane, so nothing may be moored to it — no hold, no note, no
+   * bookmark. What it *does* have is a `tmux_target`, which is the whole point:
+   * the terminal is one click away, and typing in it is how the agent gets
+   * unstuck.
+   */
+  provisional?: boolean;
   recent_tools: string[];
   limit_hit_at: Timestamp | null;
   limit_resets: string | null;

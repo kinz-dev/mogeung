@@ -256,6 +256,14 @@ the token layer along with everything else when the bind is not loopback.
 An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
 it chose, so a client never invents one.
 
+A `Session` may carry `provisional: true` since `R-J75` — it is a tmux pane
+running an agent that has written nothing, not a conversation the daemon has
+read. Its id is `pane:%12`, it does not outlive the pane, and nothing may be
+moored to it. Its counts are zero because they are; a client that renders those
+as facts about a conversation is lying, which is why the flag is on the wire at
+all. See
+[ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+
 ## Tasks (`R-L3`, 2026-09-09)
 
 `TaskList` and `TaskSet { note_id, ord, done }`; answered by

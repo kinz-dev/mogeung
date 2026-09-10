@@ -59,6 +59,7 @@ fn aged_session(id: &str, days_ago: i64, transcript: &str) -> Session {
         loop_signal: None,
         recent_touches: vec![],
         tmux_target: None,
+        provisional: false,
         recent_tools: vec![],
         limit_hit_at: None,
         limit_resets: None,

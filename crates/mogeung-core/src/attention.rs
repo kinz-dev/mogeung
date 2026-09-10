@@ -304,6 +304,7 @@ mod tests {
             recent_touches: vec![],
             recent_tools: vec![],
             tmux_target: None,
+            provisional: false,
             limit_hit_at: None,
             limit_resets: None,
             verify_runs: Vec::new(),

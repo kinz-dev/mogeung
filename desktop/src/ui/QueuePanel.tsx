@@ -285,6 +285,22 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
                 {label}
               </Chip>
             )}
+            {/*
+              A pane running an agent that has written nothing. `R-J75`,
+              ADR-0038. Said out loud rather than left to the zeroes below,
+              because a row whose counts are all zero looks like a session that
+              did nothing — and this is one that has not been *able* to. The
+              terminal is the point: open it and type.
+            */}
+            {session?.provisional && (
+              <Chip
+                color="var(--amber)"
+                title="a tmux pane running an agent that has not written anything yet — open its terminal to see what it is waiting for"
+                className="shrink-0"
+              >
+                not started writing
+              </Chip>
+            )}
             {/* `min-w-0 flex-1` is what makes `truncate` work at all: without
                 it the span is content-sized and the ellipsis never engages. */}
             <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-strong)]">

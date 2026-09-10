@@ -120,6 +120,14 @@ pub struct AppState {
     /// Unset means `~/.mogeung/scratch`; a test points it at a directory of
     /// its own, the way the harness already hands in a Claude home, so no
     /// test can write into the developer's real scratch folder.
+    /// Panes running an agent that has written nothing yet. `R-J75`,
+    /// [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+    ///
+    /// **Not in `sessions`, and not in the store.** These are a view of running
+    /// processes, rebuilt from tmux on every scan and merged into the snapshot
+    /// only — so a pane that closes stops appearing without anything having to
+    /// notice, and nothing can be moored to an id that will not outlive it.
+    provisional: tokio::sync::RwLock<Vec<Session>>,
     pub scratch_dir: std::sync::OnceLock<PathBuf>,
     /// Where the note mirror is written. `R-B35`, overridable since `R-L3`.
     ///
@@ -238,7 +246,7 @@ pub struct AppState {
 /// `ps -axo` costs ~18 ms against a few hundred processes and is re-forked only
 /// when the pane list moved, when a caller says it must, or on the backstop.
 struct ProcTable {
-    panes: std::sync::Arc<Vec<(u32, String)>>,
+    panes: std::sync::Arc<Vec<Pane>>,
     parents: std::sync::Arc<HashMap<u32, u32>>,
     /// When this table was resolved — the TTL that makes one scan share it.
     at: std::time::Instant,
@@ -411,6 +419,46 @@ fn resolve(path: &Path) -> PathBuf {
 /// a Codex rollout — and `Session` has forty fields. Written out three times,
 /// a field added to the struct is a field two of them forget; written once,
 /// the compiler asks each caller only about what it actually knows.
+/// A session standing for a pane, until the agent in it speaks for itself.
+/// `R-J75`,
+/// [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+///
+/// **Carries only what the pane can prove.** The counts are zero because they
+/// are, not because nobody looked; the cwd is the process's where the platform
+/// will say and `None` where it will not (macOS); the source is read from the
+/// program name. `provisional` is on the wire so the window can say *running,
+/// nothing written yet* rather than rendering zeroes as facts.
+///
+/// `started_at` is **now**, not the process's start time: what this row is
+/// about is that mogeung noticed, and claiming to know when an agent started
+/// would need a per-process stat this does not do.
+pub fn provisional_session(
+    pane: &Pane,
+    program: &str,
+    now: chrono::DateTime<Utc>,
+) -> Session {
+    use mogeung_core::session::SessionSource;
+    let source = match program {
+        "codex" => SessionSource::Codex,
+        "qwen" | "qwen-code" => SessionSource::QwenCode,
+        _ => SessionSource::ClaudeCode,
+    };
+    let mut s = blank_session(format!("pane:{}", pane.id), source, now, now);
+    s.alive = true;
+    s.pid = Some(pane.pid);
+    s.tmux_target = Some(pane.target.clone());
+    s.provisional = true;
+    if let Some(cwd) = process_cwd(pane.pid) {
+        s.repo_root = crate::git::repo_root(std::path::Path::new(&cwd))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
+        s.cwd = cwd;
+    }
+    // The one thing it can say for itself, and the reason the row exists.
+    s.name = Some(format!("{program} — nothing written yet"));
+    s
+}
+
 fn blank_session(
     id: SessionId,
     source: mogeung_core::session::SessionSource,
@@ -456,6 +504,7 @@ fn blank_session(
         // Filled by the scan's liveness pass, which is where the pid it needs
         // becomes known.
         tmux_target: None,
+        provisional: false,
         limit_hit_at: None,
         limit_resets: None,
         verify_runs: Vec::new(),
@@ -544,6 +593,7 @@ impl AppState {
             seqs: Mutex::new(seqs),
             identity,
             ssh_target: std::sync::OnceLock::new(),
+            provisional: tokio::sync::RwLock::new(Vec::new()),
             scratch_dir: std::sync::OnceLock::new(),
             notes_dir: std::sync::OnceLock::new(),
             runs: crate::run::Runs::new(),
@@ -875,7 +925,12 @@ impl AppState {
     }
 
     pub async fn snapshot(&self) -> ServerMsg {
-        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        let mut sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        // Panes running an agent that has not written anything yet. `R-J75`.
+        // Appended here rather than kept in `self.sessions`, because they are
+        // a view of running processes rather than a record of conversations —
+        // ADR-0038 clause 3.
+        sessions.extend(self.provisional.read().await.iter().cloned());
         let queue = rank(&sessions, Utc::now(), &self.attention);
         ServerMsg::Snapshot {
             sessions,
@@ -1056,7 +1111,7 @@ impl AppState {
         &self,
         force_parents: bool,
     ) -> (
-        std::sync::Arc<Vec<(u32, String)>>,
+        std::sync::Arc<Vec<Pane>>,
         std::sync::Arc<HashMap<u32, u32>>,
     ) {
         use std::sync::Arc;
@@ -1302,9 +1357,58 @@ impl AppState {
                 .await
                 .finish_scan(sessions.len() as u64, live_count, files.len() as u64);
         }
+        // Panes running an agent that has not written yet. `R-J75`, ADR-0038.
+        // Last, because suppression needs the real sessions this scan just
+        // settled — a provisional row exists only while nothing better does.
+        self.refresh_provisional().await;
         self.publish_queue().await;
         self.publish_health().await;
         self.maybe_run_retention().await;
+    }
+
+    /// Rebuild the provisional sessions from tmux. `R-J75`,
+    /// [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+    ///
+    /// **Recomputed, never accumulated.** These are a view of running
+    /// processes: a pane that has closed simply stops appearing, and nothing
+    /// has to notice it went. Clause 3 of the ADR — never persisted — is what
+    /// makes that safe.
+    ///
+    /// Suppression is by **pane**, resolved fresh here for every live session
+    /// that has a pid, rather than by comparing target strings: a target
+    /// renumbers when a window closes, and matching on one would show two rows
+    /// for one agent the first time somebody tidied their windows.
+    async fn refresh_provisional(&self) {
+        let panes = tmux_panes();
+        if panes.is_empty() {
+            self.provisional.write().await.clear();
+            return;
+        }
+        let parents = process_parents();
+        let table = process_commands();
+
+        let claimed: std::collections::HashSet<String> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.alive)
+                .filter_map(|s| s.pid)
+                .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
+                .collect()
+        };
+
+        let now = Utc::now();
+        let mut out = Vec::new();
+        for pane in &panes {
+            if claimed.contains(&pane.id) {
+                continue;
+            }
+            let Some(program) = agent_in_pane(pane, &table) else {
+                continue;
+            };
+            out.push(provisional_session(pane, &program, now));
+        }
+        *self.provisional.write().await = out;
     }
 
     // -----------------------------------------------------------------------
@@ -2309,7 +2413,7 @@ impl AppState {
         id: String,
         transcript: Option<(&crate::qwen::QwenTranscript, &crate::qwen::QwenThread)>,
         live: Option<&crate::qwen::QwenLiveEntry>,
-        panes: &[(u32, String)],
+        panes: &[Pane],
         parents: &HashMap<u32, u32>,
         now: chrono::DateTime<Utc>,
     ) {
@@ -4637,7 +4741,7 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         status_since, base_sha, files_changed, insertions,
         deletions, error, transcript_path, reviewed,
         open_tools, snoozed_until, collisions, loop_signal,
-        tmux_target, limit_hit_at, limit_resets, verify_runs,
+        tmux_target, provisional, limit_hit_at, limit_resets, verify_runs,
         claims, source, announced_dirs,
     } = after;
 
@@ -4666,6 +4770,9 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         || *collisions != before.collisions
         || *loop_signal != before.loop_signal
         || *tmux_target != before.tmux_target
+        // A row becoming real, or ceasing to be, is the most significant change
+        // a session can undergo. `R-J75`.
+        || *provisional != before.provisional
         || *limit_hit_at != before.limit_hit_at
         || *limit_resets != before.limit_resets
         || *verify_runs != before.verify_runs
@@ -4902,6 +5009,81 @@ fn tty_of(pid: u32) -> Option<String> {
 /// The scan resolves a tmux pane for every live session, and doing that with a
 /// `ps` per ancestry step would be a subprocess storm on a machine running the
 /// four-plus sessions mogeung is built for. One table, walked in memory.
+/// Every process, as `(pid, ppid, program)`. `R-J75`.
+///
+/// One `ps` for the whole table rather than one per process: adoption asks
+/// *what is running in this pane* of every pane on every scan, and
+/// `terminal_app_of`'s per-level fork is affordable once and not sixty times.
+///
+/// `comm` rather than the full command line, because `is_agent` matches the
+/// **program** — the same rule ADR-0025 uses to refuse starting one, and
+/// deliberately the same list rather than a second that could drift from it.
+pub fn process_commands() -> Vec<(u32, u32, String)> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,comm="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    parse_process_commands(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_process_commands(stdout: &str) -> Vec<(u32, u32, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (pid, rest) = line.split_once(char::is_whitespace)?;
+            let rest = rest.trim();
+            let (ppid, comm) = rest.split_once(char::is_whitespace)?;
+            let comm = comm.trim();
+            if comm.is_empty() {
+                return None;
+            }
+            Some((pid.parse().ok()?, ppid.trim().parse().ok()?, comm.to_string()))
+        })
+        .collect()
+}
+
+/// The agent running in `pane`, if one is. `R-J75`,
+/// [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
+///
+/// Walks **down** from the pane's own process, where everything else here walks
+/// up: the pane usually holds a shell, and the agent is its child. Bounded by
+/// the table it is given, so a cycle cannot spin it.
+///
+/// Answers the program name, which is what names the source — and is why the
+/// limit ADR-0025 records applies unchanged: a wrapper script that calls
+/// `claude` is not `claude`, and walks past.
+pub fn agent_in_pane(pane: &Pane, table: &[(u32, u32, String)]) -> Option<String> {
+    let mut children: HashMap<u32, Vec<(u32, &str)>> = HashMap::new();
+    for (pid, ppid, comm) in table {
+        children.entry(*ppid).or_default().push((*pid, comm.as_str()));
+    }
+    // The pane's own process first: `yolomo` runs the agent with no shell
+    // between, and that is the case worth getting right without a walk.
+    if let Some((_, _, comm)) = table.iter().find(|(pid, _, _)| *pid == pane.pid) {
+        if mogeung_core::run::is_agent(comm) {
+            return Some(comm.clone());
+        }
+    }
+    let mut stack = vec![pane.pid];
+    let mut seen = 0usize;
+    while let Some(pid) = stack.pop() {
+        seen += 1;
+        if seen > 512 {
+            return None;
+        }
+        for (child, comm) in children.get(&pid).into_iter().flatten() {
+            if mogeung_core::run::is_agent(comm) {
+                return Some((*comm).to_string());
+            }
+            stack.push(*child);
+        }
+    }
+    None
+}
+
 pub fn process_parents() -> HashMap<u32, u32> {
     let Ok(out) = std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid="])
@@ -4922,37 +5104,59 @@ fn parse_process_parents(stdout: &str) -> HashMap<u32, u32> {
         .collect()
 }
 
-/// Parse `tmux list-panes` output into `(pane_pid, target)` pairs.
+/// One tmux pane. `R-J75`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pane {
+    /// tmux's own `%12`. **The identity**, per
+    /// [ADR-0038](../../../docs/decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md):
+    /// unique within the server and stable for the pane's life, where the
+    /// target below renumbers when a window is closed.
+    pub id: String,
+    /// The process tmux spawned in it — usually a shell, with the agent under.
+    pub pid: u32,
+    /// `name:0.0`, which is what you attach to. A **location**, not an identity.
+    pub target: String,
+}
+
+/// Parse `tmux list-panes` output into panes.
 ///
 /// Split out from the command so it can be tested without a tmux server, which
 /// a test machine will not have running.
-fn parse_tmux_panes(stdout: &str) -> Vec<(u32, String)> {
+///
+/// The pane id comes **first** in the format string on purpose: a session name
+/// may contain spaces, so the target has to be the whole rest of the line, and
+/// anything after it could not be told apart from it.
+fn parse_tmux_panes(stdout: &str) -> Vec<Pane> {
     stdout
         .lines()
         .filter_map(|line| {
-            let (pid, target) = line.trim().split_once(char::is_whitespace)?;
-            // A target with no session name is useless for attaching, and a
-            // session name may itself contain spaces — so take the rest whole.
+            let (id, rest) = line.trim().split_once(char::is_whitespace)?;
+            let (pid, target) = rest.trim().split_once(char::is_whitespace)?;
             let target = target.trim();
-            if target.is_empty() {
+            // A target with no session name is useless for attaching.
+            if target.is_empty() || !id.starts_with('%') {
                 return None;
             }
-            Some((pid.trim().parse().ok()?, target.to_string()))
+            Some(Pane {
+                id: id.to_string(),
+                pid: pid.trim().parse().ok()?,
+                target: target.to_string(),
+            })
         })
         .collect()
 }
 
-/// Every tmux pane, as `(pane_pid, attach target)`.
+/// Every tmux pane.
 ///
 /// Empty when tmux is not installed or no server is running — both ordinary,
 /// neither an error.
-pub fn tmux_panes() -> Vec<(u32, String)> {
+pub fn tmux_panes() -> Vec<Pane> {
     let Ok(out) = crate::env::command("tmux")
         .args([
             "list-panes",
             "-a",
             "-F",
-            "#{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
+            "#{pane_id} #{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
         ])
         .output()
     else {
@@ -4991,9 +5195,23 @@ fn process_cwd(pid: u32) -> Option<String> {
 
 pub fn tmux_target_in(
     pid: u32,
-    panes: &[(u32, String)],
+    panes: &[Pane],
     parents: &HashMap<u32, u32>,
 ) -> Option<String> {
+    pane_of(pid, panes, parents).map(|p| p.target.clone())
+}
+
+/// The pane `pid` is running in, walking process ancestry. `R-J75`.
+///
+/// The same walk `tmux_target_in` has always done, returning the pane rather
+/// than its name — which is what reconciliation needs, because ADR-0038
+/// matches a provisional session to a real one **by pane** and a target is a
+/// location that renumbers.
+pub fn pane_of<'a>(
+    pid: u32,
+    panes: &'a [Pane],
+    parents: &HashMap<u32, u32>,
+) -> Option<&'a Pane> {
     if panes.is_empty() {
         return None;
     }
@@ -5001,8 +5219,8 @@ pub fn tmux_target_in(
     // Bounded because a corrupt table could contain a cycle, and a scan that
     // spins is worse than one that misses a pane.
     for _ in 0..24 {
-        if let Some((_, target)) = panes.iter().find(|(p, _)| *p == current) {
-            return Some(target.clone());
+        if let Some(pane) = panes.iter().find(|p| p.pid == current) {
+            return Some(pane);
         }
         let parent = *parents.get(&current)?;
         if parent <= 1 || parent == current {
@@ -5213,33 +5431,152 @@ mod terminal_tests {
         assert_eq!(tty_of(999_999), None);
     }
 
+    // -- Adopting a pane. `R-J75`, ADR-0038. --------------------------------
+
+    /// The identity is the **pane**, not the target, and the prefix keeps it
+    /// unmistakable for a real session id.
+    #[test]
+    fn a_provisional_session_is_identified_by_its_pane() {
+        let p = Pane { id: "%12".into(), pid: 200, target: "work:0.0".into() };
+        let s = provisional_session(&p, "claude", Utc::now());
+
+        assert_eq!(s.id, "pane:%12");
+        assert!(s.provisional);
+        assert_eq!(s.tmux_target.as_deref(), Some("work:0.0"));
+        assert_eq!(s.pid, Some(200));
+        assert!(s.alive);
+    }
+
+    /// A target renumbers when a window is closed; an identity must not. Two
+    /// panes that swap targets keep their own ids.
+    #[test]
+    fn the_identity_does_not_move_when_the_target_does() {
+        let before = Pane { id: "%12".into(), pid: 200, target: "work:1.0".into() };
+        let after = Pane { id: "%12".into(), pid: 200, target: "work:0.0".into() };
+
+        assert_eq!(
+            provisional_session(&before, "claude", Utc::now()).id,
+            provisional_session(&after, "claude", Utc::now()).id
+        );
+    }
+
+    /// Zero counts are the truth about a pane nothing has been written in, and
+    /// `provisional` is what stops a window rendering them as facts about a
+    /// conversation.
+    #[test]
+    fn it_claims_nothing_it_cannot_prove() {
+        let p = Pane { id: "%1".into(), pid: 1, target: "s:0.0".into() };
+        let s = provisional_session(&p, "codex", Utc::now());
+
+        assert_eq!((s.turns, s.tool_calls, s.tokens_in, s.tokens_out), (0, 0, 0, 0));
+        assert_eq!(s.title, None);
+        assert!(s.name.is_some_and(|n| n.contains("nothing written yet")));
+    }
+
+    #[test]
+    fn the_source_is_read_from_the_program() {
+        use mogeung_core::session::SessionSource;
+        let p = Pane { id: "%1".into(), pid: 1, target: "s:0.0".into() };
+        let of = |program| provisional_session(&p, program, Utc::now()).source;
+
+        assert_eq!(of("codex"), SessionSource::Codex);
+        assert_eq!(of("qwen"), SessionSource::QwenCode);
+        assert_eq!(of("claude"), SessionSource::ClaudeCode);
+    }
+
+
+
+    fn table() -> Vec<(u32, u32, String)> {
+        vec![
+            (100, 1, "tmux: server".into()),
+            (200, 100, "bash".into()),
+            (300, 200, "claude".into()),
+            (400, 100, "zsh".into()),
+            (500, 400, "vim".into()),
+            (600, 100, "codex".into()),
+        ]
+    }
+
+    fn pane(id: &str, pid: u32) -> Pane {
+        Pane { id: id.into(), pid, target: "s:0.0".into() }
+    }
+
+    #[test]
+    fn an_agent_under_a_shell_is_found() {
+        assert_eq!(agent_in_pane(&pane("%1", 200), &table()).as_deref(), Some("claude"));
+    }
+
+    /// `yolomo` runs the agent as the pane command with no shell between.
+    #[test]
+    fn an_agent_that_is_the_pane_process_is_found() {
+        assert_eq!(agent_in_pane(&pane("%2", 600), &table()).as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn a_pane_running_something_else_is_not_an_agent() {
+        assert_eq!(agent_in_pane(&pane("%3", 400), &table()), None);
+    }
+
+    #[test]
+    fn a_pane_with_no_process_in_the_table_is_not_an_agent() {
+        assert_eq!(agent_in_pane(&pane("%4", 9999), &table()), None);
+    }
+
+    /// A table that refers to itself must not spin the walk.
+    #[test]
+    fn a_cycle_in_the_process_table_terminates() {
+        let cyclic = vec![(10, 11, "bash".into()), (11, 10, "bash".into())];
+        assert_eq!(agent_in_pane(&pane("%5", 10), &cyclic), None);
+    }
+
+    #[test]
+    fn the_process_list_parses_and_skips_junk() {
+        let t = parse_process_commands(
+            "  100     1 tmux: server\n\
+               200   100 bash\n\
+             notanumber 1 nope\n\
+             \n\
+             300\n",
+        );
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0], (100, 1, "tmux: server".to_string()));
+    }
+
     /// A session name may contain spaces — `yolomo` derives one from a
     /// directory, and directories do. Splitting on whitespace and taking the
     /// second field would truncate `my project:0.0` to `my`, producing a target
     /// that attaches to the wrong session or to none at all.
     #[test]
     fn a_session_name_containing_spaces_survives_parsing() {
-        let panes = parse_tmux_panes("4210 my project:0.0\n");
-        assert_eq!(panes, vec![(4210, "my project:0.0".to_string())]);
+        let panes = parse_tmux_panes("%3 4210 my project:0.0\n");
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].target, "my project:0.0");
+        assert_eq!(panes[0].pid, 4210);
+        assert_eq!(panes[0].id, "%3");
     }
 
     #[test]
     fn tmux_pane_lines_parse_and_junk_is_dropped() {
         let panes = parse_tmux_panes(
-            "1234 mogeung-app:0.0\n\
-             5678 mogeung-api:1.2\n\
+            "%1 1234 mogeung-app:0.0\n\
+             %2 5678 mogeung-api:1.2\n\
              \n\
-             notanumber mogeung-x:0.0\n\
+             %3 notanumber mogeung-x:0.0\n\
+             nopercent 4321 mogeung-y:0.0\n\
              9999\n",
         );
         assert_eq!(
-            panes,
-            vec![
-                (1234, "mogeung-app:0.0".to_string()),
-                (5678, "mogeung-api:1.2".to_string()),
-            ],
+            panes.iter().map(|p| (p.id.as_str(), p.pid)).collect::<Vec<_>>(),
+            vec![("%1", 1234), ("%2", 5678)],
             "a malformed line must be skipped, not panic or poison the rest"
         );
+    }
+
+    /// The pane id is the identity (ADR-0038) and the target is a location, so
+    /// a line missing the id is unusable even when the rest of it parses.
+    #[test]
+    fn a_line_without_a_pane_id_is_not_a_pane() {
+        assert!(parse_tmux_panes("1234 mogeung-app:0.0\n").is_empty());
     }
 
     /// Not being under tmux is the ordinary case, not a failure. pid 1 is never
@@ -5532,12 +5869,12 @@ mod terminal_tests {
         let mut found = None;
         for _ in 0..50 {
             let panes = tmux_panes();
-            let Some((pane_pid, _)) = panes.iter().find(|(_, t)| t.starts_with(&name)) else {
+            let Some(pane) = panes.iter().find(|p| p.target.starts_with(&name)) else {
                 std::thread::sleep(std::time::Duration::from_millis(40));
                 continue;
             };
             let kids = std::process::Command::new("pgrep")
-                .args(["-P", &pane_pid.to_string()])
+                .args(["-P", &pane.pid.to_string()])
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

@@ -208,6 +208,28 @@ bare `mogeung-<place>-<stamp>` it has always had — a name already written into
 `tmux attach` lines should not move for a feature that did not touch it.
 Nothing in mogeung parses either; panes are matched by process ancestry.
 
+### A pane running an agent that has not written (`R-J75`, 2026-09-10)
+
+Every session above is discovered from **the agent's own bookkeeping**, and that
+has one failure no parsing fixes: an agent that is running and blocked *before*
+it writes is invisible. `R-J74` found the specific case — Codex asking whether
+it may trust a directory, opening no thread until you answer — and the general
+one covers a login expiry, a first-run migration, and anything a future CLI
+invents.
+
+So a tmux pane whose process tree contains an agent CLI is published as a
+session, marked `provisional`, identified by tmux's own `pane_id` rather than by
+the attach target: a target renumbers when a window closes, and an identity that
+is a location is not one.
+[ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)
+carries the reasoning, including why reconciliation is by pane and why these
+rows are never persisted.
+
+The reuse worth knowing: `is_agent` is ADR-0025's list of programs mogeung must
+never *start*, used here to recognise one. Same list rather than a second that
+could drift — and therefore the same limit, that a wrapper script calling
+`claude` is not `claude`.
+
 ### And whether it can be found at all (`R-J87`)
 
 Every launch above resolves a program name, and on 2026-09-06 none of them
