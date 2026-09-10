@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-09-09
+updated: 2026-09-10
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -55,8 +55,9 @@ SQLite at `~/.mogeung/mogeung.db`:
 - `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
 - `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
   writing (`R-B35`)
-- `note_tasks(note_id, ord, text, done)` — a **cache** of where the `- [ ]`
-  lines in each document are (`R-L3`)
+- `note_tasks(note_id, ord, text, done, depth, grp)` — a **cache** of where the
+  `- [ ]` lines in each document are, how deeply each is nested, and the heading
+  above it (`R-L3`, `R-L10`)
 - `task_events(note_id, text, done, at)` — append-only, the history a checkbox
   cannot keep (`R-L3`)
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
@@ -91,6 +92,12 @@ defence against a task existing in two places. Delete them, restart, and
 `prepare` rebuilds every task from the markdown — the only casualty is *when*
 things were closed, and the ADR names that as the acceptable loss. A test drops
 both tables and asserts exactly that.
+
+`note_tasks` is **dropped and recreated** when its shape changes rather than
+migrated — `R-L10` added `depth` and `grp` that way. That is the privilege of
+being a cache and not a licence taken lightly: the rebuild at startup means
+there is nothing in it to preserve. `task_events` is never dropped, because
+history is not a cache and cannot be recomputed from anything.
 
 **`notes` is the odd one, and deliberately.** Everything else here is derived:
 lose it and a rescan of `~/.claude` and git rebuilds it. A note cannot be

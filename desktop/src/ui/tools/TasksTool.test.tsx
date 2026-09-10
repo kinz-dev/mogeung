@@ -299,3 +299,94 @@ describe("nesting and grouping", () => {
     expect(text.indexOf("Zebra")).toBeLessThan(text.indexOf("Apple"));
   });
 });
+
+describe("folders and sub-tasks", () => {
+  /** `R-L11`, asked 2026-09-10: show grouping as a folder, and sub-tasks. */
+  const nested = () =>
+    useStore.setState({
+      tasks: [
+        task({ ord: 0, text: "ship it", group: "Work" }),
+        task({ ord: 1, text: "write it", group: "Work", depth: 1 }),
+        task({ ord: 2, text: "test it", group: "Work", depth: 1 }),
+        task({ ord: 3, text: "milk", group: "Groceries" }),
+      ],
+    });
+
+  it("draws a heading as a folder that says what is inside", () => {
+    nested();
+    render(<TasksTool />);
+    expect(screen.getByLabelText("close Work")).toBeInTheDocument();
+    expect(screen.getByText("3 of 3")).toBeInTheDocument();
+  });
+
+  it("shuts a folder, hiding its tasks but not itself", () => {
+    nested();
+    render(<TasksTool />);
+
+    fireEvent.click(screen.getByLabelText("close Work"));
+
+    expect(screen.queryByText("ship it")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("open Work")).toBeInTheDocument();
+    // The other folder is untouched.
+    expect(screen.getByText("milk")).toBeInTheDocument();
+  });
+
+  it("gives a task with children a twisty, and a leaf none", () => {
+    nested();
+    render(<TasksTool />);
+    expect(screen.getByLabelText("fold ship it")).toBeInTheDocument();
+    expect(screen.queryByLabelText("fold milk")).not.toBeInTheDocument();
+  });
+
+  it("folds a sub-task away and says what is left under it", () => {
+    nested();
+    render(<TasksTool />);
+
+    fireEvent.click(screen.getByLabelText("fold ship it"));
+
+    expect(screen.queryByText("write it")).not.toBeInTheDocument();
+    expect(screen.getByText("ship it")).toBeInTheDocument();
+    expect(screen.getByText(/3 of 3 left/)).toBeInTheDocument();
+  });
+
+  /**
+   * **No cascade.** Each line is its own checkbox in the document, and ticking
+   * a parent's children would write lines the user never ticked — ADR-0015
+   * says the document is the truth, and inventing edits to it is the one thing
+   * this panel must not do.
+   */
+  it("ticking a parent does not tick its children", () => {
+    nested();
+    render(<TasksTool />);
+
+    fireEvent.click(screen.getByLabelText("close ship it"));
+
+    const sets = sent.filter((m) => (m as { cmd?: string }).cmd === "task_set");
+    expect(sets).toEqual([{ cmd: "task_set", note_id: "n1", ord: 0, done: true }]);
+  });
+
+  /** Hiding a ticked parent would orphan its open children. */
+  it("keeps a ticked parent while an open child needs it", () => {
+    useStore.setState({
+      tasks: [
+        task({ ord: 0, text: "parent", done: true }),
+        task({ ord: 1, text: "child", depth: 1 }),
+      ],
+    });
+    render(<TasksTool />);
+
+    expect(screen.getByText("parent")).toBeInTheDocument();
+    expect(screen.getByText("child")).toBeInTheDocument();
+  });
+
+  /** A folder whose whole contents are ticked draws nothing at all. */
+  it("hides a folder with nothing left to show", () => {
+    useStore.setState({
+      tasks: [task({ ord: 0, text: "milk", group: "Groceries", done: true })],
+    });
+    render(<TasksTool />);
+
+    expect(screen.queryByLabelText(/Groceries/)).not.toBeInTheDocument();
+    expect(screen.getByText(/show 1 done/i)).toBeInTheDocument();
+  });
+});

@@ -8,11 +8,16 @@
  * and leaves the document alone, and that absence is the whole of ADR-0015's
  * defence against two sources of truth.
  *
- * **Nesting and grouping are the document's, not the panel's** (`R-L10`). A
- * task indented under another is drawn indented; a task under a markdown
- * heading is drawn under that heading. Neither needed new syntax, because
- * markdown already has both — which is the same reason a task is a checkbox
- * rather than a record.
+ * **Nesting and grouping are the document's, not the panel's** (`R-L10`,
+ * `R-L11`). A heading is drawn as a folder you can shut; a task indented under
+ * another is drawn under it, with its own twisty when it has children. Neither
+ * needed new syntax, because markdown already has both — which is the same
+ * reason a task is a checkbox rather than a record.
+ *
+ * **Ticking a parent does not tick its children.** Each line is its own
+ * checkbox in the document, and a cascade would write lines you never ticked.
+ * The parent shows what is left under it instead, which says the same thing
+ * without editing anything.
  *
  * **Open first, then what you closed today.** The done half is collapsed into a
  * count rather than a list, because a checklist that keeps its corpses at eye
@@ -24,7 +29,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "@/wire/types";
-import { CheckSquare, Square } from "lucide-react";
+import { groupsOf, keyOf, openUnder, rowsOf, totalUnder } from "@/lib/taskTree";
+import { CheckSquare, ChevronDown, ChevronRight, Square } from "lucide-react";
 import { useStore } from "@/store";
 import { Dim, Empty, Input, Row, SectionLabel } from "@/ui/primitives";
 import { TASKS_DOC, addTask, noteTitle, openNote } from "@/lib/notes";
@@ -37,6 +43,17 @@ export function TasksTool() {
   const [showDone, setShowDone] = useState(false);
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLInputElement>(null);
+  // One set for both, keyed differently — a group by its name, a task by its
+  // note and position. They never collide and they behave identically, so two
+  // pieces of state would be two things to keep in step for no gain.
+  const [shut, setShut] = useState<ReadonlySet<string>>(() => new Set());
+
+  const toggleShut = (key: string) =>
+    setShut((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
 
   // Asked for on mount because a document may have been edited by another
   // window — or the daemon restarted and rebuilt the table — while this panel
@@ -45,27 +62,8 @@ export function TasksTool() {
     send({ cmd: "task_list" });
   }, [send]);
 
-  const open = useMemo(() => tasks.filter((t) => !t.done), [tasks]);
-  const done = useMemo(() => tasks.filter((t) => t.done), [tasks]);
-
-  /**
-   * Split a list into its headings, keeping document order. `R-L10`.
-   *
-   * Ordered by first appearance rather than alphabetically, and ungrouped
-   * tasks stay where they are rather than being swept into an *(other)* bucket
-   * — a heading is a thing you wrote, and a task you did not file under one is
-   * not filed under "nothing", it is simply above the first heading.
-   */
-  const inGroups = (list: Task[]): [string | null, Task[]][] => {
-    const out: [string | null, Task[]][] = [];
-    for (const t of list) {
-      const key = t.group ?? null;
-      const last = out[out.length - 1];
-      if (last && last[0] === key) last[1].push(t);
-      else out.push([key, [t]]);
-    }
-    return out;
-  };
+  const groups = useMemo(() => groupsOf(tasks), [tasks]);
+  const doneCount = useMemo(() => tasks.filter((t) => t.done).length, [tasks]);
 
   /** The document a task lives in, for the line under it. */
   const noteName = (id: string) => {
@@ -103,36 +101,64 @@ export function TasksTool() {
     </div>
   );
 
-  const row = (t: Task) => (
-    <Row
-      key={`${t.note_id}:${t.ord}`}
-      className="flex items-start gap-2 py-1 pr-2"
-      // Indented by the document's own nesting. `R-L10`.
-      style={{ paddingLeft: `${(t.depth ?? 0) * 14 + 8}px` }}
-      // The row opens the document; the box ticks. Two targets, because
-      // "where did I write this" and "I have done it" are different questions
-      // and one of them must not be reachable only by the other.
-      onClick={() => openNote(t.note_id)}
-    >
-      <button
-        type="button"
-        aria-label={t.done ? `reopen ${t.text}` : `close ${t.text}`}
-        className="mt-0.5 shrink-0 rounded-sm text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
-        onClick={(e) => {
-          e.stopPropagation();
-          toggle(t.note_id, t.ord, !t.done);
-        }}
+  const taskRow = (row: { node: { task: Task; depth: number; children: unknown[] }; collapsed: boolean }) => {
+    const t = row.node.task;
+    const kids = row.node.children.length > 0;
+    const left = 8 + row.node.depth * 14;
+    return (
+      <Row
+        key={keyOf(t)}
+        className="flex items-start gap-1 py-1 pr-2"
+        style={{ paddingLeft: `${left}px` }}
+        // The row opens the document; the box ticks; the twisty folds. Three
+        // targets, because "where did I write this", "I have done it" and
+        // "not now" are different questions.
+        onClick={() => openNote(t.note_id)}
       >
-        {t.done ? <CheckSquare size={12} /> : <Square size={12} />}
-      </button>
-      <div className="min-w-0 flex-1">
-        <div className={`text-xs ${t.done ? "text-[var(--dim)] line-through" : ""}`}>
-          {t.text || <Dim className="text-2xs">an empty checkbox</Dim>}
+        {kids ? (
+          <button
+            type="button"
+            aria-label={row.collapsed ? `show what is under ${t.text}` : `fold ${t.text}`}
+            className="mt-0.5 shrink-0 rounded-sm text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleShut(keyOf(t));
+            }}
+          >
+            {row.collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+          </button>
+        ) : (
+          // A leaf keeps the twisty's width, or every level of the tree is
+          // ragged down its left edge.
+          <span className="mt-0.5 w-[11px] shrink-0" />
+        )}
+        <button
+          type="button"
+          aria-label={t.done ? `reopen ${t.text}` : `close ${t.text}`}
+          className="mt-0.5 shrink-0 rounded-sm text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle(t.note_id, t.ord, !t.done);
+          }}
+        >
+          {t.done ? <CheckSquare size={12} /> : <Square size={12} />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className={`text-xs ${t.done ? "text-[var(--dim)] line-through" : ""}`}>
+            {t.text || <Dim className="text-2xs">an empty checkbox</Dim>}
+          </div>
+          <Dim className="block truncate text-2xs">
+            {noteName(t.note_id)}
+            {/* What a folded parent is hiding, so shutting one never hides a
+                count you needed. */}
+            {kids && row.collapsed && (
+              <> · {openUnder(row.node as never)} of {totalUnder(row.node as never)} left</>
+            )}
+          </Dim>
         </div>
-        <Dim className="block truncate text-2xs">{noteName(t.note_id)}</Dim>
-      </div>
-    </Row>
-  );
+      </Row>
+    );
+  };
 
   if (tasks.length === 0) {
     return (
@@ -149,34 +175,51 @@ export function TasksTool() {
     <div className="flex min-h-0 flex-1 flex-col">
       {adder}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {open.length === 0 ? (
-          <Empty hint="everything with a box is ticked">nothing open</Empty>
-        ) : (
-          inGroups(open).map(([group, rows], i) => (
-            <div key={`${group ?? ""}:${i}`}>
-              {group !== null && (
-                <div className="px-2 pt-2 pb-0.5">
-                  <SectionLabel>{group}</SectionLabel>
-                </div>
+        {groups.map((g, i) => {
+          const rows = rowsOf(g.nodes, { showDone, collapsed: shut });
+          // A group with nothing to show while `done` is hidden is a folder
+          // whose whole contents are ticked. Drawing an empty one would be a
+          // row that answers no question.
+          if (rows.length === 0) return null;
+          const key = `group:${g.name ?? ""}:${i}`;
+          const folded = shut.has(key);
+          return (
+            <div key={key}>
+              {/*
+                A heading is a **folder**, not a label: it shuts, and it says
+                what is inside while shut. Tasks above the first heading have
+                no folder at all — a heading is a thing you wrote, and *not
+                filed* is not the same as filed under nothing.
+              */}
+              {g.name !== null && (
+                <button
+                  type="button"
+                  aria-label={folded ? `open ${g.name}` : `close ${g.name}`}
+                  className="flex w-full items-center gap-1 px-2 pt-2 pb-0.5 text-left outline-none hover:bg-[var(--bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+                  onClick={() => toggleShut(key)}
+                >
+                  {folded ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                  <SectionLabel>{g.name}</SectionLabel>
+                  <Dim className="text-2xs">
+                    {g.open} of {g.total}
+                  </Dim>
+                </button>
               )}
-              {rows.map(row)}
+              {!folded && rows.map(taskRow)}
             </div>
-          ))
-        )}
+          );
+        })}
 
-        {done.length > 0 && (
-          <>
-            <button
-              type="button"
-              className="flex w-full items-center gap-1 px-2 py-1 text-left outline-none hover:bg-[var(--bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
-              onClick={() => setShowDone((v) => !v)}
-            >
-              <SectionLabel>
-                {showDone ? "hide" : "show"} {done.length} done
-              </SectionLabel>
-            </button>
-            {showDone && done.map(row)}
-          </>
+        {doneCount > 0 && (
+          <button
+            type="button"
+            className="flex w-full items-center gap-1 border-t border-[var(--border)] px-2 py-1 text-left outline-none hover:bg-[var(--bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+            onClick={() => setShowDone((v) => !v)}
+          >
+            <SectionLabel>
+              {showDone ? "hide" : "show"} {doneCount} done
+            </SectionLabel>
+          </button>
         )}
       </div>
 

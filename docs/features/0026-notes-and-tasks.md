@@ -292,3 +292,28 @@ flat. A `Task` now carries `depth` and the panel indents by it.
 belong together*, so a task carries the nearest heading above it. Groups keep
 document order rather than sorting, and a task above the first heading stays
 ungrouped — *not filed* is not the same as filed under nothing.
+
+### The panel draws the shape, 2026-09-10 (`R-L11`)
+
+> enhance the display of the Tasks so that it reflects the grouping (show it as
+> a folder like structure) and sub tasks (indented tasks)
+
+`R-L10` taught the parser both and the panel drew neither properly — a heading
+was a label, and depth was padding. A heading is now a folder that shuts and
+says *3 of 5* while closed; a task with children has its own twisty and says
+what is left under it when folded.
+
+- **A done parent stays visible while an open child needs it.** Hiding ticked
+  tasks is what makes a checklist a list of what to do; hiding a ticked *parent*
+  orphans its children. This is the rule that would have gone wrong quietly.
+- **Depth is renumbered as it nests.** Markdown lets you over-indent, and two
+  levels of blank indentation is a gap nobody wrote.
+- **A heading used twice is two sections.** Merging them would move tasks up
+  the page.
+- **Ticking a parent does not tick its children**, and a test says so. A
+  cascade would write lines the user never ticked, which is exactly what
+  ADR-0015 forbids this panel to do.
+
+The shape lives in `lib/taskTree.ts` with its own tests, like `scratchTree.ts`:
+every interesting decision here is about what stays visible, and a test should
+be able to state that without rendering anything.

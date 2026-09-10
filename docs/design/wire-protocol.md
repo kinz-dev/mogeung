@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-09
+updated: 2026-09-10
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -262,6 +262,12 @@ it chose, so a client never invents one.
 `Tasks { tasks, closed_today }`, broadcast — and broadcast again after any
 `NoteSave` or `NoteDelete`, because a checkbox typed into a document has to
 appear in the list without being asked for.
+
+A `Task` carries `depth` and `group` since `R-L10` — how deeply the line is
+nested, and the markdown heading above it. Both are read from the document
+rather than stored anywhere: markdown already has nesting and headings, so
+neither needed new syntax, and the panel draws its folders and sub-tasks from
+these two fields alone (`R-L11`).
 
 **A task is addressed by document and position, and has no id.** There is no
 task outside a `- [ ]` line and no field on one that is not written on the line
