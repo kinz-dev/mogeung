@@ -268,3 +268,27 @@ overridable the way `scratch_dir` always was, the harness sets it, and the test
 checks its own directory. The lesson is the shape of the assertion rather than
 the missing field: a test that reads the same global the code writes cannot tell
 you the code wrote in the wrong place.
+
+### Nesting and grouping, 2026-09-10 (`R-L10`)
+
+> how to have indented tasks? … or grouping of tasks?
+
+**The first was a bug report wearing a question mark.** `R-L3`'s parser treated
+four spaces as an indented code block, which is right at the top level of a
+document and wrong inside a list: markdown measures a code block from the
+enclosing block's content column, so a checkbox indented four spaces under
+another checkbox is one level in. Every task nested that way was silently
+dropped — and four spaces is the more common convention. The reporter's own note
+used it, and had lost its middle line.
+
+The rule is now: **an indented checkbox is nested when there is a list to nest it
+in, and code when there is not**, with a stack of open indents rather than a
+fixed step, because markdown does not fix the step.
+
+Depth was not recorded at all before this, so even two-space nesting rendered
+flat. A `Task` now carries `depth` and the panel indents by it.
+
+**Grouping needed no new syntax.** A markdown heading already says *these things
+belong together*, so a task carries the nearest heading above it. Groups keep
+document order rather than sorting, and a task above the first heading stays
+ungrouped — *not filed* is not the same as filed under nothing.

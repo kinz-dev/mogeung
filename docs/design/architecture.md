@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-09
+updated: 2026-09-10
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -541,6 +541,16 @@ would put Tauri's Linux system dependencies in the path of
 The window docks things two ways, and which one a thing uses is a decision
 rather than a habit —
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
+
+**Notes and tasks live in `state.rs` too, and belong to
+[data-model.md](data-model.md)** and
+[ADR-0015](../decisions/0015-markdown-is-the-truth.md) rather than here:
+`save_note`, `set_task` and the note mirror share this file with everything
+above, and none of them touches a session, a transcript or the machine. Said
+here because both this document and
+[cross-session-signals.md](cross-session-signals.md) cover `state.rs`, so a
+change to one subject raises a staleness warning on the other two — noted on
+2026-09-10, when `R-L10` did exactly that.
 
 **Panes** are views of a session — with one exception since 2026-09-03, a
 **scratch** pane (`R-L5`; managed from the rail since `R-L6` and `R-L7`), which

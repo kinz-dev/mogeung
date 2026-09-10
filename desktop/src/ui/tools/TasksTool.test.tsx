@@ -237,3 +237,65 @@ describe("making a task", () => {
     expect(box).toHaveValue("");
   });
 });
+
+describe("nesting and grouping", () => {
+  /**
+   * `R-L10`, asked 2026-09-10: *"how to have indented tasks?"* and *"or
+   * grouping of tasks?"* Both are the document's, not the panel's — markdown
+   * already has nesting and headings, so neither needed new syntax.
+   */
+  it("indents a nested task by its depth", () => {
+    useStore.setState({
+      tasks: [task({ ord: 0, text: "parent" }), task({ ord: 1, text: "child", depth: 1 })],
+    });
+    render(<TasksTool />);
+
+    const pad = (label: string) =>
+      screen.getByText(label).closest("[role=option]")!.getAttribute("style") ?? "";
+
+    expect(pad("parent")).toContain("padding-left: 8px");
+    expect(pad("child")).toContain("padding-left: 22px");
+  });
+
+  it("puts each heading above the tasks under it", () => {
+    useStore.setState({
+      tasks: [
+        task({ ord: 0, text: "milk", group: "Groceries" }),
+        task({ ord: 1, text: "the thing", group: "Work" }),
+      ],
+    });
+    render(<TasksTool />);
+
+    expect(screen.getByText("Groceries")).toBeInTheDocument();
+    expect(screen.getByText("Work")).toBeInTheDocument();
+  });
+
+  /**
+   * A task above the first heading is not filed under "nothing" — it is simply
+   * above the first heading, and sweeping it into an *(other)* bucket would
+   * invent a group the document does not have.
+   */
+  it("leaves an ungrouped task ungrouped", () => {
+    useStore.setState({
+      tasks: [task({ ord: 0, text: "loose" }), task({ ord: 1, text: "milk", group: "Groceries" })],
+    });
+    render(<TasksTool />);
+
+    expect(screen.getByText("loose")).toBeInTheDocument();
+    expect(screen.queryByText(/other|ungrouped/i)).not.toBeInTheDocument();
+  });
+
+  /** Document order, not alphabetical — the order you wrote them in. */
+  it("keeps the headings in the order the document has them", () => {
+    useStore.setState({
+      tasks: [
+        task({ ord: 0, text: "z-first", group: "Zebra" }),
+        task({ ord: 1, text: "a-second", group: "Apple" }),
+      ],
+    });
+    const { container } = render(<TasksTool />);
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Zebra")).toBeLessThan(text.indexOf("Apple"));
+  });
+});

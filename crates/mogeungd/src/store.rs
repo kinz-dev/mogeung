@@ -86,11 +86,19 @@ impl Store {
             -- a cache of where those lines are, rebuilt from the documents
             -- whenever they are saved and on startup. Delete it and restart
             -- and nothing is lost but the history below.
+            -- Dropped and recreated rather than migrated, and that is the
+            -- privilege of being a cache: `R-L10` added `depth` and `grp`, and
+            -- `prepare` rebuilds every row from the documents at startup, so
+            -- there is nothing here to preserve across a shape change. The
+            -- history below is a different matter and is never dropped.
+            DROP TABLE IF EXISTS note_tasks;
             CREATE TABLE IF NOT EXISTS note_tasks (
                 note_id TEXT NOT NULL,
                 ord     INTEGER NOT NULL,
                 text    TEXT NOT NULL,
                 done    INTEGER NOT NULL,
+                depth   INTEGER NOT NULL DEFAULT 0,
+                grp     TEXT,
                 PRIMARY KEY (note_id, ord)
             );
 
@@ -348,8 +356,9 @@ impl Store {
         c.execute("DELETE FROM note_tasks WHERE note_id = ?1", params![note_id])?;
         for t in &tasks {
             c.execute(
-                "INSERT INTO note_tasks (note_id, ord, text, done) VALUES (?1, ?2, ?3, ?4)",
-                params![note_id, t.ord as i64, t.text, t.done as i64],
+                "INSERT INTO note_tasks (note_id, ord, text, done, depth, grp) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![note_id, t.ord as i64, t.text, t.done as i64, t.depth as i64, t.group],
             )?;
         }
         Ok(tasks)
@@ -381,10 +390,11 @@ impl Store {
     }
 
     /// Every task, for the panel. Small by nature, like the notes themselves.
-    pub fn load_tasks(&self) -> Result<Vec<(String, u32, String, bool)>> {
+    #[allow(clippy::type_complexity)]
+    pub fn load_tasks(&self) -> Result<Vec<(String, u32, String, bool, u32, Option<String>)>> {
         let c = self.conn.lock().unwrap();
         let mut q = c.prepare(
-            "SELECT note_id, ord, text, done FROM note_tasks ORDER BY note_id, ord",
+            "SELECT note_id, ord, text, done, depth, grp FROM note_tasks ORDER BY note_id, ord",
         )?;
         let rows = q.query_map([], |r| {
             Ok((
@@ -392,6 +402,8 @@ impl Store {
                 r.get::<_, i64>(1)? as u32,
                 r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)? != 0,
+                r.get::<_, i64>(4)? as u32,
+                r.get::<_, Option<String>>(5)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -1083,7 +1095,7 @@ mod tests {
 
         let tasks = s.load_tasks().unwrap();
         assert_eq!(tasks.len(), 2, "every task came back from the document");
-        assert!(tasks.iter().any(|(_, _, t, done)| t == "b" && *done));
+        assert!(tasks.iter().any(|(_, _, t, done, _, _)| t == "b" && *done));
 
         // And the history is the only casualty. It reads 1 rather than 0
         // because rebuilding sees a closed box it has no memory of — an

@@ -977,6 +977,10 @@ export interface Task {
   ord: number;
   text: string;
   done: boolean;
+  /** How deeply nested, from zero. `R-L10`. */
+  depth?: number;
+  /** The markdown heading this task sits under, if any. `R-L10`. */
+  group?: string;
 }
 
 export interface Note {

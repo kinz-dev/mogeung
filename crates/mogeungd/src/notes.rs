@@ -278,6 +278,19 @@ pub struct Task {
     pub ord: usize,
     /// The line's own index in the body, for the rewriter. Not an identity.
     pub line: usize,
+    /// How deeply nested, counting from zero. `R-L10`.
+    ///
+    /// Derived from a **stack of indents** rather than from `indent / 2`,
+    /// because markdown does not fix the step: two spaces and four spaces are
+    /// both one level in, and a document may use either — or both, which is
+    /// what a copied checklist tends to produce.
+    pub depth: usize,
+    /// The nearest markdown heading above this line, if any. `R-L10`.
+    ///
+    /// The grouping, and deliberately not a field of its own: a heading is how
+    /// markdown already says *these things belong together*, so a task needs no
+    /// new syntax to be grouped and no group to be ungrouped.
+    pub group: Option<String>,
     /// The words after the box, trimmed. This is the task's identity for
     /// history — see [`Store::record_task_transitions`]. Rewriting the words
     /// makes it a different task, which is the honest reading of a line that
@@ -307,6 +320,11 @@ pub struct Task {
 pub fn tasks_in(body: &str) -> Vec<Task> {
     let mut out = Vec::new();
     let mut fence: Option<(char, usize)> = None;
+    // The indent of each open list level, outermost first. A checkbox indented
+    // past the top of this stack is nested under it; one indented back to or
+    // below a level closes the levels beneath.
+    let mut levels: Vec<usize> = Vec::new();
+    let mut group: Option<String> = None;
 
     for (line, raw) in body.lines().enumerate() {
         let trimmed = raw.trim_start();
@@ -323,21 +341,77 @@ pub fn tasks_in(body: &str) -> Vec<Task> {
             }
             continue;
         }
-        if fence.is_some() || indent >= 4 || trimmed.starts_with('>') {
+        if fence.is_some() {
+            continue;
+        }
+
+        // A heading is the group from here until the next one. Checked before
+        // the list rules, because a heading also ends any list above it.
+        if let Some(rest) = heading(trimmed) {
+            group = rest;
+            levels.clear();
+            continue;
+        }
+
+        if trimmed.starts_with('>') {
             continue;
         }
 
         let Some((done, text)) = checkbox(trimmed) else {
+            // A blank line does not close a list — a list with a gap in it is
+            // still one list — but anything else at column zero does.
+            if !trimmed.is_empty() && indent == 0 {
+                levels.clear();
+            }
             continue;
         };
+
+        // **An indented checkbox is nested when there is a list to nest it in,
+        // and code when there is not.** `R-L10`.
+        //
+        // The old rule was *four spaces is a code block*, which is true at the
+        // top level of a document and wrong inside a list: markdown measures an
+        // indented code block from the enclosing block's content column, so
+        // `    - [ ] x` under `- [ ] y` is one level in, not a snippet. That
+        // rule silently dropped every task anyone nested with four spaces,
+        // which is the more common convention of the two.
+        if levels.is_empty() && indent >= 4 {
+            continue;
+        }
+
+        while levels.last().is_some_and(|open| indent <= *open) {
+            levels.pop();
+        }
+        levels.push(indent);
+
         out.push(Task {
             ord: out.len(),
             line,
+            depth: levels.len() - 1,
+            group: group.clone(),
             text: text.to_string(),
             done,
         });
     }
     out
+}
+
+/// The text of an ATX heading, or `None` when this is not one.
+///
+/// `Some(None)` cannot happen: a heading with no words still groups, and it
+/// groups under an empty name, which reads better than the tasks below it
+/// escaping back to the previous section.
+fn heading(trimmed: &str) -> Option<Option<String>> {
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let rest = &trimmed[hashes..];
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    let name = rest.trim().trim_end_matches('#').trim().to_string();
+    Some(if name.is_empty() { None } else { Some(name) })
 }
 
 /// `(character, length)` when this line opens or closes a code fence.
@@ -443,12 +517,76 @@ mod task_tests {
         assert_eq!(texts(body), vec![(false, "mine".into())]);
     }
 
-    /// Four spaces is an indented code block; two is a nested list item, and
-    /// that is a real case rather than a curiosity.
+    /// **Rewritten 2026-09-10.** This used to say *four spaces is an indented
+    /// code block*, and asserted that a four-space checkbox was dropped. That
+    /// is true at the top level of a document and wrong inside a list, where
+    /// markdown measures a code block from the enclosing content column — so
+    /// the rule silently discarded every task nested with four spaces, which is
+    /// the more common of the two conventions. Reported as *"how to have
+    /// indented tasks?"*, which is the question you ask when yours vanished.
     #[test]
-    fn indentation_decides_between_a_nested_task_and_a_code_block() {
-        let body = "- [ ] top\n  - [ ] nested\n\n    - [ ] indented code\n";
-        assert_eq!(texts(body), vec![(false, "top".into()), (false, "nested".into())]);
+    fn an_indented_checkbox_is_nested_when_there_is_a_list_to_nest_it_in() {
+        let body = "- [ ] top\n  - [ ] two spaces\n    - [ ] four spaces\n";
+        let t = tasks_in(body);
+        assert_eq!(t.len(), 3, "none of them is a code block");
+        assert_eq!(t.iter().map(|t| t.depth).collect::<Vec<_>>(), vec![0, 1, 2]);
+    }
+
+    /// And code when there is not: an indented block with no list above it is
+    /// still a snippet.
+    #[test]
+    fn an_indented_checkbox_with_no_list_above_it_is_code() {
+        let body = "prose, then a snippet:\n\n    - [ ] not a task\n";
+        assert_eq!(texts(body), Vec::new());
+    }
+
+    /// The step is not fixed by markdown, so it is read rather than assumed:
+    /// four spaces used consistently is one level per step, not two.
+    #[test]
+    fn the_indent_step_is_whatever_the_document_uses() {
+        let body = "- [ ] a\n    - [ ] b\n        - [ ] c\n";
+        assert_eq!(
+            tasks_in(body).iter().map(|t| t.depth).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    /// Coming back out closes the levels beneath.
+    #[test]
+    fn dedenting_returns_to_the_level_it_names() {
+        let body = "- [ ] a\n  - [ ] b\n- [ ] c\n";
+        assert_eq!(
+            tasks_in(body).iter().map(|t| t.depth).collect::<Vec<_>>(),
+            vec![0, 1, 0]
+        );
+    }
+
+    // -- Grouping. `R-L10`. -------------------------------------------------
+
+    #[test]
+    fn a_heading_groups_the_tasks_below_it() {
+        let body = "- [ ] loose\n\n## Groceries\n\n- [ ] milk\n\n## Work\n\n- [ ] the thing\n";
+        let g: Vec<_> = tasks_in(body).into_iter().map(|t| t.group).collect();
+        assert_eq!(g, vec![None, Some("Groceries".into()), Some("Work".into())]);
+    }
+
+    #[test]
+    fn a_heading_ends_the_list_above_it() {
+        let body = "- [ ] a\n\n## Next\n\n  - [ ] b\n";
+        let t = tasks_in(body);
+        assert_eq!(t[1].depth, 0, "a new section starts a new list");
+    }
+
+    #[test]
+    fn a_closing_hash_is_not_part_of_the_name() {
+        let body = "### Tidy ###\n- [ ] a\n";
+        assert_eq!(tasks_in(body)[0].group.as_deref(), Some("Tidy"));
+    }
+
+    #[test]
+    fn a_hash_that_is_not_a_heading_does_not_group() {
+        let body = "#hashtag not a heading\n- [ ] a\n";
+        assert_eq!(tasks_in(body)[0].group, None);
     }
 
     #[test]

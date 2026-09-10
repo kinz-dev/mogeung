@@ -8,6 +8,12 @@
  * and leaves the document alone, and that absence is the whole of ADR-0015's
  * defence against two sources of truth.
  *
+ * **Nesting and grouping are the document's, not the panel's** (`R-L10`). A
+ * task indented under another is drawn indented; a task under a markdown
+ * heading is drawn under that heading. Neither needed new syntax, because
+ * markdown already has both — which is the same reason a task is a checkbox
+ * rather than a record.
+ *
  * **Open first, then what you closed today.** The done half is collapsed into a
  * count rather than a list, because a checklist that keeps its corpses at eye
  * level stops being a list of what to do. The count is the one thing the
@@ -17,6 +23,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Task } from "@/wire/types";
 import { CheckSquare, Square } from "lucide-react";
 import { useStore } from "@/store";
 import { Dim, Empty, Input, Row, SectionLabel } from "@/ui/primitives";
@@ -40,6 +47,25 @@ export function TasksTool() {
 
   const open = useMemo(() => tasks.filter((t) => !t.done), [tasks]);
   const done = useMemo(() => tasks.filter((t) => t.done), [tasks]);
+
+  /**
+   * Split a list into its headings, keeping document order. `R-L10`.
+   *
+   * Ordered by first appearance rather than alphabetically, and ungrouped
+   * tasks stay where they are rather than being swept into an *(other)* bucket
+   * — a heading is a thing you wrote, and a task you did not file under one is
+   * not filed under "nothing", it is simply above the first heading.
+   */
+  const inGroups = (list: Task[]): [string | null, Task[]][] => {
+    const out: [string | null, Task[]][] = [];
+    for (const t of list) {
+      const key = t.group ?? null;
+      const last = out[out.length - 1];
+      if (last && last[0] === key) last[1].push(t);
+      else out.push([key, [t]]);
+    }
+    return out;
+  };
 
   /** The document a task lives in, for the line under it. */
   const noteName = (id: string) => {
@@ -77,10 +103,12 @@ export function TasksTool() {
     </div>
   );
 
-  const row = (t: { note_id: string; ord: number; text: string; done: boolean }) => (
+  const row = (t: Task) => (
     <Row
       key={`${t.note_id}:${t.ord}`}
-      className="flex items-start gap-2 px-2 py-1"
+      className="flex items-start gap-2 py-1 pr-2"
+      // Indented by the document's own nesting. `R-L10`.
+      style={{ paddingLeft: `${(t.depth ?? 0) * 14 + 8}px` }}
       // The row opens the document; the box ticks. Two targets, because
       // "where did I write this" and "I have done it" are different questions
       // and one of them must not be reachable only by the other.
@@ -124,7 +152,16 @@ export function TasksTool() {
         {open.length === 0 ? (
           <Empty hint="everything with a box is ticked">nothing open</Empty>
         ) : (
-          open.map(row)
+          inGroups(open).map(([group, rows], i) => (
+            <div key={`${group ?? ""}:${i}`}>
+              {group !== null && (
+                <div className="px-2 pt-2 pb-0.5">
+                  <SectionLabel>{group}</SectionLabel>
+                </div>
+              )}
+              {rows.map(row)}
+            </div>
+          ))
         )}
 
         {done.length > 0 && (

@@ -3294,12 +3294,16 @@ impl AppState {
             .store
             .load_tasks()?
             .into_iter()
-            .map(|(note_id, ord, text, done)| mogeung_core::wire::Task {
-                note_id,
-                ord,
-                text,
-                done,
-            })
+            .map(
+                |(note_id, ord, text, done, depth, group)| mogeung_core::wire::Task {
+                    note_id,
+                    ord,
+                    text,
+                    done,
+                    depth,
+                    group,
+                },
+            )
             .collect();
         Ok((tasks, self.store.closed_since(start_of_today())?))
     }

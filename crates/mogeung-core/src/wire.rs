@@ -937,6 +937,12 @@ pub struct Task {
     pub ord: u32,
     pub text: String,
     pub done: bool,
+    /// How deeply nested, from zero. `R-L10`.
+    #[serde(default)]
+    pub depth: u32,
+    /// The markdown heading this task sits under, if any. `R-L10`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
