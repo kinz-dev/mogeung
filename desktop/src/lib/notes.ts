@@ -249,3 +249,50 @@ export function noteTitle(body: string): string {
   const first = body.split("\n").find((l) => l.trim().length > 0) ?? "";
   return first.replace(/^#{1,6}\s*/, "").trim();
 }
+
+/** The document new tasks go into when you have not said otherwise. `R-L3`. */
+export const TASKS_DOC = "Tasks";
+
+/**
+ * Add a task from the Tasks panel. `R-L3`.
+ *
+ * **This writes a document, which is the only way a task can be made** —
+ * ADR-0015 rule 2 says there is no task outside a `- [ ]` line, so an "add"
+ * that did anything else would be inventing a second kind of task. It appends
+ * the line to a document called *Tasks*, creating that document the first time.
+ *
+ * Reported 2026-09-10: *"I can't get any task display. it always show no
+ * tasks"* — and it was right to, because nothing in the window could put a
+ * checkbox into a note. A panel that lists tasks and cannot make one is a panel
+ * you can only use if you already knew the trick.
+ */
+export function addTask(text: string): void {
+  const body = text.trim();
+  if (!body) return;
+  const { notes, send } = useStore.getState();
+  const existing = notes.find((n) => noteTitle(n.body) === TASKS_DOC);
+
+  if (!existing) {
+    send({
+      cmd: "note_save",
+      id: "",
+      body: `# ${TASKS_DOC}\n\n- [ ] ${body}\n`,
+      session_id: null,
+      seq: null,
+      repo: null,
+    });
+    return;
+  }
+
+  // Appended, and the trailing newline is put back: a document that ends
+  // mid-line after every addition is one you notice when you open it.
+  const next = existing.body.replace(/\n*$/, "") + `\n- [ ] ${body}\n`;
+  send({
+    cmd: "note_save",
+    id: existing.id,
+    body: next,
+    session_id: existing.session_id ?? null,
+    seq: existing.seq ?? null,
+    repo: existing.repo ?? null,
+  });
+}

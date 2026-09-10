@@ -16,11 +16,11 @@
  * on screen rather than a second column of ticks.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckSquare, Square } from "lucide-react";
 import { useStore } from "@/store";
-import { Dim, Empty, Row, SectionLabel } from "@/ui/primitives";
-import { noteTitle, openNote } from "@/lib/notes";
+import { Dim, Empty, Input, Row, SectionLabel } from "@/ui/primitives";
+import { TASKS_DOC, addTask, noteTitle, openNote } from "@/lib/notes";
 
 export function TasksTool() {
   const tasks = useStore((s) => s.tasks);
@@ -28,6 +28,8 @@ export function TasksTool() {
   const notes = useStore((s) => s.notes);
   const send = useStore((s) => s.send);
   const [showDone, setShowDone] = useState(false);
+  const [draft, setDraft] = useState("");
+  const box = useRef<HTMLInputElement>(null);
 
   // Asked for on mount because a document may have been edited by another
   // window — or the daemon restarted and rebuilt the table — while this panel
@@ -47,6 +49,33 @@ export function TasksTool() {
 
   const toggle = (note_id: string, ord: number, done: boolean) =>
     send({ cmd: "task_set", note_id, ord, done });
+
+  /**
+   * The one thing this panel could not do until 2026-09-10, and the reason it
+   * read as broken: a list of checkboxes with no way to write one.
+   *
+   * It appends to a document rather than inventing a task, because ADR-0015
+   * says there is no task outside a `- [ ]` line — so *adding* one is writing a
+   * line, and the derived table follows as it does for any other edit.
+   */
+  const add = () => {
+    addTask(draft);
+    setDraft("");
+    box.current?.focus();
+  };
+
+  const adder = (
+    <div className="shrink-0 border-b border-[var(--border)] px-2 py-1">
+      <Input
+        inputRef={box}
+        value={draft}
+        placeholder={`add a task to ${TASKS_DOC}…`}
+        ariaLabel="add a task"
+        onChange={setDraft}
+        onKeyDown={(e) => e.key === "Enter" && add()}
+      />
+    </div>
+  );
 
   const row = (t: { note_id: string; ord: number; text: string; done: boolean }) => (
     <Row
@@ -79,14 +108,18 @@ export function TasksTool() {
 
   if (tasks.length === 0) {
     return (
-      <Empty hint="write `- [ ] something` in a note and it appears here — a task is a checkbox in a document and nothing else">
-        no tasks
-      </Empty>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {adder}
+        <Empty hint={`type above, or write \`- [ ] something\` in any note — a task is a checkbox in a document and nothing else, so anything you add lands in a document called ${TASKS_DOC}`}>
+          no tasks yet
+        </Empty>
+      </div>
     );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {adder}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {open.length === 0 ? (
           <Empty hint="everything with a box is ticked">nothing open</Empty>

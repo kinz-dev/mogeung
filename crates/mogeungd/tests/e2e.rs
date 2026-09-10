@@ -12,6 +12,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 struct Harness {
     url: String,
+    /// The mirror this harness writes to. Exposed since 2026-09-10: the note
+    /// test asserted against `notes::mirror_dir()` — the **real** one — which
+    /// is exactly why it passed for months while writing there.
+    notes: PathBuf,
     _dir: PathBuf,
 }
 
@@ -29,6 +33,10 @@ async fn boot(name: &str) -> Harness {
     // that wrote into `~/.mogeung/scratch` would leave files on the
     // developer's desk and read the ones already there.
     state.scratch_dir.set(dir.join("scratch")).unwrap();
+    // The mirror too, or every test that saves a note writes into the **real**
+    // `~/.mogeung/notes`. It did: the suite left one orphan file per run in a
+    // user's own notes folder until 2026-09-10.
+    state.notes_dir.set(dir.join("notes")).unwrap();
     let app = api::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -39,6 +47,7 @@ async fn boot(name: &str) -> Harness {
 
     Harness {
         url: format!("ws://127.0.0.1:{port}/ws"),
+        notes: dir.join("notes"),
         _dir: dir,
     }
 }
@@ -349,7 +358,7 @@ async fn a_note_reaches_every_client_and_lands_on_disk() {
 
     // The mirror holds the writing, which is the whole mitigation for keeping
     // this in a database at all (ADR-0015).
-    let mirror = mogeungd::notes::mirror_dir();
+    let mirror = h.notes.clone();
     let named = |id: &str| -> Vec<String> {
         std::fs::read_dir(mirror.clone())
             .map(|d| {

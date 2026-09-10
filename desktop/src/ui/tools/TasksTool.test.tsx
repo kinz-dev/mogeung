@@ -159,3 +159,81 @@ describe("the tasks panel", () => {
     expect(screen.getByText(/a document that has gone/)).toBeInTheDocument();
   });
 });
+
+describe("making a task", () => {
+  /**
+   * Reported 2026-09-10: *"I can't get any task display. it always show no
+   * tasks"* — and the panel was right, because none of the user's fourteen
+   * notes held a checkbox and **nothing in the window could put one there**.
+   * A list of checkboxes you can only fill by knowing markdown and finding
+   * another panel first is a list that reads as broken.
+   */
+  it("offers a box even when there is nothing to list", () => {
+    render(<TasksTool />);
+    expect(screen.getByLabelText("add a task")).toBeInTheDocument();
+    expect(screen.getByText(/no tasks yet/i)).toBeInTheDocument();
+  });
+
+  /**
+   * **It writes a document**, because ADR-0015 says there is no task outside a
+   * `- [ ]` line. An add that did anything else would be a second kind of task.
+   */
+  it("creates the Tasks document the first time, with the line in it", () => {
+    useStore.setState({ notes: [] });
+    render(<TasksTool />);
+
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "buy milk" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    const save = sent.find((m) => (m as { cmd?: string }).cmd === "note_save") as {
+      id: string;
+      body: string;
+    };
+    expect(save.id).toBe("");
+    expect(save.body).toBe("# Tasks\n\n- [ ] buy milk\n");
+  });
+
+  it("appends to the Tasks document once it exists", () => {
+    useStore.setState({ notes: [note("t1", "# Tasks\n\n- [ ] first\n")] });
+    render(<TasksTool />);
+
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "second" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    const save = sent.find((m) => (m as { cmd?: string }).cmd === "note_save") as {
+      id: string;
+      body: string;
+    };
+    expect(save.id).toBe("t1");
+    expect(save.body).toBe("# Tasks\n\n- [ ] first\n- [ ] second\n");
+  });
+
+  /** A document that ends mid-line after every addition is one you notice. */
+  it("keeps the document ending in a single newline", () => {
+    useStore.setState({ notes: [note("t1", "# Tasks\n\n- [ ] first\n\n\n")] });
+    render(<TasksTool />);
+
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "second" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    const save = sent.find((m) => (m as { cmd?: string }).cmd === "note_save") as { body: string };
+    expect(save.body).toBe("# Tasks\n\n- [ ] first\n- [ ] second\n");
+  });
+
+  it("sends nothing for an empty box", () => {
+    render(<TasksTool />);
+    fireEvent.keyDown(screen.getByLabelText("add a task"), { key: "Enter" });
+    expect(sent.some((m) => (m as { cmd?: string }).cmd === "note_save")).toBe(false);
+  });
+
+  it("clears the box so the next task can be typed straight away", () => {
+    render(<TasksTool />);
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "one" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(box).toHaveValue("");
+  });
+});

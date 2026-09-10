@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-08
+updated: 2026-09-10
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -20,6 +20,14 @@ covers:
 > — launching a terminal, focusing one, and since `R-J34` showing a folder in
 > the file manager. They are the same family and they teach each other, so
 > they are described together below.
+>
+> **Notes and their tasks are a fourth resident** and belong to
+> [data-model.md](data-model.md) and
+> [ADR-0015](../decisions/0015-markdown-is-the-truth.md): `save_note`,
+> `set_task` and the mirror all live in `state.rs` too, and none of them reaches
+> out to the machine or reads a transcript. Added to this list on 2026-09-10,
+> when `R-L3` raised a staleness warning here by touching a file it shares — the
+> exact coincidence the paragraph above exists to name.
 >
 > The **file surface** — which roots a session may be read through, and the
 > guard around them — is a third resident of `state.rs` and belongs to

@@ -242,3 +242,29 @@ caches where those lines are, and `task_events` remembers the transitions.
   overwrite on the next save. Not solved, and not pretended otherwise — it is
   the same class as `R-D21`'s branch-switch, which was answered by warning
   rather than by guessing.
+
+### Amended 2026-09-10, on the first report
+
+> I can't get any task display. it always show "no tasks"
+
+**The panel was right and the feature was still wrong.** None of the notes on
+that machine held a checkbox, so an empty list was the honest answer — and
+nothing in the window could put a checkbox into a note. `R-L1` decided a task is
+a line in a document and this spec built exactly that, without noticing that
+*writing the line* had no home: you had to know the markdown, and find the Notes
+panel, before the Tasks panel could show you anything at all.
+
+There is now a box at the top of the panel. A task typed there is **appended to
+a document** called *Tasks*, created the first time — which keeps ADR-0015's
+rule 2 exactly as it was, because adding a task is writing a line and nothing
+else.
+
+**And a worse thing was found on the way.** The e2e suite had been writing its
+notes into the **real** `~/.mogeung/notes`: `AppState` let `scratch_dir` be
+overridden and never the mirror, and the note test asserted against
+`notes::mirror_dir()` — so it passed *because* it was inspecting the folder it
+was polluting. Six orphan files on this machine, one per run. `notes_dir` is now
+overridable the way `scratch_dir` always was, the harness sets it, and the test
+checks its own directory. The lesson is the shape of the assertion rather than
+the missing field: a test that reads the same global the code writes cannot tell
+you the code wrote in the wrong place.

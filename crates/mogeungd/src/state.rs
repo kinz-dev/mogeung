@@ -121,6 +121,14 @@ pub struct AppState {
     /// its own, the way the harness already hands in a Claude home, so no
     /// test can write into the developer's real scratch folder.
     pub scratch_dir: std::sync::OnceLock<PathBuf>,
+    /// Where the note mirror is written. `R-B35`, overridable since `R-L3`.
+    ///
+    /// Overridable for the same reason `scratch_dir` is, and it should have
+    /// been from the start: without it every test that saves a note writes into
+    /// the **real** `~/.mogeung/notes`. That is what happened — the e2e suite
+    /// left orphan files in a user's own notes folder, one per run, discovered
+    /// 2026-09-10 while looking for something else.
+    pub notes_dir: std::sync::OnceLock<PathBuf>,
     /// Every run this daemon owns. `R-N4`.
     pub runs: crate::run::Runs,
     /// The local model seam, when one is configured. `R-O1`, ADR-0030.
@@ -537,6 +545,7 @@ impl AppState {
             identity,
             ssh_target: std::sync::OnceLock::new(),
             scratch_dir: std::sync::OnceLock::new(),
+            notes_dir: std::sync::OnceLock::new(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
             proxy: crate::llmproxy::Proxy::new(),
@@ -3225,6 +3234,14 @@ impl AppState {
             .unwrap_or_else(crate::scratch::default_dir)
     }
 
+    /// The note mirror directory in force. `R-B35`.
+    pub fn notes_dir(&self) -> PathBuf {
+        self.notes_dir
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::notes::mirror_dir)
+    }
+
     /// Create or update a note, and mirror it. `R-B35`.
     ///
     /// The store is written first and the mirror second, deliberately: the
@@ -3264,7 +3281,7 @@ impl AppState {
         if let Err(e) = self.store.rederive_tasks(&note.id, &note.body) {
             tracing::warn!("could not derive tasks for note {}: {e}", note.id);
         }
-        if let Err(e) = crate::notes::mirror(&note) {
+        if let Err(e) = crate::notes::mirror_in(&self.notes_dir(), &note) {
             // Worth saying once, and worth not failing over.
             tracing::warn!("could not mirror note {} to disk: {e}", note.id);
         }
@@ -3342,7 +3359,7 @@ impl AppState {
         self.store.delete_note(id)?;
         // Its tasks go with it; what you closed stays. That happened.
         let _ = self.store.forget_tasks(id);
-        crate::notes::unmirror(id);
+        let _ = crate::notes::unmirror_in(&self.notes_dir(), id);
         self.store.load_notes()
     }
 
