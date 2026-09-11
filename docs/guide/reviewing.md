@@ -150,7 +150,8 @@ click **scopes the log to that ref and checks nothing out**. In the middle,
 one row per commit — the graph, the subject with its refs as chips, author,
 date — and at the end of a row the two marks that are mogeung's: a blue dot
 for a commit that probably came from this session, and *read* once every hunk
-of it has been read. Above the rows, the filter bar: *text or hash*, then
+of it has been read. The columns have a header; drag a divider to resize a
+column, and the widths are kept. Above the rows, the filter bar: *text or hash*, then
 Branch, User, Date and Paths. Enter runs the query; a hash selects that
 commit; `author:`, `path:` and `find:` in the box reach the same fields the
 dropdowns do. What is in force is named beneath the bar, with *clear* beside
@@ -163,9 +164,12 @@ details beneath — message, hash, author and email, date, the signature state,
 and the branches that contain it. **Click a file and its diff replaces the
 details**, read marks and all; *all files* is the root row; *details* brings
 the message back. `n` and `p` step through the hunks and across files. The
-strip's ⧉ — or `Enter` on the file you already have selected — opens that
-diff as a pane in the centre, where a long read has the window's height and
-can pop out into a window of its own; it closes like a file.
+strip's ⧉, `Ctrl+D`, or `Enter` on the file you already have selected opens
+that diff as a pane in the centre, where a long read has the window's height
+and can pop out into a window of its own; it closes like a file. `Ctrl+D` in
+the log opens the selected commit's whole diff the same way. A **double-click
+on a file** opens the file itself, as it stood at that commit, in the Code
+pane.
 
 **Local changes** is the working tree, grouped Conflicted · Staged · Unstaged
 · Untracked, with a *this session* toggle and the selected file's diff — or

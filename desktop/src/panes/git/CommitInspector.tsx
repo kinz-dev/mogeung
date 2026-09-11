@@ -23,6 +23,7 @@ import { FileIcon } from "@/ui/FileIcon";
 import { fileTree, visible, type FileNode } from "@/lib/gitTree";
 import { signatureWord } from "@/lib/gitFilter";
 import { selectCommit, selectFile } from "@/lib/gitActions";
+import { openFile } from "@/lib/explorer";
 import { stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { interactive, row as rowCls, rowSelected } from "@/ui/styles";
@@ -62,9 +63,22 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
   // What a pane in the centre could be opened on: a commit's sha, or a
   // range's `from..to`. A stash has no revision a pane could ask for again.
   const rev = selected ?? (label && /^[0-9a-f]+\.\.[0-9a-f]+$/i.test(label) ? label : null);
-  const openInCentre = () => {
+  const openInCentre = (path?: string) => {
     if (!rev) return;
-    showDiffPane(id, rev, focus && focus !== ALL_FILES ? focus : "*");
+    const target = path ?? (focus && focus !== ALL_FILES ? focus : "*");
+    showDiffPane(id, rev, target);
+  };
+  /**
+   * The file itself, as it stood at this commit, in the Code pane — the
+   * double-click gesture asked for on the first day of use (2026-09-11),
+   * beside `Ctrl+D` for the diff. A deleted file is read at the parent,
+   * where it still exists; a range opens at its `to` end.
+   */
+  const openFileAt = (r: FileNode) => {
+    if (!rev || !r.file) return;
+    const at = rev.includes("..") ? rev.split("..")[1] : rev;
+    if (r.file.status === "deleted") openFile(id, r.file.old_path ?? r.path, { rev: `${at}^` });
+    else openFile(id, r.path, { rev: at });
   };
 
   const toggleDir = (path: string) =>
@@ -102,6 +116,13 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.target as HTMLElement).tagName === "BUTTON" && e.key === "Enter") return;
+    // Ctrl+D: this file's diff — or every file's — as a pane in the centre.
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      const r = cursor > 0 ? tree[cursor - 1] : null;
+      openInCentre(r && r.kind === "file" ? r.path : undefined);
+      return;
+    }
     if (e.key === "n" || e.key === "p") {
       e.preventDefault();
       stepHunk(e.key === "n" ? 1 : -1);
@@ -209,12 +230,13 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
               depth={r.depth + 1}
               selected={r.kind === "file" && focus === r.path}
               cursor={cursor === i + 1}
-              title={r.path}
+              title={r.kind === "file" ? `${r.path} — double-click opens the file at this commit; Ctrl+D its diff` : r.path}
               onClick={() => {
                 setCursor(i + 1);
                 if (r.kind === "dir") toggleDir(r.path);
                 else selectFile(id, focus === r.path ? null : r.path);
               }}
+              onDoubleClick={() => r.kind === "file" && openFileAt(r)}
             >
               {r.kind === "dir" ? (
                 <>
@@ -260,8 +282,8 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
             </Dim>
             {rev && (
               <IconButton
-                title="open this diff as a pane in the centre — a long read leaves the dock's height behind, and a pane can pop out (R-D30)"
-                onClick={openInCentre}
+                title="open this diff as a pane in the centre (Ctrl+D) — a long read leaves the dock's height behind, and a pane can pop out (R-D30)"
+                onClick={() => openInCentre()}
                 className="h-5 w-5"
               >
                 <ExternalLink size={11} />
@@ -395,6 +417,7 @@ function TreeRow({
   selected,
   cursor,
   onClick,
+  onDoubleClick,
   title,
   children,
 }: {
@@ -402,6 +425,7 @@ function TreeRow({
   selected: boolean;
   cursor: boolean;
   onClick: () => void;
+  onDoubleClick?: () => void;
   title?: string;
   children: React.ReactNode;
 }) {
@@ -411,6 +435,7 @@ function TreeRow({
       aria-selected={selected}
       data-cursor={cursor || undefined}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       title={title}
       style={{ paddingLeft: 4 + depth * 12 }}
       className={cn(

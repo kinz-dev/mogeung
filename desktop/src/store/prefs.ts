@@ -38,6 +38,14 @@ export type RailTool = (typeof RAIL_TOOLS)[number];
  * time**, so the diff and the conversation can no longer be split side by side
  * the way the tile tree allowed. That was possible before and is not now.
  */
+/** The Git log's fixed columns, in pixels; the subject flexes. */
+export interface LogColumns {
+  graph: number | null;
+  author: number;
+  date: number;
+  marks: number;
+}
+
 export type DockTool = "insight" | "git" | "debt" | "changes" | "transcript" | "run";
 
 /**
@@ -192,6 +200,12 @@ export interface Prefs {
   gitInspectorWidth: number;
   gitBranchesOpen: boolean;
   /**
+   * The log's column widths, dragged by their dividers. `graph` is `null`
+   * until a hand sets it — the lanes size it until then. Asked for on the
+   * first day of use, 2026-09-11.
+   */
+  gitLogColumns: LogColumns;
+  /**
    * Starred refs, keyed by repository root the way `dismissedDirs` is: a
    * favourite is a fact about a repository, and a path names the same
    * repository on every machine that checks it out. `R-D26`.
@@ -304,6 +318,7 @@ export const defaultPrefs = (): Prefs => ({
   gitBranchesWidth: 210,
   gitInspectorWidth: 360,
   gitBranchesOpen: true,
+  gitLogColumns: { graph: null, author: 96, date: 84, marks: 56 },
   gitFavourites: {},
   gitRecents: {},
   groupByRepo: false,

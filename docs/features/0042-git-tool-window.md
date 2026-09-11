@@ -523,6 +523,32 @@ keys can find the next hunk in the scroller and step into the next file past
 the last one — the `R-D18` walk, without the inspector knowing how a hunk
 is drawn.
 
+### The first day of use (2026-09-11, after the install)
+
+Two asks within the hour, both on the Log tab, both built the same day.
+
+**"Make the grid line clearer so that I can resize the column, and make all
+column resizable."** The log has a header row now — *subject · author ·
+date · marks*, with the graph column unlabelled — and a divider on every
+fixed column, dragged the way every other edge in this window is and written
+to the preferences on release (`gitLogColumns`). Cells carry a vertical
+rule. The subject is the column that flexes, so a divider resizes the fixed
+column beside it; the graph sizes itself from the lanes until a hand sets it
+and clips after. Floors keep a column from being dragged out of existence.
+The virtualiser is told the header's height as a scroll margin so keyboard
+selection still lands where it should.
+
+**"A keymap Ctrl+D for opening the diff in the main window. Double click the
+file to open that file in the main window."** Read as two different things,
+deliberately: `Ctrl+D` opens the **diff** — the focused file's in the
+inspector, the selected commit's every file in the log — as an `R-D30`
+pane; a **double-click** on a file opens the **file itself as it stood at
+that commit** in the Code pane, through the revision tabs `R-D11` built,
+with a deleted file read at the parent where it still exists. Enter on an
+already-selected file still opens the diff, and a double-click on a log row
+opens the whole commit's diff. If the double-click was meant to be the diff
+too, it is one line to change and the spec's author will say.
+
 ### `R-D30` (2026-09-11)
 
 An afternoon rather than the medium it was sized at, because the two hard
