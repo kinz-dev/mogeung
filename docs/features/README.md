@@ -1,7 +1,7 @@
 ---
 title: Features in flight
 status: active
-updated: 2026-08-03
+updated: 2026-09-10
 ---
 
 # Features
@@ -33,3 +33,9 @@ They are one piece of work in two specs: the rail without a tool window in it
 is nothing, and the search panel has nowhere to live until the rail exists.
 The docking rule both depend on is
 [ADR-0017](../decisions/0017-the-rail-is-chrome.md).
+
+**Planned, not built** — specified 2026-09-10 from a screenshot of IntelliJ's
+Git tool window:
+
+- [0042 — the Git tool window](0042-git-tool-window.md), the gap analysis, the
+  design and the plan for `R-D26`–`R-D30`
