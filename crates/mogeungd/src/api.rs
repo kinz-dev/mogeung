@@ -729,6 +729,12 @@ struct LogQuery {
     path: Option<String>,
     #[serde(default)]
     pickaxe: Option<String>,
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    since: Option<i64>,
+    #[serde(default)]
+    until: Option<i64>,
 }
 
 fn default_log_limit() -> u32 {
@@ -745,6 +751,9 @@ async fn get_git_log(
         author: q.author,
         path: q.path,
         pickaxe: q.pickaxe,
+        all: q.all,
+        since: q.since,
+        until: q.until,
     };
     match state.git_log(&id, q.skip, q.limit, q.rev, filter).await {
         Ok((commits, done)) => Json(serde_json::json!({ "commits": commits, "done": done })),
@@ -1876,12 +1885,18 @@ async fn handle(
             author,
             path,
             pickaxe,
+            all,
+            since,
+            until,
         } => {
             let filter = crate::git::LogFilter {
                 grep: grep.clone(),
                 author: author.clone(),
                 path: path.clone(),
                 pickaxe: pickaxe.clone(),
+                all,
+                since,
+                until,
             };
             match state
                 .git_log(&session_id, skip, limit, rev.clone(), filter)
@@ -1897,6 +1912,9 @@ async fn handle(
                     author,
                     path,
                     pickaxe,
+                    all,
+                    since,
+                    until,
                 }),
                 Err(e) => err(e),
             }

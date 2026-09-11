@@ -476,5 +476,20 @@ params. `cargo test --workspace`, `npm test`, `npm run check`,
 
 ## Notes
 
-*Nothing built yet. The gap analysis above was taken against the window as
-of commit `6005012` and the daemon's `git.rs` at 2,565 lines.*
+*The gap analysis above was taken against the window as of commit `6005012`
+and the daemon's `git.rs` at 2,565 lines.*
+
+### `R-D27` (2026-09-11)
+
+A morning, as planned, and two things worth writing down. **`@<epoch>` is a
+date git accepts, and the first check said it was not** — the range tried was
+a year out, because a hand-computed epoch landed in 2025. The ISO form was
+already the plan and is what shipped, but the lesson is the one the spec
+gives for the filter text: do not learn git's date grammar at the argument,
+fix one form and test it. **`--since` is a cutoff on the *commit* date**, not
+the author date the first draft of the wire comment said, and it is applied
+during traversal rather than as a filter — fine for a date dropdown, wrong
+for anything that wanted exactness, and the wire comment now says which.
+`log_page`'s argument list became `log_args` so the shape could be pinned
+without a repository; the test that does so would have failed on the old
+code by not compiling, which is the honest kind.

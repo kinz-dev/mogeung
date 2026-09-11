@@ -1127,6 +1127,11 @@ pub struct LogFilter {
     pub path: Option<String>,
     /// Pickaxe: commits that changed how often this literal occurs.
     pub pickaxe: Option<String>,
+    /// Every ref, `--all`, beside whatever `rev` says. `R-D27`.
+    pub all: bool,
+    /// A commit-date range in unix seconds, either end open. `R-D27`.
+    pub since: Option<i64>,
+    pub until: Option<i64>,
 }
 
 /// How a diff is cut: context width and whitespace sensitivity. `R-D14`.
@@ -1184,6 +1189,21 @@ pub fn log_page(
     filter: &LogFilter,
 ) -> Result<(Vec<CommitInfo>, Vec<Vec<String>>, bool)> {
     let limit = limit.clamp(1, 200);
+    let args = log_args(skip, limit, rev, filter)?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run_git(cwd, &args)?;
+    let (mut commits, mut files) = parse_log(&out);
+    let done = commits.len() as u32 <= limit;
+    commits.truncate(limit as usize);
+    files.truncate(limit as usize);
+    Ok((commits, files, done))
+}
+
+/// The argument list `log_page` hands to git, built apart from the spawn
+/// so its shape can be pinned by a test without a repository. `limit` is
+/// already clamped. Everything a client typed is either validated here or
+/// joined with `=` so it cannot open a new argument.
+fn log_args(skip: u32, limit: u32, rev: Option<&str>, filter: &LogFilter) -> Result<Vec<String>> {
     if let Some(r) = rev {
         if !valid_ref_name(r) {
             bail!("that is not a ref name");
@@ -1203,51 +1223,62 @@ pub fn log_page(
         }
     }
     // \x1f between fields, \x1e between records: subjects contain anything.
-    let skip_arg = format!("--skip={skip}");
-    let n_arg = format!("-n{}", limit + 1);
-    let grep_arg = filter.grep.as_ref().map(|g| format!("--grep={g}"));
-    let author_arg = filter.author.as_ref().map(|a| format!("--author={a}"));
-    let pickaxe_arg = filter.pickaxe.as_ref().map(|x| format!("-S{x}"));
-    let mut args = vec![
-        "log",
-        &skip_arg,
-        &n_arg,
-        "--name-only",
-        "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%p%x1f%s%x1e",
+    let mut args: Vec<String> = vec![
+        "log".into(),
+        format!("--skip={skip}"),
+        format!("-n{}", limit + 1),
+        "--name-only".into(),
+        "--format=%H%x1f%h%x1f%an%x1f%at%x1f%D%x1f%p%x1f%s%x1e".into(),
     ];
-    if let Some(g) = &grep_arg {
+    if let Some(g) = &filter.grep {
         // Literal and case-insensitive: a filter box is not a regex field,
         // and `--fixed-strings` covers --author the same way.
-        args.extend(["--fixed-strings", "-i", g]);
+        args.extend(["--fixed-strings".into(), "-i".into(), format!("--grep={g}")]);
     }
-    if let Some(a) = &author_arg {
-        if grep_arg.is_none() {
-            args.extend(["--fixed-strings", "-i"]);
+    if let Some(a) = &filter.author {
+        if filter.grep.is_none() {
+            args.extend(["--fixed-strings".into(), "-i".into()]);
         }
-        args.push(a);
+        args.push(format!("--author={a}"));
     }
-    if let Some(x) = &pickaxe_arg {
+    if let Some(x) = &filter.pickaxe {
         // -S is literal by default: no regex ever reaches git from here.
-        args.push(x);
+        args.push(format!("-S{x}"));
+    }
+    // A date range. Git's date parser takes many shapes and this is not the
+    // place to learn which; an epoch becomes one fixed ISO form here, and
+    // nothing a client typed is ever the argument. `R-D27`.
+    if let Some(t) = filter.since {
+        args.push(format!("--since={}", iso_utc(t)?));
+    }
+    if let Some(t) = filter.until {
+        args.push(format!("--until={}", iso_utc(t)?));
     }
     if filter.path.is_some() {
         // One path exactly — --follow is only defined for one — and this
         // is what makes the filtered log double as file history.
-        args.push("--follow");
+        args.push("--follow".into());
+    }
+    // `--all` beside a `rev` is legal and means both. `R-D27`.
+    if filter.all {
+        args.push("--all".into());
     }
     if let Some(r) = rev {
-        args.push(r);
+        args.push(r.into());
     }
-    args.push("--");
+    args.push("--".into());
     if let Some(p) = &filter.path {
-        args.push(p);
+        args.push(p.clone());
     }
-    let out = run_git(cwd, &args)?;
-    let (mut commits, mut files) = parse_log(&out);
-    let done = commits.len() as u32 <= limit;
-    commits.truncate(limit as usize);
-    files.truncate(limit as usize);
-    Ok((commits, files, done))
+    Ok(args)
+}
+
+/// An epoch as the one date form this module hands to git,
+/// `2026-09-09T00:00:00Z`. Out of chrono's range is not a date.
+fn iso_utc(epoch: i64) -> Result<String> {
+    let t = chrono::DateTime::<chrono::Utc>::from_timestamp(epoch, 0)
+        .ok_or_else(|| anyhow!("that is not a date"))?;
+    Ok(t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 /// Parse `--format=…%x1e --name-only` output. Only the separators are
@@ -1329,7 +1360,7 @@ pub fn show_commit(
         &[
             "show",
             "-s",
-            "--format=%an%x1f%cn%x1f%at%x1f%ct%x1f%p%x1f%D%x1f%B",
+            "--format=%an%x1f%ae%x1f%cn%x1f%ce%x1f%at%x1f%ct%x1f%p%x1f%D%x1f%G?%x1f%B",
             sha,
             "--",
         ],
@@ -1370,12 +1401,15 @@ fn parse_containing_branches(out: &str) -> Vec<String> {
 
 /// Parse the `-s` header record. `%B` is multiline and last, so `splitn`
 /// keeps the body's newlines intact; a body containing the separator could
-/// corrupt nothing past it.
+/// corrupt nothing past it. The fields are read in wire order — a struct
+/// expression evaluates in the order written, and these are `next()` calls.
 fn parse_commit_detail(out: &str) -> Option<CommitDetail> {
-    let mut f = out.splitn(7, '\x1f');
+    let mut f = out.splitn(10, '\x1f');
     Some(CommitDetail {
         author: f.next()?.trim_start_matches(['\n', '\r']).to_string(),
+        author_email: f.next()?.to_string(),
         committer: f.next()?.to_string(),
+        committer_email: f.next()?.to_string(),
         epoch: f.next()?.trim().parse().unwrap_or(0),
         commit_epoch: f.next()?.trim().parse().unwrap_or(0),
         parents: f
@@ -1389,6 +1423,9 @@ fn parse_commit_detail(out: &str) -> Option<CommitDetail> {
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().to_string())
             .collect(),
+        // `%G?` is one letter; git may pad it with a newline when there is
+        // no gpg to ask, so it is trimmed rather than trusted.
+        signature: f.next()?.trim().to_string(),
         message: f.next().unwrap_or("").trim_end().to_string(),
         // Filled by the separate `--contains` call in `show_commit`.
         branches: Vec::new(),
@@ -2487,22 +2524,73 @@ copy to src/b.rs
     /// annotated fields split only on the separator.
     #[test]
     fn commit_detail_keeps_the_body_multiline() {
-        let out = "keith\x1fGitHub\x1f1722000000\x1f1722000100\x1fp1 p2\x1fHEAD -> main, tag: v1\x1f\
+        let out = "keith\x1fkeith@example.com\x1fGitHub\x1fnoreply@github.com\x1f1722000000\x1f1722000100\x1fp1 p2\x1fHEAD -> main, tag: v1\x1fG\x1f\
                    feat: the subject\n\nA body paragraph.\n\nAnother, with = signs and -- dashes.\n";
         let d = parse_commit_detail(out).unwrap();
         assert_eq!(d.author, "keith");
+        assert_eq!(d.author_email, "keith@example.com");
         assert_eq!(d.committer, "GitHub");
+        assert_eq!(d.committer_email, "noreply@github.com");
         assert_eq!(d.epoch, 1722000000);
         assert_eq!(d.commit_epoch, 1722000100);
         assert_eq!(d.parents, vec!["p1", "p2"]);
         assert_eq!(d.refs, vec!["HEAD -> main", "tag: v1"]);
+        assert_eq!(d.signature, "G");
         assert!(d.message.starts_with("feat: the subject\n\nA body paragraph."));
         assert!(d.message.ends_with("dashes."), "trailing newline trimmed");
 
-        let bare = parse_commit_detail("a\x1fa\x1f0\x1f0\x1f\x1f\x1fsubject only").unwrap();
+        let bare =
+            parse_commit_detail("a\x1f\x1fa\x1f\x1f0\x1f0\x1f\x1f\x1fN\n\x1fsubject only").unwrap();
         assert_eq!(bare.message, "subject only");
+        assert_eq!(bare.signature, "N", "the letter is trimmed, not trusted");
+        assert!(bare.author_email.is_empty(), "an unset email is empty, not absent");
         assert!(bare.parents.is_empty(), "a root commit has no parents");
         assert!(parse_commit_detail("").is_none(), "a truncated record degrades to no header");
+        // A body containing the separator corrupts nothing before it.
+        let sep = parse_commit_detail("a\x1f\x1fa\x1f\x1f0\x1f0\x1f\x1f\x1fN\x1fbody with \x1f in it").unwrap();
+        assert_eq!(sep.message, "body with \x1f in it");
+    }
+
+    /// The log's argument list, pinned without a repository. `R-D27` added
+    /// `--all` and a date range; the range is one fixed ISO form, never the
+    /// client's text, and both sit before the `--` that ends the options.
+    #[test]
+    fn log_args_carry_all_and_a_date_range_in_one_fixed_form() {
+        let plain = log_args(0, 100, None, &LogFilter::default()).unwrap();
+        assert_eq!(plain[0], "log");
+        assert!(plain.contains(&"-n101".to_string()), "one past the limit");
+        assert!(!plain.iter().any(|a| a == "--all"), "HEAD alone unless asked");
+        assert_eq!(plain.last().unwrap(), "--");
+
+        let f = LogFilter {
+            all: true,
+            since: Some(1_788_912_000),
+            until: Some(1_789_000_000),
+            ..LogFilter::default()
+        };
+        let args = log_args(50, 100, Some("origin/main"), &f).unwrap();
+        assert!(args.contains(&"--since=2026-09-09T00:00:00Z".to_string()));
+        assert!(args.contains(&"--until=2026-09-10T00:26:40Z".to_string()));
+        let all = args.iter().position(|a| a == "--all").unwrap();
+        let rev = args.iter().position(|a| a == "origin/main").unwrap();
+        let dashes = args.iter().position(|a| a == "--").unwrap();
+        assert!(all < rev && rev < dashes, "--all, then the rev, then --");
+
+        let with_path = log_args(
+            0,
+            10,
+            None,
+            &LogFilter {
+                path: Some("src/lib.rs".into()),
+                ..LogFilter::default()
+            },
+        )
+        .unwrap();
+        assert!(with_path.contains(&"--follow".to_string()));
+        assert_eq!(with_path.last().unwrap(), "src/lib.rs", "the path comes after --");
+
+        assert!(iso_utc(i64::MAX).is_err(), "out of range is not a date");
+        assert!(log_args(0, 10, Some("-evil"), &LogFilter::default()).is_err());
     }
 
     /// `branch -a --contains` answers one name per line; a detached HEAD's

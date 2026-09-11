@@ -342,6 +342,11 @@ export interface GitState {
   author: string;
   path: string;
   pickaxe: string;
+  /** Every ref (`--all`) rather than `rev`/HEAD alone. `R-D27`. */
+  all: boolean;
+  /** A commit-date range, unix seconds, either end open. `R-D27`. */
+  since: number | null;
+  until: number | null;
   selected: string | null;
   diff: FileChange[] | null;
   detail: CommitDetail | null;
@@ -374,6 +379,9 @@ export const emptyGit = (): GitState => ({
   author: "",
   path: "",
   pickaxe: "",
+  all: false,
+  since: null,
+  until: null,
   selected: null,
   diff: null,
   detail: null,
@@ -1988,7 +1996,10 @@ export const useStore = create<AppState>((set, get) => ({
             !echoed(msg.grep, st.grep) ||
             !echoed(msg.author, st.author) ||
             !echoed(msg.path, st.path) ||
-            !echoed(msg.pickaxe, st.pickaxe)
+            !echoed(msg.pickaxe, st.pickaxe) ||
+            (msg.all ?? false) !== st.all ||
+            (msg.since ?? null) !== st.since ||
+            (msg.until ?? null) !== st.until
           ) {
             return {};
           }

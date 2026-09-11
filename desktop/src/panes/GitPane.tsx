@@ -191,6 +191,11 @@ export function GitPane() {
       author: q.author || null,
       path: q.path || null,
       pickaxe: q.pickaxe || null,
+      // `R-D27`: carried so the echo matches; this pane never sets them,
+      // the tool window that replaces it does.
+      all: git?.all ?? false,
+      since: git?.since ?? null,
+      until: git?.until ?? null,
     });
   };
 

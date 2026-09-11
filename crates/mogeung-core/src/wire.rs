@@ -151,6 +151,18 @@ pub enum ClientMsg {
         /// of this literal string — "when did this appear/vanish". `R-D13`.
         #[serde(default)]
         pickaxe: Option<String>,
+        /// Every ref rather than one — `--all`. The tool window's default
+        /// since `R-D27`, because a graph drawn over one branch's first
+        /// parents has nothing to draw; a `rev` still narrows it when set.
+        #[serde(default)]
+        all: bool,
+        /// Unix seconds. Only commits whose **commit** date is at or after
+        /// `since`, and at or before `until`. Turned into one fixed ISO form
+        /// daemon-side, so no date text a client typed reaches git. `R-D27`.
+        #[serde(default)]
+        since: Option<i64>,
+        #[serde(default)]
+        until: Option<i64>,
     },
     /// One commit's diff, parsed into the same file/hunk shapes as `Change`.
     /// `context` widens the hunks' surrounding lines (default 3);
@@ -693,6 +705,19 @@ pub struct CommitDetail {
     /// parses. `R-D18`.
     #[serde(default)]
     pub branches: Vec<String>,
+    /// `%ae` and `%ce`. Defaulted, so a header from an older daemon still
+    /// parses; empty means the daemon did not say. `R-D27`.
+    #[serde(default)]
+    pub author_email: String,
+    #[serde(default)]
+    pub committer_email: String,
+    /// Git's own signature letter, `%G?`: `G` good, `B` bad, `U` good but
+    /// untrusted, `X` good but expired, `Y` good but the key expired, `R`
+    /// good but the key revoked, `E` cannot be checked, `N` no signature.
+    /// Passed through unworded, as a submodule's state is — the client
+    /// chooses the word. `R-D27`.
+    #[serde(default)]
+    pub signature: String,
 }
 
 /// One entry of a [`ClientMsg::GitStatus`] answer.
@@ -1173,6 +1198,12 @@ pub enum ServerMsg {
         path: Option<String>,
         #[serde(default)]
         pickaxe: Option<String>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        since: Option<i64>,
+        #[serde(default)]
+        until: Option<i64>,
     },
     /// One commit's diff, in the same shapes the Changes tab renders —
     /// plus its header (`R-D12`), absent when the detail fetch failed.

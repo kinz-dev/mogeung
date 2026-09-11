@@ -875,6 +875,11 @@ export interface CommitDetail {
   refs: string[];
   message: string;
   branches: string[];
+  /** Absent from an older daemon's header; empty means it did not say. `R-D27`. */
+  author_email?: string;
+  committer_email?: string;
+  /** Git's `%G?` letter — `N` none, `G` good, `B` bad, `U` untrusted, `E` cannot check… `R-D27`. */
+  signature?: string;
 }
 
 export interface StatusEntry {
@@ -1125,6 +1130,11 @@ export type ClientMsg =
       author?: string | null;
       path?: string | null;
       pickaxe?: string | null;
+      /** Every ref, `--all` — the graph's food. `R-D27`. */
+      all?: boolean;
+      /** Unix seconds; commit date at or after / at or before. `R-D27`. */
+      since?: number | null;
+      until?: number | null;
     }
   | { cmd: "git_show"; session_id: SessionId; sha: string; context?: number | null; ignore_ws?: boolean | null }
   | { cmd: "git_status"; session_id: SessionId }
@@ -1322,6 +1332,9 @@ export type ServerMsg =
       author?: string | null;
       path?: string | null;
       pickaxe?: string | null;
+      all?: boolean;
+      since?: number | null;
+      until?: number | null;
     }
   | {
       ev: "git_commit_diff";

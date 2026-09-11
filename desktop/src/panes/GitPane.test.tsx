@@ -85,6 +85,9 @@ describe("filtering the log", () => {
         author: null,
         path: null,
         pickaxe: null,
+        all: false,
+        since: null,
+        until: null,
       },
     ]);
   });
@@ -179,6 +182,9 @@ describe("what the list is answering", () => {
         author: null,
         path: null,
         pickaxe: null,
+        all: false,
+        since: null,
+        until: null,
       },
     ]);
   });

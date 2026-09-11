@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-10
+updated: 2026-09-11
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -38,8 +38,8 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design. Same path rule as `ListDir` |
 | `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
 | `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
-| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path`/`pickaxe` filters — a set path switches `--follow` on (file history, `R-D12`), `pickaxe` is `-S` ("when did this string appear", `R-D13`); each commit carries refs, parents and a session-attribution hint |
-| `GitShow` | One commit's diff, in `Change`'s file/hunk shapes, plus its header — full message, committer, dates, parents (`R-D12`); the sha is validated as hex before git sees it |
+| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path`/`pickaxe` filters — a set path switches `--follow` on (file history, `R-D12`), `pickaxe` is `-S` ("when did this string appear", `R-D13`); each commit carries refs, parents and a session-attribution hint. Since `R-D27`: `all` asks for every ref (`--all`, beside `rev` when both are set), and `since`/`until` are a commit-date range in unix seconds that the daemon turns into one fixed ISO form — the client's number is never the argument. All three echo back on `GitCommits` for the stray rule |
+| `GitShow` | One commit's diff, in `Change`'s file/hunk shapes, plus its header — full message, committer, dates, parents (`R-D12`), and since `R-D27` the author's and committer's emails and git's own signature letter (`%G?`, passed through unworded); the sha is validated as hex before git sees it |
 | `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished; conflicts marked, ignored paths included as `!!` dimming data |
 | `GitDiffFile` | One uncommitted file against `HEAD` (`/dev/null` when untracked) |
 | `GitBlame` | Per-line authorship, capped at 20k lines — of the worktree, or of the file at a revision (`rev`), which is what re-blame rides (`R-D11`) |
@@ -639,6 +639,7 @@ GET  /api/sessions/{id}/file?path=...
 GET  /api/sessions/{id}/tree           # every file path (R-B25)
 GET  /api/sessions/{id}/search?q=...   # literal content search (R-B25)
 GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...&grep=...&author=...&path=...
+                                       #   &pickaxe=...&all=true&since=EPOCH&until=EPOCH (R-D13, R-D27)
                                        # R-D10/R-D11/R-D12, all read-only.
                                        # The write verbs are WebSocket-only:
                                        # there is no REST route that writes.

@@ -224,6 +224,10 @@ async fn commands_about_unknown_sessions_are_harmless() {
             author: Some("\n--exec=rm".into()),
             path: Some("../outside".into()),
             pickaxe: Some("\x00".into()),
+            all: true,
+            // Out of any calendar: `iso_utc` must refuse, not panic. `R-D27`.
+            since: Some(i64::MAX),
+            until: Some(i64::MIN),
         },
     )
     .await;
