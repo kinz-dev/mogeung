@@ -3804,30 +3804,56 @@ impl AppState {
         }
         let shown = dir.display().to_string();
         let (program, args) = file_manager_command(&shown, cfg!(target_os = "macos"));
-        match std::process::Command::new(&program).args(&args).spawn() {
-            Ok(mut child) => {
-                // **Reaped, on a thread of its own.** `xdg-open` hands the
-                // folder to the desktop and exits at once, and a child nobody
-                // waits on is a zombie — one per click, on a button meant to
-                // be clicked often. Nothing *awaits* this: the answer to the
-                // client is "asked", and a handler that sat on the connection
-                // until a file manager had finished starting would trade a
-                // leak for a stall. A non-zero exit is a log line rather than
-                // an error, because by then the client has been told.
-                std::thread::spawn(move || match child.wait() {
-                    Ok(status) if !status.success() => {
-                        tracing::warn!("{program} exited {status} opening {shown}");
-                    }
-                    Err(e) => tracing::warn!("{program} could not be waited on: {e}"),
-                    _ => {}
-                });
-                Ok(())
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(anyhow!(
-                "{program} is not installed, so there is nothing here that opens a folder"
-            )),
-            Err(e) => Err(anyhow!("could not open {}: {e}", dir.display())),
+        spawn_handoff(program, args, shown, "a folder")
+    }
+
+    /// The directory a session's project is: the repository root, or the
+    /// `cwd` outside one. `R-J92`.
+    async fn project_root(&self, id: &str) -> Result<PathBuf> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow!("no such session"))?;
+        Ok(PathBuf::from(shellexpand(
+            session.repo_root.as_deref().unwrap_or(&session.cwd),
+        )))
+    }
+
+    /// Is this an IntelliJ project, and is IntelliJ here? Answered before
+    /// the click so the button can say why it is dead. `R-J92`.
+    pub async fn probe_intellij(&self, id: &str) -> Result<(String, bool, Option<String>)> {
+        let root = self.project_root(id).await?;
+        let project = root.join(".idea").is_dir();
+        let launcher = find_intellij().map(|(program, _)| program);
+        Ok((root.display().to_string(), project, launcher))
+    }
+
+    /// Open the session's project in IntelliJ IDEA, here, where the project
+    /// is. The same handoff as [`Self::open_folder`]. `R-J92`.
+    pub async fn open_in_intellij(&self, id: &str) -> Result<()> {
+        let root = self.project_root(id).await?;
+        if !root.is_dir() {
+            return Err(anyhow!("that folder is gone: {}", root.display()));
         }
+        if !root.join(".idea").is_dir() {
+            return Err(anyhow!(
+                "not an IntelliJ project: there is no .idea folder in {}",
+                root.display()
+            ));
+        }
+        let shown = root.display().to_string();
+        let Some((program, mut args)) = find_intellij() else {
+            return Err(anyhow!(
+                "IntelliJ IDEA was not found on this machine — looked for {}",
+                intellij_candidates(cfg!(target_os = "macos"), &std::env::var("HOME").unwrap_or_default())
+                    .iter()
+                    .map(|c| c.probe.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+        args.push(shown.clone());
+        spawn_handoff(program, args, shown, "a project")
     }
 
     /// Open a terminal running an interactive agent CLI in `dir`.
@@ -3933,6 +3959,113 @@ impl AppState {
 fn file_manager_command(dir: &str, macos: bool) -> (String, Vec<String>) {
     let program = if macos { "open" } else { "xdg-open" };
     (program.to_string(), vec![dir.to_string()])
+}
+
+/// Start a program that takes a folder and hand it the desktop. `R-J34`,
+/// shared with `R-J92`.
+///
+/// **Reaped, on a thread of its own.** `xdg-open` and `idea` hand the folder
+/// on and exit at once, and a child nobody waits on is a zombie — one per
+/// click, on a button meant to be clicked often. Nothing *awaits* this: the
+/// answer to the client is "asked", and a handler that sat on the connection
+/// until an application had finished starting would trade a leak for a
+/// stall. A non-zero exit is a log line rather than an error, because by
+/// then the client has been told.
+fn spawn_handoff(program: String, args: Vec<String>, shown: String, what: &str) -> Result<()> {
+    match std::process::Command::new(&program).args(&args).spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || match child.wait() {
+                Ok(status) if !status.success() => {
+                    tracing::warn!("{program} exited {status} opening {shown}");
+                }
+                Err(e) => tracing::warn!("{program} could not be waited on: {e}"),
+                _ => {}
+            });
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(anyhow!(
+            "{program} is not installed, so there is nothing here that opens {what}"
+        )),
+        Err(e) => Err(anyhow!("could not open {shown}: {e}")),
+    }
+}
+
+/// One way IntelliJ might be started on this machine. `R-J92`.
+///
+/// `probe` is the file whose presence proves the way exists — the launcher
+/// itself, or on a Mac the application bundle `open -a` would resolve —
+/// and `program`/`args` are what to run, with the project's path appended
+/// last.
+#[derive(Debug, Clone, PartialEq)]
+struct IntellijCandidate {
+    probe: String,
+    program: String,
+    args: Vec<String>,
+}
+
+/// Where IntelliJ is looked for, in order: the `idea` launcher on the
+/// daemon's (repaired, `R-J87`) PATH, JetBrains Toolbox's shell script, the
+/// usual `/opt` unpack locations, the snaps, and on a Mac the application
+/// bundles `open -a` resolves. The retired egui client's table, kept.
+fn intellij_candidates(macos: bool, home: &str) -> Vec<IntellijCandidate> {
+    let bin = |name: &str| IntellijCandidate {
+        probe: crate::env::which(name),
+        program: crate::env::which(name),
+        args: vec![],
+    };
+    let file = |path: String| IntellijCandidate {
+        probe: path.clone(),
+        program: path,
+        args: vec![],
+    };
+    let mut out = vec![bin("idea"), file(format!("{home}/.local/share/JetBrains/Toolbox/scripts/idea"))];
+    if macos {
+        for app in ["IntelliJ IDEA", "IntelliJ IDEA Ultimate", "IntelliJ IDEA CE"] {
+            for dir in ["/Applications", &format!("{home}/Applications")] {
+                out.push(IntellijCandidate {
+                    probe: format!("{dir}/{app}.app"),
+                    program: "open".into(),
+                    args: vec!["-a".into(), app.into()],
+                });
+            }
+        }
+    } else {
+        for path in [
+            "/opt/idea/bin/idea.sh",
+            "/opt/idea-IU/bin/idea.sh",
+            "/opt/idea-IC/bin/idea.sh",
+            "/opt/intellij-idea-ultimate-edition/bin/idea.sh",
+            "/opt/intellij-idea-community-edition/bin/idea.sh",
+            "/snap/bin/intellij-idea-ultimate",
+            "/snap/bin/intellij-idea-community",
+            "/usr/bin/intellij-idea-ultimate-edition",
+            "/usr/bin/intellij-idea-community-edition",
+        ] {
+            out.push(file(path.to_string()));
+        }
+    }
+    out
+}
+
+/// The first candidate whose probe exists. Split from the table so the
+/// choice can be tested against a pretend filesystem.
+fn resolve_intellij(
+    candidates: &[IntellijCandidate],
+    present: impl Fn(&str) -> bool,
+) -> Option<(String, Vec<String>)> {
+    candidates
+        .iter()
+        .find(|c| present(&c.probe))
+        .map(|c| (c.program.clone(), c.args.clone()))
+}
+
+fn find_intellij() -> Option<(String, Vec<String>)> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    // A bare name is one `which` could not place; only an absolute answer
+    // is a launcher that is actually here.
+    resolve_intellij(&intellij_candidates(cfg!(target_os = "macos"), &home), |probe| {
+        probe.contains('/') && Path::new(probe).exists()
+    })
 }
 
 /// The macOS launch path, byte-for-byte the original: `open -a Terminal`
@@ -5598,6 +5731,28 @@ mod terminal_tests {
         let (program, args) = file_manager_command("/some/repo", false);
         assert_eq!(program, "xdg-open");
         assert_eq!(args, vec!["/some/repo".to_string()]);
+    }
+
+    /// IntelliJ is looked for where it is put, per platform, and the first
+    /// way found is the one used — with the project's path last. `R-J92`.
+    #[test]
+    fn intellij_is_found_where_each_platform_puts_it() {
+        let linux = intellij_candidates(false, "/home/k");
+        assert!(linux.iter().any(|c| c.probe == "/home/k/.local/share/JetBrains/Toolbox/scripts/idea"));
+        assert!(linux.iter().any(|c| c.probe.starts_with("/snap/bin/")));
+        assert!(linux.iter().all(|c| c.program != "open"), "`open -a` is macOS-speak");
+
+        let mac = intellij_candidates(true, "/Users/k");
+        assert!(mac.iter().any(|c| c.probe == "/Applications/IntelliJ IDEA.app" && c.program == "open"));
+        assert!(mac.iter().all(|c| !c.probe.starts_with("/snap/")));
+
+        // The Toolbox script beats a snap because it comes first; a bare
+        // `idea` that `which` could not place is not a launcher.
+        let found = resolve_intellij(&linux, |p| p == "/home/k/.local/share/JetBrains/Toolbox/scripts/idea" || p.starts_with("/snap/"));
+        assert_eq!(found, Some(("/home/k/.local/share/JetBrains/Toolbox/scripts/idea".to_string(), vec![])));
+        assert_eq!(resolve_intellij(&linux, |_| false), None);
+        let app = resolve_intellij(&mac, |p| p == "/Applications/IntelliJ IDEA CE.app").unwrap();
+        assert_eq!(app, ("open".to_string(), vec!["-a".to_string(), "IntelliJ IDEA CE".to_string()]));
     }
 
     /// A path is argv, never a string a shell gets to look at — a directory

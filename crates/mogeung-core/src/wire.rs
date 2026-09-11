@@ -90,6 +90,15 @@ pub enum ClientMsg {
     /// runs on the daemon's machine, like `FocusTerminal` and for the same
     /// reason — that is where the folder is.
     OpenFolder { session_id: SessionId },
+    /// Is this session's project an IntelliJ one, and is IntelliJ here to
+    /// open it? Answered by [`ServerMsg::IntellijProbe`], once per session,
+    /// so the button can say why it is dead before it is clicked. `R-J92`.
+    ProbeIntellij { session_id: SessionId },
+    /// Open the session's project in IntelliJ IDEA, on the daemon's machine
+    /// — the same handoff as [`ClientMsg::OpenFolder`], for the same reason:
+    /// that is where the project is. Refused, in words, when there is no
+    /// `.idea` folder or no launcher. `R-J92`.
+    OpenInIntellij { session_id: SessionId },
     /// The folders added to this session's workspace by hand. `R-J40`.
     FetchWorkspace { session_id: SessionId },
     /// Add a folder to this session's workspace, so the tree and the file
@@ -1249,6 +1258,20 @@ pub enum ServerMsg {
     GitRefsInfo {
         session_id: SessionId,
         info: Box<RefsInfo>,
+    },
+    /// Whether a session's project is IntelliJ's, and what would open it.
+    /// `R-J92`.
+    IntellijProbe {
+        session_id: SessionId,
+        /// The directory the answer is about: the repository root, or the
+        /// session's `cwd` outside a repository.
+        root: String,
+        /// `root/.idea` is a directory.
+        project: bool,
+        /// The launcher found on this machine — `idea` on the daemon's
+        /// PATH, JetBrains Toolbox's script, a snap, `open -a` on a Mac —
+        /// or `None`, in which case the window says IntelliJ is not here.
+        launcher: Option<String>,
     },
     /// What a fetch did. `R-D25`.
     ///

@@ -326,6 +326,13 @@ export const emptyExplorer = (): ExplorerState => ({
   pendingFiles: [],
 });
 
+/** The daemon's answer to "is this an IntelliJ project, and is IntelliJ here?" `R-J92`. */
+export interface IntellijProbe {
+  root: string;
+  project: boolean;
+  launcher: string | null;
+}
+
 export interface GitState {
   commits: CommitInfo[];
   done: boolean;
@@ -675,6 +682,11 @@ export interface AppState {
   filter: string;
   explorer: Record<SessionId, ExplorerState>;
   git: Record<SessionId, GitState>;
+  /**
+   * Whether a session's project is IntelliJ's and what would open it,
+   * asked once per session by the pane header's button. `R-J92`.
+   */
+  intellij: Record<SessionId, IntellijProbe>;
   /**
    * The last few diffs by `session:rev`, for the diff panes (`R-D30`),
    * which outlive the selection that fetched them. Every commit or range
@@ -1061,6 +1073,7 @@ export const useStore = create<AppState>((set, get) => ({
   filter: "",
   explorer: {},
   git: {},
+  intellij: {},
   revDiffs: {},
   insight: emptyInsight(),
   search: emptySearch(),
@@ -1502,6 +1515,7 @@ export const useStore = create<AppState>((set, get) => ({
           changes: keep(prev.changes),
           changeSummaries: keep(prev.changeSummaries),
           explorer: keep(prev.explorer),
+          intellij: keep(prev.intellij),
         });
         // Notes are not part of the snapshot — they have to be asked for. On
         // every snapshot rather than once, because a reconnect is a new
@@ -2142,6 +2156,11 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "git_refs_info":
         get().patchGit(msg.session_id, { refs: msg.info });
+        break;
+      case "intellij_probe":
+        set((s) => ({
+          intellij: { ...s.intellij, [msg.session_id]: { root: msg.root, project: msg.project, launcher: msg.launcher } },
+        }));
         break;
       case "git_stash_list":
         get().patchGit(msg.session_id, { stashes: msg.stashes });

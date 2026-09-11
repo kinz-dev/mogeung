@@ -52,8 +52,12 @@ your repo — review state lives only in mogeung's database.
 
 ## Handing off
 
-**Terminal**, **IntelliJ**, **VS Code** and **Finder** open the session's working
-directory. Editing properly is not mogeung's job and is not planned to be.
+Two buttons beside the anchor in an Agent pane's header hand the session's
+folder to another program, on the machine the daemon runs on: the **file
+manager** (Finder on a Mac, your desktop's handler elsewhere), and
+**IntelliJ IDEA**. The IntelliJ button is live when the project has a `.idea`
+folder and a launcher was found there; otherwise it is dead and its hover
+says which. Editing properly is not mogeung's job and is not planned to be.
 
 
 ## The transcript

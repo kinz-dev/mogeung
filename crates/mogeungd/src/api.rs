@@ -1810,6 +1810,20 @@ async fn handle(
                 err(e);
             }
         }
+        ClientMsg::ProbeIntellij { session_id } => match state.probe_intellij(&session_id).await {
+            Ok((root, project, launcher)) => state.broadcast(ServerMsg::IntellijProbe {
+                session_id,
+                root,
+                project,
+                launcher,
+            }),
+            Err(e) => err(e),
+        },
+        ClientMsg::OpenInIntellij { session_id } => {
+            if let Err(e) = state.open_in_intellij(&session_id).await {
+                err(e);
+            }
+        }
         ClientMsg::ListDir { session_id, path } => {
             match state.list_dir(&session_id, &path).await {
                 Ok(entries) => state.broadcast(ServerMsg::DirListing {

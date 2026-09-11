@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
+import { Anchor, Braces, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
@@ -276,6 +276,13 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
   const reach = React.useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
   const host = session?.tmux_target && reach ? hostLabel(reach) : null;
 
+  // Whether this session's project is IntelliJ's, asked once per session
+  // and before the click, so the button can say why it is dead. `R-J92`.
+  const probe = useStore((s) => (session ? s.intellij[session.id] : undefined));
+  React.useEffect(() => {
+    if (kind === "agent" && session && !probe) send({ cmd: "probe_intellij", session_id: session.id });
+  }, [kind, session, probe, send]);
+
   if (kind !== "agent" || !paneId) return null;
 
   return (
@@ -346,6 +353,33 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         onClick={() => session && send({ cmd: "open_folder", session_id: session.id })}
       >
         <FolderOpen className="h-3.5 w-3.5" />
+      </IconButton>
+      {/*
+        **The project, in IntelliJ.** Asked 2026-09-11: *"a button at the top
+        next to the anchor icon, that I can open the project in intellij (if
+        that is an intellij project)"*. The retired client had it and the port
+        dropped it; `R-J34` rebuilt only the file manager. Same shape, same
+        reason: the daemon runs it, because the project is on the daemon's
+        machine. Disabled with the reason rather than hidden — no `.idea`
+        folder, or no launcher there — because the answer is known before the
+        click, from a probe asked once per session.
+      */}
+      <IconButton
+        title={
+          !session
+            ? "no project to open — this pane has no session"
+            : !probe
+              ? "checking whether this is an IntelliJ project…"
+              : !probe.project
+                ? `not an IntelliJ project — no .idea folder in ${probe.root}`
+                : !probe.launcher
+                  ? "IntelliJ IDEA was not found on the daemon's machine"
+                  : `open ${probe.root} in IntelliJ IDEA`
+        }
+        disabled={!session || !probe?.project || !probe?.launcher}
+        onClick={() => session && send({ cmd: "open_in_intellij", session_id: session.id })}
+      >
+        <Braces className="h-3.5 w-3.5" />
       </IconButton>
       {/*
         **This pane, in a window of its own.** Asked for 2026-09-08: *"move a

@@ -1110,6 +1110,8 @@ export type ClientMsg =
   | { cmd: "focus_terminal"; session_id: SessionId }
   /** Show the session's folder in the machine's file manager. `R-J34`. */
   | { cmd: "open_folder"; session_id: SessionId }
+  | { cmd: "probe_intellij"; session_id: SessionId }
+  | { cmd: "open_in_intellij"; session_id: SessionId }
   /** The folders added to this session's workspace by hand. `R-J40`. */
   | { cmd: "fetch_workspace"; session_id: SessionId }
   | { cmd: "add_workspace_dir"; session_id: SessionId; path: string }
@@ -1363,6 +1365,7 @@ export type ServerMsg =
       rev?: string | null;
     }
   | { ev: "git_refs_info"; session_id: SessionId; info: RefsInfo }
+  | { ev: "intellij_probe"; session_id: SessionId; root: string; project: boolean; launcher: string | null }
   | {
       ev: "git_fetched";
       session_id: SessionId;

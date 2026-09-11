@@ -229,7 +229,39 @@ describe("showing a session's folder", () => {
 
     fireEvent.click(screen.getByTitle("show /tmp/two in the file manager"));
 
-    expect(sent).toEqual([{ cmd: "open_folder", session_id: "s2" }]);
+    // The header also probes for IntelliJ on mount (`R-J92`); the folder
+    // button's own message is the one this test is about.
+    expect(sent.filter((m) => (m as { cmd: string }).cmd === "open_folder")).toEqual([{ cmd: "open_folder", session_id: "s2" }]);
+  });
+
+  /**
+   * The project in IntelliJ, beside it. `R-J92`. The probe is asked once
+   * for the pane's session, the button is dead with the reason until it
+   * answers yes on both counts, and the click sends the held session.
+   */
+  it("asks whether the session's project is IntelliJ's, and opens it there", () => {
+    const sent: unknown[] = [];
+    useStore.setState({
+      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), paneHold: { agent: "s2" } } } },
+      selected: "s1",
+      sessions: { s1: session("s1", { cwd: "/tmp/one" }), s2: session("s2", { cwd: "/tmp/two" }) },
+      intellij: {},
+      send: (msg: unknown) => sent.push(msg),
+    } as never);
+    header();
+    expect(sent).toEqual([{ cmd: "probe_intellij", session_id: "s2" }]);
+    expect(screen.getByTitle(/checking whether this is an IntelliJ project/)).toBeDisabled();
+
+    act(() => useStore.getState().ingest({ ev: "intellij_probe", session_id: "s2", root: "/tmp/two", project: false, launcher: "/usr/bin/idea" } as never));
+    expect(screen.getByTitle("not an IntelliJ project — no .idea folder in /tmp/two")).toBeDisabled();
+
+    act(() => useStore.getState().ingest({ ev: "intellij_probe", session_id: "s2", root: "/tmp/two", project: true, launcher: null } as never));
+    expect(screen.getByTitle("IntelliJ IDEA was not found on the daemon's machine")).toBeDisabled();
+
+    act(() => useStore.getState().ingest({ ev: "intellij_probe", session_id: "s2", root: "/tmp/two", project: true, launcher: "/usr/bin/idea" } as never));
+    sent.length = 0;
+    fireEvent.click(screen.getByTitle("open /tmp/two in IntelliJ IDEA"));
+    expect(sent).toEqual([{ cmd: "open_in_intellij", session_id: "s2" }]);
   });
 
   /** Disabled rather than absent: a control that comes and goes is one you

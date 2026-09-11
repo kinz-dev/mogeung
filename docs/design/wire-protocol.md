@@ -32,6 +32,8 @@ available as plain REST so the daemon is curl-able without a UI.
 | `FetchBlastRadius` | What else references the symbols a file's diff changed |
 | `FocusTerminal` | Bring the terminal *app* a live session runs in to the front — iTerm2, Terminal.app, the tmux client; not a mogeung pane |
 | `OpenFolder` | Show a session's `cwd` in the machine's file manager — Finder on macOS, `xdg-open`'s handler elsewhere (`R-J34`). A handoff, and it runs where the daemon is, because a path is not the same answer on two machines |
+| `ProbeIntellij` | Is this session's project IntelliJ's (`.idea` at the repository root, or the `cwd` outside one), and is a launcher here? Answered by `IntellijProbe` with the root, the two answers and the launcher found, once per session, so the window's button can say why it is dead before the click (`R-J92`) |
+| `OpenInIntellij` | Open the project in IntelliJ IDEA on the daemon's machine — the same handoff as `OpenFolder`, refused in words when there is no `.idea` folder or no launcher (`R-J92`) |
 | `FetchWorkspace` | A session's own root, the folders added to it by hand, any that have gone missing (`R-J40`), and the folders mogeung has *noticed* it working in — `WorkspaceHint { path, source, files }`, offered and never added (`R-J39`) |
 | `AddWorkspaceDir` / `RemoveWorkspaceDir` | Add or drop a folder. **Gated with the repository writes** — not because they write one, but because they widen what this daemon will read out, which is ADR-0012's rule wearing a third hat |
 | `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`). A path is relative to the session's own root, **or absolute** — in which case it is served only from inside a folder the workspace holds (`R-J40`) |
@@ -57,8 +59,9 @@ available as plain REST so the daemon is curl-able without a UI.
 ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
 
 `FocusTerminal` is not an exception. It moves *your* window; the agent is
-untouched and nothing is typed. Neither is `OpenFolder`: it hands a directory
-to another application, which is what [pillar K](../product/roadmap.md#k-explicitly-not)
+untouched and nothing is typed. Neither is `OpenFolder`, nor `OpenInIntellij`
+beside it: each hands a directory to another application, which is what
+[pillar K](../product/roadmap.md#k-explicitly-not)
 asks for — this window reads a worktree and never writes it, so anything you
 want to *do* to a file belongs to a program that can. Nor is "copy as prompt" a command at all — the
 client builds the text and puts it on your clipboard, and you paste it
