@@ -173,6 +173,58 @@ export function filePanes(api: DockviewApi | null): string[] {
 }
 
 /**
+ * One file of one commit's diff, as a pane in the centre. `R-D30`.
+ *
+ * The concession to IntelliJ's *float*: a dock tool is chrome and stays in
+ * the window, but a diff worth a long read can leave the dock's height
+ * behind as a pane, and from there leave the window under `R-B55`. Read
+ * marks come with it, because the pane is the same `DiffList`.
+ *
+ * `rev` is a sha or `from..to`; `path` is one file or `*` for all of them.
+ * Like a `file:` id it names a repository state that may be gone by the next
+ * launch, so it is stripped on restore with the file panes.
+ */
+const DIFF_PREFIX = "diff:";
+
+export function diffPaneId(session: string, rev: string, path: string): string {
+  return `${DIFF_PREFIX}${session}:${rev}:${path}`;
+}
+
+export function parseDiffPaneId(id: string): { session: string; rev: string; path: string } | null {
+  if (!id.startsWith(DIFF_PREFIX)) return null;
+  const rest = id.slice(DIFF_PREFIX.length);
+  const a = rest.indexOf(":");
+  if (a < 0) return null;
+  const b = rest.indexOf(":", a + 1);
+  if (b < 0) return null;
+  // Split from the left exactly twice: a session id and a rev cannot hold a
+  // colon, and a path can.
+  return { session: rest.slice(0, a), rev: rest.slice(a + 1, b), path: rest.slice(b + 1) };
+}
+
+export function showDiffPane(session: string, rev: string, path: string): void {
+  if (!dock) return;
+  const id = diffPaneId(session, rev, path);
+  const existing = dock.getPanel(id);
+  if (existing) {
+    existing.api.setActive();
+    return;
+  }
+  const active = dock.activeGroup;
+  const activeIsReading = active?.activePanel && (parseFilePaneId(active.activePanel.id) !== null || parseDiffPaneId(active.activePanel.id) !== null);
+  dock.addPanel({
+    id,
+    component: "diff",
+    title: path === "*" ? `${rev.slice(0, 8)} · all files` : path,
+    ...(active && !activeIsReading ? { position: { referenceGroup: active, direction: "right" as const } } : {}),
+  });
+}
+
+export function diffPanes(api: DockviewApi | null): string[] {
+  return (api?.panels ?? []).map((p) => p.id).filter((id) => id.startsWith(DIFF_PREFIX));
+}
+
+/**
  * The tabs sitting in the same group as this one, in tab order, itself
  * included. `R-J47`.
  *

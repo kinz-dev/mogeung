@@ -388,6 +388,20 @@ export interface GitState {
   console: ConsoleEntry[];
 }
 
+/** How many revision diffs the window keeps for its panes. */
+const REV_DIFFS = 8;
+
+/** A bounded map, insertion-ordered: the oldest key goes when the cap is
+ *  passed, and a key seen again moves to the end. */
+function remember(m: Record<string, FileChange[]>, key: string, files: FileChange[]): Record<string, FileChange[]> {
+  const next: Record<string, FileChange[]> = {};
+  for (const [k, v] of Object.entries(m)) if (k !== key) next[k] = v;
+  next[key] = files;
+  const keys = Object.keys(next);
+  while (keys.length > REV_DIFFS) delete next[keys.shift()!];
+  return next;
+}
+
 export const emptyGit = (): GitState => ({
   commits: [],
   done: false,
@@ -661,6 +675,13 @@ export interface AppState {
   filter: string;
   explorer: Record<SessionId, ExplorerState>;
   git: Record<SessionId, GitState>;
+  /**
+   * The last few diffs by `session:rev`, for the diff panes (`R-D30`),
+   * which outlive the selection that fetched them. Every commit or range
+   * diff that arrives lands here whether or not it is still selected;
+   * bounded, oldest first out.
+   */
+  revDiffs: Record<string, FileChange[]>;
   insight: InsightState;
   search: SearchPanelState;
   /** Scroll the Transcript to the first event at or after this moment. */
@@ -1040,6 +1061,7 @@ export const useStore = create<AppState>((set, get) => ({
   filter: "",
   explorer: {},
   git: {},
+  revDiffs: {},
   insight: emptyInsight(),
   search: emptySearch(),
   focusEventTs: null,
@@ -2069,8 +2091,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "git_commit_diff":
         set((s) => {
+          const revDiffs = remember(s.revDiffs, `${msg.session_id}:${msg.sha}`, msg.files);
           const st = s.git[msg.session_id] ?? emptyGit();
-          if (st.selected !== msg.sha) return {};
+          if (st.selected !== msg.sha) return { revDiffs };
           // `R-D17`'s badge, learnt here and nowhere else: a commit is *read*
           // when every hunk of it is, which is only knowable once its diff
           // has been fetched — the spec chose honesty over a badge on every
@@ -2078,6 +2101,7 @@ export const useStore = create<AppState>((set, get) => ({
           const hunks = msg.files.flatMap((f) => f.hunks);
           const read = hunks.length > 0 && hunks.every((h) => h.reviewed);
           return {
+            revDiffs,
             git: {
               ...s.git,
               [msg.session_id]: {
@@ -2146,6 +2170,7 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
       case "git_range_diff":
+        set((s) => ({ revDiffs: remember(s.revDiffs, `${msg.session_id}:${msg.from}..${msg.to}`, msg.files) }));
         get().patchGit(msg.session_id, {
           diff: msg.files,
           detail: null,

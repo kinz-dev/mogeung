@@ -48,12 +48,13 @@ import { WallOverlay } from "@/ui/WallOverlay";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { FilePane } from "@/panes/FilePane";
+import { DiffPane } from "@/panes/DiffPane";
 import { ScratchPane } from "@/panes/ScratchPane";
 import { AgentPane } from "@/panes/AgentPane";
 import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
-import { closePanesFor, dropOrphanHolds, filePanes, setDock } from "@/lib/panes";
+import { closePanesFor, dropOrphanHolds, filePanes, setDock, diffPanes } from "@/lib/panes";
 import { retheme } from "@/lib/popout";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
@@ -156,6 +157,9 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // A scratch file. Its id is `scratch:<name>` and, unlike `file:`, it is
   // **kept** by the saved layout: it names nothing that can go stale.
   scratch: pane("scratch", ScratchPane, { scale: false }),
+  // One file of one commit, out of the Git tool window. `R-D30`. Its id
+  // names a sha, so it is stripped on restore with the `file:` panes.
+  diff: pane("diff", DiffPane),
 };
 
 const LAYOUT_KEY = "mogeung.layout";
@@ -198,7 +202,7 @@ const MOVED_TO_DOCK = ["git", "info", "debt", "insight", "changes", "transcript"
  * a fresh window has no open files to restore in the first place.
  */
 function stripFilePanes(api: DockviewApi): void {
-  for (const id of filePanes(api)) api.getPanel(id)?.api.close();
+  for (const id of [...filePanes(api), ...diffPanes(api)]) api.getPanel(id)?.api.close();
 }
 
 /**

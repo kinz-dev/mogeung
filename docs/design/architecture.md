@@ -587,7 +587,11 @@ and **file** — since `R-B45` moved Changes and Transcript down to join Git,
 Insight and Debt in the bottom dock, and Info under the queue. A file is a pane
 per open file since `R-B53`, which collapsed the Code pane's own tab strip and
 two-way split into dockview's: the window docked things twice until then, and
-the inner system was the weaker one. They live in the dockview
+the inner system was the weaker one. A **diff** pane (`R-D30`, id
+`diff:<session>:<rev>:<path>`) is the third kind in the centre since
+2026-09-11 — one file of one commit out of the Git tool window, closable and
+stripped on restore like a `file:` pane, drawn from a small store cache of
+revision diffs that every commit or range diff fills as it arrives. They live in the dockview
 tree, are draggable and splittable, and their arrangement is serialised into the
 client's own storage.
 

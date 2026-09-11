@@ -316,7 +316,7 @@ leave the dock as a pane and, from there, as a window under `R-B55`.
 
 `R-D30` — the diff pane:
 
-- [ ] A file in the inspector can be opened as a pane in the centre, showing
+- [x] A file in the inspector can be opened as a pane in the centre, showing
       that file's diff with read marks; the pane pops out under `R-B55` and
       is not restored by a saved layout
 
@@ -522,6 +522,28 @@ compared. Pinned by a test.
 keys can find the next hunk in the scroller and step into the next file past
 the last one — the `R-D18` walk, without the inspector knowing how a hunk
 is drawn.
+
+### `R-D30` (2026-09-11)
+
+An afternoon rather than the medium it was sized at, because the two hard
+parts already existed: `R-B53` made a pane per file with an id that carries
+what the pane needs, and `R-B55` made every pane pop out. A `diff:` id
+beside `file:`, the same strip-on-restore rule, the same close button, and
+the pane is `DiffList` — read marks included, because the marks are content
+hashes and a hunk read here is read in the dock.
+
+**The one thing that needed inventing was where the files come from.** The
+git slice keeps one diff, the selected commit's, and a pane outlives the
+selection that fetched it. So the store now keeps a small cache of revision
+diffs, `revDiffs`, keyed `session:rev` and bounded at eight, filled by every
+commit or range diff that arrives whether or not it is still selected — a
+pane opened from the inspector never asks, and a pane opened cold asks once.
+Not a stash: a stash has no revision a pane could ask for again, so the
+button is absent there rather than promising a re-fetch that cannot happen.
+
+Two ways to see one diff is the duplication `R-D18` refused, and the row
+said in advance which one goes if the maximise makes the pane unwanted.
+That verdict is the week's.
 
 ### `R-D28` (2026-09-11)
 

@@ -18,7 +18,7 @@ import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "doc
 import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
-import { addAgentPane, closeAgentPane, parseFilePaneId } from "@/lib/panes";
+import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
 import { popOutPane } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
@@ -147,6 +147,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
   const { text, held, hint } = usePaneTitle(props.api.id, fallback);
   const file = fileOf(props.api.id);
   const scratch = parseScratchPaneId(props.api.id);
+  // A diff pane (`R-D30`) is a document you are finished with too: it names
+  // a revision, closes like a file, and is stripped on restore with them.
+  const diff = parseDiffPaneId(props.api.id);
   const root = useStore((s) => {
     if (!file) return null;
     const owner = s.sessions[file.session];
@@ -164,15 +167,16 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
         exception and always was: it is a document you are finished with, and
         `R-B53` made that a real tab rather than a row in a strip.
       */}
-      {(file || scratch) && (
+      {(file || scratch || diff) && (
         <button
           type="button"
-          title={`close ${file ? file.name : scratch}`}
-          aria-label={`close ${file ? file.name : scratch}`}
+          title={`close ${file ? file.name : (scratch ?? text)}`}
+          aria-label={`close ${file ? file.name : (scratch ?? text)}`}
           onClick={(e) => {
             e.stopPropagation();
             // A scratch file is a document too (`R-L5`); it closes through
-            // the dock because nothing in the store holds it open.
+            // the dock because nothing in the store holds it open. So does a
+            // diff pane.
             if (file) closeFile(file.session, file.path, file.rev);
             else props.api.close();
           }}

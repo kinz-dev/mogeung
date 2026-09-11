@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 660 passing |
-| Rust | 46022 lines |
+| Tests | 661 passing |
+| Rust | 46163 lines |
 | Docs | 110 files, 38 ADRs |
 
 ## Assumptions
@@ -62,5 +62,5 @@ Untested: **17** · At risk: **5** · Supported: 17 · Refuted: 2
 | [Scratch files](docs/features/0039-scratch-files.md) | `shipped` | [A27] |
 | [A connection manager](docs/features/0040-a-connection-manager.md) | `shipped` | [A24] |
 | [A pane in its own window](docs/features/0041-a-pane-in-its-own-window.md) | `shipped` | [A30] |
-| [The Git tool window — IntelliJ's log, in the dock](docs/features/0042-git-tool-window.md) | `draft` | [A13, A18, A19, A26] |
+| [The Git tool window — IntelliJ's log, in the dock](docs/features/0042-git-tool-window.md) | `active` | [A13, A18, A19, A26] |
 

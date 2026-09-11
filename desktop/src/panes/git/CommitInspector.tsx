@@ -14,9 +14,10 @@
  */
 
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Folder } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, Folder } from "lucide-react";
 import { useStore } from "@/store";
-import { Dim, Empty, Mono } from "@/ui/primitives";
+import { Dim, Empty, IconButton, Mono } from "@/ui/primitives";
+import { showDiffPane } from "@/lib/panes";
 import { DiffList } from "@/ui/DiffView";
 import { FileIcon } from "@/ui/FileIcon";
 import { fileTree, visible, type FileNode } from "@/lib/gitTree";
@@ -58,6 +59,13 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
   // A range or a stash has no details to show, so its default is every file.
   const showDiff = focus !== null || (!detail && !!label);
   const fileRows = tree.filter((r) => r.kind === "file");
+  // What a pane in the centre could be opened on: a commit's sha, or a
+  // range's `from..to`. A stash has no revision a pane could ask for again.
+  const rev = selected ?? (label && /^[0-9a-f]+\.\.[0-9a-f]+$/i.test(label) ? label : null);
+  const openInCentre = () => {
+    if (!rev) return;
+    showDiffPane(id, rev, focus && focus !== ALL_FILES ? focus : "*");
+  };
 
   const toggleDir = (path: string) =>
     setCollapsed((c) => {
@@ -111,10 +119,15 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
     if (e.key === "ArrowDown" || e.key === "j") setCursor(Math.min(count - 1, cursor + 1));
     else if (e.key === "ArrowUp" || e.key === "k") setCursor(Math.max(0, cursor - 1));
     else if (e.key === "Enter") {
-      if (cursor === 0) selectFile(id, ALL_FILES);
-      else {
+      // Enter selects; Enter on what is already selected opens it in the
+      // centre — the second press is the `R-D30` gesture.
+      if (cursor === 0) {
+        if (focus === ALL_FILES) openInCentre();
+        else selectFile(id, ALL_FILES);
+      } else {
         const r = tree[cursor - 1];
         if (r.kind === "dir") toggleDir(r.path);
+        else if (focus === r.path) openInCentre();
         else selectFile(id, r.path);
       }
     } else return;
@@ -245,6 +258,15 @@ export function CommitInspector({ id, onBack }: { id: string; onBack: () => void
             <Dim className="ml-auto shrink-0" title="n and p step through the hunks, and across files">
               n / p
             </Dim>
+            {rev && (
+              <IconButton
+                title="open this diff as a pane in the centre — a long read leaves the dock's height behind, and a pane can pop out (R-D30)"
+                onClick={openInCentre}
+                className="h-5 w-5"
+              >
+                <ExternalLink size={11} />
+              </IconButton>
+            )}
             {detail && (
               <button
                 type="button"

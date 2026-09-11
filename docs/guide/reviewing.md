@@ -162,7 +162,10 @@ On the right, the selected commit: its files as a tree with counts, and the
 details beneath — message, hash, author and email, date, the signature state,
 and the branches that contain it. **Click a file and its diff replaces the
 details**, read marks and all; *all files* is the root row; *details* brings
-the message back. `n` and `p` step through the hunks and across files.
+the message back. `n` and `p` step through the hunks and across files. The
+strip's ⧉ — or `Enter` on the file you already have selected — opens that
+diff as a pane in the centre, where a long read has the window's height and
+can pop out into a window of its own; it closes like a file.
 
 **Local changes** is the working tree, grouped Conflicted · Staged · Unstaged
 · Untracked, with a *this session* toggle and the selected file's diff — or
