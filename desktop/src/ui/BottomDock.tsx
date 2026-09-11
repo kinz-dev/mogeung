@@ -26,7 +26,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import { useStore } from "@/store";
 import { useChord } from "@/lib/keymap";
 import type { DockTool } from "@/store/prefs";
@@ -87,6 +87,7 @@ export function BottomDock() {
   };
   const dock = useStore((s) => s.prefs.dock);
   const stored = useStore((s) => s.prefs.dockHeight);
+  const max = useStore((s) => s.prefs.dockMax);
   const setPrefs = useStore((s) => s.setPrefs);
   const [height, setHeight] = useState(stored);
   const heightRef = useRef(height);
@@ -110,15 +111,25 @@ export function BottomDock() {
   };
 
   const show = (tool: DockTool) => setPrefs({ dock: dock === tool ? null : tool });
+  const toggleMax = () => setPrefs({ dockMax: !max });
 
   return (
     <>
       {dock && (
-        <div className="flex shrink-0 flex-col border-t border-[var(--border)]" style={{ height }}>
+        // Maximised (`R-D29`) the dock asks for the whole column and the
+        // centre, which is `min-h-0 flex-1`, folds to nothing — IntelliJ's
+        // maximised tool window, without a second layout. `dockHeight` is
+        // untouched, so restoring gives back the height you had.
+        <div
+          data-max={max || undefined}
+          className={cn("flex flex-col border-t border-[var(--border)]", max ? "min-h-0" : "shrink-0")}
+          style={max ? { flex: "1 1 100%" } : { height }}
+        >
           <div
-            onMouseDown={onDrag}
-            className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--blue)]"
-            title="drag to resize"
+            onMouseDown={max ? undefined : onDrag}
+            onDoubleClick={toggleMax}
+            className={cn("h-1 shrink-0", max ? "cursor-default" : "cursor-row-resize hover:bg-[var(--blue)]")}
+            title={max ? "double-click to restore" : "drag to resize — double-click to maximise"}
           />
           <div className="min-h-0 flex-1 bg-[var(--bg-panel)]">
             {/* Keyed per tool so each keeps its own zoom, and so switching
@@ -148,6 +159,9 @@ export function BottomDock() {
             title={`${t.hint}${chords[t.id] ? `  (${chords[t.id]})` : ""}`}
             aria-pressed={dock === t.id}
             onClick={() => show(t.id)}
+            // IntelliJ's own gesture for a maximised tool window, on the
+            // tool that is already open; on another it only opens it.
+            onDoubleClick={() => dock === t.id && toggleMax()}
             className={cn(
               "rounded-sm px-2 py-0.5 text-2xs outline-none",
               "transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)]",
@@ -161,7 +175,14 @@ export function BottomDock() {
           </button>
         ))}
         {dock && (
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-0.5">
+            <IconButton
+              title={max ? "restore the dock to its height (Alt+Shift+9)" : "maximise the dock — the centre folds away (Alt+Shift+9)"}
+              active={max}
+              onClick={toggleMax}
+            >
+              {max ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+            </IconButton>
             <IconButton title="collapse the dock" onClick={() => setPrefs({ dock: null })}>
               <ChevronDown size={12} />
             </IconButton>

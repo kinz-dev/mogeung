@@ -167,8 +167,15 @@ the message back. `n` and `p` step through the hunks and across files.
 **Local changes** is the working tree, grouped Conflicted · Staged · Unstaged
 · Untracked, with a *this session* toggle and the selected file's diff — or
 its three sides when it is conflicted. **Stash** lists what is shelved and
-shows one through the same inspector. **More** holds the reflog, the
-worktrees and the submodules.
+shows one through the same inspector. **Console** is every git question this
+window asked, in order, with what came back — git's refusals in its own
+words, and the fetch report in full. **More** holds the reflog, the worktrees
+and the submodules.
+
+Three panes at the dock's usual height is a cramped IntelliJ, and IntelliJ
+knows it: **maximise** the dock with the button on its strip, `Alt+Shift+9`,
+or a double-click on the open tool's tab, and the centre folds away until
+you restore it.
 
 Right-click a commit for copy sha, copy subject, copy as patch, a link to the
 commit on GitHub or GitLab, and *mark* — two marked ends make a range diff.

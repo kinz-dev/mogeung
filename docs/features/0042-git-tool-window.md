@@ -308,9 +308,9 @@ leave the dock as a pane and, from there, as a window under `R-B55`.
 
 `R-D29` — console and height:
 
-- [ ] The Console tab lists, per session, every git command the window sent
+- [x] The Console tab lists, per session, every git command the window sent
       and what came back; the fetch report lands there in full
-- [ ] The bottom dock can be maximised to the centre's height and restored,
+- [x] The bottom dock can be maximised to the centre's height and restored,
       by a gesture and by a key, and the state survives switching tools
 
 `R-D30` — the diff pane:
@@ -521,6 +521,27 @@ compared. Pinned by a test.
 keys can find the next hunk in the scroller and step into the next file past
 the last one — the `R-D18` walk, without the inspector knowing how a hunk
 is drawn.
+
+### `R-D29` (2026-09-11)
+
+Smaller than `R-D26` by an order of magnitude, and two things are worth
+writing down. **The ledger has one writer on each side.** Every `git_*`
+command becomes a row inside the store's `send`, and every answer closes a
+row inside `ingest` before the switch — so no region of the window, and no
+future one, has to remember the console exists. **The wire's error has no
+address.** `ServerMsg::Error` carries a message and nothing else, so a
+refusal lands on the latest command still waiting, across sessions, ordered
+by a send sequence rather than the clock — two commands in one millisecond
+have a latest, and the first test found they did not when the clock was the
+tie-break. The row says on hover that this is a guess. Giving the error a
+`session_id` and a `cmd` on the wire would make it certain and is a small
+daemon change; it was not made here because a window a build ahead of its
+daemon would still need the guess, and because the guess is right whenever
+one command is in flight, which is nearly always.
+
+Maximise cost no layout: the dock asks for the column with `flex: 1 1 100%`
+and the centre, already `min-h-0 flex-1`, folds to nothing. `dockHeight` is
+untouched, so restoring gives back what you had.
 
 ### `R-D27` (2026-09-11)
 

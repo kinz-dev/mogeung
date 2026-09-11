@@ -181,7 +181,12 @@ carried seven. The graph's lanes and the two trees are pure functions under
 of the daemon, since every row already carries its parents. The default log
 is every ref (`--all`, `R-D27`), which is what gives the graph something to
 draw; the store keeps a page whose echo lacks the `R-D27` fields, because a
-daemon a build behind the window answers without them.
+daemon a build behind the window answers without them. The window's Console
+tab (`R-D29`) is fed from the store's one `send` and one `ingest`: every
+`git_*` command is a row as it is sent, its answer closes the row, and a
+daemon `error` — which carries no address on the wire — lands on the latest
+row still waiting, by send order. The dock's maximise is a preference and
+one flex rule, not a second layout.
 
 **One outbound network call exists**, and only one: `git fetch`, on an explicit
 keystroke (`Ctrl+T`), admitted 2026-08-01 by

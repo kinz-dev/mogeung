@@ -134,6 +134,12 @@ export interface Prefs {
   /** The bottom dock's open tool, or `null` for the strip. */
   dock: DockTool | null;
   dockHeight: number;
+  /**
+   * The dock fills the window, the centre folded to nothing. `R-D29`. A
+   * preference so the shape survives switching tools; the height it goes
+   * back to is `dockHeight`, untouched.
+   */
+  dockMax: boolean;
   /** Info sits under the queue, because it is about the row you just clicked. */
   infoOpen: boolean;
   /** The Files tree follows the file you are reading. `R-J25`. */
@@ -285,6 +291,7 @@ export const defaultPrefs = (): Prefs => ({
   railSizes: {},
   dock: null,
   dockHeight: 280,
+  dockMax: false,
   infoOpen: false,
   filesFollow: false,
   dismissedDirs: {},

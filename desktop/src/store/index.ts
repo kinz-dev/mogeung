@@ -74,6 +74,7 @@ import {
   type DaemonStatus,
 } from "@/lib/tauri";
 import { applyAppZoom } from "@/lib/zoom";
+import { answerFor, attachError, attachResult, gitSessionOf, pushCmd, type ConsoleEntry } from "@/lib/gitConsole";
 import { draftAsk, type FlaggedHunk } from "@/lib/prompt";
 import { commandAsk, explainAsk, parseCommand, refineAsk } from "@/lib/command";
 import {
@@ -383,6 +384,8 @@ export interface GitState {
    * (`R-D17`); the log row wears the badge once known, and only then.
    */
   readBySha: Record<string, boolean>;
+  /** What the window asked git and what came back, in order. `R-D29`. */
+  console: ConsoleEntry[];
 }
 
 export const emptyGit = (): GitState => ({
@@ -417,6 +420,7 @@ export const emptyGit = (): GitState => ({
   rangeMark: null,
   logPending: false,
   readBySha: {},
+  console: [],
 });
 
 export interface InsightState {
@@ -1084,6 +1088,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   send: (msg) => {
     client?.send(msg);
+    // The Console tab's ledger (`R-D29`): every git command is a row the
+    // moment it is sent, so a question that never comes back is visible as
+    // one — the difference between "slow" and "lost" is the whole tab.
+    const gid = gitSessionOf(msg);
+    if (gid) {
+      set((s) => {
+        const st = s.git[gid] ?? emptyGit();
+        return { git: { ...s.git, [gid]: { ...st, console: pushCmd(st.console, msg) } } };
+      });
+    }
     // A note mutation is answered by a broadcast of the whole set — but if that
     // answer is ever missed, the row stays on screen and the action looks like
     // it failed. Asking again costs one small message and makes the list
@@ -1432,6 +1446,17 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   ingest: (msg) => {
+    // The Console's other half: an answer closes the row that asked. Before
+    // the switch, so no case has to remember it.
+    const answered = answerFor(msg);
+    const gid = gitSessionOf(msg);
+    if (answered && gid) {
+      set((s) => {
+        const st = s.git[gid];
+        if (!st) return {};
+        return { git: { ...s.git, [gid]: { ...st, console: attachResult(st.console, answered.cmds, answered.summary) } } };
+      });
+    }
     switch (msg.ev) {
       case "snapshot": {
         const sessions: Record<SessionId, Session> = {};
@@ -2267,6 +2292,19 @@ export const useStore = create<AppState>((set, get) => ({
 
       case "error":
         get().pushError(msg.message);
+        // The wire's error carries no address, so it lands on the latest git
+        // command still waiting, in whichever session sent it most recently —
+        // a heuristic, and the Console row says so. `R-D29`.
+        set((s) => {
+          let latest: { id: string; seq: number } | null = null;
+          for (const [id, st] of Object.entries(s.git)) {
+            const w = st.console.filter((r) => r.result === null && r.error === null).pop();
+            if (w && (!latest || w.seq > latest.seq)) latest = { id, seq: w.seq };
+          }
+          if (!latest) return {};
+          const st = s.git[latest.id];
+          return { git: { ...s.git, [latest.id]: { ...st, console: attachError(st.console, msg.message) } } };
+        });
         break;
 
       default:

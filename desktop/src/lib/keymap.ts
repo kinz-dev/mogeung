@@ -403,6 +403,20 @@ export const ACTIONS: Action[] = [
   dockTool("debt", "Debt", ["Alt+5"]),
   dockTool("insight", "Insight", ["Alt+8"]),
   dockTool("git", "Git", ["Alt+9"]),
+  {
+    id: "dock.maximise",
+    label: "Maximise the dock, or restore it",
+    group: "Dock",
+    // The digit that is the dock's last tool, shifted: a tool window at 300
+    // px is a cramped one, and IntelliJ answers that with a maximise. `R-D29`.
+    // By physical key, so the layout's `(` does not get in the way.
+    keys: ["Alt+Shift+Digit9"],
+    run: () => {
+      const { prefs, setPrefs } = useStore.getState();
+      if (!prefs.dock) return;
+      setPrefs({ dockMax: !prefs.dockMax });
+    },
+  },
 
   {
     id: "info.toggle",

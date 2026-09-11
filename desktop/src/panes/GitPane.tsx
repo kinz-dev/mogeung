@@ -36,9 +36,10 @@ import { CommitInspector } from "./git/CommitInspector";
 import { LocalChanges } from "./git/LocalChanges";
 import { StashTab } from "./git/StashTab";
 import { MoreTab } from "./git/MoreTab";
+import { ConsoleTab } from "./git/ConsoleTab";
 import { Splitter, useDragWidth, useWidth } from "./git/Dropdown";
 
-type Tab = "log" | "local" | "stash" | "more";
+type Tab = "log" | "local" | "stash" | "console" | "more";
 
 function Count({ n }: { n: number }) {
   return <span className="ml-1 rounded-sm bg-[var(--bg-faint)] px-1 text-2xs leading-3 tabular-nums text-[var(--dim)]">{n}</span>;
@@ -130,6 +131,7 @@ export function GitPane() {
               ),
               title: "shelved work",
             },
+            { value: "console", label: "Console", title: "what this window asked git, and what git said" },
             { value: "more", label: "More", title: "reflog, worktrees, submodules" },
           ]}
         />
@@ -225,6 +227,7 @@ export function GitPane() {
         )}
         {tab === "local" && <LocalChanges id={sid} repoRoot={root} />}
         {tab === "stash" && <StashTab id={sid} />}
+        {tab === "console" && <ConsoleTab id={sid} />}
         {tab === "more" && <MoreTab id={sid} />}
       </div>
     </div>
