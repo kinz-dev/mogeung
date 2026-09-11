@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-10
+updated: 2026-09-11
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -167,6 +167,21 @@ fire-and-forget command on the blocking pool, and every one read-only by
 protocol until `R-D19` added the first three writes on 2026-07-31, with client-supplied shas, ref names and filters shape-checked
 before git sees an argument. See
 [wire-protocol.md](wire-protocol.md) for the family and its hygiene rules.
+
+In the window it is the **Git tool window** since 2026-09-11 (`R-D26`,
+[feature 0042](../features/0042-git-tool-window.md)): a dock tool with Log,
+Local changes, Stash and More tabs, and the Log tab as three panes — a branch
+tree grouped on `/`, a virtualised graph log under a filter bar, and a commit
+inspector that shows the files as a tree, the details beneath, and one file's
+diff on selection. The client reaches the daemon through one module,
+`desktop/src/lib/gitActions.ts`, and one door for the log, because eight
+things narrow it and every bug in that area was a second call site that
+carried seven. The graph's lanes and the two trees are pure functions under
+`desktop/src/lib/` with their own tests; nothing about the topology is asked
+of the daemon, since every row already carries its parents. The default log
+is every ref (`--all`, `R-D27`), which is what gives the graph something to
+draw; the store keeps a page whose echo lacks the `R-D27` fields, because a
+daemon a build behind the window answers without them.
 
 **One outbound network call exists**, and only one: `git fetch`, on an explicit
 keystroke (`Ctrl+T`), admitted 2026-08-01 by

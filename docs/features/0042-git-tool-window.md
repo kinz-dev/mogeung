@@ -262,24 +262,26 @@ leave the dock as a pane and, from there, as a window under `R-B55`.
 
 `R-D26` — the window:
 
-- [ ] The Git tool has Log, Local changes, Stash and Console tabs, and the
+- [x] The Git tool has Log, Local changes, Stash and Console tabs, and the
       Log tab is three resizable panes whose widths survive a restart
-- [ ] The branch tree shows HEAD, local branches, every remote's branches and
+      *(Console is `R-D29`; a fifth tab, More, holds the three lists the
+      wire already carried — see Notes)*
+- [x] The branch tree shows HEAD, local branches, every remote's branches and
       tags, grouped on `/`, searchable, with favourites that persist; the
       current branch shows ahead/behind and the age of the fetch it is as of
-- [ ] The log is one row per commit with a graph column drawn from parents,
+- [x] The log is one row per commit with a graph column drawn from parents,
       subject, refs and tags as chips, author and date; it scrolls without a
       *load more* button, and selecting a row shows that commit
-- [ ] The filter bar narrows by text, branch, user and path, says what is in
+- [x] The filter bar narrows by text, branch, user and path, says what is in
       force, and clears in one gesture; a hash typed into the search selects
       that commit; the session and read toggles narrow to those rows
-- [ ] The inspector shows the commit's files as a directory tree with counts
+- [x] The inspector shows the commit's files as a directory tree with counts
       and read marks, its details beneath, and one file's diff on selection
       with `n`/`p` walking across files
-- [ ] A commit row's menu offers copy sha, copy subject, copy as patch, open
-      on host when the remote is recognisable, and mark/diff against the
+- [x] A commit row's menu offers copy sha, copy subject, copy as patch, *copy
+      link on host* when the remote is recognisable, and mark/diff against the
       marked commit; a branch's menu offers scope, compare and copy
-- [ ] Every list is reachable and operable from the keyboard, and the focus
+- [x] Every list is reachable and operable from the keyboard, and the focus
       ring is visible on every row
 
 `R-D27` — the wire:
@@ -478,6 +480,47 @@ params. `cargo test --workspace`, `npm test`, `npm run check`,
 
 *The gap analysis above was taken against the window as of commit `6005012`
 and the daemon's `git.rs` at 2,565 lines.*
+
+### `R-D26` (2026-09-11)
+
+Built the day after the spec, and three things in it are not what the spec
+drew.
+
+**A fifth tab.** IntelliJ's window has no home for the reflog, the worktrees
+or the submodules, and the wire has carried all three since `R-D13`/`R-D15`.
+Dropping them would have regressed the pane to make it look more like the
+screenshot; they sit under *More*, with the same inspector on the right, and
+compare and range moved into the menus where the spec put them.
+
+**"Open on host" is "copy link on host".** The shell's one URL opener,
+`open_local_url`, refuses anything not on this machine, and a general opener
+is a Tauri capability this row does not add. The link is built the same way
+and put on the clipboard, which is the widest part of the pipe here as it
+is for the follow-up prompt.
+
+**No panels library.** `react-resizable-panels` sizes in percentages of its
+group; every other draggable edge in this window is pixels in the
+preferences, written once on release, so the splitters use that idiom
+(`useDragWidth`) rather than a second one. What the idiom did not have was
+a clamp, and the first look in a browser found why one was needed: a dock
+620 px wide with a 210 px branch pane and a 360 px inspector left the log
+50 px, with the ref chips drawn over the graph. The outer panes are now at
+most a share of the pane — 28 % and 42 % — and the log's columns give way
+from the right below 700 px and 480 px. The saved widths are untouched, so
+a wide window gets them back.
+
+**The echo rule grew a clause.** The store drops a page whose echo disagrees
+with the scope in force, and `R-D27` added three fields to the echo. A
+daemon a build behind the window answers without them, and comparing an
+absent field against `all: true` would have dropped every page it sent —
+an empty log for good on the machine whose daemon lagged. A missing field
+now means "the daemon did not say" and matches anything; a present one is
+compared. Pinned by a test.
+
+**`n`/`p` needed one attribute.** The hunk block gained `data-hunk` so the
+keys can find the next hunk in the scroller and step into the next file past
+the last one — the `R-D18` walk, without the inspector knowing how a hunk
+is drawn.
 
 ### `R-D27` (2026-09-11)
 

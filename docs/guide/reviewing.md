@@ -1,7 +1,7 @@
 ---
 title: Reviewing changes
 status: active
-updated: 2026-07-25
+updated: 2026-09-11
 ---
 
 # Reviewing changes
@@ -138,3 +138,47 @@ straight to it.
 
 It only covers sessions mogeung has seen — work from before it was watching is
 not in the number.
+
+## The Git tool window
+
+**Git** in the bottom dock (`Alt+9`) is the repository the selected session
+is in — IntelliJ's tool window, in mogeung's colours.
+
+**Log** is three panes. On the left, the branches: HEAD, Local, one node per
+remote, Tags, grouped on `/`, with a search box and a star for favourites. A
+click **scopes the log to that ref and checks nothing out**. In the middle,
+one row per commit — the graph, the subject with its refs as chips, author,
+date — and at the end of a row the two marks that are mogeung's: a blue dot
+for a commit that probably came from this session, and *read* once every hunk
+of it has been read. Above the rows, the filter bar: *text or hash*, then
+Branch, User, Date and Paths. Enter runs the query; a hash selects that
+commit; `author:`, `path:` and `find:` in the box reach the same fields the
+dropdowns do. What is in force is named beneath the bar, with *clear* beside
+it. The default is every branch, which is what the graph needs; any text
+filter hides the graph, because lanes drawn over a subset would join dots
+that are not adjacent.
+
+On the right, the selected commit: its files as a tree with counts, and the
+details beneath — message, hash, author and email, date, the signature state,
+and the branches that contain it. **Click a file and its diff replaces the
+details**, read marks and all; *all files* is the root row; *details* brings
+the message back. `n` and `p` step through the hunks and across files.
+
+**Local changes** is the working tree, grouped Conflicted · Staged · Unstaged
+· Untracked, with a *this session* toggle and the selected file's diff — or
+its three sides when it is conflicted. **Stash** lists what is shelved and
+shows one through the same inspector. **More** holds the reflog, the
+worktrees and the submodules.
+
+Right-click a commit for copy sha, copy subject, copy as patch, a link to the
+commit on GitHub or GitLab, and *mark* — two marked ends make a range diff.
+Right-click a branch for *compare with the current branch*, which shows what
+merging it would bring, from the merge base.
+
+The keyboard: `/` is the search box; `↑` `↓` or `j` `k` move the log; `Enter`
+steps into the file tree and `Esc` back; `n` `p` walk hunks; `Ctrl+T`
+fetches, and the header says when the last fetch was, because ahead/behind is
+only as true as that.
+
+Everything here reads. Staging, committing, stashing and checking out from the
+window are the next row on the roadmap, not this one.

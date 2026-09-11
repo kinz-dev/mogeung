@@ -42,8 +42,12 @@ export function Dim({
   );
 }
 
-export function Mono({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn("font-mono", className)}>{children}</span>;
+export function Mono({ children, className, title }: { children: React.ReactNode; className?: string; title?: string }) {
+  return (
+    <span title={title} className={cn("font-mono", className)}>
+      {children}
+    </span>
+  );
 }
 
 /**

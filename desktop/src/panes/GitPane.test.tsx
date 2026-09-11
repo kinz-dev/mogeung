@@ -69,10 +69,10 @@ describe("filtering the log", () => {
   it("asks for the filtered log, and does not ask for the whole log again", () => {
     show();
 
-    fireEvent.change(screen.getByPlaceholderText(/filter messages/), {
+    fireEvent.change(screen.getByPlaceholderText(/text or hash/), {
       target: { value: "PROJ-1" },
     });
-    fireEvent.keyDown(screen.getByPlaceholderText(/filter messages/), { key: "Enter" });
+    fireEvent.keyDown(screen.getByPlaceholderText(/text or hash/), { key: "Enter" });
 
     expect(logs()).toEqual([
       {
@@ -85,7 +85,7 @@ describe("filtering the log", () => {
         author: null,
         path: null,
         pickaxe: null,
-        all: false,
+        all: true,
         since: null,
         until: null,
       },
@@ -99,10 +99,10 @@ describe("filtering the log", () => {
    */
   it("drops a page that answers a different filter", () => {
     show();
-    fireEvent.change(screen.getByPlaceholderText(/filter messages/), {
+    fireEvent.change(screen.getByPlaceholderText(/text or hash/), {
       target: { value: "PROJ-1" },
     });
-    fireEvent.keyDown(screen.getByPlaceholderText(/filter messages/), { key: "Enter" });
+    fireEvent.keyDown(screen.getByPlaceholderText(/text or hash/), { key: "Enter" });
 
     const { ingest } = useStore.getState();
     act(() =>
@@ -154,7 +154,7 @@ describe("filtering the log", () => {
 describe("what the list is answering", () => {
   it("says a typed filter has not been run yet", () => {
     show();
-    fireEvent.change(screen.getByPlaceholderText(/filter messages/), {
+    fireEvent.change(screen.getByPlaceholderText(/text or hash/), {
       target: { value: "PROJ-1" },
     });
 
@@ -182,7 +182,7 @@ describe("what the list is answering", () => {
         author: null,
         path: null,
         pickaxe: null,
-        all: false,
+        all: true,
         since: null,
         until: null,
       },

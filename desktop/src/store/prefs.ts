@@ -177,6 +177,22 @@ export interface Prefs {
    * anything else the window puts in a column.
    */
   gitSidebarWidth: number;
+  /**
+   * The Git tool window's three panes. `R-D26`. Widths of the two outer
+   * panes in pixels — the log takes the rest — and whether the branch pane
+   * is open at all; the shape a window was left in is the shape it opens in.
+   */
+  gitBranchesWidth: number;
+  gitInspectorWidth: number;
+  gitBranchesOpen: boolean;
+  /**
+   * Starred refs, keyed by repository root the way `dismissedDirs` is: a
+   * favourite is a fact about a repository, and a path names the same
+   * repository on every machine that checks it out. `R-D26`.
+   */
+  gitFavourites: Record<string, string[]>;
+  /** The last few refs the log was scoped to, newest first, same key. */
+  gitRecents: Record<string, string[]>;
 
   groupByRepo: boolean;
   autoSelect: boolean;
@@ -278,6 +294,11 @@ export const defaultPrefs = (): Prefs => ({
   launchHeadless: false,
   queueWidth: 380,
   gitSidebarWidth: 340,
+  gitBranchesWidth: 210,
+  gitInspectorWidth: 360,
+  gitBranchesOpen: true,
+  gitFavourites: {},
+  gitRecents: {},
   groupByRepo: false,
   autoSelect: false,
   previewOnSelect: true,

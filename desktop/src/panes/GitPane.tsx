@@ -1,226 +1,159 @@
 /**
- * The session repo's git state. `R-D10`, deepened by `R-D11`–`R-D15`.
+ * The Git tool window. `R-D26`, the shape of
+ * [feature 0042](../../../docs/features/0042-git-tool-window.md): Log, Local
+ * changes, Stash and More as tabs, and the Log tab as three panes — the
+ * branch tree, the graph log under its filter bar, and the commit inspector.
  *
- * **Read-only from end to end in this client.** The wire does carry a write
- * family (`R-D19`/`R-D20`), and the daemon will honour it — but nothing here
- * sends one. Staging and committing are exactly the pressure
- * [ADR-0012](../../docs/decisions/0012-write-locally-never-publish.md)
- * anticipated, and adding them is a decision rather than a port.
+ * **Read-only from end to end in this client, still.** The wire carries a
+ * write family (`R-D19`–`R-D22`) and the daemon honours it, and nothing here
+ * sends one: that is `R-D28`, sequenced last because it is
+ * [A26](../../../docs/product/assumptions.md)'s test rather than a port.
  *
  * `git fetch` is the single outbound network call in the whole product, on an
  * explicit keystroke, admitted by
- * [ADR-0014](../../docs/decisions/0014-fetch-is-not-publishing.md). It never
- * runs on a timer and it never pushes or merges.
+ * [ADR-0014](../../../docs/decisions/0014-fetch-is-not-publishing.md). It
+ * never runs on a timer and it never pushes or merges.
+ *
+ * The tool lives in the bottom dock — chrome, one tool at a time, following
+ * the selected session ([ADR-0017](../../../docs/decisions/0017-the-rail-is-chrome.md)).
+ * Each region reads its own slice of the store and reaches the daemon
+ * through `lib/gitActions.ts`, so this file is the arrangement and nothing
+ * else.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { CloudDownload, Columns2, Filter, GitBranch, GitCommitVertical, RefreshCw } from "lucide-react";
+import { CloudDownload, Columns2, PanelLeft, RefreshCw, X } from "lucide-react";
 import { useStore, useSelectedSession } from "@/store";
-import { Chip, Dim, Empty, IconButton, Input, Mono, PaneHeader, Row, Segmented } from "@/ui/primitives";
-import { DiffList } from "@/ui/DiffView";
-import { dirTail, stamp } from "@/lib/format";
-import { cn } from "@/lib/cn";
+import { Dim, Empty, IconButton, Segmented } from "@/ui/primitives";
+import { sectionLabel } from "@/ui/styles";
+import { repoName } from "@/wire/types";
+import { askLog } from "@/lib/gitActions";
+import { stamp } from "@/lib/format";
+import { BranchTree } from "./git/BranchTree";
+import { LogToolbar, type Only } from "./git/LogToolbar";
+import { LogTable } from "./git/LogTable";
+import { CommitInspector } from "./git/CommitInspector";
+import { LocalChanges } from "./git/LocalChanges";
+import { StashTab } from "./git/StashTab";
+import { MoreTab } from "./git/MoreTab";
+import { Splitter, useDragWidth, useWidth } from "./git/Dropdown";
 
-type View = "log" | "local" | "refs" | "stashes" | "more";
+type Tab = "log" | "local" | "stash" | "more";
 
-/** What narrows the log, as one value — there are four of them, and every bug
- *  in this area has been a call site that carried three. */
-type Query = { grep: string; author: string; path: string; pickaxe: string };
-
-/** The lists that are one round-trip each and are asked for on demand. */
-const ON_DEMAND = {
-  reflog: "git_reflog",
-  worktrees: "git_worktrees",
-  submodules: "git_submodules",
-} as const;
-
-/**
- * A path in a column narrower than it is.
- *
- * Plain `truncate` spends the width it has on the leading directories and then
- * cuts off the file name — the one part you were reading, and the reason a
- * column of `desktop/src/store/prefs.…` says nothing about which seven files
- * changed. [`dirTail`] is the house answer and is used here rather than a
- * second one: whole segments come off the front, never mid-name, because a
- * half-cut directory reads as a directory that exists.
- *
- * The budget is in characters and the column is in pixels, so it is estimated
- * from the pane's width — deliberately roughly. It only decides *which end*
- * gives way; CSS truncation is still the backstop, and the untouched path is on
- * the title for when two directories end the same way.
- */
-function FilePath({ path, chars }: { path: string; chars: number }) {
-  const shown = dirTail(path, chars);
-  const cut = shown.lastIndexOf("/");
-  const dir = cut < 0 ? "" : shown.slice(0, cut + 1);
-  const name = shown.slice(cut + 1);
-  return (
-    <span className="flex min-w-0 items-baseline" title={path}>
-      {dir && <Mono className="truncate text-xs text-[var(--dim)]">{dir}</Mono>}
-      <Mono className="shrink-0 text-xs">{name}</Mono>
-    </span>
-  );
+function Count({ n }: { n: number }) {
+  return <span className="ml-1 rounded-sm bg-[var(--bg-faint)] px-1 text-2xs leading-3 tabular-nums text-[var(--dim)]">{n}</span>;
 }
 
 export function GitPane() {
   const s = useSelectedSession();
   const id = s?.id ?? null;
-  const git = useStore((st) => (st.selected ? st.git[st.selected] : undefined));
+  const repoRoot = s?.repo_root ?? null;
+  // Field by field, never the whole slice: this header sits above every row
+  // of the log and every line of the diff.
+  const logAsked = useStore((st) => (id ? (st.git[id]?.logAsked ?? false) : false));
+  const hasStatus = useStore((st) => (id ? !!st.git[id]?.status : false));
+  const hasRefs = useStore((st) => (id ? !!st.git[id]?.refs : false));
+  const changed = useStore((st) => (id ? (st.git[id]?.status?.filter((e) => e.state !== "!!").length ?? null) : null));
+  const stashCount = useStore((st) => (id ? (st.git[id]?.stashes?.length ?? null) : null));
+  const fetching = useStore((st) => (id ? (st.git[id]?.fetching ?? false) : false));
+  const fetched = useStore((st) => (id ? (st.git[id]?.fetched ?? null) : null));
+  const fetchEpoch = useStore((st) => (id ? (st.git[id]?.refs?.fetch_epoch ?? null) : null));
   const patchGit = useStore((st) => st.patchGit);
   const send = useStore((st) => st.send);
-  // Field by field, for the reason ChangesPane states: this header sits above
-  // every line of the diff.
   const sideBySide = useStore((st) => st.prefs.sideBySide);
+  const branchesOpen = useStore((st) => st.prefs.gitBranchesOpen);
+  const savedBranches = useStore((st) => st.prefs.gitBranchesWidth);
+  const savedInspector = useStore((st) => st.prefs.gitInspectorWidth);
   const setPrefs = useStore((st) => st.setPrefs);
-  const [view, setView] = useState<View>("log");
-  const [grep, setGrep] = useState("");
-  const [author, setAuthor] = useState("");
-  const [path, setPath] = useState("");
-  const [pickaxe, setPickaxe] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [more, setMore] = useState<keyof typeof ON_DEMAND>("reflog");
-  const [compareTo, setCompareTo] = useState("");
-  const [rangeFrom, setRangeFrom] = useState("");
-  const [rangeTo, setRangeTo] = useState("");
-  const repoRoot = s?.repo_root ?? null;
+  const [branchesWidth, dragBranches] = useDragWidth(savedBranches, 160, 480, (px) => setPrefs({ gitBranchesWidth: px }));
+  const [inspectorWidth, dragInspector] = useDragWidth(savedInspector, 260, 900, (px) => setPrefs({ gitInspectorWidth: px }), -1);
+  const [tab, setTab] = useState<Tab>("log");
+  const [only, setOnly] = useState<Only>({ session: false, read: false });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // The outer panes are remembered in pixels and drawn as at most a share of
+  // the pane: a dock 620 px wide with a 210 px branch pane and a 360 px
+  // inspector left the log 50 px, which is what the first browser look found.
+  // The saved widths are untouched; a wider window gets them back.
+  const total = useWidth(bodyRef);
+  const bw = total > 0 ? Math.min(branchesWidth, Math.floor(total * 0.28)) : branchesWidth;
+  const iw = total > 0 ? Math.min(inspectorWidth, Math.floor(total * 0.42)) : inspectorWidth;
 
-  // The list is a column of paths, and 340px was not enough for most of them.
-  // Same idiom as the queue's edge: local state during the drag, the
-  // preferences file written once on release.
-  const savedWidth = useStore((st) => st.prefs.gitSidebarWidth);
-  const [width, setWidth] = useState(savedWidth);
-  const latest = useRef(width);
-  const onDrag = (e: React.MouseEvent) => {
-    const startX = e.clientX;
-    const startW = latest.current;
-    const move = (ev: MouseEvent) => {
-      // Through a ref as well as through state: the `up` below is registered
-      // once and closes over this render's `width` for ever, so reading the
-      // state there saves the width the drag *started* at.
-      latest.current = Math.min(900, Math.max(220, startW + ev.clientX - startX));
-      setWidth(latest.current);
-    };
-    const up = () => {
-      setPrefs({ gitSidebarWidth: latest.current });
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  };
-  // How many `text-xs` monospace characters this width holds, less the state
-  // column and the padding. An estimate, and only ever an estimate — see
-  // [`FilePath`].
-  const chars = Math.max(12, Math.floor((width - 56) / 7));
-
-  // One door for fetching, in the render, so a docked pane works unswitched.
+  // One door for the first questions, in the render, so a docked pane works
+  // unswitched — and **only for a repository**: a session outside one used to
+  // fire three questions the daemon could only answer with an error.
   useEffect(() => {
-    if (!id) return;
-    // **Only for a repository.** The pane already refuses to render for a
-    // session that has no `repo_root`, but the fetch ran regardless — so
-    // selecting a non-repo session fired three git questions the daemon could
-    // only answer with an error, and the window turned that into a red banner
-    // you had to dismiss by hand. Not asking is the fix; making the answer
-    // quieter is a separate one.
-    if (!repoRoot) return;
-    // **Because nobody has asked, not because the list is empty.** A filtered
-    // query empties the list on purpose (`askLog`), and reading that as "no
-    // log yet" fired a second, unfiltered query behind every filter — whose
-    // answer landed last and put the whole log back, which is exactly what
-    // "the filter doesn't work" looks like. Reload clears the flag.
-    if (!git?.logAsked) {
-      patchGit(id, { logAsked: true });
-      send({ cmd: "git_log", session_id: id, skip: 0, limit: 100 });
-    }
-    if (!git?.status) send({ cmd: "git_status", session_id: id });
-    if (!git?.refs) send({ cmd: "git_refs", session_id: id });
-  }, [id, repoRoot, git?.logAsked, git?.status, git?.refs, patchGit, send]);
-
-  // **The boxes start at what the list answers.** They are local state and the
-  // filters live per session in the store, so arriving at a session with a
-  // filter in force used to show three empty boxes above a filtered list —
-  // and, with the line below, an invitation to press Enter on nothing.
-  // Adjusted during the render for the session that changed, which is React's
-  // own answer to "state derived from a prop", rather than in an effect that
-  // would paint the wrong thing first.
-  const syncedFor = useRef<string | null>(null);
-  if (id && syncedFor.current !== id) {
-    syncedFor.current = id;
-    setGrep(git?.grep ?? "");
-    setAuthor(git?.author ?? "");
-    setPath(git?.path ?? "");
-    setPickaxe(git?.pickaxe ?? "");
-  }
+    if (!id || !repoRoot) return;
+    // Because nobody has asked, not because the list is empty: a filtered
+    // query empties the list on purpose. Reload clears the flag.
+    if (!logAsked) askLog(id, 0);
+    if (!hasStatus) send({ cmd: "git_status", session_id: id });
+    if (!hasRefs) send({ cmd: "git_refs", session_id: id });
+  }, [id, repoRoot, logAsked, hasStatus, hasRefs, send]);
 
   if (!s) return <Empty>select a session</Empty>;
   if (!s.repo_root) return <Empty hint="git needs a repository">this session is not in a git repo</Empty>;
+  const sid = s.id;
+  const root = s.repo_root;
 
-  const selectCommit = (sha: string) => {
-    if (!id) return;
-    patchGit(id, {
-      selected: sha,
-      selectedPath: null,
-      diff: null,
-      detail: null,
-      conflict: null,
-      diffLabel: null,
-    });
-    send({ cmd: "git_show", session_id: id, sha });
-  };
-
-  /**
-   * One place that asks for a log, because there are now five things that
-   * narrow it — message, author, path, pickaxe and the branch scope — and a
-   * second call site would inevitably drop one of them and look like the
-   * filter had been ignored.
-   */
-  const askLog = (skip: number, over: Partial<Query> = {}) => {
-    if (!id) return;
-    // The overrides exist because a filter is cleared by a *button*, and
-    // `setGrep("")` has not landed by the time this reads it — a query built
-    // from the state here would ask for the filter you just dropped.
-    const q: Query = { grep, author, path, pickaxe, ...over };
-    if (skip === 0) patchGit(id, { commits: [], ...q, logAsked: true });
-    send({
-      cmd: "git_log",
-      session_id: id,
-      skip,
-      limit: 100,
-      rev: git?.rev ?? null,
-      grep: q.grep || null,
-      author: q.author || null,
-      path: q.path || null,
-      pickaxe: q.pickaxe || null,
-      // `R-D27`: carried so the echo matches; this pane never sets them,
-      // the tool window that replaces it does.
-      all: git?.all ?? false,
-      since: git?.since ?? null,
-      until: git?.until ?? null,
-    });
-  };
-
-  // What the list on screen actually answers, which is not what is in the
-  // boxes until Enter has been pressed.
-  const applied = {
-    grep: git?.grep ?? "",
-    author: git?.author ?? "",
-    path: git?.path ?? "",
-    pickaxe: git?.pickaxe ?? "",
-  };
-  const unrun =
-    grep !== applied.grep ||
-    author !== applied.author ||
-    path !== applied.path ||
-    pickaxe !== applied.pickaxe;
-  const anyApplied = !!(applied.grep || applied.author || applied.path || applied.pickaxe);
+  const focusLog = () => rootRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus();
+  const focusInspector = () => rootRef.current?.querySelector<HTMLElement>('[aria-label="the selected commit"]')?.focus();
 
   return (
-    <div className="flex h-full min-h-0 bg-[var(--bg-panel)]">
-      <div className="flex shrink-0 flex-col border-r border-[var(--border)]" style={{ width }}>
-        <PaneHeader title="Git">
-          {/* The pref is shared with Changes, and until now only Changes could
-              reach it — so the diff on this side of the window was whatever you
-              had last set on the other, with nothing here saying so. */}
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
+      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-[var(--border)] px-2">
+        <span className={sectionLabel} title={root}>
+          Git · <span className="font-mono tracking-normal text-[var(--text)] normal-case">{repoName(s)}</span>
+        </span>
+        <Segmented
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: "log", label: "Log", title: "commits — branches, the graph, and what each one changed" },
+            {
+              value: "local",
+              label: (
+                <>
+                  Local changes
+                  {changed !== null && changed > 0 && <Count n={changed} />}
+                </>
+              ),
+              title: "the working tree: staged, unstaged, untracked, conflicted",
+            },
+            {
+              value: "stash",
+              label: (
+                <>
+                  Stash
+                  {stashCount !== null && stashCount > 0 && <Count n={stashCount} />}
+                </>
+              ),
+              title: "shelved work",
+            },
+            { value: "more", label: "More", title: "reflog, worktrees, submodules" },
+          ]}
+        />
+        <div className="ml-auto flex items-center gap-0.5">
+          {fetchEpoch !== null ? (
+            <Dim className="mr-1 text-2xs" title="ahead/behind counts are as of this fetch (R-D23)">
+              fetched {stamp(fetchEpoch)}
+            </Dim>
+          ) : (
+            hasRefs && (
+              <Dim className="mr-1 text-2xs" title="no fetch has ever run here — ahead/behind may be stale (R-D23)">
+                never fetched
+              </Dim>
+            )
+          )}
+          {tab === "log" && (
+            <IconButton
+              title="show or hide the branch pane"
+              active={branchesOpen}
+              onClick={() => setPrefs({ gitBranchesOpen: !branchesOpen })}
+            >
+              <PanelLeft size={13} />
+            </IconButton>
+          )}
           <IconButton
             title="side by side — the file as it was left, as it is right  (R-D6)"
             active={sideBySide}
@@ -229,504 +162,70 @@ export function GitPane() {
             <Columns2 size={13} />
           </IconButton>
           <IconButton
-            title="update remote-tracking refs — the only outbound call there is (Ctrl+T)"
+            title={fetching ? "fetching…" : "update remote-tracking refs — the only outbound call there is (Ctrl+T)"}
+            disabled={fetching}
             onClick={() => {
-              if (!id) return;
-              patchGit(id, { fetching: true });
-              send({ cmd: "git_fetch", session_id: id });
+              patchGit(sid, { fetching: true });
+              send({ cmd: "git_fetch", session_id: sid });
             }}
           >
             <CloudDownload size={13} />
           </IconButton>
           <IconButton
-            title="reload"
-            onClick={() => {
-              if (!id) return;
-              patchGit(id, { commits: [], status: null, refs: null, logAsked: false });
-            }}
+            title="reload — ask git again for everything this window shows"
+            onClick={() =>
+              patchGit(sid, {
+                commits: [],
+                status: null,
+                refs: null,
+                stashes: null,
+                reflog: null,
+                worktrees: null,
+                submodules: null,
+                logAsked: false,
+              })
+            }
           >
             <RefreshCw size={13} />
           </IconButton>
-        </PaneHeader>
-
-        <div className="flex shrink-0 items-center border-b border-[var(--border)] px-2 py-1">
-          <Segmented
-            value={view}
-            onChange={(v) => {
-              setView(v);
-              if (v === "stashes" && id) send({ cmd: "git_stashes", session_id: id });
-              if (v === "more" && id) send({ cmd: ON_DEMAND[more], session_id: id });
-            }}
-            options={[
-              { value: "log", label: "log", title: "commits, newest first" },
-              { value: "local", label: "local", title: "uncommitted changes" },
-              { value: "refs", label: "refs", title: "branches, tags and remotes" },
-              { value: "stashes", label: "stashes", title: "shelved work" },
-              { value: "more", label: "more", title: "reflog, worktrees, submodules, compare" },
-            ]}
-          />
         </div>
+      </div>
 
-        {view === "log" && (
+      {fetched && (
+        <div className="flex max-h-24 shrink-0 items-start gap-2 overflow-y-auto border-b border-[var(--border)] px-2 py-1">
+          <Dim className="min-w-0 flex-1 text-2xs whitespace-pre-wrap">
+            {fetched.length === 0 ? "fetch: the remotes had nothing new" : fetched.join("\n")}
+          </Dim>
+          <IconButton title="dismiss" onClick={() => patchGit(sid, { fetched: null })}>
+            <X size={11} />
+          </IconButton>
+        </div>
+      )}
+
+      <div ref={bodyRef} className="flex min-h-0 flex-1">
+        {tab === "log" && (
           <>
-            <div className="shrink-0 px-2 py-1">
-              <div className="flex items-center gap-1">
-                <Input
-                  value={grep}
-                  onChange={setGrep}
-                  placeholder="filter messages — Enter"
-                  onKeyDown={(e) => e.key === "Enter" && askLog(0)}
-                />
-                <IconButton
-                  title="by author, by path, and pickaxe  (R-D12, R-D13)"
-                  active={filtersOpen || !!(author || path || pickaxe)}
-                  onClick={() => setFiltersOpen(!filtersOpen)}
-                >
-                  <Filter size={12} />
-                </IconButton>
-              </div>
-              {filtersOpen && (
-                <div className="mt-1 space-y-1">
-                  <Input value={author} onChange={setAuthor} placeholder="author" onKeyDown={(e) => e.key === "Enter" && askLog(0)} />
-                  <Input value={path} onChange={setPath} placeholder="path — the file's history" mono onKeyDown={(e) => e.key === "Enter" && askLog(0)} />
-                  <Input
-                    value={pickaxe}
-                    mono
-                    onChange={setPickaxe}
-                    placeholder="pickaxe: when did this string appear or vanish"
-                    onKeyDown={(e) => e.key === "Enter" && askLog(0)}
-                  />
-                  <Dim className="block text-2xs">
-                    Enter runs the query. `pickaxe` is git's `-S`: commits where the number of
-                    occurrences of that text changed, which is how you find where a thing was
-                    introduced or deleted rather than merely mentioned.
-                  </Dim>
+            {branchesOpen && (
+              <>
+                <div className="flex shrink-0 flex-col" style={{ width: bw }}>
+                  <BranchTree id={sid} repoRoot={root} />
                 </div>
-              )}
-              {/*
-                **What the list answers, said out loud.** Enter runs the query,
-                which is cheap to forget — and a filter that has been typed but
-                not run looks exactly like a filter that has been ignored. So a
-                box that differs from the list says so, and a filter that *is*
-                in force is named with the way out of it.
-              */}
-              {unrun ? (
-                <Dim className="mt-0.5 block text-2xs">press Enter to run this filter</Dim>
-              ) : anyApplied ? (
-                <div className="mt-1 flex items-center gap-1">
-                  <Chip color="var(--amber)">
-                    {[
-                      applied.grep && `message ~ ${applied.grep}`,
-                      applied.author && `author ~ ${applied.author}`,
-                      applied.path && applied.path,
-                      applied.pickaxe && `-S ${applied.pickaxe}`,
-                    ]
-                      .filter(Boolean)
-                      .join("  ·  ")}
-                  </Chip>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGrep("");
-                      setAuthor("");
-                      setPath("");
-                      setPickaxe("");
-                      askLog(0, { grep: "", author: "", path: "", pickaxe: "" });
-                    }}
-                    className="rounded-sm text-2xs text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
-                  >
-                    clear
-                  </button>
-                </div>
-              ) : null}
-              {git?.rev && (
-                <div className="mt-1 flex items-center gap-1">
-                  <Chip color="var(--amber)">scoped to {git.rev}</Chip>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!id) return;
-                      // Through `askLog`, like everything else: this used to
-                      // send its own query carrying `grep` alone, so clearing
-                      // the branch scope silently dropped the author, path and
-                      // pickaxe filters that were still on screen.
-                      patchGit(id, { rev: null });
-                      askLog(0);
-                    }}
-                    className="rounded-sm text-2xs text-[var(--dim)] outline-none hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
-                  >
-                    clear
-                  </button>
-                </div>
-              )}
+                <Splitter onMouseDown={dragBranches} />
+              </>
+            )}
+            <div className="flex min-w-0 flex-1 flex-col">
+              <LogToolbar id={sid} repoRoot={root} only={only} setOnly={setOnly} />
+              <LogTable id={sid} only={only} onEnter={focusInspector} />
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {!git?.commits.length ? (
-                // Told apart, because they look identical from the outside and
-                // mean opposite things: a query still in flight, and a query
-                // that came back with nothing.
-                git?.done ? (
-                  <Empty hint="Enter runs the query — clear the box to see the whole log">
-                    no commit matches these filters
-                  </Empty>
-                ) : (
-                  <Empty>reading the log…</Empty>
-                )
-              ) : (
-                git.commits.map((c) => (
-                  <Row
-                    key={c.sha}
-                    selected={git.selected === c.sha}
-                    onClick={() => selectCommit(c.sha)}
-                    className="border-b border-[var(--border)] py-1"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <Mono className="shrink-0 text-2xs text-[var(--amber)]">{c.short}</Mono>
-                      <span className="truncate text-sm">{c.summary}</span>
-                      {c.touches_session && (
-                        <Chip color="var(--blue)" title="lands in this session's lifetime and touches files it edited — a hint, not an author column">
-                          session
-                        </Chip>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Dim className="truncate text-2xs">{c.author}</Dim>
-                      <Dim className="ml-auto shrink-0 text-2xs">{stamp(c.epoch)}</Dim>
-                    </div>
-                    {c.refs.length > 0 && (
-                      <div className="mt-0.5 flex flex-wrap gap-1">
-                        {c.refs.map((r) => (
-                          <Chip key={r} color="var(--green)">
-                            {r}
-                          </Chip>
-                        ))}
-                      </div>
-                    )}
-                  </Row>
-                ))
-              )}
-              {git && !git.done && git.commits.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => askLog(git.commits.length)}
-                  className="outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] w-full py-1 text-2xs text-[var(--dim)] hover:bg-[var(--bg-faint)]"
-                >
-                  load more
-                </button>
-              )}
+            <Splitter onMouseDown={dragInspector} />
+            <div className="flex shrink-0 flex-col" style={{ width: iw }}>
+              <CommitInspector id={sid} onBack={focusLog} />
             </div>
           </>
         )}
-
-        {view === "local" && (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {!git?.status ? (
-              <Empty>reading status…</Empty>
-            ) : git.status.length === 0 ? (
-              <Empty>the working tree is clean</Empty>
-            ) : (
-              git.status
-                .filter((e) => e.state !== "!!")
-                .map((e) => (
-                  <Row
-                    key={e.path}
-                    selected={git.selectedPath === e.path}
-                    onClick={() => {
-                      if (!id) return;
-                      patchGit(id, {
-                        selected: null,
-                        selectedPath: e.path,
-                        diff: null,
-                        detail: null,
-                        conflict: null,
-                        diffLabel: null,
-                      });
-                      // A conflicted file has no ordinary diff worth reading —
-                      // it has three sides. `R-D16`.
-                      if (e.conflicted) send({ cmd: "git_conflict_file", session_id: id, path: e.path });
-                      else send({ cmd: "git_diff_file", session_id: id, path: e.path });
-                    }}
-                    className="flex items-center gap-2 border-b border-[var(--border)] py-0.5"
-                  >
-                    <Mono
-                      className={cn(
-                        "w-6 shrink-0 text-2xs",
-                        e.conflicted ? "text-[var(--red)]" : e.staged ? "text-[var(--add-fg)]" : "text-[var(--amber)]",
-                      )}
-                    >
-                      {e.state}
-                    </Mono>
-                    <FilePath path={e.path} chars={chars} />
-                    {e.conflicted && <Chip color="var(--red)">conflict</Chip>}
-                  </Row>
-                ))
-            )}
-          </div>
-        )}
-
-        {view === "refs" && (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {!git?.refs ? (
-              <Empty>reading refs…</Empty>
-            ) : (
-              <>
-                <div className="px-2 py-1">
-                  <Dim className="text-2xs">
-                    HEAD {git.refs.head ?? "(detached)"} · {git.refs.head_sha.slice(0, 8)}
-                  </Dim>
-                  {git.refs.fetch_epoch && (
-                    <Dim className="block text-2xs">last fetch {stamp(git.refs.fetch_epoch)}</Dim>
-                  )}
-                </div>
-                {git.refs.branches.map((b) => (
-                  <Row
-                    key={b.name}
-                    onClick={() => {
-                      if (!id) return;
-                      patchGit(id, { commits: [], rev: b.name });
-                      send({ cmd: "git_log", session_id: id, skip: 0, limit: 100, rev: b.name });
-                      setView("log");
-                    }}
-                    className="flex items-center gap-2 border-b border-[var(--border)] py-0.5"
-                    title="scope the log to this branch — nothing is checked out"
-                  >
-                    <GitBranch size={11} className="shrink-0 text-[var(--dim)]" />
-                    <span className={cn("truncate text-sm", b.current && "text-[var(--green)]")}>{b.name}</span>
-                    {(b.ahead > 0 || b.behind > 0) && (
-                      <Dim className="ml-auto shrink-0 text-2xs">
-                        ↑{b.ahead} ↓{b.behind}
-                      </Dim>
-                    )}
-                  </Row>
-                ))}
-              </>
-            )}
-          </div>
-        )}
-
-        {view === "stashes" && (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {!git?.stashes ? (
-              <Empty>reading stashes…</Empty>
-            ) : git.stashes.length === 0 ? (
-              <Empty>nothing stashed</Empty>
-            ) : (
-              git.stashes.map((st) => (
-                <Row
-                  key={st.index}
-                  onClick={() => id && send({ cmd: "git_stash_show", session_id: id, index: st.index })}
-                  className="border-b border-[var(--border)] py-0.5"
-                >
-                  <Mono className="text-2xs text-[var(--amber)]">stash@{`{${st.index}}`}</Mono>{" "}
-                  <span className="text-xs">{st.message}</span>
-                </Row>
-              ))
-            )}
-          </div>
-        )}
-
-        {view === "more" && (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="px-2 py-1">
-              <Segmented
-                value={more}
-                onChange={(v) => {
-                  setMore(v);
-                  if (id) send({ cmd: ON_DEMAND[v], session_id: id });
-                }}
-                options={[
-                  { value: "reflog", label: "reflog", title: "where HEAD has been — including what a reset moved off" },
-                  { value: "worktrees", label: "worktrees", title: "every checkout of this repository" },
-                  { value: "submodules", label: "submodules", title: "nested repositories and their state" },
-                ]}
-              />
-            </div>
-
-            {more === "reflog" &&
-              (!git?.reflog ? (
-                <Empty>reading the reflog…</Empty>
-              ) : git.reflog.length === 0 ? (
-                <Empty>nothing in the reflog</Empty>
-              ) : (
-                git.reflog.map((e, i) => (
-                  <Row
-                    key={`${e.sha}:${i}`}
-                    onClick={() => selectCommit(e.sha)}
-                    className="border-b border-[var(--border)] py-0.5"
-                    title="show this commit — the reflog is how you find work a reset moved off a branch"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <Mono className="shrink-0 text-2xs text-[var(--amber)]">{e.sha.slice(0, 8)}</Mono>
-                      <Mono className="shrink-0 text-2xs text-[var(--dim)]">{e.selector}</Mono>
-                    </div>
-                    <div className="truncate text-xs">{e.summary}</div>
-                  </Row>
-                ))
-              ))}
-
-            {more === "worktrees" &&
-              (!git?.worktrees ? (
-                <Empty>reading worktrees…</Empty>
-              ) : (
-                git.worktrees.map((w) => (
-                  <div key={w.path} className="border-b border-[var(--border)] px-2 py-1">
-                    <FilePath path={w.path} chars={chars} />
-                    <div className="flex items-center gap-2">
-                      <Dim className="text-2xs">{w.branch ?? "(detached)"}</Dim>
-                      <Mono className="text-2xs text-[var(--dim)]">{w.sha.slice(0, 8)}</Mono>
-                    </div>
-                  </div>
-                ))
-              ))}
-
-            {more === "submodules" &&
-              (!git?.submodules ? (
-                <Empty>reading submodules…</Empty>
-              ) : git.submodules.length === 0 ? (
-                <Empty>this repository has no submodules</Empty>
-              ) : (
-                git.submodules.map((m) => (
-                  <div key={m.path} className="border-b border-[var(--border)] px-2 py-1">
-                    <FilePath path={m.path} chars={chars} />
-                    <div className="flex items-center gap-2">
-                      <Mono className="text-2xs text-[var(--dim)]">{m.sha.slice(0, 8)}</Mono>
-                      {m.note && <Dim className="truncate text-2xs">{m.note}</Dim>}
-                      {/* The state character is git's own — `-` uninitialised,
-                          `+` moved, `U` conflicted — so it is shown rather than
-                          translated into a word that would be a guess. */}
-                      {m.state.trim() && <Chip color="var(--amber)">{m.state}</Chip>}
-                    </div>
-                  </div>
-                ))
-              ))}
-
-            {/* Two ends, two shapes of question. Compare asks "what is on that
-                branch that HEAD has not got" from the merge base, which is the
-                three-dot comparison people mean and rarely type; the range is
-                the literal two-ended one for when you know both. `R-D15`. */}
-            <div className="border-t border-[var(--border)] px-2 py-1">
-              <Dim className="mb-1 block text-2xs">compare with a branch — from the merge base</Dim>
-              <div className="flex items-center gap-1">
-                <Input
-                  value={compareTo}
-                  mono
-                  onChange={setCompareTo}
-                  placeholder="origin/main"
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter" || !id || !compareTo.trim()) return;
-                    send({ cmd: "git_compare", session_id: id, branch: compareTo.trim() });
-                  }}
-                />
-              </div>
-              <Dim className="mt-2 mb-1 block text-2xs">or a literal range</Dim>
-              <div className="flex items-center gap-1">
-                <Input value={rangeFrom} mono onChange={setRangeFrom} placeholder="from" />
-                <Input
-                  value={rangeTo}
-                  mono
-                  onChange={setRangeTo}
-                  placeholder="to — Enter"
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter" || !id || !rangeFrom.trim() || !rangeTo.trim()) return;
-                    send({
-                      cmd: "git_diff_range",
-                      session_id: id,
-                      from: rangeFrom.trim(),
-                      to: rangeTo.trim(),
-                    });
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {git?.fetched && (
-          <div className="max-h-24 shrink-0 overflow-y-auto border-t border-[var(--border)] px-2 py-1">
-            <Dim className="text-2xs">
-              {git.fetched.length === 0 ? "fetch: the remotes had nothing new" : git.fetched.join("\n")}
-            </Dim>
-          </div>
-        )}
-      </div>
-
-      <div
-        onMouseDown={onDrag}
-        className="w-1 shrink-0 cursor-col-resize hover:bg-[var(--blue)]"
-        title="drag to resize — a path is longer than a list is wide"
-      />
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        {git?.detail && (
-          <div className="shrink-0 border-b border-[var(--border)] px-3 py-2">
-            <div className="text-sm whitespace-pre-wrap text-[var(--text-strong)]">{git.detail.message}</div>
-            <Dim className="mt-1 block text-2xs">
-              {git.detail.author} · {stamp(git.detail.epoch)}
-              {git.detail.branches.length > 0 && ` · in ${git.detail.branches.join(", ")}`}
-            </Dim>
-          </div>
-        )}
-        {git?.diffLabel && (
-          <div className="shrink-0 border-b border-[var(--border)] px-3 py-1">
-            <Dim className="text-2xs">comparing {git.diffLabel}</Dim>
-          </div>
-        )}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {git?.conflict ? (
-            /* `R-D16`: ours, base and theirs, side by side and read-only.
-               mogeung does not resolve anything — the wire has `git_resolve`
-               and this client does not send it. What a conflict needs first is
-               to be *read*, and the markers in the worktree file are the one
-               view that shows neither original. */
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="shrink-0 border-b border-[var(--border)] px-3 py-1">
-                <Mono className="text-xs text-[var(--text-strong)]">{git.conflict.path}</Mono>
-                <Dim className="ml-2 text-2xs">
-                  three stages, read-only — resolving is git's job, in your terminal
-                </Dim>
-              </div>
-              <div className="grid min-h-0 flex-1 grid-cols-3">
-                {(
-                  [
-                    ["ours", git.conflict.ours, "var(--add-fg)"],
-                    ["base", git.conflict.base, "var(--dim)"],
-                    ["theirs", git.conflict.theirs, "var(--del-fg)"],
-                  ] as const
-                ).map(([name, body, colour]) => (
-                  <div key={name} className="flex min-h-0 flex-col border-r border-[var(--border)]">
-                    <div className="shrink-0 px-2 py-0.5 text-2xs" style={{ color: colour }}>
-                      {name}
-                    </div>
-                    <pre className="min-h-0 flex-1 overflow-auto px-2 font-mono text-2xs whitespace-pre">
-                      {body || "(empty on this side)"}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-              {git.conflict.truncated && (
-                <Dim className="shrink-0 px-3 py-1 text-2xs">
-                  one of the sides went past the size cap — this is its head
-                </Dim>
-              )}
-            </div>
-          ) : git?.diff?.length === 0 ? (
-            /* An answer with no files at all is not the same as no answer, and
-               rendering an empty list for it looks exactly like the pane
-               having ignored the click. A binary file and a mode-only change
-               both arrive this way. */
-            <Empty hint="a binary file, or a change git shows no text for">
-              nothing to show for {git.selectedPath ?? "that"}
-            </Empty>
-          ) : git?.diff && id ? (
-            <DiffList files={git.diff} sessionId={id} />
-          ) : (
-            <Empty hint="every diff here is read-only, permanently">
-              <span className="inline-flex items-center gap-1">
-                <GitCommitVertical size={12} /> pick a commit or a changed file
-              </span>
-            </Empty>
-          )}
-        </div>
+        {tab === "local" && <LocalChanges id={sid} repoRoot={root} />}
+        {tab === "stash" && <StashTab id={sid} />}
+        {tab === "more" && <MoreTab id={sid} />}
       </div>
     </div>
   );

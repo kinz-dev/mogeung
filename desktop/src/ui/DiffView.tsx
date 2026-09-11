@@ -293,7 +293,7 @@ const HunkBlock = React.memo(function HunkBlock({
   if (hideNoise && risk === "noise" && hunk.reviewed) return null;
 
   return (
-    <div className={cn("border-t border-[var(--border)]", hunk.reviewed && "opacity-55")}>
+    <div data-hunk={hunk.anchor} className={cn("border-t border-[var(--border)]", hunk.reviewed && "opacity-55")}>
       <div className="flex items-center gap-2 bg-[var(--bg)] px-2 py-0.5">
         <button type="button" onClick={() => setOpen(!open)} className="outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] text-[var(--dim)]">
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}

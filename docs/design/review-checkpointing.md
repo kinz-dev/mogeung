@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-08-26
+updated: 2026-09-11
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
@@ -211,3 +211,12 @@ matching declaration keywords (`fn`, `def`, `class`, `func`, `struct`, …).
 anything dynamic. The UI says so on the panel itself rather than in
 documentation nobody reads. Test references are called out first: "did anything
 test this?" is the question with teeth.
+
+## What of `git.rs` this covers
+
+`git.rs` is also the daemon's log, refs and detail plumbing, and those parts
+are described by [wire-protocol.md](wire-protocol.md), not here — `R-D27`
+(2026-09-11) added `log_args` and three header fields there without touching
+an anchor. This document covers `parse_unified`, `anchor_of`,
+`normalize_for_anchor` and the `reviewed` set they are fed; a change to those
+is a change to checkpointing, and a change elsewhere in the file is not.

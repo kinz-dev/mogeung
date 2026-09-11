@@ -368,6 +368,21 @@ export interface GitState {
   conflict: { path: string; base: string; ours: string; theirs: string; truncated: boolean } | null;
   /** What the diff pane is currently showing, so its header can say. */
   diffLabel: string | null;
+  /**
+   * One file of the shown diff, or `null` for all of them. `R-D26`, the
+   * `R-D18` shape: the inspector's tree sets it, the diff is filtered by it,
+   * and a new selection clears it.
+   */
+  selectedFile: string | null;
+  /** A commit marked for a range diff against the next one picked. `R-D26`. */
+  rangeMark: string | null;
+  /** A log page is in flight — the scroll's end asks for the next only once. */
+  logPending: boolean;
+  /**
+   * Commits whose every hunk a human has read, learnt as their diffs arrive
+   * (`R-D17`); the log row wears the badge once known, and only then.
+   */
+  readBySha: Record<string, boolean>;
 }
 
 export const emptyGit = (): GitState => ({
@@ -379,7 +394,9 @@ export const emptyGit = (): GitState => ({
   author: "",
   path: "",
   pickaxe: "",
-  all: false,
+  // Every ref by default since `R-D26` — a graph over one branch's first
+  // parents has nothing to draw. A branch picked in the tree narrows it.
+  all: true,
   since: null,
   until: null,
   selected: null,
@@ -396,6 +413,10 @@ export const emptyGit = (): GitState => ({
   fetched: null,
   conflict: null,
   diffLabel: null,
+  selectedFile: null,
+  rangeMark: null,
+  logPending: false,
+  readBySha: {},
 });
 
 export interface InsightState {
@@ -1992,14 +2013,19 @@ export const useStore = create<AppState>((set, get) => ({
           // "the filter does nothing" looked like from the outside.
           if ((st.rev ?? null) !== (msg.rev ?? null)) return {};
           const echoed = (v: string | null | undefined, want: string) => (v ?? "") === want;
+          // The `R-D27` fields are compared only when the daemon echoed them:
+          // a daemon from before that row answers without them, and dropping
+          // every page it sends as a stray would leave the log empty for good
+          // on a machine whose daemon is a build behind the window.
+          const same = <T,>(v: T | null | undefined, want: T | null) => v === undefined || v === want;
           if (
             !echoed(msg.grep, st.grep) ||
             !echoed(msg.author, st.author) ||
             !echoed(msg.path, st.path) ||
             !echoed(msg.pickaxe, st.pickaxe) ||
-            (msg.all ?? false) !== st.all ||
-            (msg.since ?? null) !== st.since ||
-            (msg.until ?? null) !== st.until
+            !same(msg.all, st.all) ||
+            !same(msg.since, st.since) ||
+            !same(msg.until, st.until)
           ) {
             return {};
           }
@@ -2010,6 +2036,7 @@ export const useStore = create<AppState>((set, get) => ({
                 ...st,
                 commits: msg.skip === 0 ? msg.commits : [...st.commits, ...msg.commits],
                 done: msg.done,
+                logPending: false,
               },
             },
           };
@@ -2019,10 +2046,21 @@ export const useStore = create<AppState>((set, get) => ({
         set((s) => {
           const st = s.git[msg.session_id] ?? emptyGit();
           if (st.selected !== msg.sha) return {};
+          // `R-D17`'s badge, learnt here and nowhere else: a commit is *read*
+          // when every hunk of it is, which is only knowable once its diff
+          // has been fetched — the spec chose honesty over a badge on every
+          // row that would have meant diffing the whole log.
+          const hunks = msg.files.flatMap((f) => f.hunks);
+          const read = hunks.length > 0 && hunks.every((h) => h.reviewed);
           return {
             git: {
               ...s.git,
-              [msg.session_id]: { ...st, diff: msg.files, detail: msg.detail ?? null },
+              [msg.session_id]: {
+                ...st,
+                diff: msg.files,
+                detail: msg.detail ?? null,
+                readBySha: { ...st.readBySha, [msg.sha]: read },
+              },
             },
           };
         });
@@ -2046,6 +2084,7 @@ export const useStore = create<AppState>((set, get) => ({
                 diff: msg.files,
                 detail: null,
                 conflict: null,
+                selectedFile: null,
                 diffLabel: `${msg.path} — the working tree against HEAD`,
               },
             },
@@ -2087,6 +2126,7 @@ export const useStore = create<AppState>((set, get) => ({
           detail: null,
           conflict: null,
           selectedPath: null,
+          selectedFile: null,
           // `git_compare` answers with this event too, so the label says which
           // two ends were compared rather than leaving the pane unattributed.
           diffLabel: `${msg.from.slice(0, 8)}..${msg.to.slice(0, 8)}`,
@@ -2098,6 +2138,8 @@ export const useStore = create<AppState>((set, get) => ({
           detail: null,
           conflict: null,
           selectedPath: null,
+          selectedFile: null,
+          diffLabel: `stash@{${msg.index}}`,
         });
         break;
       case "git_conflict_stages":
