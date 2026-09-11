@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-10
+updated: 2026-09-11
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -525,3 +525,12 @@ certain and the UI must not pretend otherwise.
 *2026-09-03: `state.rs` gained `scratch_dir` (`R-L5`), a `OnceLock` a test
 sets so no test writes to the real `~/.mogeung/scratch`. Nothing in the
 signals above reads it; noted so the staleness check stays honest.*
+
+## What of `state.rs` this covers
+
+`state.rs` is also the daemon's git wrappers and its handoffs to other
+programs — `open_folder`, and since `R-J92` (2026-09-11) `open_in_intellij`
+and the probe beside it — and those are described by
+[wire-protocol.md](wire-protocol.md), not here. This document covers the
+scan loop's signals, attribution and the queue's inputs; a change to a
+handoff is not a change to a signal.
