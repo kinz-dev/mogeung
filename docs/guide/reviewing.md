@@ -187,5 +187,18 @@ steps into the file tree and `Esc` back; `n` `p` walk hunks; `Ctrl+T`
 fetches, and the header says when the last fetch was, because ahead/behind is
 only as true as that.
 
-Everything here reads. Staging, committing, stashing and checking out from the
-window are the next row on the roadmap, not this one.
+**And it acts.** In Local changes the checkbox is the index: tick a file to
+stage it, untick to take it out of the next commit; *stage all* and *unstage
+all* sit on each group's header. The commit box on the right takes a message,
+*amend*, and *name this session in a trailer* — a `Mogeung-Session:` line
+that prompt-blame reads back — and commits only what is staged, never `-a`.
+Right-click a file for *discard*, which asks first and names every file,
+because git keeps no copy. A conflicted file's three-way view offers *take
+ours*, *take theirs* and *mark resolved*. Right-click a branch to *check it
+out*; if an agent is running in that worktree the window names it and asks,
+because git cannot see an agent reading files that silently change. The
+branch pane's `+` makes a new branch from HEAD. Stash has *Stash all*, and
+*pop* and *drop* on each entry. Every refusal comes back in git's own words.
+
+Nothing here reaches a remote but fetch. Pull and push are not in this
+window, by decision.

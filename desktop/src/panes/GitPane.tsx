@@ -4,10 +4,14 @@
  * changes, Stash and More as tabs, and the Log tab as three panes — the
  * branch tree, the graph log under its filter bar, and the commit inspector.
  *
- * **Read-only from end to end in this client, still.** The wire carries a
- * write family (`R-D19`–`R-D22`) and the daemon honours it, and nothing here
- * sends one: that is `R-D28`, sequenced last because it is
- * [A26](../../../docs/product/assumptions.md)'s test rather than a port.
+ * **The write family is sent since `R-D28`** — stage, unstage, discard,
+ * commit, branch, switch, stash, resolve — through `lib/gitActions.ts` and
+ * nowhere else, guarded daemon-side by [ADR-0012](../../../docs/decisions/0012-write-locally-never-publish.md)'s
+ * loopback-or-token rule and answered by a status re-broadcast, never by
+ * anything this client models itself. It is
+ * [A26](../../../docs/product/assumptions.md)'s test, run for the first time;
+ * [feature 0025](../../../docs/features/0025-git-write-local.md)'s removal
+ * condition stands.
  *
  * `git fetch` is the single outbound network call in the whole product, on an
  * explicit keystroke, admitted by

@@ -293,17 +293,18 @@ leave the dock as a pane and, from there, as a window under `R-B55`.
 
 `R-D28` — the writes, A26's test:
 
-- [ ] Local changes stages and unstages by checkbox, discards from a menu
+- [x] Local changes stages and unstages by checkbox, discards from a menu
       after a confirmation that names every file, and commits from a box
       with amend and the session trailer; the list reflects git's answer
       without a manual reload
-- [ ] A branch can be created and checked out from the tree, with `R-D21`'s
+- [x] A branch can be created and checked out from the tree, with `R-D21`'s
       warning when a session is live in that worktree; a stash can be pushed,
       popped and dropped; a conflicted file can be resolved from its
       three-way view
-- [ ] Every refusal arrives in git's own words, in the Console and beside the
-      control that asked
-- [ ] The removal condition from [0025](0025-git-write-local.md) is
+- [x] Every refusal arrives in git's own words, in the Console and beside the
+      control that asked *(beside the commit box; elsewhere the banner and
+      the Console)*
+- [x] The removal condition from [0025](0025-git-write-local.md) is
       restated in the roadmap row and dated
 
 `R-D29` — console and height:
@@ -521,6 +522,30 @@ compared. Pinned by a test.
 keys can find the next hunk in the scroller and step into the next file past
 the last one — the `R-D18` walk, without the inspector knowing how a hunk
 is drawn.
+
+### `R-D28` (2026-09-11)
+
+The smallest of the client rows in code and the largest in what it changes,
+which is why it went last. Every verb was already on the wire and already
+guarded, so the work was controls and their tests — 934 green on the first
+run — and three decisions worth writing down.
+
+**A new branch is made from HEAD, and the button says so.** The daemon's
+`git_branch_create` is `git branch <name>` with no start point, so a menu
+item on a row — *new branch from here* — would promise what it cannot do.
+The button is on the pane, labelled *from HEAD*, and a "create and check
+out" onto a worktree with a live agent gets `R-D21`'s warning like any other
+checkout: create first, then ask.
+
+**The commit box empties on evidence, not on the click.** A commit is
+answered by the status re-broadcast, and the box clears when that arrives
+with nothing staged — so a refused commit keeps the message you typed and
+shows git's refusal beneath the button, from the Console's row.
+
+**The checkbox is the index, and a partially staged file is ticked.** A file
+both staged and changed again since wears *+ unstaged* beside its name;
+ticking it stages the rest. The alternative — an indeterminate checkbox —
+is a state git does not have.
 
 ### `R-D29` (2026-09-11)
 

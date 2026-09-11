@@ -3,19 +3,26 @@
  * searchable, starred. `R-D26`.
  *
  * A click **scopes the log** and checks nothing out; checking out is a menu
- * item and a write, and arrives with `R-D28`. The current branch is bold and
+ * item and a write (`R-D28`), behind `R-D21`'s warning when an agent is
+ * running in the worktree — named, and proceeded past on confirm, only when
+ * something is actually live, because a confirmation that always appears is
+ * always dismissed. A new branch is made from HEAD, which is what the
+ * daemon's `git branch <name>` does, so the button sits on the pane rather
+ * than on a row that would promise a start point it cannot deliver. The
+ * current branch is bold and
  * carries ↑↓ against its upstream, and the hover names the fetch those
  * numbers are as of — `R-D23`'s rule, kept: a number that can lie carries
  * its age.
  */
 
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, GitBranch, Star, Tag } from "lucide-react";
+import { ChevronDown, ChevronRight, GitBranch, GitBranchPlus, Star, Tag } from "lucide-react";
 import { useStore } from "@/store";
-import { Dim, Empty, Input } from "@/ui/primitives";
+import { Button, Checkbox, Dim, Empty, IconButton, Input, Mono } from "@/ui/primitives";
+import { Dialog } from "@/ui/Dialog";
 import { ContextMenu, MenuItem, MenuSeparator } from "@/ui/Menu";
 import { refTree, visible, type RefNode } from "@/lib/gitTree";
-import { compareWith, copyText, scopeTo, selectCommit, toggleFavourite } from "@/lib/gitActions";
+import { branchCreate, compareWith, copyText, liveSessionsIn, scopeTo, selectCommit, switchTo, toggleFavourite } from "@/lib/gitActions";
 import { stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { interactive, row as rowCls, rowSelected } from "@/ui/styles";
@@ -30,6 +37,19 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [cursor, setCursor] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  /** A checkout waiting on the `R-D21` warning: the ref, and who is live. */
+  const [checkout, setCheckout] = useState<{ ref: string; live: { id: string; title: string }[] } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newSwitch, setNewSwitch] = useState(true);
+
+  /** Check out: straight away when nothing is running in this worktree,
+   *  and behind a dialog naming what is when something is. */
+  const checkOut = (ref: string) => {
+    const live = liveSessionsIn(repoRoot);
+    if (live.length === 0) switchTo(id, ref);
+    else setCheckout({ ref, live });
+  };
 
   const rows = useMemo(
     () => (refs ? visible(refTree(refs, query, favs), collapsed, (r) => r.key) : []),
@@ -76,6 +96,9 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-7 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5">
         <Input value={query} onChange={setQuery} placeholder="branch or tag" ariaLabel="branch or tag" className="h-5 text-2xs" />
+        <IconButton title="new branch from HEAD…" onClick={() => setCreating(true)}>
+          <GitBranchPlus size={12} />
+        </IconButton>
       </div>
       {!refs ? (
         <Empty>reading refs…</Empty>
@@ -181,6 +204,11 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
                       Compare with the current branch — from the merge base
                     </MenuItem>
                   )}
+                  {r.branch && (
+                    <MenuItem disabled={isCurrent} onSelect={() => checkOut(r.ref!)}>
+                      {isCurrent ? "Checked out" : "Check out — move the working tree here"}
+                    </MenuItem>
+                  )}
                   <MenuSeparator />
                   <MenuItem onSelect={() => copyText(r.ref!)}>Copy name</MenuItem>
                   {r.branch && (
@@ -194,6 +222,95 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
             return <div key={r.key}>{inner}</div>;
           })}
         </div>
+      )}
+      {checkout && (
+        <Dialog
+          title={`Check out ${checkout.ref}?`}
+          subtitle="an agent is running in this worktree"
+          onClose={() => setCheckout(null)}
+        >
+          <div className="flex flex-col gap-3 px-3 py-3">
+            <Dim className="text-xs">
+              Git refuses a switch that would lose work. What it cannot see is an agent reading files that silently become different content.
+              These sessions are live here:
+            </Dim>
+            <ul className="m-0 list-none p-0">
+              {checkout.live.map((l) => (
+                <li key={l.id} className="py-0.5 text-xs">
+                  {l.title} <Mono className="text-2xs text-[var(--dim)]">{l.id.slice(0, 8)}</Mono>
+                </li>
+              ))}
+            </ul>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="solid"
+                onClick={() => {
+                  switchTo(id, checkout.ref);
+                  setCheckout(null);
+                }}
+              >
+                Check out anyway
+              </Button>
+              <Button variant="outline" onClick={() => setCheckout(null)}>
+                Stay
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+      {creating && (
+        <Dialog title="New branch from HEAD" onClose={() => setCreating(false)}>
+          <div className="flex flex-col gap-3 px-3 py-3">
+            <Input
+              value={newName}
+              onChange={setNewName}
+              mono
+              autoFocus
+              placeholder="name"
+              ariaLabel="branch name"
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || !newName.trim()) return;
+                if (newSwitch && liveSessionsIn(repoRoot).length > 0) {
+                  // The switch half of "create and switch" is a switch, and
+                  // gets the same warning. Create first, then ask.
+                  branchCreate(id, newName, false);
+                  setCreating(false);
+                  setCheckout({ ref: newName.trim(), live: liveSessionsIn(repoRoot) });
+                  setNewName("");
+                  return;
+                }
+                branchCreate(id, newName, newSwitch);
+                setCreating(false);
+                setNewName("");
+              }}
+            />
+            <Checkbox checked={newSwitch} onChange={setNewSwitch} label="check it out" />
+            <Dim className="text-2xs">A name git refuses comes back in git's own words — see the Console.</Dim>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="solid"
+                disabled={!newName.trim()}
+                onClick={() => {
+                  if (newSwitch && liveSessionsIn(repoRoot).length > 0) {
+                    branchCreate(id, newName, false);
+                    setCreating(false);
+                    setCheckout({ ref: newName.trim(), live: liveSessionsIn(repoRoot) });
+                    setNewName("");
+                    return;
+                  }
+                  branchCreate(id, newName, newSwitch);
+                  setCreating(false);
+                  setNewName("");
+                }}
+              >
+                Create
+              </Button>
+              <Button variant="outline" onClick={() => setCreating(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );

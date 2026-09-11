@@ -186,7 +186,12 @@ tab (`R-D29`) is fed from the store's one `send` and one `ingest`: every
 `git_*` command is a row as it is sent, its answer closes the row, and a
 daemon `error` — which carries no address on the wire — lands on the latest
 row still waiting, by send order. The dock's maximise is a preference and
-one flex rule, not a second layout.
+one flex rule, not a second layout. The write family (`R-D19`–`R-D22`) is
+sent from the window since `R-D28` — from `gitActions.ts` and nowhere else,
+answered by the daemon's status re-broadcast rather than by anything the
+client models — which makes 2026-09-11 the first day since the egui client
+went that a commit could be made from mogeung, and the first day
+[A26](../product/assumptions.md) has been tested.
 
 **One outbound network call exists**, and only one: `git fetch`, on an explicit
 keystroke (`Ctrl+T`), admitted 2026-08-01 by
