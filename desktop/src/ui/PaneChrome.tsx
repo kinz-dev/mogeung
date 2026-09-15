@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, Braces, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
+import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
@@ -23,6 +23,7 @@ import { popOutPane } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
+import { IntellijGlyph } from "@/ui/IdeGlyphs";
 import { hostLabel, reachFor } from "@/lib/tmux";
 import { closeFile, revealInFiles } from "@/lib/explorer";
 import { closeAllTabs, closeOtherTabs, closeTab } from "@/lib/closeTabs";
@@ -379,7 +380,7 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         disabled={!session || !probe?.project || !probe?.launcher}
         onClick={() => session && send({ cmd: "open_in_intellij", session_id: session.id })}
       >
-        <Braces className="h-3.5 w-3.5" />
+        <IntellijGlyph className="h-3.5 w-3.5" />
       </IconButton>
       {/*
         **This pane, in a window of its own.** Asked for 2026-09-08: *"move a
