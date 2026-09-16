@@ -65,6 +65,9 @@ const SESSION = {
   cwd: "/tmp/repo",
   repo_root: "/tmp/repo",
   alive: true,
+  // The pane behind it, without which the default scope hides the row
+  // outright — `R-J93`.
+  tmux_target: "work:0.0",
   touched_files: [],
   collisions: [],
   verify_runs: [],

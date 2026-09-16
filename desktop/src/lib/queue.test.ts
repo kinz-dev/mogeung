@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { queueDetail, visibleQueue } from "@/lib/queue";
+import { hiddenByTmux, queueDetail, visibleQueue } from "@/lib/queue";
 import { emptyScoped, type ScopedPrefs } from "@/store/prefs";
 import type { AttentionItem, Session } from "@/wire/types";
 
@@ -40,20 +40,26 @@ const item = (id: string, reason: AttentionItem["reason"] = "running"): Attentio
   detail: "",
 });
 
-function ask(opts: {
+interface Ask {
   queue: AttentionItem[];
   sessions: Session[];
   scope?: "needs_you" | "live" | "all";
   filter?: string;
   scoped?: Partial<ScopedPrefs>;
-}) {
-  return visibleQueue({
-    queue: opts.queue,
-    sessions: Object.fromEntries(opts.sessions.map((s) => [s.id, s])),
-    scope: opts.scope ?? "all",
-    filter: opts.filter ?? "",
-    scoped: { ...emptyScoped(), ...opts.scoped },
-  }).map((r) => r.session.id);
+  tmuxOnly?: boolean;
+}
+
+const view = (opts: Ask) => ({
+  queue: opts.queue,
+  sessions: Object.fromEntries(opts.sessions.map((s) => [s.id, s])),
+  scope: opts.scope ?? "all",
+  filter: opts.filter ?? "",
+  scoped: { ...emptyScoped(), ...opts.scoped },
+  tmuxOnly: opts.tmuxOnly,
+});
+
+function ask(opts: Ask) {
+  return visibleQueue(view(opts)).map((r) => r.session.id);
 }
 
 describe("what the queue is showing", () => {
@@ -122,6 +128,69 @@ describe("what the queue is showing", () => {
 
   it("skips a queue entry whose session it has never seen", () => {
     expect(ask({ queue: [item("ghost"), item("a")], sessions: [session("a")] })).toEqual(["a"]);
+  });
+
+  /**
+   * `R-J93`. A session with no pane cannot be attached to, so under the two
+   * scopes you work from it is a row you can only read past. The pane, not
+   * the process: `tmux_target` is the daemon's one answer to *can this be
+   * attached to*.
+   */
+  describe("sessions with no tmux pane", () => {
+    const pane = (id: string, extra: Partial<Session> = {}) =>
+      session(id, { tmux_target: "work:0.0", ...extra } as Partial<Session>);
+
+    it("drops them from the needs-you and live scopes", () => {
+      for (const scope of ["needs_you", "live"] as const) {
+        expect(
+          ask({
+            queue: [item("a", "awaiting_input"), item("loose", "awaiting_input")],
+            sessions: [pane("a"), session("loose")],
+            scope,
+            tmuxOnly: true,
+          }),
+        ).toEqual(["a"]);
+      }
+    });
+
+    it("keeps every one of them under the all scope, which is the way back", () => {
+      expect(
+        ask({
+          queue: [item("a"), item("loose")],
+          sessions: [pane("a"), session("loose")],
+          scope: "all",
+          tmuxOnly: true,
+        }),
+      ).toEqual(["a", "loose"]);
+    });
+
+    it("leaves them alone when the rule is off", () => {
+      expect(
+        ask({
+          queue: [item("a"), item("loose")],
+          sessions: [pane("a"), session("loose")],
+          scope: "live",
+          tmuxOnly: false,
+        }),
+      ).toEqual(["a", "loose"]);
+    });
+
+    /** The panel has to be able to say what it took, or the row just vanishes. */
+    it("counts what it held back, and only what the other filters would have shown", () => {
+      const opts: Ask = {
+        queue: [item("a"), item("loose"), item("dead"), item("mine")],
+        sessions: [pane("a"), session("loose"), session("dead", { alive: false }), session("mine")],
+        scope: "live",
+        tmuxOnly: true,
+        scoped: { hidden: ["mine"] },
+      };
+      // `dead` fails the live scope and `mine` you hid yourself: neither is
+      // being held back by this rule, and counting them would offer to show
+      // rows that would not appear.
+      expect(hiddenByTmux(view(opts))).toBe(1);
+      expect(hiddenByTmux(view({ ...opts, scope: "all" }))).toBe(0);
+      expect(hiddenByTmux(view({ ...opts, tmuxOnly: false }))).toBe(0);
+    });
   });
 
   it("has nothing to show when everything is filtered out", () => {

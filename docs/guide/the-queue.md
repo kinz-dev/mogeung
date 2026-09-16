@@ -1,7 +1,7 @@
 ---
 title: The attention queue
 status: active
-updated: 2026-09-08
+updated: 2026-09-16
 ---
 
 # The attention queue
@@ -77,6 +77,23 @@ Three buttons above the filter decide what the queue is *for*:
 The queue exists to answer *where do I look*, not *what exists*, so it starts
 narrow. If it looks emptier than expected the panel says how many sessions are
 outside the current scope.
+
+### Under tmux only
+
+**needs you** and **live** show only sessions mogeung can attach to — ones
+running in a tmux pane, which is what `yolomo`, `codexmo` and `qwenmo` give
+you. A session started in a plain terminal or in iTerm2 is owned by that
+terminal and has no pane to host, so there is no Agent pane to open and nothing
+to type into: it is a row you can only read past.
+
+**all** ignores the rule entirely, and the terminal button in the panel header
+turns it off without leaving the scope you are in. Whenever rows are being held
+back the panel says so — `3 hidden — not under tmux` — and pressing that line
+shows them.
+
+The cost is worth knowing: a session that has **ended** has no pane either, so
+by default **needs you** no longer lists ended-but-unreviewed work. Turn the
+rule off, or use **all**, when review is what you are doing.
 
 ## Hiding and pinning
 

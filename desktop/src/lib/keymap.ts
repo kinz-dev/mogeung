@@ -862,9 +862,17 @@ export function defaultKeys(action: Action, platform: Platform = currentPlatform
  */
 function moveSelection(delta: number): void {
   const { queue, sessions, selected, select, prefs, filter, scoped } = useStore.getState();
-  const ids = visibleQueue({ queue, sessions, scope: prefs.scope, filter, scoped: scoped() }).map(
-    (r) => r.session.id,
-  );
+  const ids = visibleQueue({
+    queue,
+    sessions,
+    scope: prefs.scope,
+    filter,
+    scoped: scoped(),
+    // The same list the panel draws, `R-J93` included — a row the tmux rule
+    // hid is a row the arrows must not stop on, which is the whole point of
+    // there being one definition.
+    tmuxOnly: prefs.tmuxOnly,
+  }).map((r) => r.session.id);
   if (ids.length === 0) return;
   const at = selected ? ids.indexOf(selected) : -1;
   // A selection that is filtered *out* is not "before the first row" — landing

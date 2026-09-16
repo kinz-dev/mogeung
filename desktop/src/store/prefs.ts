@@ -215,6 +215,18 @@ export interface Prefs {
   gitRecents: Record<string, string[]>;
 
   groupByRepo: boolean;
+  /**
+   * Hide sessions with no tmux pane from the `needs you` and `live` scopes.
+   * `R-J93`. On by default, and the `all` scope ignores it either way.
+   *
+   * The ask, 2026-09-16: a session mogeung cannot attach to is one you cannot
+   * act on from here — there is no Agent pane to open and nothing to type
+   * into — so under the two scopes you *work* from it is a row that can only
+   * be read past. Off puts them back without leaving the scope you are in,
+   * which the `all` escape hatch alone would not: `all` also brings back
+   * every session that has ended.
+   */
+  tmuxOnly: boolean;
   autoSelect: boolean;
   previewOnSelect: boolean;
 
@@ -322,6 +334,7 @@ export const defaultPrefs = (): Prefs => ({
   gitFavourites: {},
   gitRecents: {},
   groupByRepo: false,
+  tmuxOnly: true,
   autoSelect: false,
   previewOnSelect: true,
   hideReviewed: false,

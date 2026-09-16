@@ -97,22 +97,53 @@ export interface VisibleRow {
   session: Session;
 }
 
-/** The rows the queue shows, in the order it shows them. */
-export function visibleQueue(s: {
+export interface QueueView {
   queue: AttentionItem[];
   sessions: Record<string, Session>;
   scope: Scope;
   filter: string;
   scoped: ScopedPrefs;
-}): VisibleRow[] {
+  /**
+   * Hide sessions mogeung cannot attach to, in the two working scopes.
+   * `R-J93`. Absent means *do not* — the rule is the panel's setting, not
+   * this function's opinion.
+   */
+  tmuxOnly?: boolean;
+}
+
+/**
+ * Is there a tmux pane behind this session? `R-J93`.
+ *
+ * `tmux_target` is the daemon's answer to *can this be attached to*, and it
+ * is the only one there is: it is set by walking the session's process up to
+ * a pane and cleared the moment the session stops being live, so a session
+ * started in iTerm2 or from a bare terminal has never had one, and one that
+ * has ended no longer does. [ADR-0010](../../../docs/decisions/0010-attach-a-terminal-never-own-one.md)
+ * is why that matters here rather than being trivia: a row with no pane is a
+ * row whose Agent pane cannot open, so *"go and see"* is not on offer.
+ */
+export function underTmux(s: Session): boolean {
+  return !!s.tmux_target;
+}
+
+function passes(s: QueueView, item: AttentionItem, session: Session, tmuxOnly: boolean): boolean {
+  if (s.scoped.hidden.includes(session.id)) return false;
+  if (s.scope === "needs_you" && !needsHuman(item.reason)) return false;
+  if (s.scope === "live" && !session.alive) return false;
+  // **The working scopes only**, which is the whole shape of `R-J93`: `all`
+  // is what "everything mogeung has seen" has always meant, so it stays the
+  // one place nothing is dropped and the answer to "where did that row go".
+  if (tmuxOnly && s.scope !== "all" && !underTmux(session)) return false;
+  return matchesFilter(session, s.scoped.labels[session.id], s.filter, s.scoped.tags[session.id]);
+}
+
+/** The rows the queue shows, in the order it shows them. */
+export function visibleQueue(s: QueueView): VisibleRow[] {
   const rows: VisibleRow[] = [];
   for (const item of s.queue) {
     const session = s.sessions[item.session_id];
     if (!session) continue;
-    if (s.scoped.hidden.includes(session.id)) continue;
-    if (s.scope === "needs_you" && !needsHuman(item.reason)) continue;
-    if (s.scope === "live" && !session.alive) continue;
-    if (!matchesFilter(session, s.scoped.labels[session.id], s.filter, s.scoped.tags[session.id])) continue;
+    if (!passes(s, item, session, !!s.tmuxOnly)) continue;
     rows.push({ item, session });
   }
   // Pin, then colour, then label — each keeping the attention rank underneath
@@ -121,4 +152,26 @@ export function visibleQueue(s: {
   // hand-made keys above the computed one.
   rows.sort((a, b) => compareByTagThenLabel(a.session.id, b.session.id, s.scoped));
   return rows;
+}
+
+/**
+ * How many rows the tmux rule is holding back right now. `R-J93`.
+ *
+ * Counted rather than inferred, because the panel has to *say* it: a filter
+ * that removes rows silently is indistinguishable from a daemon that has
+ * stopped reporting them, and this product's one claim is that it tells you
+ * who needs you. Everything else is applied first, so this is the number that
+ * would appear if the rule alone were lifted — not the number of sessions on
+ * the machine without a pane.
+ */
+export function hiddenByTmux(s: QueueView): number {
+  if (!s.tmuxOnly || s.scope === "all") return 0;
+  let n = 0;
+  for (const item of s.queue) {
+    const session = s.sessions[item.session_id];
+    if (!session) continue;
+    if (underTmux(session)) continue;
+    if (passes({ ...s, tmuxOnly: false }, item, session, false)) n++;
+  }
+  return n;
 }

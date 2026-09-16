@@ -557,6 +557,10 @@ describe("the keyboard", () => {
         cwd: "/tmp/r",
         repo_root: "/tmp/r",
         alive,
+        // A live session has a pane, and since `R-J93` the queue's working
+        // scopes show only sessions that do — so a fixture without one would
+        // be testing the arrows against a board with nothing on it.
+        tmux_target: alive ? "work:0.0" : null,
         touched_files: [],
         collisions: [],
         verify_runs: [],

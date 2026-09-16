@@ -8,14 +8,14 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Pin, Tag } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Pin, Tag, TerminalSquare } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } from "@/ui/primitives";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
-import { matchesFilter, queueDetail, visibleQueue } from "@/lib/queue";
+import { hiddenByTmux, matchesFilter, queueDetail, visibleQueue } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
 import { revealSession } from "@/lib/panes";
@@ -121,12 +121,34 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
   // queue, the strip and the ambient board at once, and a whole-prefs
   // subscription meant every zoom or font tweak recomputed all three.
   const scope = useStore((s) => s.prefs.scope);
+  const tmuxOnly = useStore((s) => s.prefs.tmuxOnly);
   const filter = useStore((s) => s.filter);
   const scoped = useStore((s) => s.scoped());
 
   return useMemo(
-    () => visibleQueue({ queue, sessions, scope, filter, scoped }),
-    [queue, sessions, scope, filter, scoped],
+    () => visibleQueue({ queue, sessions, scope, filter, scoped, tmuxOnly }),
+    [queue, sessions, scope, filter, scoped, tmuxOnly],
+  );
+}
+
+/**
+ * How many rows the tmux rule is holding back. `R-J93`.
+ *
+ * A second subscription rather than a field on `useVisibleQueue`, because the
+ * strip and the ambient board want the rows and have nowhere to put a number
+ * — and this one is only ever read by the panel that can turn the rule off.
+ */
+function useHiddenByTmux(): number {
+  const queue = useStore((s) => s.queue);
+  const sessions = useStore((s) => s.sessions);
+  const scope = useStore((s) => s.prefs.scope);
+  const tmuxOnly = useStore((s) => s.prefs.tmuxOnly);
+  const filter = useStore((s) => s.filter);
+  const scoped = useStore((s) => s.scoped());
+
+  return useMemo(
+    () => hiddenByTmux({ queue, sessions, scope, filter, scoped, tmuxOnly }),
+    [queue, sessions, scope, filter, scoped, tmuxOnly],
   );
 }
 
@@ -452,6 +474,7 @@ export function QueuePanel() {
   const filter = useStore((s) => s.filter);
   const firstSnapshot = useStore((s) => s.firstSnapshot);
   const rows = useVisibleQueue();
+  const hidden = useHiddenByTmux();
   const selected = useStore((s) => s.selected);
   const parentRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(prefs.queueWidth);
@@ -555,6 +578,17 @@ export function QueuePanel() {
           <span className="text-2xs text-[var(--dim)]">{rows.length}</span>
           <div className="ml-auto flex items-center gap-1">
             <IconButton
+              title={
+                prefs.tmuxOnly
+                  ? "under tmux only, in “needs you” and “live”  (R-J93)"
+                  : "showing sessions with no tmux pane too  (R-J93)"
+              }
+              active={prefs.tmuxOnly}
+              onClick={() => setPrefs({ tmuxOnly: !prefs.tmuxOnly })}
+            >
+              <TerminalSquare size={13} />
+            </IconButton>
+            <IconButton
               title="group by repository  (R-B6)"
               active={prefs.groupByRepo}
               onClick={() => setPrefs({ groupByRepo: !prefs.groupByRepo })}
@@ -587,6 +621,25 @@ export function QueuePanel() {
           />
         </div>
 
+        {/*
+          What the rule took, said out loud. `R-J93`.
+
+          A hidden row and a row that was never reported look identical from
+          here, and this panel is the product's one claim — so the number that
+          is missing is worth a line of its own, and the line is the way back:
+          pressing it shows them without leaving the scope you are working in.
+        */}
+        {hidden > 0 && (
+          <button
+            type="button"
+            onClick={() => setPrefs({ tmuxOnly: false })}
+            title="these sessions have no tmux pane, so there is no terminal to attach to"
+            className="shrink-0 px-2 pb-1 text-left text-2xs text-[var(--dim)] underline-offset-2 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+          >
+            {hidden} hidden — not under tmux
+          </button>
+        )}
+
         <div
           ref={parentRef}
           id={QUEUE_LIST_ID}
@@ -602,9 +655,11 @@ export function QueuePanel() {
             <Empty
               hint={
                 firstSnapshot
-                  ? prefs.scope === "needs_you"
-                    ? "nothing needs you — try the “all” scope"
-                    : "no sessions match this filter"
+                  ? hidden > 0
+                    ? `${hidden} session(s) hidden — none of them is under tmux`
+                    : prefs.scope === "needs_you"
+                      ? "nothing needs you — try the “all” scope"
+                      : "no sessions match this filter"
                   : undefined
               }
             >
