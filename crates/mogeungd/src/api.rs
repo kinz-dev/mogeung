@@ -2013,8 +2013,12 @@ async fn handle(
             Ok(()) => after_ref_change(state, session_id).await,
             Err(e) => err(e),
         },
-        ClientMsg::GitSwitch { session_id, name } => {
-            match state.git_switch(&session_id, name).await {
+        ClientMsg::GitSwitch {
+            session_id,
+            name,
+            detach,
+        } => {
+            match state.git_switch(&session_id, name, detach).await {
                 Ok(()) => {
                     state.recompute_change(&session_id).await;
                     after_ref_change(state, session_id).await
@@ -2427,7 +2431,7 @@ mod write_guard_tests {
                 name: "b".into(),
                 switch_to: true,
             },
-            ClientMsg::GitSwitch { session_id: id(), name: "b".into() },
+            ClientMsg::GitSwitch { session_id: id(), name: "b".into(), detach: false },
             ClientMsg::GitStashPush {
                 session_id: id(),
                 message: String::new(),
@@ -2462,6 +2466,27 @@ mod write_guard_tests {
         ] {
             assert!(!is_write(&cmd), "{cmd:?} only reads");
         }
+    }
+
+    /// A window built before `R-D32` sends no `detach`, and must keep meaning
+    /// *move onto a branch* — the whole point of `#[serde(default)]` on a flag
+    /// whose other value moves the worktree somewhere you did not ask for.
+    #[test]
+    fn a_switch_without_the_detach_flag_is_an_ordinary_switch() {
+        let msg: ClientMsg =
+            serde_json::from_str(r#"{"cmd":"git_switch","session_id":"s","name":"main"}"#).unwrap();
+        match msg {
+            ClientMsg::GitSwitch { detach, name, .. } => {
+                assert!(!detach);
+                assert_eq!(name, "main");
+            }
+            other => panic!("decoded as {other:?}"),
+        }
+        let asked: ClientMsg = serde_json::from_str(
+            r#"{"cmd":"git_switch","session_id":"s","name":"v1","detach":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(asked, ClientMsg::GitSwitch { detach: true, .. }));
     }
 
     /// `ForgetSession` is destructive and deliberately *not* a repository

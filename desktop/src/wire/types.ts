@@ -1147,7 +1147,9 @@ export type ClientMsg =
   | { cmd: "git_discard"; session_id: SessionId; paths: string[] }
   | { cmd: "git_commit"; session_id: SessionId; message: string; amend: boolean; session_trailer: boolean }
   | { cmd: "git_branch_create"; session_id: SessionId; name: string; switch_to: boolean }
-  | { cmd: "git_switch"; session_id: SessionId; name: string }
+  /** `detach` is *checkout tag or revision* (`R-D32`): the same verb
+   *  pointed at a commit-ish, which plain `git switch` refuses. */
+  | { cmd: "git_switch"; session_id: SessionId; name: string; detach?: boolean }
   | { cmd: "git_stash_push"; session_id: SessionId; message: string; include_untracked: boolean }
   | { cmd: "git_stash_pop"; session_id: SessionId; index: number }
   | { cmd: "git_stash_drop"; session_id: SessionId; index: number }

@@ -333,6 +333,12 @@ export interface IntellijProbe {
   launcher: string | null;
 }
 
+/** Which git popup is open. `R-D31`, `R-D32`. */
+export type GitPopup = null | "ops" | "branches";
+
+/** The Git tool window's tabs, in the order the strip draws them. `R-D26`. */
+export type GitTab = "log" | "local" | "stash" | "console" | "more";
+
 export interface GitState {
   commits: CommitInfo[];
   done: boolean;
@@ -728,6 +734,41 @@ export interface AppState {
   paletteOpen: boolean;
   paletteMode: "actions" | "files" | "scratch";
   /**
+   * Which git popup is open, if either. `R-D31`, `R-D32`.
+   *
+   * One field for two popups, because they are one gesture: `Alt+\`` opens the
+   * operations list and `7` swaps it for the branches list, which a pair of
+   * booleans would let get into the state of being both open at once.
+   */
+  gitPopup: GitPopup;
+  /**
+   * The Git tool window's tab. `R-D31`.
+   *
+   * Lifted out of `GitPane`'s own `useState` so the popup can **route** to a
+   * tab — *stash changes* means the Stash tab with the dock open, and a
+   * component holding that state privately is a component nothing else can
+   * send anybody to. View state rather than a preference: which tab you were
+   * on last week is not a setting.
+   */
+  gitTab: GitTab;
+  /**
+   * Which of the More tab's three lists it shows. `R-D31`.
+   *
+   * Lifted for the same reason `gitTab` is, and it is the reason the lift is
+   * worth doing twice: *Worktrees…* is a row in the popup, and the worktrees
+   * are two levels down — a tab, and then a list inside it.
+   */
+  gitMore: "reflog" | "worktrees" | "submodules";
+  /**
+   * The commit box should take the keyboard. `R-D31`.
+   *
+   * `focusRail`'s device, for the same reason: the Local changes tab also
+   * mounts when the dock is simply opened, so an `autoFocus` would grab the
+   * keyboard every time you glanced at a diff. Consumed and cleared by the
+   * box.
+   */
+  commitFocus: number;
+  /**
    * The folder a new scratch file will be made in, or `null` for the root.
    * `R-L9`. Set by the panel's *New scratch file here…*, and cleared when the
    * palette closes so the next chord means the root again.
@@ -1084,6 +1125,10 @@ export const useStore = create<AppState>((set, get) => ({
   noticesOpen: false,
   paletteOpen: false,
   paletteMode: "actions",
+  gitPopup: null,
+  gitTab: "log",
+  gitMore: "reflog",
+  commitFocus: 0,
   scratchFolder: null,
   showHealth: false,
   showWall: false,

@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 662 passing |
-| Rust | 46355 lines |
-| Docs | 110 files, 38 ADRs |
+| Tests | 665 passing |
+| Rust | 46442 lines |
+| Docs | 111 files, 38 ADRs |
 
 ## Assumptions
 
@@ -63,4 +63,5 @@ Untested: **17** · At risk: **5** · Supported: 17 · Refuted: 2
 | [A connection manager](docs/features/0040-a-connection-manager.md) | `shipped` | [A24] |
 | [A pane in its own window](docs/features/0041-a-pane-in-its-own-window.md) | `shipped` | [A30] |
 | [The Git tool window — IntelliJ's log, in the dock](docs/features/0042-git-tool-window.md) | `active` | [A13, A18, A19, A26] |
+| [The Git Operations popup — IntelliJ's two popups, on a keystroke](docs/features/0043-git-operations-popup.md) | `active` | [A13, A19, A26] |
 

@@ -460,10 +460,51 @@ fn a_branch_name_that_could_be_a_flag_is_refused_with_a_reason() {
 fn switching_moves_the_worktree() {
     let dir = repo("switch", false);
     git::branch_create(&dir, "other", false).unwrap();
-    git::switch(&dir, "other").unwrap();
+    git::switch(&dir, "other", false).unwrap();
     assert_eq!(branch_now(&dir), "other");
-    git::switch(&dir, "main").unwrap();
+    git::switch(&dir, "main", false).unwrap();
     assert_eq!(branch_now(&dir), "main");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Checkout tag or revision. `R-D32`.
+///
+/// Plain `git switch` refuses anything that is not a branch — which is the
+/// whole reason the flag exists, and the assertion worth making is that the
+/// refusal is real rather than assumed. A tag and a raw sha both arrive as a
+/// detached HEAD, and `main` is still there to come back to.
+#[test]
+fn a_tag_or_a_sha_is_reached_only_by_detaching() {
+    let dir = repo("switch-detach", false);
+    let sha = git_in(&dir, &["rev-parse", "HEAD"]).trim().to_string();
+    git_in(&dir, &["tag", "v1"]);
+
+    let e = git::switch(&dir, "v1", false).unwrap_err().to_string();
+    assert!(!e.is_empty(), "git refuses a tag without --detach");
+    assert_eq!(branch_now(&dir), "main", "and did not move");
+
+    git::switch(&dir, "v1", true).unwrap();
+    assert_eq!(branch_now(&dir), "HEAD", "detached");
+    assert_eq!(git_in(&dir, &["rev-parse", "HEAD"]).trim(), sha);
+
+    git::switch(&dir, "main", false).unwrap();
+    assert_eq!(branch_now(&dir), "main", "and back again");
+
+    git::switch(&dir, &sha, true).unwrap();
+    assert_eq!(branch_now(&dir), "HEAD", "a raw sha too");
+
+    git::switch(&dir, "main", false).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The flag widens nothing: `check_ref` is asked first either way.
+#[test]
+fn detaching_refuses_the_same_names_switching_does() {
+    let dir = repo("switch-detach-evil", false);
+    for bad in ["--force", "..", "a..b", "main@{1}", "-x"] {
+        let e = git::switch(&dir, bad, true).unwrap_err().to_string();
+        assert!(e.contains("not a branch name mogeung will use"), "{bad:?} → {e}");
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -478,10 +519,10 @@ fn a_switch_that_would_lose_work_is_gits_refusal() {
     std::fs::write(dir.join("kept.txt"), "from other\n").unwrap();
     git::stage(&dir, &p("kept.txt")).unwrap();
     git::commit(&dir, "other's version", false, &[]).unwrap();
-    git::switch(&dir, "main").unwrap();
+    git::switch(&dir, "main", false).unwrap();
 
     std::fs::write(dir.join("kept.txt"), "uncommitted edit\n").unwrap();
-    let e = git::switch(&dir, "other").unwrap_err().to_string();
+    let e = git::switch(&dir, "other", false).unwrap_err().to_string();
     assert!(e.contains("kept.txt"), "git names the file: {e}");
     assert_eq!(branch_now(&dir), "main", "and did not move");
     assert_eq!(

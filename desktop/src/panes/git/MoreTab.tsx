@@ -6,7 +6,7 @@
  * itself creates. `R-D26`.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useStore } from "@/store";
 import { Chip, Dim, Empty, Mono, Segmented } from "@/ui/primitives";
 import { selectCommit } from "@/lib/gitActions";
@@ -20,7 +20,10 @@ type List = "reflog" | "worktrees" | "submodules";
 const CMD = { reflog: "git_reflog", worktrees: "git_worktrees", submodules: "git_submodules" } as const;
 
 export function MoreTab({ id }: { id: string }) {
-  const [list, setList] = useState<List>("reflog");
+  // In the store since `R-D31`, for `gitTab`'s reason one level down: the
+  // operations popup's *Worktrees…* names a list inside a tab.
+  const list = useStore((s) => s.gitMore);
+  const setList = (next: List) => useStore.setState({ gitMore: next });
   const reflog = useStore((s) => s.git[id]?.reflog ?? null);
   const worktrees = useStore((s) => s.git[id]?.worktrees ?? null);
   const submodules = useStore((s) => s.git[id]?.submodules ?? null);

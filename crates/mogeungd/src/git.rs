@@ -266,9 +266,20 @@ pub fn branch_create(root: &Path, name: &str, switch_to: bool) -> Result<()> {
 /// every file. What git has no opinion about — and cannot detect — is that an
 /// agent may be reading those files right now. That warning belongs in the
 /// window, which is the only place that knows a session is live.
-pub fn switch(root: &Path, name: &str) -> Result<()> {
+///
+/// `detach` is what makes *checkout tag or revision* (`R-D32`) possible:
+/// `git switch` refuses anything that is not a branch, and the same command
+/// with `--detach` takes a tag or a sha and says so in the usual way — a
+/// detached HEAD, which git itself explains on arrival. Two commands would
+/// have been the alternative, and then two places where `check_ref` has to be
+/// remembered.
+pub fn switch(root: &Path, name: &str, detach: bool) -> Result<()> {
     let name = check_ref(name)?;
-    run_git_write(root, &["switch", name]).map(drop)
+    let args: Vec<&str> = match detach {
+        true => vec!["switch", "--detach", name],
+        false => vec!["switch", name],
+    };
+    run_git_write(root, &args).map(drop)
 }
 
 /// Shelve the working tree. `R-D21`.

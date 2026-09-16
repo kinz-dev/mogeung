@@ -27,7 +27,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CloudDownload, Columns2, PanelLeft, RefreshCw, X } from "lucide-react";
-import { useStore, useSelectedSession } from "@/store";
+import { useStore, useSelectedSession, type GitTab } from "@/store";
 import { Dim, Empty, IconButton, Segmented } from "@/ui/primitives";
 import { sectionLabel } from "@/ui/styles";
 import { repoName } from "@/wire/types";
@@ -43,7 +43,10 @@ import { MoreTab } from "./git/MoreTab";
 import { ConsoleTab } from "./git/ConsoleTab";
 import { Splitter, useDragWidth, useWidth } from "./git/Dropdown";
 
-type Tab = "log" | "local" | "stash" | "console" | "more";
+// The tabs are `GitTab` in the store since `R-D31`: the operations popup
+// routes to one — *stash changes* means the Stash tab — and a component
+// holding that privately is a component nothing can send anybody to.
+type Tab = GitTab;
 
 function Count({ n }: { n: number }) {
   return <span className="ml-1 rounded-sm bg-[var(--bg-faint)] px-1 text-2xs leading-3 tabular-nums text-[var(--dim)]">{n}</span>;
@@ -72,7 +75,8 @@ export function GitPane() {
   const setPrefs = useStore((st) => st.setPrefs);
   const [branchesWidth, dragBranches] = useDragWidth(savedBranches, 160, 480, (px) => setPrefs({ gitBranchesWidth: px }));
   const [inspectorWidth, dragInspector] = useDragWidth(savedInspector, 260, 900, (px) => setPrefs({ gitInspectorWidth: px }), -1);
-  const [tab, setTab] = useState<Tab>("log");
+  const tab = useStore((st) => st.gitTab);
+  const setTab = (next: Tab) => useStore.setState({ gitTab: next });
   const [only, setOnly] = useState<Only>({ session: false, read: false });
   const rootRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);

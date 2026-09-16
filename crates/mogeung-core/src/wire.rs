@@ -244,9 +244,18 @@ pub enum ClientMsg {
     /// Git refuses a switch that would lose work. What it cannot know is that
     /// an agent may be reading those files right now — the window warns about
     /// that, because it is the only side that knows a session is live.
+    ///
+    /// `detach` is *checkout tag or revision*, `R-D32`: the same verb pointed
+    /// at a commit-ish rather than a branch, which plain `git switch` refuses.
+    /// It widens nothing — `check_ref` admits exactly the names it always did,
+    /// and a sha and a tag were already among them.
     GitSwitch {
         session_id: SessionId,
         name: String,
+        /// Default false, so a client that predates the flag means what it
+        /// always meant: move onto a branch.
+        #[serde(default)]
+        detach: bool,
     },
     /// Shelve the working tree. `R-D21`.
     GitStashPush {

@@ -322,6 +322,20 @@ function CommitBox({
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
   const [trailer, setTrailer] = useState(true);
+  const box = useRef<HTMLTextAreaElement>(null);
+  /**
+   * *Commit…* in the operations popup means **type the message now**.
+   * `R-D31`.
+   *
+   * A counter rather than a boolean, and `focusRail`'s device: the tab also
+   * mounts when the dock is simply opened, so an `autoFocus` would take the
+   * keyboard every time you glanced at a diff — and two commits in a row have
+   * to focus twice, which a boolean already true cannot do.
+   */
+  const wanted = useStore((s) => s.commitFocus);
+  useEffect(() => {
+    if (wanted > 0) box.current?.focus();
+  }, [wanted]);
   // A commit was sent and not yet answered. The answer is the status
   // re-broadcast: when it arrives with nothing staged, the box empties.
   const sent = useRef(false);
@@ -342,6 +356,7 @@ function CommitBox({
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-2">
         <textarea
+          ref={box}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           aria-label="commit message"

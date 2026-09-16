@@ -67,6 +67,17 @@ export interface ScopedPrefs {
   labels: Record<SessionId, string>;
   editorWrap: string[];
   /**
+   * Files whose blame gutter is on, by path. `R-D31`.
+   *
+   * `editorWrap`'s shape, deliberately: it was `useState` inside `FilePane`
+   * until the operations popup needed to *turn blame on from outside the
+   * pane*, and a per-path list is the only form in which that request can be
+   * made — the popup knows a path, never which pane is showing it. It
+   * persisting is the side effect, and the welcome one: annotation is a way of
+   * reading a file, not a thing you re-ask for every time you open it.
+   */
+  editorBlame: string[];
+  /**
    * Marked lines in files: `[session, path, line]`, plus a digit since
    * `R-J37`. See [`lib/marks.ts`](../lib/marks.ts) — the fourth element is
    * absent on every mark made by clicking the margin, so an older preferences
@@ -287,6 +298,7 @@ export const emptyScoped = (): ScopedPrefs => ({
   pinned: [],
   labels: {},
   editorWrap: [],
+  editorBlame: [],
   bookmarks: [],
   tags: {},
   shells: [],

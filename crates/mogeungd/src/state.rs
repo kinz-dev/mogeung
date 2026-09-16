@@ -3287,11 +3287,12 @@ impl AppState {
         Ok(())
     }
 
-    /// Move the worktree onto an existing branch. `R-D21`.
-    pub async fn git_switch(&self, id: &str, name: String) -> Result<()> {
+    /// Move the worktree onto an existing branch, or detach onto any
+    /// commit-ish. `R-D21`, `R-D32`.
+    pub async fn git_switch(&self, id: &str, name: String, detach: bool) -> Result<()> {
         let root = self.git_root(id).await?;
         let moved = root.clone();
-        tokio::task::spawn_blocking(move || crate::git::switch(&root, &name)).await??;
+        tokio::task::spawn_blocking(move || crate::git::switch(&root, &name, detach)).await??;
         self.unpin_diff_bases(&moved).await;
         Ok(())
     }

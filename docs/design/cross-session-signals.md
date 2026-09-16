@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-11
+updated: 2026-09-16
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -534,3 +534,10 @@ and the probe beside it — and those are described by
 [wire-protocol.md](wire-protocol.md), not here. This document covers the
 scan loop's signals, attribution and the queue's inputs; a change to a
 handoff is not a change to a signal.
+
+Checked again on 2026-09-16, when `R-D32` gave `git_switch` its `detach` flag:
+that is a wrapper, the flag reaches git and nothing else, and no signal here
+reads it. The one thing a switch *does* touch on this side —
+`unpin_diff_bases`, which a detached checkout triggers exactly as a branch
+switch does — is [review-checkpointing.md](review-checkpointing.md)'s, where
+the base is defined.

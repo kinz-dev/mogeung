@@ -1,7 +1,7 @@
 ---
 title: Reviewing changes
 status: active
-updated: 2026-09-11
+updated: 2026-09-16
 ---
 
 # Reviewing changes
@@ -213,3 +213,42 @@ branch pane's `+` makes a new branch from HEAD. Stash has *Stash all*, and
 
 Nothing here reaches a remote but fetch. Pull and push are not in this
 window, by decision.
+
+## The git popups
+
+Everything above is a tool window you open, find a tab in, and click. `Alt+` `
+is the same verbs on one key: IntelliJ's **Git Operations** popup, numbered.
+
+| | |
+|---|---|
+| `1` | Commit… — the Local changes tab, cursor in the message box |
+| `2` | Commit File… — stages the selected file first |
+| `3` | Rollback… — names the file and asks, as discard always does |
+| `4` | Show History — the log, scoped to the selected file |
+| `5` | Annotate with Git Blame — the blame gutter, for that file |
+| `6` | Show Diff |
+| `7` | Branches… — the second popup |
+| `8` | Push… — **refuses**, and says why |
+| `9` `0` | Stash and unstash |
+
+Below the numbers: *Update Project (fetch)*, *Worktrees…*, *Copy Branch Name*
+and *Show Local History*, which here means the reflog — mogeung keeps no record
+of your edits, and git's own is the nearest true answer.
+
+A digit runs its entry; `↑` `↓` and `Enter` do the same; `Escape` closes. An
+entry with nothing to act on — *Rollback* with no file selected — **says so**
+rather than doing nothing, and the list stays up, because the answer is usually
+the entry below.
+
+`7`, or `Ctrl+Shift+` ` on its own, opens **Branches**: one box that searches
+branches *and* actions, the repository and the branch it is on, the branches you
+were last looking at, then Local, Remote and Tags grouped on `/`. `Enter` checks
+one out — behind the same warning the branch pane gives when an agent is live in
+that worktree. Right-click a branch for compare, its log, copy name and
+favourite. *New Branch…* makes one from HEAD; *Checkout Tag or Revision…* takes
+a tag or a sha and leaves HEAD detached, which is the one place in the window
+that does.
+
+Merge, rebase and pull-into are not there, for the reason push is not: this
+window writes locally and never publishes.
+

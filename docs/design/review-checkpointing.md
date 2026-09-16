@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-09-11
+updated: 2026-09-16
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
@@ -130,6 +130,13 @@ already committed: those commits are inside the base, so the work is invisible
 and the session looks like it did nothing. Resolved with
 `git rev-list -1 --before <session start> HEAD`, falling back to `HEAD` when the
 repo has no commit that old.
+
+**Moving the worktree drops the pinned base** of every session in it, and since
+`R-D32` (2026-09-16) there are two ways to move it: `git switch <branch>`, and
+the same verb with `--detach` onto a tag or a sha. Both clear rather than
+recompute, because a base resolved on one line of history may not be an
+ancestor of anything checked out afterwards, and the scan loop already knows
+how to resolve a missing one — one place that can compute a base beats two.
 
 ## Presentation
 

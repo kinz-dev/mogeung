@@ -46,6 +46,8 @@ import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
 import { FileDrop } from "@/ui/FileDrop";
+import { GitOpsPopup } from "@/ui/GitOpsPopup";
+import { BranchesPopup } from "@/ui/BranchesPopup";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { FilePane } from "@/panes/FilePane";
@@ -395,6 +397,9 @@ export default function App() {
         <WallOverlay />
         {/* A file dragged in from a file manager opens in the Code pane. `R-J94`. */}
         <FileDrop />
+        {/* IntelliJ's two git popups, on `Alt+\`` and `7`. `R-D31`, `R-D32`. */}
+        <GitOpsPopup />
+        <BranchesPopup />
         <NoticesWindow />
         <Toasts />
         <ResizeGrip />

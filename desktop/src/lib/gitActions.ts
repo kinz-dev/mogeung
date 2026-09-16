@@ -213,8 +213,8 @@ export function branchCreate(id: SessionId, name: string, switchTo: boolean): vo
 
 /** Moves the worktree. `R-D21`'s warning — name the live sessions, proceed
  *  on confirm — belongs to the caller; see `liveSessionsIn`. */
-export function switchTo(id: SessionId, name: string): void {
-  useStore.getState().send({ cmd: "git_switch", session_id: id, name });
+export function switchTo(id: SessionId, name: string, detach = false): void {
+  useStore.getState().send({ cmd: "git_switch", session_id: id, name, detach });
 }
 
 export function stashPush(id: SessionId, message: string, includeUntracked: boolean): void {

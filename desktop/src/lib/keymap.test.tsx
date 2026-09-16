@@ -67,6 +67,7 @@ describe("the keyboard", () => {
       showKeymap: false,
       labelEditing: null,
       searchOpen: false,
+      gitPopup: null,
     });
     useStore.getState().setPrefs({ dock: null, infoOpen: false });
   });
@@ -587,6 +588,34 @@ describe("the keyboard", () => {
 
     press("ArrowUp");
     expect(useStore.getState().selected).toBe("a");
+  });
+
+  /**
+   * The git popups, on IntelliJ's own chords. `R-D31`, `R-D32`.
+   *
+   * **Spelled by physical key**, and this test is where that has to hold:
+   * `⌥`` composes a dead grave accent on a Mac, so a chord matched against the
+   * *character* would never fire there — `R-L6`'s rule, one key over. The
+   * event therefore carries `code`, the way the window receives it.
+   */
+  it("opens the git operations popup on Alt+`, and the branches popup on its own chord", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+
+    press("`", { altKey: true, code: "Backquote" });
+    expect(useStore.getState().gitPopup).toBe("ops");
+
+    act(() => useStore.setState({ gitPopup: null }));
+    press("`", { ctrlKey: true, shiftKey: true, code: "Backquote" });
+    expect(useStore.getState().gitPopup).toBe("branches");
+  });
+
+  /** `Control+` ` is the terminal and has been since the panel existed. */
+  it("leaves the terminal's own backquote chord alone", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    press("`", { ctrlKey: true, code: "Backquote" });
+    expect(useStore.getState().gitPopup).toBeNull();
   });
 
   /** The strip reads left to right, and so do the chords. */

@@ -292,7 +292,22 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineFilter, setOutlineFilter] = useState("");
   const [preview, setPreview] = useState(false);
-  const [blameOn, setBlameOn] = useState(false);
+  /**
+   * The blame gutter, in scoped prefs rather than in this pane. `R-D31`.
+   *
+   * `editorWrap`'s shape, one line above, and it is here for a reason that is
+   * not tidiness: the operations popup's *Annotate with Git Blame* has a
+   * **path** and no handle on whichever pane is showing it, so the only form
+   * in which it can ask is a per-path list. It persisting is the side effect,
+   * and the welcome one — annotation is a way of reading a file.
+   */
+  const blameOn = scoped.editorBlame.includes(path);
+  const setBlameOn = (on: boolean) =>
+    setScoped({
+      editorBlame: on
+        ? [...scoped.editorBlame, path]
+        : scoped.editorBlame.filter((p) => p !== path),
+    });
 
   const index = st ? st.open.findIndex((t) => t.path === path && t.rev === rev) : -1;
   const tab = index >= 0 && st ? st.open[index] : null;

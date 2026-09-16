@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-11
+updated: 2026-09-16
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -185,6 +185,14 @@ result: a verb that wrote the file and left the index unmerged would show a
 conflict that looks fixed and is not. The content is deliberately **not**
 inspected — markers left in a file are committable once the index says
 resolved, and a validator refusing them would refuse legitimate content too.
+
+`GitSwitch` grew one flag on 2026-09-16 (`R-D32`): `detach`, defaulted false,
+which runs `git switch --detach` and is how *checkout tag or revision* reaches
+anything that is not a branch — plain `git switch` refuses a tag and a sha
+outright. It widens nothing, because the name still goes through the rule
+below: a tag and a hex sha were always among the names it admits. A client that
+predates the flag sends no field and means what it always meant, which is what
+`#[serde(default)]` is there for.
 
 `GitSwitch` clears the pinned diff base of **every** session in that worktree
 ([A9](../product/assumptions.md)): a base is the last commit before a session

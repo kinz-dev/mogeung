@@ -667,6 +667,32 @@ export const ACTIONS: Action[] = [
     },
   },
   {
+    id: "git.ops",
+    label: "Git operations…",
+    group: "Git",
+    /**
+     * `Alt+` `, IntelliJ's own chord for its VCS Operations popup — `R-D31`.
+     *
+     * **Spelled by physical key**, which is not decoration: `⌥`` on a Mac
+     * composes a dead grave accent, so a chord matched against the *character*
+     * would never fire there. `R-L6` wrote that rule down for `⌥P`; a code
+     * spelling then works on both platforms and needs no `MAC_KEYS` row.
+     *
+     * `Control+` ` is the terminal, and has been since the panel existed. The
+     * two are one key apart on purpose: that is where IntelliJ puts them too.
+     */
+    keys: ["Alt+Backquote"],
+    run: () => useStore.setState({ gitPopup: "ops" }),
+  },
+  {
+    id: "git.branches",
+    label: "Branches…",
+    group: "Git",
+    /** IntelliJ's `Ctrl+Shift+` `, and the popup entry `7` reaches. `R-D32`. */
+    keys: ["$mod+Shift+Backquote"],
+    run: () => useStore.setState({ gitPopup: "branches" }),
+  },
+  {
     id: "session.label",
     // Named for the noun the dialog, the badge and the filter all use. The
     // palette searches `group + label`, so "rename" is the word it will not

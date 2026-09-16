@@ -55,6 +55,10 @@ const refs: RefsInfo = {
 function show(git: Partial<ReturnType<typeof emptyGit>> = {}, live = false) {
   sent.length = 0;
   useStore.setState({
+    // The tool window's tab is in the store since `R-D31` — the operations
+    // popup routes to one — so each fixture starts it where it starts a fresh
+    // window rather than wherever the previous test left it.
+    gitTab: "log",
     selected: "s1",
     sessions: {
       s1: { id: "s1", cwd: "/repo", repo_root: "/repo", title: "the session", alive: live },
@@ -135,7 +139,7 @@ describe("branches", () => {
     show({}, false);
     fireEvent.contextMenu(screen.getByText("git-fetch"));
     fireEvent.click(screen.getByText(/Check out — move/));
-    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", name: "git-fetch" }]);
+    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", name: "git-fetch", detach: false }]);
   });
 
   it("names the live session and waits for a confirm when one is", () => {
@@ -145,7 +149,7 @@ describe("branches", () => {
     expect(writes()).toEqual([]);
     expect(screen.getByRole("dialog", { name: /Check out git-fetch/ })).toHaveTextContent("the session");
     fireEvent.click(screen.getByText("Check out anyway"));
-    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", name: "git-fetch" }]);
+    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", name: "git-fetch", detach: false }]);
   });
 
   it("creates a branch from HEAD, checking it out when asked", () => {
