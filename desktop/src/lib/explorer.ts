@@ -367,10 +367,38 @@ export function languageOf(path: string): string {
     toml: "toml",
     xml: "xml",
     md: "markdown",
+    markdown: "markdown",
     lock: "toml",
     dockerfile: "dockerfile",
   };
   if (path.endsWith("Dockerfile")) return "dockerfile";
   if (path.endsWith("Makefile")) return "makefile";
   return map[ext] ?? "plaintext";
+}
+
+/**
+ * Does this file wrap in the editor unless you say otherwise?
+ *
+ * **Prose wraps; code does not**, and the split is the whole rule. Reported
+ * 2026-09-16: *"when viewing a md file in a markdown model, if the line is too
+ * long it doesn't automatically wrap"*. It did not, because `wordWrap` was
+ * `off` for every file and the header's toggle was the only way to turn it on
+ * — per file, so a paragraph that ran off the right edge had to be dealt with
+ * again in the next document.
+ *
+ * Horizontal scroll is the **right** answer for code: indentation is
+ * structure, and a wrapped line of Rust puts its continuation where a nested
+ * block would be. Markdown has no such structure to lose — a paragraph is one
+ * long line by convention, so the line length in the file says nothing about
+ * how it is meant to be read.
+ *
+ * By **extension and not by language**, deliberately: `languageOf` answers
+ * `plaintext` for a `.txt` and for every extension it has never heard of, and
+ * a `.csv` or a `.log` guessed into wrapping loses the columns that are the
+ * only thing holding it together. So the set is named, and it is short.
+ */
+const PROSE: ReadonlySet<string> = new Set(["md", "markdown", "txt", "text"]);
+
+export function wrapsByDefault(path: string): boolean {
+  return PROSE.has(path.slice(path.lastIndexOf(".") + 1).toLowerCase());
 }

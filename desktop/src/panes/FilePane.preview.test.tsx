@@ -139,7 +139,7 @@ describe("finding in the rendered preview", () => {
 });
 
 /**
- * The wrap button, in the preview. `R-J52`.
+ * The wrap button, in the preview. `R-J52`, and its default since 2026-09-16.
  *
  * Reported 2026-08-25: pressing it while reading a `.md` did nothing. It fed
  * `wordWrap` to Monaco, which is not what is on screen in preview mode — and
@@ -147,6 +147,13 @@ describe("finding in the rendered preview", () => {
  * fenced block. These pin the join rather than the CSS: that the same per-file
  * state reaches both renderings, and that it survives the round trip to
  * source and back.
+ *
+ * **A markdown file now wraps by default** (`wrapsByDefault`), which reaches
+ * the fences too — one flag, one meaning, in both renderings. The cost, stated
+ * because it is a divergence: GitHub and IntelliJ scroll a fence sideways and
+ * this wraps it. The alternative was a control meaning two different things
+ * depending on which rendering you were looking at, which is worse, and the
+ * button takes it back in one press.
  */
 describe("wrapping long lines in the preview", () => {
   const body = ["# Doc", "", "```", "x".repeat(400), "```"].join("\n");
@@ -158,26 +165,26 @@ describe("wrapping long lines in the preview", () => {
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
   };
 
-  it("does not wrap until asked — code scrolls sideways by default", () => {
+  it("wraps a markdown file's fences without being asked, because the file wraps", () => {
     openPreview();
-    expect(prose().className).not.toContain("wrap-code");
+    expect(prose().className).toContain("wrap-code");
   });
 
-  it("wraps the rendering when the header's wrap is on", () => {
+  it("lets the header's button take it back off", () => {
     openPreview();
-    fireEvent.click(screen.getByTitle(/^wrap long lines/));
-    expect(prose().className).toContain("wrap-code");
+    fireEvent.click(screen.getByRole("button", { name: /wrap/i }));
+    expect(prose().className).not.toContain("wrap-code");
   });
 
   /** One control, two renderings: the state is the editor's own, per file. */
   it("is the same setting the source view uses", () => {
     openPreview();
-    fireEvent.click(screen.getByTitle(/^wrap long lines/));
-    expect(useStore.getState().scoped().editorWrap).toEqual(["notes.md"]);
+    fireEvent.click(screen.getByRole("button", { name: /wrap/i }));
+    expect(useStore.getState().scoped().editorNoWrap).toEqual(["notes.md"]);
 
-    // Back to source and into the preview again — still wrapped.
+    // Back to source and into the preview again — still unwrapped.
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
     fireEvent.click(screen.getByTitle(/read it as markdown/i));
-    expect(prose().className).toContain("wrap-code");
+    expect(prose().className).not.toContain("wrap-code");
   });
 });

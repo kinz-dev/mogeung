@@ -29,7 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/store";
 import { usePaneId } from "@/lib/paneScope";
 import { fetchScratch, forgetScratch, parseScratchPaneId, scratchPath } from "@/lib/scratch";
-import { languageOf } from "@/lib/explorer";
+import { languageOf, wrapsByDefault } from "@/lib/explorer";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
 import { Dim, Empty, Mono } from "@/ui/primitives";
 
@@ -138,7 +138,12 @@ function Scratch({ name }: { name: string }) {
             fontFamily: "var(--font-mono)",
             lineNumbers: "on",
             minimap: { enabled: false },
-            wordWrap: "off",
+            // Prose wraps, code does not — the same rule the file pane
+            // follows since 2026-09-16, and a scratch file is markdown as
+            // often as it is anything else (`R-L5`). No toggle here: this
+            // pane has no header to hang one on, and the language is the
+            // better answer than a default nobody can change.
+            wordWrap: wrapsByDefault(name) ? "on" : "off",
             scrollBeyondLastLine: false,
             renderWhitespace: "selection",
             smoothScrolling: true,

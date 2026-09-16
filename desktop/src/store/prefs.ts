@@ -65,7 +65,20 @@ export interface ScopedPrefs {
   hidden: SessionId[];
   pinned: SessionId[];
   labels: Record<SessionId, string>;
+  /**
+   * Files whose wrap you turned **on**, by path — against a default that is
+   * off for code and, since 2026-09-16, on for prose (`wrapsByDefault`).
+   */
   editorWrap: string[];
+  /**
+   * And the files whose wrap you turned **off**.
+   *
+   * Two lists rather than one map of path → boolean, because the saved shape
+   * of `editorWrap` predates the per-language default and a file already
+   * listing a path has to keep meaning what it meant when it was written.
+   * A path is in at most one of them: setting either clears the other.
+   */
+  editorNoWrap: string[];
   /**
    * Files whose blame gutter is on, by path. `R-D31`.
    *
@@ -298,6 +311,7 @@ export const emptyScoped = (): ScopedPrefs => ({
   pinned: [],
   labels: {},
   editorWrap: [],
+  editorNoWrap: [],
   editorBlame: [],
   bookmarks: [],
   tags: {},

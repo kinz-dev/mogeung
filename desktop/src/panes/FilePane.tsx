@@ -33,7 +33,7 @@ import { usePaneId } from "@/lib/paneScope";
 import { filePaneId, parseFilePaneId } from "@/lib/panes";
 import { forgetCursor, noteCursor, toggleMark } from "@/lib/marks";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
-import { explorerFetch, forgetFileBodies, languageOf } from "@/lib/explorer";
+import { explorerFetch, forgetFileBodies, languageOf, wrapsByDefault } from "@/lib/explorer";
 import { base } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
@@ -269,6 +269,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const st = useStore((s) => s.explorer[session]);
   const theme = useStore((s) => s.prefs.theme);
   const wrapPaths = useStore((s) => s.scoped().editorWrap);
+  const noWrapPaths = useStore((s) => s.scoped().editorNoWrap);
   const setScoped = useStore((s) => s.setScoped);
   /**
    * The factor Ctrl+wheel over this pane actually writes. `R-J26`.
@@ -456,7 +457,21 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   }
   if (tab.content === null) return <Empty>loading {base(tab.path)}…</Empty>;
 
-  const wrap = wrapPaths.includes(tab.path);
+  /**
+   * Wrapped, or not — **your answer for this file, else the language's**.
+   *
+   * Reported 2026-09-16: a markdown file did not wrap, and the only way to
+   * make it was the button, once per document. Prose now wraps on its own
+   * (`wrapsByDefault`) and code still does not, because indentation is
+   * structure and a wrapped line of Rust puts its continuation where a nested
+   * block would be. The two lists are the override, in both directions: a
+   * markdown file you turned wrap *off* on has to stay off.
+   */
+  const wrap = wrapPaths.includes(tab.path)
+    ? true
+    : noWrapPaths.includes(tab.path)
+      ? false
+      : wrapsByDefault(tab.path);
   const symbols = outline(tab.content, ext);
 
   const markLine = (line: number) => {
@@ -544,11 +559,24 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
             <ListTree size={12} />
           </IconButton>
           <IconButton
-            title="wrap long lines — per file, because wrap is a property of prose. In a markdown preview it wraps the code fences, which are the only thing there that does not wrap already"
+            title={
+              wrap
+                ? "wrapping — press to let long lines run off the edge instead"
+                : "wrap long lines — per file. Prose wraps on its own; code does not, because indentation is structure"
+            }
             active={wrap}
             onClick={() =>
+              // Written to **both** lists every time: the one it belongs in,
+              // and out of the one it does not. A path in neither is a path
+              // following its language, which is how it arrives and how it
+              // goes back to behaving if the default ever changes.
               setScoped({
-                editorWrap: wrap ? wrapPaths.filter((p) => p !== tab.path) : [...wrapPaths, tab.path],
+                editorWrap: wrap
+                  ? wrapPaths.filter((p) => p !== tab.path)
+                  : [...wrapPaths.filter((p) => p !== tab.path), tab.path],
+                editorNoWrap: wrap
+                  ? [...noWrapPaths.filter((p) => p !== tab.path), tab.path]
+                  : noWrapPaths.filter((p) => p !== tab.path),
               })
             }
           >
