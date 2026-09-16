@@ -154,7 +154,15 @@ function MarkdownPreview({
     // `tabIndex` so the preview can *hold* focus: `Ctrl+F` is scoped by asking
     // whether the active element is inside here, and a div full of prose has
     // nothing focusable in it until something says so.
-    <div ref={rootRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
+    // **`min-w-0`, and it is the whole of `R-J96`.** This is a flex *item* in a
+    // row, and a flex item's `min-width` defaults to `auto` — it refuses to
+    // shrink below the intrinsic width of what is inside it. One wide table,
+    // or one long line, and the preview lays itself out at the width of its
+    // widest content: measured at **10 154 px inside an 821 px pane**, with
+    // the group clipping the overflow, so the prose ran off the right edge
+    // with nothing to wrap against and nothing to scroll. The same class of
+    // bug `FilePane.layout.test.tsx` records for the height, one axis over.
+    <div ref={rootRef} tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
       {finding && (
         <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--border)] px-2 py-1">
           <Input
@@ -218,7 +226,7 @@ function MarkdownPreview({
           queue is not inside anything zoomable. */}
       <div
         data-testid="preview-body"
-        className="min-h-0 flex-1 overflow-auto px-3 py-2"
+        className="min-h-0 min-w-0 flex-1 overflow-auto px-3 py-2"
         style={zoom === 1 ? undefined : { zoom }}
       >
         {/* Off by default, because horizontal scroll is the right answer for
@@ -606,7 +614,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
           }}
         />
       ) : (
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 min-w-0 flex-1">
         <Editor
           path={`${tab.path}@${tab.rev ?? "worktree"}`}
           language={languageOf(tab.path)}
