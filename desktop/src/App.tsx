@@ -45,6 +45,7 @@ import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
+import { FileDrop } from "@/ui/FileDrop";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { FilePane } from "@/panes/FilePane";
@@ -392,6 +393,8 @@ export default function App() {
         <LabelWindow />
         <SearchOverlay />
         <WallOverlay />
+        {/* A file dragged in from a file manager opens in the Code pane. `R-J94`. */}
+        <FileDrop />
         <NoticesWindow />
         <Toasts />
         <ResizeGrip />

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-11
+updated: 2026-09-16
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -143,6 +143,16 @@ retrospective, so it can only say where an agent has already been, which makes
 it a shortcut for a click and not a basis for a read boundary. Nothing widens
 until somebody presses `+`, and dismissing one is a client preference (keyed by
 the same repository root) rather than a fact about the session.
+
+**A file dropped on the window is the second gesture that widens it** (`R-J94`,
+2026-09-16). A drop whose path falls under no root opens the same door: the
+file's folder is added to the selected session's workspace, and only then is
+the file asked for. The boundary is unchanged — the daemon still serves an
+absolute path only from an authorised folder — and so is the rule that only a
+human widens it, since a drag onto the window is a hand saying *this file*.
+What is new is that the act is now easy to perform without noticing, so the
+window **says** what it added and where to remove it. The `+` and the drop are
+the only two ways in; nothing in the daemon adds a root on its own.
 
 The inference is deliberately narrow, and the shape came from the corpus rather
 than from taste: of the folders sessions wrote into outside their own root,
