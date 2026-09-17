@@ -28,6 +28,37 @@ export const LOCAL: Reach = { kind: "local" };
 export const TERM = "xterm-256color";
 
 /**
+ * Force tmux to write UTF-8, whatever the launcher's locale says. `R-J97`.
+ *
+ * Reported 2026-09-17: Claude Code's banner arrived in the Agent pane as **a
+ * row of `_`**, while the cursor and the prompt were fine. That reads like a
+ * font fault and is not one — a font missing a glyph draws **tofu**, and `_` is
+ * what **tmux** writes, one per cell, for a character it does not believe the
+ * client can take. `R-J89` bundled the font for a report worded almost the same
+ * way; the font was a real fault, and this is the half that was left.
+ *
+ * tmux decides UTF-8 from `LC_ALL`, `LC_CTYPE` and `LANG`, and a window started
+ * from the Dock has **none of the three** — launchd hands an app `HOME`,
+ * `PATH`, `SHELL`, `USER` and little else. That is the same empty-environment
+ * fault `TERM` above exists for, one variable over. Measured on the reporting
+ * machine, against the live pane: `list-clients` reported `utf8=0` for our own
+ * attach, with no locale variable in the app's environment at all.
+ *
+ * `-u` sets the flag outright and asks the environment nothing, so it holds for
+ * a pane opened from the Dock, from a shell, or over ssh — where the far side's
+ * locale is a second machine's problem and just as invisible from here.
+ *
+ * It is a **client** flag and has to precede the tmux verb, which is why it is
+ * applied here rather than in `attachArgs` or `shellArgs`: those build the
+ * command, and this belongs to the invocation.
+ *
+ * What it does **not** do is give the programs *inside* the pane a locale.
+ * `-u` governs what tmux writes to its client; a shell that still has no
+ * `LC_CTYPE` will mis-sort and mis-count characters on its own account.
+ */
+export const UTF8 = "-u";
+
+/**
  * Where package managers put binaries, for when a login profile did not say.
  *
  * Homebrew on Apple silicon, Homebrew on Intel, MacPorts, and the two Nix
@@ -120,11 +151,11 @@ export function shellArgs(name: string, cwd: string): string[] {
  * act on it.
  */
 export function spawnAs(reach: Reach, tmuxArgs: string[]): string[] {
-  if (reach.kind === "local") return ["tmux", ...tmuxArgs];
+  if (reach.kind === "local") return ["tmux", UTF8, ...tmuxArgs];
 
   // Each argument is quoted because the remote shell parses this line: a
   // worktree path with a space in it is the ordinary case, not the exotic one.
-  const command = ["tmux", ...tmuxArgs.map(shellQuote)].join(" ");
+  const command = ["tmux", UTF8, ...tmuxArgs.map(shellQuote)].join(" ");
 
   // …and then the whole thing is wrapped, because finding `tmux` over ssh is
   // harder than it looks:

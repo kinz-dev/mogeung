@@ -79,8 +79,89 @@ describe("spawnAs", () => {
   it("runs tmux directly when the daemon is on this machine", () => {
     expect(spawnAs({ kind: "local" }, attachArgs("mog:0.0"))).toEqual([
       "tmux",
+      "-u",
       ...attachArgs("mog:0.0"),
     ]);
+  });
+
+  /**
+   * `R-J97`. Claude Code's banner came through as a row of `_` because tmux
+   * had no `LC_ALL`/`LC_CTYPE`/`LANG` to read — a Dock-launched app is handed
+   * none — and wrote an underscore per cell it thought the client could not
+   * take. Measured on the reporting machine as `utf8=0`. `-u` answers the
+   * question tmux was getting wrong instead of hoping the environment does.
+   */
+  it("forces UTF-8 rather than trusting the launcher's locale", () => {
+    expect(spawnAs({ kind: "local" }, attachArgs("mog:0.0"))).toContain("-u");
+  });
+
+  /** A client flag, so it has to land before the verb — after it, tmux reads
+   * it as the command's own and `attach-session` has no `-u`. */
+  it("puts the UTF-8 flag before the tmux verb", () => {
+    const argv = spawnAs({ kind: "local" }, attachArgs("mog:0.0"));
+    // Asserted present first, deliberately: `indexOf` answers -1 for a flag
+    // that is not there, and -1 is less than every real index — so the
+    // ordering check alone passes loudest exactly when the flag is missing.
+    expect(argv).toContain("-u");
+    expect(argv.indexOf("-u")).toBeLessThan(argv.indexOf("attach-session"));
+  });
+
+  /** The far side's locale is a second machine's environment and just as
+   * invisible from here, so the flag travels rather than being assumed. */
+  it("carries the UTF-8 flag over ssh too", () => {
+    const argv = spawnAs({ kind: "ssh", dest: "box" }, attachArgs("mog:0.0"));
+    expect(argv[3]).toContain("tmux -u ");
+    expect(argv[3].indexOf(" -u ")).toBeLessThan(argv[3].indexOf("attach-session"));
+  });
+
+  /** The panel's own shells go through the same door, so they get it too —
+   * a worktree shell renders a UTF-8 prompt as readily as an agent does. */
+  it("forces UTF-8 for a worktree shell as well as an attach", () => {
+    expect(spawnAs({ kind: "local" }, shellArgs("mog-0", "/repo"))).toContain("-u");
+  });
+
+  /**
+   * **`R-J97` is deliberately not gated to macOS, and this is the guard.**
+   *
+   * Asked for directly — *"make sure this fix only apply when this is running
+   * on MacOS, because I don't want the app to break on the linux platform"* —
+   * and the answer is that gating it is what would break Linux. Three reasons,
+   * pinned here because all three are invisible at the call site:
+   *
+   * 1. `-u` is a **no-op** where the locale already says UTF-8. Measured on
+   *    both paths: `client_utf8` is 1 with the flag and 1 without it, so a
+   *    correctly-configured Linux box cannot tell the difference.
+   * 2. The pane **requires** UTF-8 on every platform. `src-tauri/src/lib.rs`
+   *    decodes the pty with `String::from_utf8_lossy` before the bytes cross
+   *    IPC, in shared code with no `target_os` branch — so anything tmux emits
+   *    that is not UTF-8 is already lost, on Linux as much as on macOS.
+   * 3. A correct gate is **not implementable here**. `isMac()` reads
+   *    `navigator.platform`, which is the *window's* platform, while `Reach`
+   *    carries no OS for an ssh target — so gating would send `-u` to a Linux
+   *    host from a Mac window and withhold it from a Mac host from a Linux
+   *    one, which is exactly backwards and reinstates this bug on the remote
+   *    path `R-I6` exists for.
+   *
+   * So the invariant is not "we set `-u`" — the tests above cover that — but
+   * **"the platform is never consulted"**. This fails the day someone wraps it
+   * in `isMac()`, which is the change it exists to stop.
+   */
+  it("forces UTF-8 on every platform, not only on a Mac", () => {
+    const original = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+    try {
+      for (const platform of ["Linux x86_64", "MacIntel", "Win32", ""]) {
+        Object.defineProperty(window.navigator, "platform", {
+          value: platform,
+          configurable: true,
+        });
+        expect(spawnAs({ kind: "local" }, attachArgs("mog:0.0")), platform).toContain("-u");
+        expect(spawnAs({ kind: "ssh", dest: "box" }, attachArgs("mog:0.0"))[3], platform).toContain(
+          "tmux -u ",
+        );
+      }
+    } finally {
+      if (original) Object.defineProperty(window.navigator, "platform", original);
+    }
   });
 
   /** `-t` forces a pty on the far side. Without it tmux refuses to start and
