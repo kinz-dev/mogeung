@@ -794,21 +794,65 @@ mod tests {
         assert_eq!(env_for(&d, &c.id), vec![("TOKEN".into(), "hunter2".into())]);
     }
 
-    /// **`R-N8`, against this repository rather than a fixture.**
+    /// **`R-N8`: a human's entry wins over the same run inferred.**
     ///
-    /// `.vscode/tasks.json` here carries `cargo test --workspace`, which
-    /// `detect.rs` also infers. That duplicate is deliberate: it is the one
-    /// place the precedence rule fires every time the panel opens, so if it
-    /// ever stops firing the list grows a visible duplicate row rather than
-    /// failing quietly. The row exists because *"the kind of thing that never
-    /// happens unless it is a row"*.
+    /// The duplicate is the point. A `[workspace]` manifest makes `detect.rs`
+    /// infer `cargo test --workspace`, and the task below names that same
+    /// command line, so `merge` has to fold them into one row. If precedence
+    /// ever stops firing, the list grows a visible duplicate rather than
+    /// failing quietly — *"the kind of thing that never happens unless it is a
+    /// row"*.
+    ///
+    /// **Moved onto a fixture on 2026-09-17, having never once run for anyone
+    /// but its author.** It was written against this repository itself, on the
+    /// reasoning that the real files make it fire every time the panel opens.
+    /// They do not: `.gitignore` excludes `.vscode/` — deliberately, alongside
+    /// `.cursor/`, `.gemini/`, `.kiro/` and the rest of the per-developer
+    /// editor and agent config — so `tasks.json` and `launch.json` are in no
+    /// commit, and `git log` finds them in none. The test therefore passed only
+    /// where those untracked files happened to exist and **failed on every
+    /// fresh clone**, which is where it was found. A canary that runs for one
+    /// machine is worth less than a fixture that runs for all of them, and the
+    /// property it guards is not about this repository at all.
     #[test]
-    fn the_checked_in_task_beats_the_inferred_one_in_this_repository() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
-        let all = all(&root);
+    fn a_checked_in_task_beats_the_inferred_one() {
+        let d = scratch("precedence");
+        // A workspace manifest is all `detect.rs` needs to infer
+        // `cargo test --workspace` at the root, with an empty `dir`.
+        write(&d, "Cargo.toml", "[workspace]\nmembers = []\n");
+        // The same command line, written by a human — and written the way VS
+        // Code lets one write it, with a comment and a trailing comma, so this
+        // still covers the JSONC path the original did.
+        write(
+            &d,
+            ".vscode/tasks.json",
+            r#"{
+              // The name is deliberately not the command: precedence is on the
+              // command line, so a person's own wording must not defeat it.
+              "version": "2.0.0",
+              "tasks": [
+                {
+                  "type": "shell",
+                  "label": "Run all the tests (fast)",
+                  "command": "cargo",
+                  "args": ["test", "--workspace"],
+                },
+              ],
+            }"#,
+        );
+        write(
+            &d,
+            ".vscode/launch.json",
+            r#"{
+              "version": "0.2.0",
+              "configurations": [
+                /* read alongside the tasks, not instead of them */
+                { "type": "lldb", "request": "launch", "name": "the window's own suite" },
+              ],
+            }"#,
+        );
+
+        let all = all(&d);
 
         let same: Vec<&RunConfig> = all
             .configs
@@ -817,15 +861,19 @@ mod tests {
             .collect();
         assert_eq!(same.len(), 1, "one row, not two:\n{same:#?}");
         assert_eq!(same[0].origin, Origin::VsCode, "the human's entry has to win");
+        assert_eq!(
+            same[0].name, "Run all the tests (fast)",
+            "the human's name travels with the human's entry"
+        );
 
-        // The launch.json entry is read too, and this repository's files parse
-        // with the comments and trailing commas they were written with.
+        // The launch file is read too, and both parse with the comments and
+        // trailing commas they were written with.
         assert!(
             all.configs.iter().any(|c| c.name == "the window's own suite"),
-            "the checked-in launch.json must be read:\n{:#?}",
+            "the launch.json must be read:\n{:#?}",
             all.configs.iter().map(|c| &c.name).collect::<Vec<_>>()
         );
-        // And nothing in our own files is a type nobody classified.
+        // And nothing in either file is a type nobody classified.
         assert!(all.unknown.is_empty(), "{:?}", all.unknown);
     }
 
