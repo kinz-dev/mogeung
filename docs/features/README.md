@@ -1,7 +1,7 @@
 ---
 title: Features in flight
 status: active
-updated: 2026-09-10
+updated: 2026-09-17
 ---
 
 # Features
@@ -39,3 +39,11 @@ Git tool window:
 
 - [0042 — the Git tool window](0042-git-tool-window.md), the gap analysis, the
   design and the plan for `R-D26`–`R-D30`
+
+**Planned, not built** — specified 2026-09-17 from two screenshots of
+IntelliJ's Run popup and its Run/Debug Configurations dialog:
+
+- [0045 — run configurations](0045-run-configurations.md), the gap analysis,
+  the design and the plan for `R-N15`–`R-N26`: the Run tool window as tabbed
+  terminals, the configurations dialog, the `Alt+Shift+F10` popup, Gradle and
+  Cargo as kinds behind a compiled-in seam
