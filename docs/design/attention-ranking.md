@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-08-29
+updated: 2026-09-22
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -92,6 +92,22 @@ queue when it brought dollars back for one view only.
 
 The numbers are worth having — they answer *where did this session's time go*,
 which nothing else mogeung reads can — and the Info pane is where they belong.
+
+**`provisional` (`R-J75`, 2026-09-10) is not read either, and the row it marks
+ranks on almost nothing.** A tmux pane running an agent that has not written a
+line yet is published as a session with `provisional: true`
+([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)),
+carrying only what the pane can prove: alive, a pid, a cwd where the platform
+will say, and zero of everything else. Ranking does not look at the flag. It
+looks at the evidence, and the evidence places the row at `running` — alive,
+no registry status, nothing to be blocked on — with the detail *working*. Two
+consequences follow from the row being rebuilt every scan with its clocks set
+to now: it can never become `STALLED`, since it is never silent for longer than
+a scan, and it never earns the within-tier tie-break, so it sits at exactly
+100, the floor of the tier. When the agent writes its first line the real
+session takes the pane and is ranked on its own, so the row moves the moment it
+becomes real. `R-J75` names that as its cost; this document names it as what
+ranking on evidence rather than on a flag has to do.
 
 ## Configuration
 

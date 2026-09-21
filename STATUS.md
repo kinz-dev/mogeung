@@ -7,7 +7,7 @@
 | Branch | `main` |
 | Tests | 667 passing |
 | Rust | 46791 lines |
-| Docs | 113 files, 38 ADRs |
+| Docs | 115 files, 39 ADRs |
 
 ## Assumptions
 
@@ -66,4 +66,5 @@ Untested: **19** · At risk: **5** · Supported: 18 · Refuted: 2
 | [The Git Operations popup — IntelliJ's two popups, on a keystroke](docs/features/0043-git-operations-popup.md) | `active` | [A13, A19, A26] |
 | [More than one repository — the Git window picks](docs/features/0044-more-than-one-repository.md) | `active` | [A19, A26] |
 | [Run configurations — IntelliJ's Run tool window, its Edit dialog and its popup](docs/features/0045-run-configurations.md) | `draft` | [A13, A32, A33, A34, A42, A43] |
+| [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `draft` | [A44, A24] |
 

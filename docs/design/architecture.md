@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-16
+updated: 2026-09-22
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/state.rs
@@ -148,8 +148,12 @@ the same repository root) rather than a fact about the session.
 2026-09-16). A git command may name a repository, and the set it is checked
 against is `session_roots` — the same one every file read uses. So the fence is
 one fence: a repository can be picked exactly when its folder was already
-readable, and the daemon refuses anything else with the same sentence it gives
-a file outside the set.
+readable, and the daemon refuses anything else in words — *not in this
+session's workspace — add the folder in Files first* for a folder outside the
+set, *not a git repository* for one inside it that is not a checkout. The
+workspace answer also says which of the roots **are** checkouts (`repos`, the
+session's own first, and the order is load-bearing), because a client cannot
+test for a `.git` it is not allowed to read.
 
 **A file dropped on the window is the second gesture that widens it** (`R-J94`,
 2026-09-16). A drop whose path falls under no root opens the same door: the
@@ -209,6 +213,24 @@ answered by the daemon's status re-broadcast rather than by anything the
 client models — which makes 2026-09-11 the first day since the egui client
 went that a commit could be made from mogeung, and the first day
 [A26](../product/assumptions.md) has been tested.
+
+**Which repository the window shows is view state, per session** (`R-D34`,
+2026-09-16): `git[id].repo` in the store, `null` for the session's own root,
+attached to every send by `gitActions.ts` — and picking another clears the rest
+of the slice, because a log, a status and a branch list from two checkouts have
+nothing to say to each other. Store state rather than a preference, unlike a
+hold: which repository you were looking at is not a setting. The echo-drop rule
+the `R-D27` sentence above describes now covers the repository too — the
+commits, local-changes, refs and stash answers are each dropped unless the
+`repo` they echo is the one the slice shows, because a write re-broadcasts to
+every window on the session and a second window on another checkout would
+otherwise feed this one its status; a daemon from before that row echoes
+nothing, which reads as the session's own. The two popups `R-D31` and `R-D32`
+added the same day — git operations on Alt+`, branches on 7 — lifted
+`gitPopup`, `gitTab`, `gitMore` and `commitFocus` out of their components into
+the store, so a keyboard router has something to route to; view state rather
+than a preference, for the reason the store's own comment gives: which tab you
+were on last week is not a setting.
 
 **One outbound network call exists**, and only one: `git fetch`, on an explicit
 keystroke (`Ctrl+T`), admitted 2026-08-01 by
@@ -464,7 +486,11 @@ watches one daemon and watching two machines means two windows). The split is by
 subject: what describes *this window* — theme, layout, fonts, zoom, filters —
 is stored flat, and what is keyed by a session id or a path on the watched
 machine is stored under that machine's id: hidden, pinned, labels, colour tags,
-bookmarks, editor wrap, and the terminal panel's tab list. The window adopts a
+bookmarks, editor wrap and its opposite (`editorNoWrap` — prose wraps by
+default since `R-J95`, so a path has to be able to decline as well as ask),
+blame switched on per path (`editorBlame`, lifted out of the pane the day the
+operations popup needed to turn it on from outside), and the terminal panel's
+tab list. The window adopts a
 machine's state when the daemon publishes its identity, which is also when it
 swaps the terminal tabs — so a tab rooted at a worktree on the dev box does not
 follow you to the laptop that happens to have the same path. Keying on
@@ -480,8 +506,12 @@ is written on every save, so a file from last month states the old answer
 explicitly and would keep it for ever. `PREFS_VERSION` is the seam for those.
 A file below the current version is moved onto the new default once and stamped,
 and a file already at it is left exactly as its owner set it. Bumping it moves a
-setting somebody may have chosen on purpose, so a bump has to be worth that; the
-first one is side-by-side becoming the default diff.
+setting somebody may have chosen on purpose, so a bump has to be worth that. The
+first was side-by-side becoming the default diff; the second (2026-09-11) is the
+Git log's columns becoming shares of its width, because a file from that morning
+holds pixels under the same key. `gitLogColumns` is then completed field by
+field *after* the migration has had its say, the way `zoom` is — the one case
+where a saved object is thrown away rather than filled in.
 
 Session ids are not stable across `/clear`, which mints a new one for the same
 conversation, so anything keyed by one has to be able to *move*. The window

@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-16
+updated: 2026-09-22
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -541,3 +541,10 @@ reads it. The one thing a switch *does* touch on this side —
 `unpin_diff_bases`, which a detached checkout triggers exactly as a branch
 switch does — is [review-checkpointing.md](review-checkpointing.md)'s, where
 the base is defined.
+
+Checked again on 2026-09-21, when `R-D34` gave every git wrapper an optional
+`repo` and `git_root` a fence: the fence reads `session_roots`, never
+`recent_touches`; `compute_change`, `recompute_change` and the attribution
+filter were not touched by that commit; and `git_blame` passes `None` on
+purpose, so blame follows the file the session is reading rather than the
+checkout a Git window is pointed at. Nothing here follows the picker.

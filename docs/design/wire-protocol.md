@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-16
+updated: 2026-09-22
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -131,7 +131,11 @@ still broadcasts immediately. A clean shutdown flushes whatever is coasting.
 `parse_unified` the union of the repo's reviewed anchors, so a hunk a
 human read in the Changes tab arrives already marked when seen through a
 commit — anchors are content hashes, which is what makes the two views
-agree. Its optional `CommitDetail` also names the branches containing
+agree. The union is the *resolved* repository's — since `R-D34` the one the
+command named — so with a sibling checkout picked it is that checkout's
+sessions, usually none, and the hunks arrive unmarked; the marks belong to the
+session's own work, which is where the Changes tab keeps them. Its optional
+`CommitDetail` also names the branches containing
 the commit (`R-D18`, serde-defaulted so either side may be older).
 
 The `Git…` family was **read-only by protocol** until 2026-07-31: no staging,
@@ -198,7 +202,12 @@ and `GitStashList` — because a write verb re-broadcasts to *every* window
 watching the session, and two of them may be pointed at two repositories; the
 client drops an answer that is not for the one it is showing. `Workspace` grew
 `repos` in the same row: which of a session's roots hold a `.git`, which a
-client cannot test for itself.
+client cannot test for itself. The stray rule is complete for those four
+answers and no others: `GitCommitDiff`, `GitRangeDiff`, `GitFileAtRevContent`,
+`GitConflictStages`, `GitReflogList`, `GitWorktreeList` and `GitFetched` carry
+no `repo`, so an answer in flight for the checkout a window has just switched
+away from lands — a limit taken knowingly rather than an oversight, and the
+first thing to close if a stale answer is ever seen after a switch.
 
 `GitSwitch` grew one flag on 2026-09-16 (`R-D32`): `detach`, defaulted false,
 which runs `git switch --detach` and is how *checkout tag or revision* reaches
@@ -234,7 +243,11 @@ Two properties hold for every one of them:
   reporting what it did. The client therefore holds no model of repository
   state that could drift from git's, and the pane shows what git says one
   round trip after the click — including when git did something other than
-  what was asked.
+  what was asked. Since `R-D34` the re-read is of the repository the write
+  **named**: `rebroadcast_status` and `after_ref_change` take the `repo` and
+  tag the status, refs and stash answers with it, so the window that asked
+  sees the checkout it wrote to, and a window on another checkout drops the
+  echo.
 
 Write failures carry **git's own words verbatim** — stderr when there is any,
 stdout otherwise, because git splits refusals across both streams and the
@@ -668,6 +681,9 @@ GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...&grep=...&author=...&path=
                                        # R-D10/R-D11/R-D12, all read-only.
                                        # The write verbs are WebSocket-only:
                                        # there is no REST route that writes.
+                                       # So is picking a repository (R-D34):
+                                       # every route here passes no repo and
+                                       # answers for the session's own.
 GET  /api/sessions/{id}/git/show?sha=...
 GET  /api/sessions/{id}/git/status
 GET  /api/sessions/{id}/git/diff?path=...

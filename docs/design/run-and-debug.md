@@ -1,7 +1,7 @@
 ---
 title: Run and debug
 status: active
-updated: 2026-08-26
+updated: 2026-09-22
 covers:
   - crates/mogeung-core/src/run.rs
   - crates/mogeungd/src/detect.rs
@@ -24,9 +24,13 @@ Transcript — it is something you consult against the centre rather than the
 thing you are doing. It moved there hours after it first shipped in the centre.
 
 **Phase 1 is built.** `R-N1`–`R-N8`: the sweep, the reader, detection, process
-ownership, the panel, masking, the corroboration type and mogeung's own
-checked-in configuration. Phase 2 — the DAP client, breakpoints, per-language
-adapters — is not started.
+ownership, the panel, masking and the corroboration type. **Not** mogeung's own
+checked-in configuration, though `R-N8` claimed one and this paragraph repeated
+it: `.vscode/` is in `.gitignore`, `git log --all -- .vscode/` is empty, and
+the precedence test that asserted against those files passed only on the one
+machine where they sat untracked. `R-N27` (2026-09-17) moved it onto a fixture,
+where it also pins that the human's *name* travels with the human's entry.
+Phase 2 — the DAP client, breakpoints, per-language adapters — is not started.
 
 ## Two sources, and one of them is the source
 
@@ -45,6 +49,18 @@ one of them.
 The practical consequence is that **the panel is never empty because a project
 did not adopt anything**. It is empty only when a project has no manifest we
 understand, which the sweep also counts.
+
+**When both sources describe one run, the human's entry wins, under the
+human's name.** `merge` in `runconfig.rs` keys on the directory and the command
+line, and drops a detected entry that a *runnable* file-sourced one already
+covers — so `cargo test --workspace` inferred from a workspace `Cargo.toml` and
+a `tasks.json` entry called *Run all the tests (fast)* are one row, the file's.
+Same **command**, not same name: ADR-0026's line is *"they win over a detected
+entry with the same command, because a human wrote them"*, and a person who
+labelled their test run has still written down `cargo test`, so showing both
+would be showing one thing twice. A file entry that cannot run — one that leans
+on a `${…}` only VS Code can answer — claims nothing, and the detected row
+stays.
 
 ## `RunConfig`, and why the id is the security boundary
 
