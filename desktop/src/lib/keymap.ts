@@ -18,6 +18,7 @@ import { currentPlatform, type Platform } from "@/lib/platform";
 import { togglePaneHold, useStore } from "@/store";
 import { exportFilename, exportPayload, type DockTool, type RailTool } from "@/store/prefs";
 import { cursorIn, markFor, setMnemonic, MNEMONICS } from "@/lib/marks";
+import { editorIn } from "@/lib/editors";
 import { openFile } from "@/lib/explorer";
 import { exportText } from "@/lib/tauri";
 import { addAgentPane, focusPane, movePane, parseFilePaneId, resetLayout, showFilePane } from "@/lib/panes";
@@ -44,6 +45,42 @@ export interface Action {
   keys: string[];
   run: (dock: DockviewApi | null) => void;
 }
+
+/**
+ * Fold All and Unfold All. `R-J99`, asked 2026-09-21.
+ *
+ * Monaco has both and binds them to `Ctrl+K Ctrl+0` and `Ctrl+K Ctrl+J`, and
+ * neither chord can reach it from here: this map listens in the capture phase
+ * and a chord always fires, so `Ctrl+K` opens the palette and `Ctrl+0` resets
+ * the zoom before the editor sees either. The right-click menu does not list
+ * them either. Found 2026-09-21 by pressing them in the running window and
+ * watching the palette open instead.
+ *
+ * `Ctrl+Shift+-` and `Ctrl+Shift+=` are IntelliJ's *Collapse All* and *Expand
+ * All* as a laptop spells them (the numpad `-`/`+` are its first spelling),
+ * asked for by name. `Ctrl+Shift+=` was zoom-in's second spelling until then —
+ * see `zoom.in`, which keeps `Ctrl+=` and gives this one up.
+ *
+ * Runs Monaco's own action on the **active pane's** editor rather than on any
+ * editor, for the reason the bookmark chords read the active pane's cursor: a
+ * chord fires wherever the keyboard is, and it says so rather than folding a
+ * file you are not in.
+ */
+const foldAction = (id: string, label: string, keys: string[], action: string, verb: string): Action => ({
+  id,
+  label,
+  group: "Editor",
+  keys,
+  run: () => {
+    const { activePane, pushNotice } = useStore.getState();
+    const editor = editorIn(activePane);
+    if (!editor) {
+      pushNotice(`${verb} needs a file — put the cursor in one first`);
+      return;
+    }
+    void editor.getAction(action)?.run();
+  },
+});
 
 const pane = (id: string, title: string, keys: string[]): Action => ({
   id: `pane.${id}`,
@@ -514,6 +551,20 @@ export const ACTIONS: Action[] = [
     keys: ["$mod+p"],
     run: () => useStore.setState({ paletteOpen: true, paletteMode: "files" }),
   },
+  foldAction(
+    "editor.fold_all",
+    "Fold all — collapse every region of the file you are reading",
+    ["$mod+Shift+Minus"],
+    "editor.foldAll",
+    "fold all",
+  ),
+  foldAction(
+    "editor.unfold_all",
+    "Unfold all — expand every region of the file you are reading",
+    ["$mod+Shift+Equal"],
+    "editor.unfoldAll",
+    "unfold all",
+  ),
   {
     id: "search.overlay",
     label: "Search everything — this conversation, this session's files, every session",
@@ -569,10 +620,11 @@ export const ACTIONS: Action[] = [
     id: "zoom.in",
     label: "Zoom in",
     group: "View",
-    // `Equal`/`Minus` are key *codes*, so they match whether or not Shift is
-    // held — `Ctrl++` and `Ctrl+=` are the same gesture to everyone but the
-    // keyboard.
-    keys: ["$mod+Equal", "$mod+Shift+Equal"],
+    // `Equal`/`Minus` are key *codes*, so a layout cannot move them. Until
+    // 2026-09-21 `$mod+Shift+Equal` sat beside this one so that `Ctrl++` — `+`
+    // being Shift+`=` on most keyboards — zoomed too. It is `editor.unfold_all`
+    // now, IntelliJ's *Expand All*, asked for by name (`R-J99`); `Ctrl+=` zooms.
+    keys: ["$mod+Equal"],
     run: () => nudgeAppZoom(1),
   },
   {

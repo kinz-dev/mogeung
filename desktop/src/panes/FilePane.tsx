@@ -32,6 +32,7 @@ import { useStore } from "@/store";
 import { usePaneId } from "@/lib/paneScope";
 import { filePaneId, parseFilePaneId } from "@/lib/panes";
 import { forgetCursor, noteCursor, toggleMark } from "@/lib/marks";
+import { forgetEditor, noteEditor } from "@/lib/editors";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
 import { explorerFetch, forgetFileBodies, languageOf, wrapsByDefault } from "@/lib/explorer";
 import { base } from "@/lib/format";
@@ -342,8 +343,20 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
     wasActive.current = active;
   }, [active, id, path, rev]);
 
-  // `R-J37`: a closed file is not a place a bookmark chord may land.
-  useEffect(() => () => forgetCursor(pane), [pane]);
+  // `R-J37`: a closed file is not a place a bookmark chord may land — nor,
+  // `R-J99`, one a fold chord may act on.
+  useEffect(
+    () => () => {
+      forgetCursor(pane);
+      forgetEditor(pane);
+    },
+    [pane],
+  );
+  // Reading markdown as markdown unmounts the editor without closing the
+  // pane, and a fold chord must not be handed an editor that is gone.
+  useEffect(() => {
+    if (preview) forgetEditor(pane);
+  }, [preview, pane]);
 
   /**
    * **Keep your place when the file is re-read.** `R-J38`.
@@ -490,6 +503,9 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const onMount: OnMount = (ed, monaco) => {
     editorRef.current = ed;
     monacoRef.current = monaco;
+    // `R-J99`: the fold chords act on the active pane's editor, and this is
+    // how they find it.
+    noteEditor(pane, ed);
     // Where the cursor is, for `R-J37`'s set-a-bookmark chord. Published to a
     // module rather than to the store on purpose — see `noteCursor`: this
     // moves on every arrow key, and a store write per keystroke would render

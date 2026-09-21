@@ -183,6 +183,54 @@ describe("the keyboard", () => {
   });
 
   /**
+   * Fold All and Unfold All on IntelliJ's chords. `R-J99`, asked 2026-09-21.
+   *
+   * Monaco binds both to `Ctrl+K …` chords, and `Ctrl+K` is the palette here
+   * — pressed in the running window, the palette opened and nothing folded.
+   * So the window runs Monaco's own actions, on the editor of the pane the
+   * keyboard is in.
+   */
+  it("folds and unfolds the file the keyboard is in", async () => {
+    const { default: App } = await import("@/App");
+    const { noteEditor } = await import("@/lib/editors");
+    render(<App />);
+    const ran: string[] = [];
+    const pane = "file:s1::package.json";
+    noteEditor(pane, { getAction: (id) => ({ run: () => ran.push(id) }) });
+    useStore.setState({ activePane: pane });
+
+    press("_", { ctrlKey: true, shiftKey: true, code: "Minus" });
+    press("+", { ctrlKey: true, shiftKey: true, code: "Equal" });
+
+    expect(ran).toEqual(["editor.foldAll", "editor.unfoldAll"]);
+  });
+
+  it("says so rather than folding a file the keyboard is not in", async () => {
+    const { default: App } = await import("@/App");
+    const { noteEditor } = await import("@/lib/editors");
+    render(<App />);
+    const ran: string[] = [];
+    noteEditor("file:s1::package.json", { getAction: (id) => ({ run: () => ran.push(id) }) });
+    useStore.setState({ activePane: "agent" });
+
+    press("_", { ctrlKey: true, shiftKey: true, code: "Minus" });
+
+    expect(ran).toEqual([]);
+    expect(useStore.getState().notices.at(-1)?.text).toMatch(/needs a file/);
+  });
+
+  /** `Ctrl++` was zoom-in's second spelling; it is *Unfold All* now, and
+   *  `Ctrl+=` still zooms. `rebind.test.ts`'s collision test is what fails if
+   *  both ever hold it again. */
+  it("gives Ctrl+Shift+= to unfold and keeps Ctrl+= for zoom", async () => {
+    const { ACTIONS } = await import("@/lib/keymap");
+    const at = (chord: string) => ACTIONS.filter((a) => a.keys.includes(chord)).map((a) => a.id);
+    expect(at("$mod+Shift+Minus")).toEqual(["editor.fold_all"]);
+    expect(at("$mod+Shift+Equal")).toEqual(["editor.unfold_all"]);
+    expect(at("$mod+Equal")).toEqual(["zoom.in"]);
+  });
+
+  /**
    * `Alt+1` focuses the Attention list so the arrows have somewhere to drive.
    *
    * Focusing something collapsed to a strip is not focusing it, so it expands
