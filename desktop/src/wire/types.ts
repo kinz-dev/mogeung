@@ -1122,9 +1122,20 @@ export type ClientMsg =
   | { cmd: "fetch_file"; session_id: SessionId; path: string }
   | { cmd: "list_tree"; session_id: SessionId }
   | { cmd: "search_content"; session_id: SessionId; query: string }
+  /**
+   * The git family, and the one field they share. `R-D34`.
+   *
+   * `repo` names which repository; absent means the session's own root, which
+   * is what it has always meant. The daemon refuses one that is not among the
+   * session's roots — its own plus the folders added to its workspace
+   * (`R-J40`) — so naming a repository authorises nothing that browsing it did
+   * not. `git_blame` has none deliberately: blame follows the file you are
+   * reading, which belongs to the session.
+   */
   | {
       cmd: "git_log";
       session_id: SessionId;
+      repo?: string | null;
       skip: number;
       limit: number;
       rev?: string | null;
@@ -1138,22 +1149,22 @@ export type ClientMsg =
       since?: number | null;
       until?: number | null;
     }
-  | { cmd: "git_show"; session_id: SessionId; sha: string; context?: number | null; ignore_ws?: boolean | null }
-  | { cmd: "git_status"; session_id: SessionId }
+  | { cmd: "git_show"; session_id: SessionId; repo?: string | null; sha: string; context?: number | null; ignore_ws?: boolean | null }
+  | { cmd: "git_status"; session_id: SessionId; repo?: string | null }
   // -- the write family (R-D19). Present on the wire; this client sends only
   //    what the panes expose, and the Code pane exposes nothing.
-  | { cmd: "git_stage"; session_id: SessionId; paths: string[] }
-  | { cmd: "git_unstage"; session_id: SessionId; paths: string[] }
-  | { cmd: "git_discard"; session_id: SessionId; paths: string[] }
-  | { cmd: "git_commit"; session_id: SessionId; message: string; amend: boolean; session_trailer: boolean }
-  | { cmd: "git_branch_create"; session_id: SessionId; name: string; switch_to: boolean }
+  | { cmd: "git_stage"; session_id: SessionId; repo?: string | null; paths: string[] }
+  | { cmd: "git_unstage"; session_id: SessionId; repo?: string | null; paths: string[] }
+  | { cmd: "git_discard"; session_id: SessionId; repo?: string | null; paths: string[] }
+  | { cmd: "git_commit"; session_id: SessionId; repo?: string | null; message: string; amend: boolean; session_trailer: boolean }
+  | { cmd: "git_branch_create"; session_id: SessionId; repo?: string | null; name: string; switch_to: boolean }
   /** `detach` is *checkout tag or revision* (`R-D32`): the same verb
    *  pointed at a commit-ish, which plain `git switch` refuses. */
-  | { cmd: "git_switch"; session_id: SessionId; name: string; detach?: boolean }
-  | { cmd: "git_stash_push"; session_id: SessionId; message: string; include_untracked: boolean }
-  | { cmd: "git_stash_pop"; session_id: SessionId; index: number }
-  | { cmd: "git_stash_drop"; session_id: SessionId; index: number }
-  | { cmd: "git_fetch"; session_id: SessionId }
+  | { cmd: "git_switch"; session_id: SessionId; repo?: string | null; name: string; detach?: boolean }
+  | { cmd: "git_stash_push"; session_id: SessionId; repo?: string | null; message: string; include_untracked: boolean }
+  | { cmd: "git_stash_pop"; session_id: SessionId; repo?: string | null; index: number }
+  | { cmd: "git_stash_drop"; session_id: SessionId; repo?: string | null; index: number }
+  | { cmd: "git_fetch"; session_id: SessionId; repo?: string | null }
   | { cmd: "fetch_kit" }
   | { cmd: "fetch_kit_doc"; path: string }
   | { cmd: "note_list" }
@@ -1254,26 +1265,27 @@ export type ClientMsg =
   | { cmd: "cluster_failures"; min_sessions?: number }
   | { cmd: "config_get" }
   | { cmd: "config_save"; text: string }
-  | { cmd: "git_resolve"; session_id: SessionId; path: string; side: ResolveSide }
-  | { cmd: "git_diff_file"; session_id: SessionId; path: string; context?: number | null; ignore_ws?: boolean | null }
+  | { cmd: "git_resolve"; session_id: SessionId; repo?: string | null; path: string; side: ResolveSide }
+  | { cmd: "git_diff_file"; session_id: SessionId; repo?: string | null; path: string; context?: number | null; ignore_ws?: boolean | null }
   | { cmd: "git_blame"; session_id: SessionId; path: string; rev?: string | null }
-  | { cmd: "git_refs"; session_id: SessionId }
-  | { cmd: "git_stashes"; session_id: SessionId }
-  | { cmd: "git_stash_show"; session_id: SessionId; index: number; context?: number | null; ignore_ws?: boolean | null }
-  | { cmd: "git_submodules"; session_id: SessionId }
+  | { cmd: "git_refs"; session_id: SessionId; repo?: string | null }
+  | { cmd: "git_stashes"; session_id: SessionId; repo?: string | null }
+  | { cmd: "git_stash_show"; session_id: SessionId; repo?: string | null; index: number; context?: number | null; ignore_ws?: boolean | null }
+  | { cmd: "git_submodules"; session_id: SessionId; repo?: string | null }
   | {
       cmd: "git_diff_range";
       session_id: SessionId;
+      repo?: string | null;
       from: string;
       to: string;
       context?: number | null;
       ignore_ws?: boolean | null;
     }
-  | { cmd: "git_compare"; session_id: SessionId; branch: string }
-  | { cmd: "git_reflog"; session_id: SessionId }
-  | { cmd: "git_worktrees"; session_id: SessionId }
-  | { cmd: "git_conflict_file"; session_id: SessionId; path: string }
-  | { cmd: "git_file_at_rev"; session_id: SessionId; sha: string; path: string }
+  | { cmd: "git_compare"; session_id: SessionId; repo?: string | null; branch: string }
+  | { cmd: "git_reflog"; session_id: SessionId; repo?: string | null }
+  | { cmd: "git_worktrees"; session_id: SessionId; repo?: string | null }
+  | { cmd: "git_conflict_file"; session_id: SessionId; repo?: string | null; path: string }
+  | { cmd: "git_file_at_rev"; session_id: SessionId; repo?: string | null; sha: string; path: string }
   | { cmd: "fetch_usage" }
   | { cmd: "set_signal_command"; repo: string; command: string }
   | { cmd: "run_signal"; session_id: SessionId }
@@ -1316,6 +1328,9 @@ export type ServerMsg =
       /** Folders this session has been seen working in and the workspace does
        *  not show — offered, never added. `R-J39`. */
       hints: WorkspaceHint[];
+      /** Which of the roots above are git repositories — the picker's list.
+       *  `R-D34`. The session's own is first when it is one. */
+      repos?: string[];
     }
   | { ev: "tree_listing"; session_id: SessionId; paths: string[]; truncated: boolean }
   | {
@@ -1328,6 +1343,7 @@ export type ServerMsg =
   | {
       ev: "git_commits";
       session_id: SessionId;
+      repo?: string | null;
       skip: number;
       commits: CommitInfo[];
       done: boolean;
@@ -1349,7 +1365,7 @@ export type ServerMsg =
       context?: number | null;
       ignore_ws?: boolean | null;
     }
-  | { ev: "git_local_changes"; session_id: SessionId; entries: StatusEntry[] }
+  | { ev: "git_local_changes"; session_id: SessionId; repo?: string | null; entries: StatusEntry[] }
   | {
       ev: "git_file_diff";
       session_id: SessionId;
@@ -1366,7 +1382,7 @@ export type ServerMsg =
       truncated: boolean;
       rev?: string | null;
     }
-  | { ev: "git_refs_info"; session_id: SessionId; info: RefsInfo }
+  | { ev: "git_refs_info"; session_id: SessionId; repo?: string | null; info: RefsInfo }
   | { ev: "intellij_probe"; session_id: SessionId; root: string; project: boolean; launcher: string | null }
   | {
       ev: "git_fetched";
@@ -1469,7 +1485,7 @@ export type ServerMsg =
   /** The kept conversations, newest first. `R-O9`. */
   | { ev: "chat_history"; chats: ChatSummary[]; refusal: string | null }
   | { ev: "chat_conversation"; id: string; turns: ChatTurn[] }
-  | { ev: "git_stash_list"; session_id: SessionId; stashes: StashInfo[] }
+  | { ev: "git_stash_list"; session_id: SessionId; repo?: string | null; stashes: StashInfo[] }
   | {
       ev: "git_stash_diff";
       session_id: SessionId;

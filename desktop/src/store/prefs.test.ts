@@ -100,6 +100,22 @@ describe("loading preferences written by an older build", () => {
   it("nudges nothing at all once a file is current", () => {
     expect(migrateDefaults({ version: PREFS_VERSION })).toEqual({});
   });
+
+  it("resets a version-1 file's pixel column widths to the default shares, and nothing older", () => {
+    localStorage.setItem(
+      "mogeung.prefs",
+      JSON.stringify({ version: 1, sideBySide: false, gitLogColumns: { graph: 30, author: 126, date: 84, marks: 56 } }),
+    );
+    const prefs = loadPrefs();
+    expect(prefs.gitLogColumns).toEqual(defaultPrefs().gitLogColumns);
+    // Version 1's own nudge does not run again on a file that has had it.
+    expect(prefs.sideBySide).toBe(false);
+  });
+
+  it("completes a current file's columns against the shape, as it does zoom", () => {
+    localStorage.setItem("mogeung.prefs", JSON.stringify({ version: PREFS_VERSION, gitLogColumns: { graph: 30 } }));
+    expect(loadPrefs().gitLogColumns).toEqual({ ...defaultPrefs().gitLogColumns, graph: 30 });
+  });
 });
 
 /**

@@ -505,10 +505,11 @@ preferences, written once on release, so the splitters use that idiom
 (`useDragWidth`) rather than a second one. What the idiom did not have was
 a clamp, and the first look in a browser found why one was needed: a dock
 620 px wide with a 210 px branch pane and a 360 px inspector left the log
-50 px, with the ref chips drawn over the graph. The outer panes are now at
-most a share of the pane — 28 % and 42 % — and the log's columns give way
+50 px, with the ref chips drawn over the graph. The outer panes became at
+most a share of the pane — 28 % and 42 % — and the log's columns gave way
 from the right below 700 px and 480 px. The saved widths are untouched, so
-a wide window gets them back.
+a wide window gets them back. The 42 % and the breakpoints lasted a day;
+see *The first day of use*, below.
 
 **The echo rule grew a clause.** The store drops a page whose echo disagrees
 with the scope in force, and `R-D27` added three fields to the echo. A
@@ -537,6 +538,39 @@ column beside it; the graph sizes itself from the lanes until a hand sets it
 and clips after. Floors keep a column from being dragged out of existence.
 The virtualiser is told the header's height as a scroll margin so keyboard
 selection still lands where it should.
+
+**"The git commit tables still strange, can you auto resize all the column
+when the panel is resize. Also the right hand side panel, is there a limit
+to the size, I can't resize to a bigger width?"** — the same afternoon. Two
+limits, both lifted. The log's author, date and marks were pixels, so a
+resize went to the subject alone, and below 700 px and 480 px columns
+dropped out, which is what *strange* was. The four text columns are now
+**shares of the width the graph leaves**, drawn as `fr` tracks over their
+floors, so the row scales with its pane and nothing drops out; a divider
+moves the boundary between its two neighbours and nothing else, the left
+taking what the right gives up, so the line follows the pointer and the row
+stays the width it was. The graph stays in pixels — its width is a count of
+lanes, not a share of anything. `gitLogColumns` changed shape, so the
+preferences file is at version 2 and a file from that morning has its
+pixels reset. The inspector was capped at 42 % of the dock, a rule from
+the 620-px look that a wide monitor met with room to spare; its ceiling is
+now whatever leaves the log 320 px, and the drag stops at the same place
+rather than saving a width the pane cannot draw. The Local changes tab's
+commit pane, which shares the width, follows the same rule; and the rail's
+fixed 760 px became window-relative, the way the docks' heights already
+were, in case *the right hand side panel* meant that one.
+
+The browser look found two things the tests could not. The shares are
+percentages summing to a hundred, not fractions of one: grid flex factors
+that sum below 1 fill only that fraction of the free space, and once a
+column is pinned at its floor the rest sum below 1, so `0.66fr 0.14fr …`
+left a 312-px log with 54 px of nothing on the right. And the pane's body
+was never measured when the tool was open before a session was selected —
+the width hook's effect was keyed on the ref object, which does not change
+when the element behind it appears — so every ceiling drawn from it was
+infinite: 220 and 380 of a 688-px dock, and 80 px of log. The hook watches
+whichever element is behind the ref now, and a test opens the pane before
+its session.
 
 **"A keymap Ctrl+D for opening the diff in the main window. Double click the
 file to open that file in the main window."** Read as two different things,

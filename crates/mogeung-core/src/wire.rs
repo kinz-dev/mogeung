@@ -134,6 +134,19 @@ pub enum ClientMsg {
     /// session's worktree. Case-insensitive unless the query has an uppercase
     /// letter — ripgrep's smart case, because that is what the hands expect.
     SearchContent { session_id: SessionId, query: String },
+    // -- The git family, and the one field they share. `R-D34`.
+    //
+    // **`repo` names which repository**, and absent means what it has always
+    // meant: the session's own root. Present, it must resolve inside
+    // `session_roots` — the session's root plus the folders added to its
+    // workspace (`R-J40`) — which is the same whitelist `resolve_in_workspace`
+    // puts in front of every file read. So this field **authorises nothing**:
+    // a repository can be named exactly when its folder was already readable,
+    // and one outside that set is refused before git is reached.
+    //
+    // `GitBlame` deliberately has no `repo`: blame follows the file you are
+    // reading, which belongs to the session, not to whichever repository the
+    // Git window is pointed at.
     /// A page of the session repo's commit log, newest first. `R-D10`.
     ///
     /// Like everything git here: read-only, permanently. The daemon never
@@ -146,6 +159,8 @@ pub enum ClientMsg {
     /// file history (`R-D12`).
     GitLog {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         skip: u32,
         limit: u32,
         #[serde(default)]
@@ -178,6 +193,8 @@ pub enum ClientMsg {
     /// `ignore_ws` mutes whitespace-only noise (`-w`). `R-D14`.
     GitShow {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         sha: String,
         #[serde(default)]
         context: Option<u32>,
@@ -185,7 +202,11 @@ pub enum ClientMsg {
         ignore_ws: Option<bool>,
     },
     /// The repo's uncommitted state — staged, unstaged and untracked.
-    GitStatus { session_id: SessionId },
+    GitStatus {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
 
     // -- The write family. `R-D19`.
     //
@@ -203,17 +224,23 @@ pub enum ClientMsg {
     /// Stage the given worktree paths.
     GitStage {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         paths: Vec<String>,
     },
     /// Unstage them, leaving the working tree untouched.
     GitUnstage {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         paths: Vec<String>,
     },
     /// Throw local changes away. **The one verb here with no undo** — for an
     /// untracked path it means deletion, and git keeps no copy.
     GitDiscard {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         paths: Vec<String>,
     },
     /// Commit what is staged. `R-D20`.
@@ -222,6 +249,8 @@ pub enum ClientMsg {
     /// commit that swept in unstaged files would make them a suggestion.
     GitCommit {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         message: String,
         /// Replace the tip commit instead of adding one.
         #[serde(default)]
@@ -235,6 +264,8 @@ pub enum ClientMsg {
     /// Create a branch, and optionally move onto it. `R-D21`.
     GitBranchCreate {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         name: String,
         #[serde(default)]
         switch_to: bool,
@@ -251,6 +282,8 @@ pub enum ClientMsg {
     /// and a sha and a tag were already among them.
     GitSwitch {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         name: String,
         /// Default false, so a client that predates the flag means what it
         /// always meant: move onto a branch.
@@ -261,15 +294,27 @@ pub enum ClientMsg {
     GitStashPush {
         session_id: SessionId,
         #[serde(default)]
+        repo: Option<String>,
+        #[serde(default)]
         message: String,
         /// Take untracked files along. Off by default, as in git.
         #[serde(default)]
         include_untracked: bool,
     },
     /// Restore a stash and remove it. `R-D21`.
-    GitStashPop { session_id: SessionId, index: u32 },
+    GitStashPop {
+        session_id: SessionId,
+        index: u32,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// Throw a stash away without restoring it. `R-D21`.
-    GitStashDrop { session_id: SessionId, index: u32 },
+    GitStashDrop {
+        session_id: SessionId,
+        index: u32,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// Update remote-tracking refs. `R-D25`.
     ///
     /// The one message here that reaches a network beyond this machine, and
@@ -277,7 +322,11 @@ pub enum ClientMsg {
     /// [ADR-0014](../../../docs/decisions/0014-fetch-is-not-publishing.md)
     /// admits `fetch` and refuses `pull` and `push`. Never sent on a timer —
     /// a human asks, or it does not happen.
-    GitFetch { session_id: SessionId },
+    GitFetch {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     // -- Notes. `R-B35`, pillar L.
     //
     // Not in the write family above: those change a *repository*, and the
@@ -494,6 +543,8 @@ pub enum ClientMsg {
     /// elsewhere and send [`ResolveSide::Mine`] to say it is done.
     GitResolve {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         path: String,
         side: ResolveSide,
     },
@@ -501,6 +552,8 @@ pub enum ClientMsg {
     /// One uncommitted file's diff against `HEAD`.
     GitDiffFile {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         path: String,
         #[serde(default)]
         context: Option<u32>,
@@ -521,13 +574,23 @@ pub enum ClientMsg {
     /// their tracking state, tags, remotes, and how stale the last fetch
     /// is. Display only — the daemon never fetches; even `git fetch`
     /// writes `.git`. `R-D11`.
-    GitRefs { session_id: SessionId },
+    GitRefs {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// The stash list. Read-only: listing stashes, never pushing or
     /// popping them.
-    GitStashes { session_id: SessionId },
+    GitStashes {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// One stash's diff, by its position in the list (`stash@{index}`).
     GitStashShow {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         index: u32,
         #[serde(default)]
         context: Option<u32>,
@@ -535,10 +598,16 @@ pub enum ClientMsg {
         ignore_ws: Option<bool>,
     },
     /// Submodule paths and their state.
-    GitSubmodules { session_id: SessionId },
+    GitSubmodules {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// The diff between two commits, `from` → `to`.
     GitDiffRange {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         from: String,
         to: String,
         #[serde(default)]
@@ -551,17 +620,29 @@ pub enum ClientMsg {
     /// [`ServerMsg::GitRangeDiff`] with the resolved shas. `R-D15`.
     GitCompare {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         branch: String,
     },
     /// Where HEAD has been — `git reflog`, read-only recovery sight.
-    GitReflog { session_id: SessionId },
+    GitReflog {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// The repo's worktrees, `git worktree list` — including the ones
     /// mogeung itself created for sessions.
-    GitWorktrees { session_id: SessionId },
+    GitWorktrees {
+        session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
+    },
     /// A conflicted file's three stages — base (`:1:`), ours (`:2:`),
     /// theirs (`:3:`) — for the read-only three-way view. `R-D16`.
     GitConflictFile {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         path: String,
     },
     /// One file's content as it stood at one revision, for the Editor's
@@ -569,6 +650,8 @@ pub enum ClientMsg {
     /// which is what re-blame opens.
     GitFileAtRev {
         session_id: SessionId,
+        #[serde(default)]
+        repo: Option<String>,
         sha: String,
         path: String,
     },
@@ -1179,6 +1262,14 @@ pub enum ServerMsg {
         /// workspace yet. Offered, never added. `R-J39`.
         #[serde(default)]
         hints: Vec<WorkspaceHint>,
+        /// Which of this session's roots — its own and the added folders —
+        /// are git repositories. `R-D34`.
+        ///
+        /// Answered here rather than as a message of its own because the set
+        /// *is* the workspace filtered, and a client cannot test for a `.git`
+        /// across the wire. The session's own root is first when it is one.
+        #[serde(default)]
+        repos: Vec<String>,
     },
     /// Every file of a session's worktree, sorted, `.git` never included and
     /// gitignore respected when the root is a repo. `truncated` means the walk
@@ -1203,6 +1294,11 @@ pub enum ServerMsg {
     /// stray.
     GitCommits {
         session_id: SessionId,
+        /// Which repository this is about — `None` is the session's own.
+        /// `R-D34`: a write verb re-broadcasts to every window watching the
+        /// session, and two of them may be pointed at two repositories.
+        #[serde(default)]
+        repo: Option<String>,
         skip: u32,
         commits: Vec<CommitInfo>,
         done: bool,
@@ -1240,6 +1336,11 @@ pub enum ServerMsg {
     /// The uncommitted state of the session's repo.
     GitLocalChanges {
         session_id: SessionId,
+        /// Which repository this is about — `None` is the session's own.
+        /// `R-D34`: a write verb re-broadcasts to every window watching the
+        /// session, and two of them may be pointed at two repositories.
+        #[serde(default)]
+        repo: Option<String>,
         entries: Vec<StatusEntry>,
     },
     /// One uncommitted file against `HEAD`.
@@ -1266,6 +1367,11 @@ pub enum ServerMsg {
     /// The repo's refs, in one shot. `R-D11`.
     GitRefsInfo {
         session_id: SessionId,
+        /// Which repository this is about — `None` is the session's own.
+        /// `R-D34`: a write verb re-broadcasts to every window watching the
+        /// session, and two of them may be pointed at two repositories.
+        #[serde(default)]
+        repo: Option<String>,
         info: Box<RefsInfo>,
     },
     /// Whether a session's project is IntelliJ's, and what would open it.
@@ -1483,6 +1589,11 @@ pub enum ServerMsg {
     /// The stash list.
     GitStashList {
         session_id: SessionId,
+        /// Which repository this is about — `None` is the session's own.
+        /// `R-D34`: a write verb re-broadcasts to every window watching the
+        /// session, and two of them may be pointed at two repositories.
+        #[serde(default)]
+        repo: Option<String>,
         stashes: Vec<StashInfo>,
     },
     /// One stash's diff, same shapes as every other diff here.

@@ -4,10 +4,10 @@ import type { ClientMsg, ServerMsg } from "@/wire/types";
 
 describe("describeCmd", () => {
   it("names the arguments, drops the session and the nulls, and says a flag by its name", () => {
-    const msg: ClientMsg = { cmd: "git_log", session_id: "s1", skip: 0, limit: 100, rev: null, grep: "PROJ-1", author: null, path: null, pickaxe: null, all: true, since: null, until: null };
+    const msg: ClientMsg = { cmd: "git_log", session_id: "s1", repo: null, skip: 0, limit: 100, rev: null, grep: "PROJ-1", author: null, path: null, pickaxe: null, all: true, since: null, until: null };
     expect(describeCmd(msg)).toBe("skip 0 · limit 100 · grep PROJ-1 · all");
-    expect(describeCmd({ cmd: "git_stage", session_id: "s1", paths: ["a.rs"] })).toBe("paths a.rs");
-    expect(describeCmd({ cmd: "git_stage", session_id: "s1", paths: ["a.rs", "b.rs"] })).toBe("paths 2 items");
+    expect(describeCmd({ cmd: "git_stage", session_id: "s1", repo: null, paths: ["a.rs"] })).toBe("paths a.rs");
+    expect(describeCmd({ cmd: "git_stage", session_id: "s1", repo: null, paths: ["a.rs", "b.rs"] })).toBe("paths 2 items");
     expect(describeCmd({ cmd: "git_refs", session_id: "s1" })).toBe("");
   });
 });
@@ -22,8 +22,8 @@ describe("gitSessionOf", () => {
 });
 
 describe("the ledger", () => {
-  const log: ClientMsg = { cmd: "git_log", session_id: "s1", skip: 0, limit: 100 };
-  const show: ClientMsg = { cmd: "git_show", session_id: "s1", sha: "fa64b61" };
+  const log: ClientMsg = { cmd: "git_log", session_id: "s1", repo: null, skip: 0, limit: 100 };
+  const show: ClientMsg = { cmd: "git_show", session_id: "s1", repo: null, sha: "fa64b61" };
 
   it("closes the latest waiting row of the command an answer answers", () => {
     let rows = pushCmd([], log, 1);
@@ -50,7 +50,7 @@ describe("the ledger", () => {
   });
 
   it("closes a write verb with the status it re-broadcasts", () => {
-    let rows = pushCmd([], { cmd: "git_stage", session_id: "s1", paths: ["a"] }, 1);
+    let rows = pushCmd([], { cmd: "git_stage", session_id: "s1", repo: null, paths: ["a"] }, 1);
     const a = answerFor({ ev: "git_local_changes", session_id: "s1", entries: [] } as unknown as ServerMsg)!;
     rows = attachResult(rows, a.cmds, a.summary);
     expect(rows[0].result).toBe("0 entries");

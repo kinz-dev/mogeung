@@ -118,7 +118,7 @@ describe("the popup", () => {
     act(() => {
       fireEvent.click(screen.getByText("Roll it back"));
     });
-    expect(sent).toEqual([{ cmd: "git_discard", session_id: "s1", paths: ["a.rs"] }]);
+    expect(sent).toEqual([{ cmd: "git_discard", session_id: "s1", repo: null, paths: ["a.rs"] }]);
     expect(useStore.getState().gitPopup).toBeNull();
   });
 

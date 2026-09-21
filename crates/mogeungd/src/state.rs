@@ -2907,11 +2907,17 @@ impl AppState {
             }
             None => Vec::new(),
         };
+        // Which of them a git verb may be pointed at. `R-D34`: the client
+        // cannot test for a `.git` across the wire, and the set is just this
+        // workspace filtered — so it travels with it rather than as a message
+        // of its own.
+        let repos = crate::workspace::repos(&root, &dirs);
         Ok(crate::workspace::View {
             root,
             dirs,
             missing,
             hints,
+            repos,
         })
     }
 
@@ -3051,23 +3057,59 @@ impl AppState {
 
     /// The session's repo root, refusing sessions that are not in one — the
     /// pane says "not a git repository" instead of erroring elsewhere.
-    async fn git_root(&self, id: &str) -> Result<PathBuf> {
-        let root = self.session_root(id).await?;
-        if !crate::git::is_repo(&root) {
-            anyhow::bail!("that session is not in a git repository");
+    /// The repository a git verb acts on: the session's own, or one it named.
+    /// `R-D34`.
+    ///
+    /// **The fence is `session_roots`, and it is not a new one.** A named
+    /// repository must be one of the roots this session may already be read
+    /// through — its own, plus the folders added to its workspace (`R-J40`) —
+    /// so naming one authorises nothing that browsing it did not. Anything
+    /// else is refused here, before git is reached, which is the same rule
+    /// `resolve_in_workspace` applies to a file path and for the same reason:
+    /// an unauthenticated socket must not be able to reach a repository by
+    /// asking politely.
+    ///
+    /// Canonicalised on both sides, because `/tmp` is a symlink on macOS and a
+    /// prefix test against the raw path would refuse an honest answer.
+    async fn git_root(&self, id: &str, repo: Option<&str>) -> Result<PathBuf> {
+        let Some(named) = repo.map(str::trim).filter(|r| !r.is_empty()) else {
+            let root = self.session_root(id).await?;
+            if !crate::git::is_repo(&root) {
+                anyhow::bail!("that session is not in a git repository");
+            }
+            return Ok(root);
+        };
+
+        let want = Path::new(named)
+            .canonicalize()
+            .map_err(|e| anyhow!("cannot open {named}: {e}"))?;
+        let allowed = self
+            .session_roots(id)
+            .await?
+            .into_iter()
+            .filter_map(|r| r.canonicalize().ok())
+            .any(|r| r == want);
+        if !allowed {
+            anyhow::bail!(
+                "{named} is not in this session's workspace — add the folder in Files first"
+            );
         }
-        Ok(root)
+        if !crate::git::is_repo(&want) {
+            anyhow::bail!("{named} is not a git repository");
+        }
+        Ok(want)
     }
 
     pub async fn git_log(
         &self,
         id: &str,
+        repo: Option<String>,
         skip: u32,
         limit: u32,
         rev: Option<String>,
         filter: crate::git::LogFilter,
     ) -> Result<(Vec<mogeung_core::wire::CommitInfo>, bool)> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         let (mut commits, files, done) = tokio::task::spawn_blocking(move || {
             crate::git::log_page(&root, skip, limit, rev.as_deref(), &filter)
         })
@@ -3097,42 +3139,45 @@ impl AppState {
         Ok((commits, done))
     }
 
-    pub async fn git_refs(&self, id: &str) -> Result<mogeung_core::wire::RefsInfo> {
-        let root = self.git_root(id).await?;
+    pub async fn git_refs(&self, id: &str, repo: Option<String>) -> Result<mogeung_core::wire::RefsInfo> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::refs(&root)).await?
     }
 
-    pub async fn git_stashes(&self, id: &str) -> Result<Vec<mogeung_core::wire::StashInfo>> {
-        let root = self.git_root(id).await?;
+    pub async fn git_stashes(&self, id: &str, repo: Option<String>) -> Result<Vec<mogeung_core::wire::StashInfo>> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::stashes(&root)).await?
     }
 
     pub async fn git_stash_show(
         &self,
         id: &str,
+        repo: Option<String>,
         index: u32,
         opts: crate::git::DiffOpts,
     ) -> Result<Vec<mogeung_core::change::FileChange>> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::stash_show(&root, index, opts)).await?
     }
 
     pub async fn git_submodules(
         &self,
         id: &str,
+        repo: Option<String>,
     ) -> Result<Vec<mogeung_core::wire::SubmoduleInfo>> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::submodules(&root)).await?
     }
 
     pub async fn git_diff_range(
         &self,
         id: &str,
+        repo: Option<String>,
         from: &str,
         to: &str,
         opts: crate::git::DiffOpts,
     ) -> Result<Vec<mogeung_core::change::FileChange>> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         let (from, to) = (from.to_string(), to.to_string());
         tokio::task::spawn_blocking(move || crate::git::diff_range(&root, &from, &to, opts))
             .await?
@@ -3141,9 +3186,10 @@ impl AppState {
     pub async fn git_compare(
         &self,
         id: &str,
+        repo: Option<String>,
         branch: &str,
     ) -> Result<(String, String, Vec<mogeung_core::change::FileChange>)> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         let branch = branch.to_string();
         tokio::task::spawn_blocking(move || {
             crate::git::compare_with_head(&root, &branch, crate::git::DiffOpts::default())
@@ -3151,25 +3197,27 @@ impl AppState {
         .await?
     }
 
-    pub async fn git_reflog(&self, id: &str) -> Result<Vec<mogeung_core::wire::ReflogEntry>> {
-        let root = self.git_root(id).await?;
+    pub async fn git_reflog(&self, id: &str, repo: Option<String>) -> Result<Vec<mogeung_core::wire::ReflogEntry>> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::reflog(&root)).await?
     }
 
     pub async fn git_worktrees(
         &self,
         id: &str,
+        repo: Option<String>,
     ) -> Result<Vec<mogeung_core::wire::WorktreeInfo>> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::worktrees(&root)).await?
     }
 
     pub async fn git_conflict_stages(
         &self,
         id: &str,
+        repo: Option<String>,
         rel: &str,
     ) -> Result<(String, String, String, bool)> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         let rel = rel.to_string();
         tokio::task::spawn_blocking(move || crate::git::conflict_stages(&root, &rel)).await?
     }
@@ -3177,10 +3225,11 @@ impl AppState {
     pub async fn git_file_at_rev(
         &self,
         id: &str,
+        repo: Option<String>,
         sha: &str,
         rel: &str,
     ) -> Result<(String, bool)> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         let (sha, rel) = (sha.to_string(), rel.to_string());
         tokio::task::spawn_blocking(move || crate::git::file_at_rev(&root, &sha, &rel)).await?
     }
@@ -3188,13 +3237,14 @@ impl AppState {
     pub async fn git_show(
         &self,
         id: &str,
+        repo: Option<String>,
         sha: &str,
         opts: crate::git::DiffOpts,
     ) -> Result<(
         Vec<mogeung_core::change::FileChange>,
         Option<mogeung_core::wire::CommitDetail>,
     )> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         // R-D17: the union of every reviewed anchor across this repo's
         // sessions, so a commit's hunks arrive knowing whether a human
         // has already read that code. Anchors are content hashes, which
@@ -3222,26 +3272,26 @@ impl AppState {
             .await?
     }
 
-    pub async fn git_status(&self, id: &str) -> Result<Vec<mogeung_core::wire::StatusEntry>> {
-        let root = self.git_root(id).await?;
+    pub async fn git_status(&self, id: &str, repo: Option<String>) -> Result<Vec<mogeung_core::wire::StatusEntry>> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::status(&root)).await?
     }
 
     /// Stage paths in the session's repository. `R-D19`.
-    pub async fn git_stage(&self, id: &str, paths: Vec<String>) -> Result<()> {
-        let root = self.write_target(id, &paths).await?;
+    pub async fn git_stage(&self, id: &str, repo: Option<String>, paths: Vec<String>) -> Result<()> {
+        let root = self.write_target(id, repo.as_deref(), &paths).await?;
         tokio::task::spawn_blocking(move || crate::git::stage(&root, &paths)).await?
     }
 
     /// Unstage paths, leaving the working tree alone. `R-D19`.
-    pub async fn git_unstage(&self, id: &str, paths: Vec<String>) -> Result<()> {
-        let root = self.write_target(id, &paths).await?;
+    pub async fn git_unstage(&self, id: &str, repo: Option<String>, paths: Vec<String>) -> Result<()> {
+        let root = self.write_target(id, repo.as_deref(), &paths).await?;
         tokio::task::spawn_blocking(move || crate::git::unstage(&root, &paths)).await?
     }
 
     /// Throw away local changes. Destroys work git has never seen. `R-D19`.
-    pub async fn git_discard(&self, id: &str, paths: Vec<String>) -> Result<()> {
-        let root = self.write_target(id, &paths).await?;
+    pub async fn git_discard(&self, id: &str, repo: Option<String>, paths: Vec<String>) -> Result<()> {
+        let root = self.write_target(id, repo.as_deref(), &paths).await?;
         tokio::task::spawn_blocking(move || crate::git::discard(&root, &paths)).await?
     }
 
@@ -3260,11 +3310,12 @@ impl AppState {
     pub async fn git_commit(
         &self,
         id: &str,
+        repo: Option<String>,
         message: String,
         amend: bool,
         session_trailer: bool,
     ) -> Result<String> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         let trailers = match session_trailer {
             true => vec![(crate::git::SESSION_TRAILER.to_string(), id.to_string())],
             false => Vec::new(),
@@ -3276,8 +3327,8 @@ impl AppState {
     }
 
     /// Create a branch, and optionally move onto it. `R-D21`.
-    pub async fn git_branch_create(&self, id: &str, name: String, switch_to: bool) -> Result<()> {
-        let root = self.git_root(id).await?;
+    pub async fn git_branch_create(&self, id: &str, repo: Option<String>, name: String, switch_to: bool) -> Result<()> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         let moved = root.clone();
         tokio::task::spawn_blocking(move || crate::git::branch_create(&root, &name, switch_to))
             .await??;
@@ -3289,8 +3340,8 @@ impl AppState {
 
     /// Move the worktree onto an existing branch, or detach onto any
     /// commit-ish. `R-D21`, `R-D32`.
-    pub async fn git_switch(&self, id: &str, name: String, detach: bool) -> Result<()> {
-        let root = self.git_root(id).await?;
+    pub async fn git_switch(&self, id: &str, repo: Option<String>, name: String, detach: bool) -> Result<()> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         let moved = root.clone();
         tokio::task::spawn_blocking(move || crate::git::switch(&root, &name, detach)).await??;
         self.unpin_diff_bases(&moved).await;
@@ -3300,29 +3351,30 @@ impl AppState {
     pub async fn git_stash_push(
         &self,
         id: &str,
+        repo: Option<String>,
         message: String,
         include_untracked: bool,
     ) -> Result<()> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || {
             crate::git::stash_push(&root, &message, include_untracked)
         })
         .await?
     }
 
-    pub async fn git_stash_pop(&self, id: &str, index: u32) -> Result<()> {
-        let root = self.git_root(id).await?;
+    pub async fn git_stash_pop(&self, id: &str, repo: Option<String>, index: u32) -> Result<()> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::stash_pop(&root, index)).await?
     }
 
-    pub async fn git_stash_drop(&self, id: &str, index: u32) -> Result<()> {
-        let root = self.git_root(id).await?;
+    pub async fn git_stash_drop(&self, id: &str, repo: Option<String>, index: u32) -> Result<()> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::stash_drop(&root, index)).await?
     }
 
     /// Update remote-tracking refs. `R-D25`.
-    pub async fn git_fetch(&self, id: &str) -> Result<crate::git::FetchReport> {
-        let root = self.git_root(id).await?;
+    pub async fn git_fetch(&self, id: &str, repo: Option<String>) -> Result<crate::git::FetchReport> {
+        let root = self.git_root(id, repo.as_deref()).await?;
         tokio::task::spawn_blocking(move || crate::git::fetch(&root)).await?
     }
 
@@ -3476,10 +3528,11 @@ impl AppState {
     pub async fn git_resolve(
         &self,
         id: &str,
+        repo: Option<String>,
         path: String,
         side: mogeung_core::wire::ResolveSide,
     ) -> Result<()> {
-        let root = self.write_target(id, std::slice::from_ref(&path)).await?;
+        let root = self.write_target(id, repo.as_deref(), std::slice::from_ref(&path)).await?;
         let side = match side {
             mogeung_core::wire::ResolveSide::Ours => crate::git::Side::Ours,
             mogeung_core::wire::ResolveSide::Theirs => crate::git::Side::Theirs,
@@ -3531,20 +3584,21 @@ impl AppState {
     /// bounds the write, since git itself will refuse a pathspec outside the
     /// repository — and then refuses any path that could name something
     /// outside it.
-    async fn write_target(&self, id: &str, paths: &[String]) -> Result<PathBuf> {
+    async fn write_target(&self, id: &str, repo: Option<&str>, paths: &[String]) -> Result<PathBuf> {
         for p in paths {
             refuse_escape(p)?;
         }
-        self.git_root(id).await
+        self.git_root(id, repo).await
     }
 
     pub async fn git_diff_file(
         &self,
         id: &str,
+        repo: Option<String>,
         rel: &str,
         opts: crate::git::DiffOpts,
     ) -> Result<Vec<mogeung_core::change::FileChange>> {
-        let root = self.git_root(id).await?;
+        let root = self.git_root(id, repo.as_deref()).await?;
         // Containment first: paths on this command are worktree identifiers,
         // same guard as the explorer's. (A deleted file cannot canonicalise;
         // its diff still matters, so fall back to a lexical `..` check.)
@@ -3563,7 +3617,10 @@ impl AppState {
         rel: &str,
         rev: Option<String>,
     ) -> Result<(Vec<mogeung_core::wire::BlameLine>, bool)> {
-        let root = self.git_root(id).await?;
+        // No `repo` here, deliberately (`R-D34`): blame follows the file you
+        // are reading, which belongs to the session and not to whichever
+        // repository the Git window happens to be pointed at.
+        let root = self.git_root(id, None).await?;
         // A worktree blame names a file that exists; a historical blame
         // names one that may not, so its containment is lexical — the
         // `git_diff_file` wrinkle again.

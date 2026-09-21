@@ -16,6 +16,7 @@ import { useStore } from "@/store";
 import { usePaneId } from "@/lib/paneScope";
 import { parseDiffPaneId } from "@/lib/panes";
 import { Dim, Empty, Mono } from "@/ui/primitives";
+import { repoOf } from "@/lib/gitActions";
 import { DiffList } from "@/ui/DiffView";
 
 export function DiffPane() {
@@ -30,8 +31,8 @@ export function DiffPane() {
     if (!ref || files || asked.current) return;
     asked.current = true;
     const range = ref.rev.split("..");
-    if (range.length === 2) send({ cmd: "git_diff_range", session_id: ref.session, from: range[0], to: range[1] });
-    else send({ cmd: "git_show", session_id: ref.session, sha: ref.rev });
+    if (range.length === 2) send({ cmd: "git_diff_range", session_id: ref.session, repo: repoOf(ref.session), from: range[0], to: range[1] });
+    else send({ cmd: "git_show", session_id: ref.session, repo: repoOf(ref.session), sha: ref.rev });
   }, [ref, files, send]);
 
   const shown = useMemo(() => {

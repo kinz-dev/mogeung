@@ -13,6 +13,7 @@ import { useStore, emptyExplorer, type FileTab } from "@/store";
 import { openRail } from "@/lib/rail";
 import { onWindowFocus, type Unlisten } from "@/lib/tauri";
 import { closeFilePane, showFilePane } from "@/lib/panes";
+import { repoOf } from "@/lib/gitActions";
 import type { SessionId } from "@/wire/types";
 
 /**
@@ -50,7 +51,7 @@ export function explorerFetch(id: SessionId): void {
     if (st.pendingFiles.includes(key) || wantBodies.includes(key)) continue;
     wantBodies.push(key);
     if (tab.rev === null) send({ cmd: "fetch_file", session_id: id, path: tab.path });
-    else send({ cmd: "git_file_at_rev", session_id: id, sha: tab.rev, path: tab.path });
+    else send({ cmd: "git_file_at_rev", session_id: id, sha: tab.rev, path: tab.path, repo: repoOf(id) });
   }
   if (wantBodies.length > 0) {
     patchExplorer(id, { pendingFiles: [...st.pendingFiles, ...wantBodies] });

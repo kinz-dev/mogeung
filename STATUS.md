@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 665 passing |
-| Rust | 46490 lines |
-| Docs | 112 files, 38 ADRs |
+| Tests | 667 passing |
+| Rust | 46791 lines |
+| Docs | 113 files, 38 ADRs |
 
 ## Assumptions
 
-Untested: **18** · At risk: **5** · Supported: 18 · Refuted: 2
+Untested: **19** · At risk: **5** · Supported: 18 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -64,5 +64,6 @@ Untested: **18** · At risk: **5** · Supported: 18 · Refuted: 2
 | [A pane in its own window](docs/features/0041-a-pane-in-its-own-window.md) | `shipped` | [A30] |
 | [The Git tool window — IntelliJ's log, in the dock](docs/features/0042-git-tool-window.md) | `active` | [A13, A18, A19, A26] |
 | [The Git Operations popup — IntelliJ's two popups, on a keystroke](docs/features/0043-git-operations-popup.md) | `active` | [A13, A19, A26] |
+| [More than one repository — the Git window picks](docs/features/0044-more-than-one-repository.md) | `active` | [A19, A26] |
 | [Run configurations — IntelliJ's Run tool window, its Edit dialog and its popup](docs/features/0045-run-configurations.md) | `draft` | [A13, A32, A33, A34, A42, A43] |
 

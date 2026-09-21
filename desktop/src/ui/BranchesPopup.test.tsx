@@ -13,7 +13,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BranchesPopup } from "@/ui/BranchesPopup";
-import { useStore, emptyGit } from "@/store";
+import { useStore, emptyGit, emptyExplorer } from "@/store";
 import type { ClientMsg, RefsInfo, Session } from "@/wire/types";
 
 class FakeSocket {
@@ -48,7 +48,7 @@ const session = (over: Partial<Session> = {}): Session =>
   ({ id: "s1", cwd: "/repo", repo_root: "/repo", title: "the session", alive: false, ...over }) as unknown as Session;
 
 /** `live` puts a second session in the same worktree — `R-D21`'s trigger. */
-function open(opts: { live?: boolean; repo?: boolean } = {}) {
+function open(opts: { live?: boolean; repo?: boolean; repos?: string[] } = {}) {
   sent.length = 0;
   const sessions: Record<string, Session> = {
     s1: session(opts.repo === false ? { repo_root: null } : {}),
@@ -58,6 +58,15 @@ function open(opts: { live?: boolean; repo?: boolean } = {}) {
     selected: "s1",
     sessions,
     git: { s1: { ...emptyGit(), refs } },
+    // The workspace is known, so the popup does not have to ask for it —
+    // `R-D34`'s repository list comes from that answer. `repos` is what the
+    // daemon says holds a `.git`.
+    explorer: {
+      s1: {
+        ...emptyExplorer(),
+        workspace: { dirs: opts.repos?.slice(1) ?? [], missing: [], hints: [], repos: opts.repos ?? ["/repo"] },
+      },
+    },
     gitPopup: "branches",
     notices: [],
     send: ((m: ClientMsg) => sent.push(m)) as never,
@@ -103,7 +112,7 @@ describe("the branches popup", () => {
     type("contract");
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Branches" }), { key: "Enter" });
     expect(sent).toEqual([
-      { cmd: "git_switch", session_id: "s1", name: "claude/linear-contract", detach: false },
+      { cmd: "git_switch", session_id: "s1", repo: null, name: "claude/linear-contract", detach: false },
     ]);
     expect(useStore.getState().gitPopup).toBeNull();
   });
@@ -121,7 +130,7 @@ describe("the branches popup", () => {
     expect(screen.getByText("an agent at work")).toBeInTheDocument();
     fireEvent.click(screen.getByText(/Check out claude\/linear-contract/));
     expect(sent).toEqual([
-      { cmd: "git_switch", session_id: "s1", name: "claude/linear-contract", detach: false },
+      { cmd: "git_switch", session_id: "s1", repo: null, name: "claude/linear-contract", detach: false },
     ]);
   });
 
@@ -131,7 +140,7 @@ describe("the branches popup", () => {
     fireEvent.click(screen.getByText("Checkout Tag or Revision…"));
     fireEvent.change(screen.getByPlaceholderText(/v1\.4\.0/), { target: { value: "v1.4.0" } });
     fireEvent.click(screen.getByText("Checkout"));
-    expect(sent).toEqual([{ cmd: "git_switch", session_id: "s1", name: "v1.4.0", detach: true }]);
+    expect(sent).toEqual([{ cmd: "git_switch", session_id: "s1", repo: null, name: "v1.4.0", detach: true }]);
   });
 
   it("creates a branch from HEAD, switching to it when asked", () => {
@@ -140,14 +149,14 @@ describe("the branches popup", () => {
     fireEvent.change(screen.getByPlaceholderText("feature/thing"), { target: { value: "feature/x" } });
     fireEvent.click(screen.getByText("Create"));
     expect(sent).toEqual([
-      { cmd: "git_branch_create", session_id: "s1", name: "feature/x", switch_to: true },
+      { cmd: "git_branch_create", session_id: "s1", repo: null, name: "feature/x", switch_to: true },
     ]);
   });
 
   it("fetches from the row that says it merges nothing", () => {
     open();
     fireEvent.click(screen.getByText(/Update Project/));
-    expect(sent).toEqual([{ cmd: "git_fetch", session_id: "s1" }]);
+    expect(sent).toEqual([{ cmd: "git_fetch", session_id: "s1", repo: null }]);
   });
 
   it("refuses push here too, with the same sentence", () => {

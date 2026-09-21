@@ -123,7 +123,7 @@ describe("the log", () => {
     sent.length = 0;
     render(<GitPane />);
     expect(cmds("git_log")).toEqual([
-      { cmd: "git_log", session_id: "s1", skip: 0, limit: 100, rev: null, grep: null, author: null, path: null, pickaxe: null, all: true, since: null, until: null },
+      { cmd: "git_log", session_id: "s1", repo: null, skip: 0, limit: 100, rev: null, grep: null, author: null, path: null, pickaxe: null, all: true, since: null, until: null },
     ]);
   });
 
@@ -132,7 +132,7 @@ describe("the log", () => {
     const rows = screen.getAllByRole("option");
     expect(rows.map((r) => r.getAttribute("data-sha"))).toEqual([commit("aaaaaaa1", "").sha, commit("bbbbbbb2", "").sha]);
     fireEvent.click(rows[1]);
-    expect(cmds("git_show")).toEqual([{ cmd: "git_show", session_id: "s1", sha: commit("bbbbbbb2", "").sha }]);
+    expect(cmds("git_show")).toEqual([{ cmd: "git_show", session_id: "s1", repo: null, sha: commit("bbbbbbb2", "").sha }]);
     expect(rows[1]).toHaveAttribute("aria-selected", "true");
   });
 
@@ -141,7 +141,7 @@ describe("the log", () => {
     const box = screen.getByPlaceholderText(/text or hash/);
     fireEvent.change(box, { target: { value: "fa64b61" } });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect(cmds("git_show")).toEqual([{ cmd: "git_show", session_id: "s1", sha: "fa64b61" }]);
+    expect(cmds("git_show")).toEqual([{ cmd: "git_show", session_id: "s1", repo: null, sha: "fa64b61" }]);
     expect(cmds("git_log")).toEqual([]);
 
     fireEvent.change(box, { target: { value: "author:kinz path:docs the word" } });

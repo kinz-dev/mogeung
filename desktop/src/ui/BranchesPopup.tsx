@@ -37,6 +37,8 @@ import { ContextMenu, MenuItem, MenuSeparator } from "@/ui/Menu";
 import { refTree, type RefNode } from "@/lib/gitTree";
 import {
   branchCreate,
+  pickRepo,
+  repoOf,
   compareWith,
   copyText,
   liveSessionsIn,
@@ -77,8 +79,12 @@ export function BranchesPopup() {
   const id = useStore((s) => s.selected);
   const session = useStore((s) => (s.selected ? s.sessions[s.selected] : undefined));
   const refs = useStore((s) => (id ? (s.git[id]?.refs ?? null) : null));
+  // The repository this window is showing, and the ones it could. `R-D34`.
+  const picked = useStore((s) => (id ? (s.git[id]?.repo ?? null) : null));
+  const repos = useStore((s) => (id ? (s.explorer[id]?.workspace?.repos ?? NONE) : NONE));
+  const knowsWorkspace = useStore((s) => (id ? !!s.explorer[id]?.workspace : false));
   const overrides = useStore((s) => s.prefs.keymap);
-  const repoRoot = session?.repo_root ?? null;
+  const repoRoot = picked ?? session?.repo_root ?? null;
   const favs = useStore((s) => (repoRoot ? (s.prefs.gitFavourites[repoRoot] ?? NONE) : NONE));
   const send = useStore((s) => s.send);
 
@@ -98,8 +104,11 @@ export function BranchesPopup() {
   // with the Git tool window never once opened, and an empty branch list would
   // read as a repository with no branches.
   useEffect(() => {
-    if (open && id && repoRoot && !refs) send({ cmd: "git_refs", session_id: id });
-  }, [open, id, repoRoot, refs, send]);
+    if (open && id && repoRoot && !refs) send({ cmd: "git_refs", session_id: id, repo: repoOf(id) });
+    // And the repository list, which this popup can be the first to need: it
+    // opens on a chord, with the Git tool window never once opened.
+    if (open && id && !knowsWorkspace) send({ cmd: "fetch_workspace", session_id: id });
+  }, [open, id, repoRoot, refs, knowsWorkspace, send]);
 
   useEffect(() => {
     if (!open) {
@@ -274,21 +283,52 @@ export function BranchesPopup() {
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto py-1" role="listbox" aria-label="branches and actions">
-            {/* The repository line: IntelliJ lists every repository it has open;
-                a mogeung session is exactly one worktree, so this is the row
-                that would be a list, and it says which one you are acting on. */}
-            <div className="flex items-center gap-2 px-3 py-1">
-              <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-[var(--graph-2)]" />
-              <Mono className="truncate text-xs text-[var(--text-strong)]">
-                {repoRoot?.split("/").filter(Boolean).pop()}
-              </Mono>
-              <Dim className="ml-auto truncate text-2xs">{head}</Dim>
-              {current && (current.ahead > 0 || current.behind > 0) && (
-                <Dim className="shrink-0 text-2xs tabular-nums">
-                  ↑{current.ahead} ↓{current.behind}
-                </Dim>
-              )}
-            </div>
+            {/* **The repositories**, which is the list IntelliJ draws here and
+                which mogeung could not until `R-D34`: one mogeung session was
+                one worktree. Every root of this session that holds a `.git` —
+                its own, and the folders added in Files — and clicking one
+                points the whole window at it, this popup included. Below two,
+                it is the one line it always was. */}
+            {repos.length > 1 ? (
+              repos.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  title={r}
+                  onClick={() => id && pickRepo(id, r === session?.repo_root ? null : r)}
+                  className={cn(
+                    interactive,
+                    "flex w-full items-center gap-2 px-3 py-1 text-left",
+                    r === repoRoot && rowSelected,
+                  )}
+                >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                    style={{ background: r === repoRoot ? "var(--graph-2)" : "var(--dim)" }}
+                  />
+                  <Mono className="truncate text-xs">{r.split("/").filter(Boolean).pop()}</Mono>
+                  {r === repoRoot && <Dim className="ml-auto truncate text-2xs">{head}</Dim>}
+                  {r === repoRoot && current && (current.ahead > 0 || current.behind > 0) && (
+                    <Dim className="shrink-0 text-2xs tabular-nums">
+                      ↑{current.ahead} ↓{current.behind}
+                    </Dim>
+                  )}
+                </button>
+              ))
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-1">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-[var(--graph-2)]" />
+                <Mono className="truncate text-xs text-[var(--text-strong)]">
+                  {repoRoot?.split("/").filter(Boolean).pop()}
+                </Mono>
+                <Dim className="ml-auto truncate text-2xs">{head}</Dim>
+                {current && (current.ahead > 0 || current.behind > 0) && (
+                  <Dim className="shrink-0 text-2xs tabular-nums">
+                    ↑{current.ahead} ↓{current.behind}
+                  </Dim>
+                )}
+              </div>
+            )}
             <div className="my-1 border-t border-[var(--border)]" />
 
             {rows.map((r, i) => {

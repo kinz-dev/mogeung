@@ -38,13 +38,24 @@ export type RailTool = (typeof RAIL_TOOLS)[number];
  * time**, so the diff and the conversation can no longer be split side by side
  * the way the tile tree allowed. That was possible before and is not now.
  */
-/** The Git log's fixed columns, in pixels; the subject flexes. */
+/**
+ * The Git log's columns. The graph is pixels — `null` until a hand sets it,
+ * and the lanes size it until then. The four text columns are **shares of
+ * the width the graph leaves, in percent**, summing to a hundred, so the row
+ * scales with its pane rather than growing the subject alone; a divider
+ * moves the boundary between two of them and their sum is what it was.
+ * Pixels for these, in files at version 1, are reset by [`migrateDefaults`].
+ */
 export interface LogColumns {
   graph: number | null;
+  subject: number;
   author: number;
   date: number;
   marks: number;
 }
+
+/** The shape the first pixel defaults had over a 700-px log. */
+export const DEFAULT_LOG_COLUMNS: LogColumns = { graph: null, subject: 66, author: 14, date: 12, marks: 8 };
 
 export type DockTool = "insight" | "git" | "debt" | "changes" | "transcript" | "run";
 
@@ -224,9 +235,10 @@ export interface Prefs {
   gitInspectorWidth: number;
   gitBranchesOpen: boolean;
   /**
-   * The log's column widths, dragged by their dividers. `graph` is `null`
-   * until a hand sets it — the lanes size it until then. Asked for on the
-   * first day of use, 2026-09-11.
+   * The log's columns, dragged by their dividers — the graph in pixels, the
+   * rest as shares of what it leaves. Asked for on the first day of use,
+   * 2026-09-11, twice: dividers in the morning, and the shares that
+   * afternoon, once pixels had left every resize to the subject.
    */
   gitLogColumns: LogColumns;
   /**
@@ -330,8 +342,10 @@ export const emptyScoped = (): ScopedPrefs => ({
  * a setting the reader may have chosen, so a bump needs to be worth that.
  *
  * - **1** — side-by-side became the default diff (2026-08-17).
+ * - **2** — the Git log's columns became shares of its width (2026-09-11);
+ *   a file from that morning holds pixels under the same key.
  */
-export const PREFS_VERSION = 1;
+export const PREFS_VERSION = 2;
 
 export const defaultPrefs = (): Prefs => ({
   version: PREFS_VERSION,
@@ -356,7 +370,7 @@ export const defaultPrefs = (): Prefs => ({
   gitBranchesWidth: 210,
   gitInspectorWidth: 360,
   gitBranchesOpen: true,
-  gitLogColumns: { graph: null, author: 96, date: 84, marks: 56 },
+  gitLogColumns: DEFAULT_LOG_COLUMNS,
   gitFavourites: {},
   gitRecents: {},
   groupByRepo: false,
@@ -397,6 +411,11 @@ export function migrateDefaults(saved: Partial<Prefs>): Partial<Prefs> {
   // way to tell the two apart. Moving them all is the cost of changing a
   // default at all; the toggle in Changes and in Git is one click back.
   if (from < 1) out.sideBySide = true;
+  // 2 — the log's columns are shares now. A file from the morning of
+  // 2026-09-11 holds `author: 96` and no subject at all; read as shares that
+  // is a 96-fr author beside a NaN, so the whole set goes back to default.
+  // Cost: one day's dividers, on the machine that asked for them.
+  if (from < 2) out.gitLogColumns = DEFAULT_LOG_COLUMNS;
   return out;
 }
 
@@ -449,16 +468,21 @@ export function loadPrefs(): Prefs {
     for (const [key, value] of Object.entries(saved.scoped ?? {})) {
       scoped[key] = { ...emptyScoped(), ...(value ?? {}) };
     }
+    const migrated = migrateDefaults(saved);
     return {
       ...base,
       ...saved,
-      ...migrateDefaults(saved),
+      ...migrated,
       // After the spread, never before: `...saved` would otherwise put the old
       // single-tool string straight into a field the window now iterates, and
       // `"files".map` is a blank window rather than a lost setting.
       rail: railList(saved.rail),
       version: PREFS_VERSION,
       zoom: { ...base.zoom, ...saved.zoom },
+      // Completed against the shape the way `zoom` is, so a column added later
+      // is not `undefined` in a grid template — after the migration has had
+      // its say, which is the one case the saved object is thrown away.
+      gitLogColumns: { ...base.gitLogColumns, ...saved.gitLogColumns, ...migrated.gitLogColumns },
       scoped,
     };
   } catch {

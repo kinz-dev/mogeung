@@ -755,7 +755,7 @@ async fn get_git_log(
         since: q.since,
         until: q.until,
     };
-    match state.git_log(&id, q.skip, q.limit, q.rev, filter).await {
+    match state.git_log(&id, None, q.skip, q.limit, q.rev, filter).await {
         Ok((commits, done)) => Json(serde_json::json!({ "commits": commits, "done": done })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -776,7 +776,7 @@ async fn get_git_show(
     Query(q): Query<ShaQuery>,
 ) -> impl IntoResponse {
     let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
-    match state.git_show(&id, &q.sha, opts).await {
+    match state.git_show(&id, None, &q.sha, opts).await {
         Ok((files, detail)) => Json(serde_json::json!({
             "sha": q.sha, "files": files, "detail": detail,
         })),
@@ -788,7 +788,7 @@ async fn get_git_status(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    match state.git_status(&id).await {
+    match state.git_status(&id, None).await {
         Ok(entries) => Json(serde_json::json!({ "entries": entries })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -809,7 +809,7 @@ async fn get_git_diff(
     Query(q): Query<DiffFileQuery>,
 ) -> impl IntoResponse {
     let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
-    match state.git_diff_file(&id, &q.path, opts).await {
+    match state.git_diff_file(&id, None, &q.path, opts).await {
         Ok(files) => Json(serde_json::json!({ "path": q.path, "files": files })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -839,7 +839,7 @@ async fn get_git_refs(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    match state.git_refs(&id).await {
+    match state.git_refs(&id, None).await {
         Ok(info) => Json(serde_json::json!(info)),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -849,7 +849,7 @@ async fn get_git_stashes(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    match state.git_stashes(&id).await {
+    match state.git_stashes(&id, None).await {
         Ok(stashes) => Json(serde_json::json!({ "stashes": stashes })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -870,7 +870,7 @@ async fn get_git_stash(
     Query(q): Query<StashQuery>,
 ) -> impl IntoResponse {
     let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
-    match state.git_stash_show(&id, q.index, opts).await {
+    match state.git_stash_show(&id, None, q.index, opts).await {
         Ok(files) => Json(serde_json::json!({ "index": q.index, "files": files })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -880,7 +880,7 @@ async fn get_git_submodules(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    match state.git_submodules(&id).await {
+    match state.git_submodules(&id, None).await {
         Ok(submodules) => Json(serde_json::json!({ "submodules": submodules })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -902,7 +902,7 @@ async fn get_git_range(
     Query(q): Query<RangeQuery>,
 ) -> impl IntoResponse {
     let opts = crate::git::DiffOpts::from_wire(q.context, q.ignore_ws);
-    match state.git_diff_range(&id, &q.from, &q.to, opts).await {
+    match state.git_diff_range(&id, None, &q.from, &q.to, opts).await {
         Ok(files) => {
             Json(serde_json::json!({ "from": q.from, "to": q.to, "files": files }))
         }
@@ -920,7 +920,7 @@ async fn get_git_compare(
     AxPath(id): AxPath<String>,
     Query(q): Query<BranchQuery>,
 ) -> impl IntoResponse {
-    match state.git_compare(&id, &q.branch).await {
+    match state.git_compare(&id, None, &q.branch).await {
         Ok((from, to, files)) => {
             Json(serde_json::json!({ "from": from, "to": to, "files": files }))
         }
@@ -932,7 +932,7 @@ async fn get_git_reflog(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    match state.git_reflog(&id).await {
+    match state.git_reflog(&id, None).await {
         Ok(entries) => Json(serde_json::json!({ "entries": entries })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -942,7 +942,7 @@ async fn get_git_worktrees(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> impl IntoResponse {
-    match state.git_worktrees(&id).await {
+    match state.git_worktrees(&id, None).await {
         Ok(worktrees) => Json(serde_json::json!({ "worktrees": worktrees })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -953,7 +953,7 @@ async fn get_git_conflict(
     AxPath(id): AxPath<String>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    match state.git_conflict_stages(&id, &q.path).await {
+    match state.git_conflict_stages(&id, None, &q.path).await {
         Ok((base, ours, theirs, truncated)) => Json(serde_json::json!({
             "path": q.path, "base": base, "ours": ours, "theirs": theirs,
             "truncated": truncated,
@@ -973,7 +973,7 @@ async fn get_git_file_at(
     AxPath(id): AxPath<String>,
     Query(q): Query<FileAtQuery>,
 ) -> impl IntoResponse {
-    match state.git_file_at_rev(&id, &q.sha, &q.path).await {
+    match state.git_file_at_rev(&id, None, &q.sha, &q.path).await {
         Ok((content, truncated)) => Json(serde_json::json!({
             "sha": q.sha, "path": q.path, "content": content, "truncated": truncated,
         })),
@@ -1208,10 +1208,11 @@ fn is_write(cmd: &ClientMsg) -> bool {
 ///
 /// Every write verb ends here, so "what happened" is always git's answer
 /// rather than the client's optimism.
-async fn rebroadcast_status(state: &Arc<AppState>, session_id: String) {
-    match state.git_status(&session_id).await {
+async fn rebroadcast_status(state: &Arc<AppState>, session_id: String, repo: Option<String>) {
+    match state.git_status(&session_id, repo.clone()).await {
         Ok(entries) => state.broadcast(ServerMsg::GitLocalChanges {
             session_id,
+            repo,
             entries,
         }),
         Err(e) => state.broadcast(ServerMsg::Error {
@@ -1225,26 +1226,28 @@ async fn rebroadcast_status(state: &Arc<AppState>, session_id: String) {
 ///
 /// The same rule as `R-D19`'s: the client is told what git now says, never
 /// what it was asked to do.
-async fn after_ref_change(state: &Arc<AppState>, session_id: String) {
-    match state.git_refs(&session_id).await {
+async fn after_ref_change(state: &Arc<AppState>, session_id: String, repo: Option<String>) {
+    match state.git_refs(&session_id, repo.clone()).await {
         Ok(info) => state.broadcast(ServerMsg::GitRefsInfo {
             session_id: session_id.clone(),
+            repo: repo.clone(),
             info: Box::new(info),
         }),
         Err(e) => state.broadcast(ServerMsg::Error {
             message: e.to_string(),
         }),
     }
-    match state.git_stashes(&session_id).await {
+    match state.git_stashes(&session_id, repo.clone()).await {
         Ok(stashes) => state.broadcast(ServerMsg::GitStashList {
             session_id: session_id.clone(),
+            repo: repo.clone(),
             stashes,
         }),
         Err(e) => state.broadcast(ServerMsg::Error {
             message: e.to_string(),
         }),
     }
-    rebroadcast_status(state, session_id).await
+    rebroadcast_status(state, session_id, repo).await
 }
 
 /// The scratch tree as one message. `R-L9`.
@@ -1902,6 +1905,7 @@ async fn handle(
             all,
             since,
             until,
+            repo,
         } => {
             let filter = crate::git::LogFilter {
                 grep: grep.clone(),
@@ -1913,11 +1917,12 @@ async fn handle(
                 until,
             };
             match state
-                .git_log(&session_id, skip, limit, rev.clone(), filter)
+                .git_log(&session_id, repo.clone(), skip, limit, rev.clone(), filter)
                 .await
             {
                 Ok((commits, done)) => state.broadcast(ServerMsg::GitCommits {
                     session_id,
+                    repo,
                     skip,
                     commits,
                     done,
@@ -1938,9 +1943,10 @@ async fn handle(
             sha,
             context,
             ignore_ws,
+            repo,
         } => {
             let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
-            match state.git_show(&session_id, &sha, opts).await {
+            match state.git_show(&session_id, repo.clone(), &sha, opts).await {
                 Ok((files, detail)) => state.broadcast(ServerMsg::GitCommitDiff {
                     session_id,
                     sha,
@@ -1952,9 +1958,10 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitStatus { session_id } => match state.git_status(&session_id).await {
+        ClientMsg::GitStatus { session_id , repo } => match state.git_status(&session_id, repo.clone()).await {
             Ok(entries) => state.broadcast(ServerMsg::GitLocalChanges {
                 session_id,
+                repo,
                 entries,
             }),
             Err(e) => err(e),
@@ -1967,15 +1974,15 @@ async fn handle(
         // repository state locally and the two cannot drift — the pane shows
         // what git says, one round trip after the click, including when git
         // did something other than what was asked.
-        ClientMsg::GitStage { session_id, paths } => {
-            match state.git_stage(&session_id, paths).await {
-                Ok(()) => rebroadcast_status(state, session_id).await,
+        ClientMsg::GitStage { session_id, paths , repo } => {
+            match state.git_stage(&session_id, repo.clone(), paths).await {
+                Ok(()) => rebroadcast_status(state, session_id, repo).await,
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitUnstage { session_id, paths } => {
-            match state.git_unstage(&session_id, paths).await {
-                Ok(()) => rebroadcast_status(state, session_id).await,
+        ClientMsg::GitUnstage { session_id, paths , repo } => {
+            match state.git_unstage(&session_id, repo.clone(), paths).await {
+                Ok(()) => rebroadcast_status(state, session_id, repo).await,
                 Err(e) => err(e),
             }
         }
@@ -1984,9 +1991,10 @@ async fn handle(
             message,
             amend,
             session_trailer,
+            repo,
         } => {
             match state
-                .git_commit(&session_id, message, amend, session_trailer)
+                .git_commit(&session_id, repo.clone(), message, amend, session_trailer)
                 .await
             {
                 Ok(_sha) => {
@@ -1998,7 +2006,7 @@ async fn handle(
                     // message that would exist for exactly one caller out of
                     // the protocol.
                     state.recompute_change(&session_id).await;
-                    rebroadcast_status(state, session_id).await
+                    rebroadcast_status(state, session_id, repo).await
                 }
                 Err(e) => err(e),
             }
@@ -2007,21 +2015,23 @@ async fn handle(
             session_id,
             name,
             switch_to,
-        } => match state.git_branch_create(&session_id, name, switch_to).await {
+            repo,
+        } => match state.git_branch_create(&session_id, repo.clone(), name, switch_to).await {
             // Refs *and* status: creating a branch changes the refs list, and
             // switching onto it can change what is uncommitted.
-            Ok(()) => after_ref_change(state, session_id).await,
+            Ok(()) => after_ref_change(state, session_id, repo).await,
             Err(e) => err(e),
         },
         ClientMsg::GitSwitch {
             session_id,
             name,
             detach,
+            repo,
         } => {
-            match state.git_switch(&session_id, name, detach).await {
+            match state.git_switch(&session_id, repo.clone(), name, detach).await {
                 Ok(()) => {
                     state.recompute_change(&session_id).await;
-                    after_ref_change(state, session_id).await
+                    after_ref_change(state, session_id, repo).await
                 }
                 Err(e) => err(e),
             }
@@ -2030,33 +2040,34 @@ async fn handle(
             session_id,
             message,
             include_untracked,
+            repo,
         } => match state
-            .git_stash_push(&session_id, message, include_untracked)
+            .git_stash_push(&session_id, repo.clone(), message, include_untracked)
             .await
         {
             Ok(()) => {
                 state.recompute_change(&session_id).await;
-                after_ref_change(state, session_id).await
+                after_ref_change(state, session_id, repo).await
             }
             Err(e) => err(e),
         },
-        ClientMsg::GitStashPop { session_id, index } => {
-            match state.git_stash_pop(&session_id, index).await {
+        ClientMsg::GitStashPop { session_id, index , repo } => {
+            match state.git_stash_pop(&session_id, repo.clone(), index).await {
                 Ok(()) => {
                     state.recompute_change(&session_id).await;
-                    after_ref_change(state, session_id).await
+                    after_ref_change(state, session_id, repo).await
                 }
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitStashDrop { session_id, index } => {
-            match state.git_stash_drop(&session_id, index).await {
+        ClientMsg::GitStashDrop { session_id, index , repo } => {
+            match state.git_stash_drop(&session_id, repo.clone(), index).await {
                 // Nothing in the worktree moved, so only the stash list did.
-                Ok(()) => after_ref_change(state, session_id).await,
+                Ok(()) => after_ref_change(state, session_id, repo).await,
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitFetch { session_id } => match state.git_fetch(&session_id).await {
+        ClientMsg::GitFetch { session_id , repo } => match state.git_fetch(&session_id, repo.clone()).await {
             Ok(r) => {
                 state.broadcast(ServerMsg::GitFetched {
                     session_id: session_id.clone(),
@@ -2067,7 +2078,7 @@ async fn handle(
                 });
                 // Ahead/behind live on the refs answer too, so the lists
                 // behind the popup agree with what it just said.
-                after_ref_change(state, session_id).await
+                after_ref_change(state, session_id, repo).await
             }
             Err(e) => err(e),
         },
@@ -2229,22 +2240,23 @@ async fn handle(
             session_id,
             path,
             side,
-        } => match state.git_resolve(&session_id, path, side).await {
+            repo,
+        } => match state.git_resolve(&session_id, repo.clone(), path, side).await {
             Ok(()) => {
                 state.recompute_change(&session_id).await;
-                rebroadcast_status(state, session_id).await
+                rebroadcast_status(state, session_id, repo).await
             }
             Err(e) => err(e),
         },
-        ClientMsg::GitDiscard { session_id, paths } => {
-            match state.git_discard(&session_id, paths).await {
+        ClientMsg::GitDiscard { session_id, paths , repo } => {
+            match state.git_discard(&session_id, repo.clone(), paths).await {
                 Ok(()) => {
                     // The diff the Changes tab is showing was computed from
                     // files that may no longer exist. Recomputing is not
                     // decoration: a stale hunk offers a "discard" of something
                     // already gone.
                     state.recompute_change(&session_id).await;
-                    rebroadcast_status(state, session_id).await
+                    rebroadcast_status(state, session_id, repo).await
                 }
                 Err(e) => err(e),
             }
@@ -2254,9 +2266,10 @@ async fn handle(
             path,
             context,
             ignore_ws,
+            repo,
         } => {
             let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
-            match state.git_diff_file(&session_id, &path, opts).await {
+            match state.git_diff_file(&session_id, repo.clone(), &path, opts).await {
                 Ok(files) => state.broadcast(ServerMsg::GitFileDiff {
                     session_id,
                     path,
@@ -2281,16 +2294,18 @@ async fn handle(
             }),
             Err(e) => err(e),
         },
-        ClientMsg::GitRefs { session_id } => match state.git_refs(&session_id).await {
+        ClientMsg::GitRefs { session_id , repo } => match state.git_refs(&session_id, repo.clone()).await {
             Ok(info) => state.broadcast(ServerMsg::GitRefsInfo {
                 session_id,
+                repo,
                 info: Box::new(info),
             }),
             Err(e) => err(e),
         },
-        ClientMsg::GitStashes { session_id } => match state.git_stashes(&session_id).await {
+        ClientMsg::GitStashes { session_id , repo } => match state.git_stashes(&session_id, repo.clone()).await {
             Ok(stashes) => state.broadcast(ServerMsg::GitStashList {
                 session_id,
+                repo,
                 stashes,
             }),
             Err(e) => err(e),
@@ -2300,9 +2315,10 @@ async fn handle(
             index,
             context,
             ignore_ws,
+            repo,
         } => {
             let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
-            match state.git_stash_show(&session_id, index, opts).await {
+            match state.git_stash_show(&session_id, repo.clone(), index, opts).await {
                 Ok(files) => state.broadcast(ServerMsg::GitStashDiff {
                     session_id,
                     index,
@@ -2313,8 +2329,8 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitSubmodules { session_id } => {
-            match state.git_submodules(&session_id).await {
+        ClientMsg::GitSubmodules { session_id , repo } => {
+            match state.git_submodules(&session_id, repo.clone()).await {
                 Ok(submodules) => state.broadcast(ServerMsg::GitSubmoduleList {
                     session_id,
                     submodules,
@@ -2328,9 +2344,10 @@ async fn handle(
             to,
             context,
             ignore_ws,
+            repo,
         } => {
             let opts = crate::git::DiffOpts::from_wire(context, ignore_ws);
-            match state.git_diff_range(&session_id, &from, &to, opts).await {
+            match state.git_diff_range(&session_id, repo.clone(), &from, &to, opts).await {
                 Ok(files) => state.broadcast(ServerMsg::GitRangeDiff {
                     session_id,
                     from,
@@ -2342,8 +2359,8 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitCompare { session_id, branch } => {
-            match state.git_compare(&session_id, &branch).await {
+        ClientMsg::GitCompare { session_id, branch , repo } => {
+            match state.git_compare(&session_id, repo.clone(), &branch).await {
                 Ok((from, to, files)) => state.broadcast(ServerMsg::GitRangeDiff {
                     session_id,
                     from,
@@ -2355,15 +2372,15 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitReflog { session_id } => match state.git_reflog(&session_id).await {
+        ClientMsg::GitReflog { session_id , repo } => match state.git_reflog(&session_id, repo.clone()).await {
             Ok(entries) => state.broadcast(ServerMsg::GitReflogList {
                 session_id,
                 entries,
             }),
             Err(e) => err(e),
         },
-        ClientMsg::GitWorktrees { session_id } => {
-            match state.git_worktrees(&session_id).await {
+        ClientMsg::GitWorktrees { session_id , repo } => {
+            match state.git_worktrees(&session_id, repo.clone()).await {
                 Ok(worktrees) => state.broadcast(ServerMsg::GitWorktreeList {
                     session_id,
                     worktrees,
@@ -2371,8 +2388,8 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
-        ClientMsg::GitConflictFile { session_id, path } => {
-            match state.git_conflict_stages(&session_id, &path).await {
+        ClientMsg::GitConflictFile { session_id, path , repo } => {
+            match state.git_conflict_stages(&session_id, repo.clone(), &path).await {
                 Ok((base, ours, theirs, truncated)) => {
                     state.broadcast(ServerMsg::GitConflictStages {
                         session_id,
@@ -2390,7 +2407,8 @@ async fn handle(
             session_id,
             sha,
             path,
-        } => match state.git_file_at_rev(&session_id, &sha, &path).await {
+            repo,
+        } => match state.git_file_at_rev(&session_id, repo.clone(), &sha, &path).await {
             Ok((content, truncated)) => state.broadcast(ServerMsg::GitFileAtRevContent {
                 session_id,
                 sha,
@@ -2417,30 +2435,34 @@ mod write_guard_tests {
         let paths = || vec!["a.rs".to_string()];
 
         for cmd in [
-            ClientMsg::GitStage { session_id: id(), paths: paths() },
-            ClientMsg::GitUnstage { session_id: id(), paths: paths() },
-            ClientMsg::GitDiscard { session_id: id(), paths: paths() },
+            ClientMsg::GitStage { session_id: id(), repo: None, paths: paths() },
+            ClientMsg::GitUnstage { session_id: id(), repo: None, paths: paths() },
+            ClientMsg::GitDiscard { session_id: id(), repo: None, paths: paths() },
             ClientMsg::GitCommit {
                 session_id: id(),
+                repo: None,
                 message: "m".into(),
                 amend: false,
                 session_trailer: true,
             },
             ClientMsg::GitBranchCreate {
                 session_id: id(),
+                repo: None,
                 name: "b".into(),
                 switch_to: true,
             },
-            ClientMsg::GitSwitch { session_id: id(), name: "b".into(), detach: false },
+            ClientMsg::GitSwitch { session_id: id(), repo: None, name: "b".into(), detach: false },
             ClientMsg::GitStashPush {
                 session_id: id(),
+                repo: None,
                 message: String::new(),
                 include_untracked: true,
             },
-            ClientMsg::GitStashPop { session_id: id(), index: 0 },
-            ClientMsg::GitStashDrop { session_id: id(), index: 0 },
+            ClientMsg::GitStashPop { session_id: id(), repo: None, index: 0 },
+            ClientMsg::GitStashDrop { session_id: id(), repo: None, index: 0 },
             ClientMsg::GitResolve {
                 session_id: id(),
+                repo: None,
                 path: "a.rs".into(),
                 side: mogeung_core::wire::ResolveSide::Ours,
             },
@@ -2448,7 +2470,7 @@ mod write_guard_tests {
             // the one verb that reaches a network beyond this machine
             // (ADR-0014), and an open socket must not be able to make this
             // daemon talk to someone else's server.
-            ClientMsg::GitFetch { session_id: id() },
+            ClientMsg::GitFetch { session_id: id(), repo: None },
         ] {
             assert!(is_write(&cmd), "{cmd:?} changes the repository");
         }
@@ -2457,9 +2479,9 @@ mod write_guard_tests {
         // verb broadcasts, so gating it would make a successful write look
         // like a failed one.
         for cmd in [
-            ClientMsg::GitStatus { session_id: id() },
-            ClientMsg::GitRefs { session_id: id() },
-            ClientMsg::GitStashes { session_id: id() },
+            ClientMsg::GitStatus { session_id: id(), repo: None },
+            ClientMsg::GitRefs { session_id: id(), repo: None },
+            ClientMsg::GitStashes { session_id: id(), repo: None },
             ClientMsg::RefreshChange { session_id: id(), force: true },
             ClientMsg::ReviewAll { session_id: id() },
             ClientMsg::Subscribe,

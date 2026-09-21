@@ -15,7 +15,7 @@ describe("the git console", () => {
 
   it("records a command as it is sent, and its answer as it lands", () => {
     const { send, ingest } = useStore.getState();
-    send({ cmd: "git_log", session_id: "s1", skip: 0, limit: 100, all: true });
+    send({ cmd: "git_log", session_id: "s1", repo: null, skip: 0, limit: 100, all: true });
     let rows = useStore.getState().git.s1.console;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ cmd: "git_log", args: "skip 0 · limit 100 · all", result: null, error: null });
@@ -27,8 +27,8 @@ describe("the git console", () => {
 
   it("puts a refusal on the latest waiting command, whichever session sent it", () => {
     const { send, ingest } = useStore.getState();
-    send({ cmd: "git_show", session_id: "s1", sha: "aaaa" });
-    send({ cmd: "git_show", session_id: "s2", sha: "bbbb" });
+    send({ cmd: "git_show", session_id: "s1", repo: null, sha: "aaaa" });
+    send({ cmd: "git_show", session_id: "s2", repo: null, sha: "bbbb" });
     ingest({ ev: "error", message: "that is not a commit sha" } as never);
     expect(useStore.getState().git.s2.console[0].error).toBe("that is not a commit sha");
     expect(useStore.getState().git.s1.console[0].error).toBeNull();

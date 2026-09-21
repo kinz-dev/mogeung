@@ -186,6 +186,20 @@ conflict that looks fixed and is not. The content is deliberately **not**
 inspected — markers left in a file are committable once the index says
 resolved, and a validator refusing them would refuse legitimate content too.
 
+**Every git command takes an optional `repo` since 2026-09-16** (`R-D34`).
+Absent means what it has always meant: the session's own root. Present, it is
+resolved against `session_roots` — the session's root plus the folders added to
+its workspace (`R-J40`) — so naming a repository authorises nothing that
+browsing it did not, and one outside that set is refused before git is reached.
+`GitBlame` has none deliberately: blame follows the file you are reading, which
+belongs to the session rather than to whichever repository a window is pointed
+at. Four answers echo it back — `GitCommits`, `GitLocalChanges`, `GitRefsInfo`
+and `GitStashList` — because a write verb re-broadcasts to *every* window
+watching the session, and two of them may be pointed at two repositories; the
+client drops an answer that is not for the one it is showing. `Workspace` grew
+`repos` in the same row: which of a session's roots hold a `.git`, which a
+client cannot test for itself.
+
 `GitSwitch` grew one flag on 2026-09-16 (`R-D32`): `detach`, defaulted false,
 which runs `git switch --detach` and is how *checkout tag or revision* reaches
 anything that is not a branch — plain `git switch` refuses a tag and a sha

@@ -78,6 +78,7 @@ describe("filtering the log", () => {
       {
         cmd: "git_log",
         session_id: "s1",
+        repo: null,
         skip: 0,
         limit: 100,
         rev: null,
@@ -175,6 +176,7 @@ describe("what the list is answering", () => {
       {
         cmd: "git_log",
         session_id: "s1",
+        repo: null,
         skip: 0,
         limit: 100,
         rev: null,

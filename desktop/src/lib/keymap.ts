@@ -27,6 +27,7 @@ import { fullPath } from "@/ui/PaneChrome";
 import { writeClipboard } from "@/lib/clipboard";
 import { nudgeAppZoom } from "@/lib/zoom";
 import { visibleQueue } from "@/lib/queue";
+import { repoOf } from "@/lib/gitActions";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 import type { Direction } from "@/lib/spatial";
 
@@ -715,7 +716,7 @@ export const ACTIONS: Action[] = [
         pushError("pick a session first — a fetch needs to know which repo");
         return;
       }
-      send({ cmd: "git_fetch", session_id: selected });
+      send({ cmd: "git_fetch", session_id: selected, repo: repoOf(selected) });
     },
   },
   {

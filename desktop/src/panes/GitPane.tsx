@@ -31,7 +31,7 @@ import { useStore, useSelectedSession, type GitTab } from "@/store";
 import { Dim, Empty, IconButton, Segmented } from "@/ui/primitives";
 import { sectionLabel } from "@/ui/styles";
 import { repoName } from "@/wire/types";
-import { askLog } from "@/lib/gitActions";
+import { askLog, pickRepo, repoOf } from "@/lib/gitActions";
 import { stamp } from "@/lib/format";
 import { BranchTree } from "./git/BranchTree";
 import { LogToolbar, type Only } from "./git/LogToolbar";
@@ -41,12 +41,30 @@ import { LocalChanges } from "./git/LocalChanges";
 import { StashTab } from "./git/StashTab";
 import { MoreTab } from "./git/MoreTab";
 import { ConsoleTab } from "./git/ConsoleTab";
-import { Splitter, useDragWidth, useWidth } from "./git/Dropdown";
+import { Dropdown, DropItem, DropLabel, Splitter, useDragWidth, useWidth } from "./git/Dropdown";
 
 // The tabs are `GitTab` in the store since `R-D31`: the operations popup
 // routes to one — *stash changes* means the Stash tab — and a component
 // holding that privately is a component nothing can send anybody to.
 type Tab = GitTab;
+
+/**
+ * What the log keeps however wide the panes beside it are drawn: its
+ * subject column at the floor, a graph and a date. The inspector's ceiling
+ * is whatever this leaves — it used to be 42 % of the dock, which on a wide
+ * monitor was the limit a hand met with room to spare (asked 2026-09-11:
+ * *"is there a limit to the size, I can't resize to a bigger width?"*).
+ */
+const LOG_MIN = 320;
+/** A stable empty list, so the selector does not re-render on every read. */
+const NO_REPOS: string[] = [];
+
+/** The last segment of a path — what a repository is called. */
+function baseName(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
+/** `Splitter` is `w-1`. */
+const SPLITTER_PX = 4;
 
 function Count({ n }: { n: number }) {
   return <span className="ml-1 rounded-sm bg-[var(--bg-faint)] px-1 text-2xs leading-3 tabular-nums text-[var(--dim)]">{n}</span>;
@@ -55,7 +73,18 @@ function Count({ n }: { n: number }) {
 export function GitPane() {
   const s = useSelectedSession();
   const id = s?.id ?? null;
-  const repoRoot = s?.repo_root ?? null;
+  /**
+   * The repository this window is showing, and the ones it could. `R-D34`.
+   *
+   * `git[id].repo` is the pick and `null` means the session's own — so a
+   * session that has never picked anything behaves exactly as it always did.
+   * The list comes from the workspace answer, because only the daemon can say
+   * which of a session's roots hold a `.git`.
+   */
+  const picked = useStore((st) => (id ? (st.git[id]?.repo ?? null) : null));
+  const repoRoot = picked ?? s?.repo_root ?? null;
+  const repos = useStore((st) => (id ? (st.explorer[id]?.workspace?.repos ?? NO_REPOS) : NO_REPOS));
+  const knowsWorkspace = useStore((st) => (id ? !!st.explorer[id]?.workspace : false));
   // Field by field, never the whole slice: this header sits above every row
   // of the log and every line of the diff.
   const logAsked = useStore((st) => (id ? (st.git[id]?.logAsked ?? false) : false));
@@ -73,37 +102,71 @@ export function GitPane() {
   const savedBranches = useStore((st) => st.prefs.gitBranchesWidth);
   const savedInspector = useStore((st) => st.prefs.gitInspectorWidth);
   const setPrefs = useStore((st) => st.setPrefs);
-  const [branchesWidth, dragBranches] = useDragWidth(savedBranches, 160, 480, (px) => setPrefs({ gitBranchesWidth: px }));
-  const [inspectorWidth, dragInspector] = useDragWidth(savedInspector, 260, 900, (px) => setPrefs({ gitInspectorWidth: px }), -1);
   const tab = useStore((st) => st.gitTab);
   const setTab = (next: Tab) => useStore.setState({ gitTab: next });
   const [only, setOnly] = useState<Only>({ session: false, read: false });
   const rootRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  // The outer panes are remembered in pixels and drawn as at most a share of
-  // the pane: a dock 620 px wide with a 210 px branch pane and a 360 px
+  // The outer panes are remembered in pixels and drawn no wider than the log
+  // can afford: a dock 620 px wide with a 210 px branch pane and a 360 px
   // inspector left the log 50 px, which is what the first browser look found.
-  // The saved widths are untouched; a wider window gets them back.
+  // The branch pane is at most a share; the inspector may take everything
+  // the log's floor leaves, since a wide dock is exactly where a wide diff
+  // wants to be. The saved widths are untouched; a wider window gets them
+  // back — and the drag is clamped to the same ceiling, so the edge stops
+  // where the pane does rather than saving a width it cannot draw.
   const total = useWidth(bodyRef);
+  const [branchesWidth, dragBranches] = useDragWidth(savedBranches, 160, 480, (px) => setPrefs({ gitBranchesWidth: px }));
   const bw = total > 0 ? Math.min(branchesWidth, Math.floor(total * 0.28)) : branchesWidth;
-  const iw = total > 0 ? Math.min(inspectorWidth, Math.floor(total * 0.42)) : inspectorWidth;
+  const inspectorMax = total > 0 ? Math.max(260, total - (branchesOpen ? bw + SPLITTER_PX : 0) - SPLITTER_PX - LOG_MIN) : Infinity;
+  const [inspectorWidth, dragInspector] = useDragWidth(savedInspector, 260, inspectorMax, (px) => setPrefs({ gitInspectorWidth: px }), -1);
+  const iw = Math.min(inspectorWidth, inspectorMax);
 
   // One door for the first questions, in the render, so a docked pane works
   // unswitched — and **only for a repository**: a session outside one used to
   // fire three questions the daemon could only answer with an error.
+  // The picker's list, asked for once. Cheap — the Files tool asks for the
+  // same answer — and it is the only way to learn which roots are checkouts.
+  useEffect(() => {
+    if (id && !knowsWorkspace) send({ cmd: "fetch_workspace", session_id: id });
+  }, [id, knowsWorkspace, send]);
+
+  /**
+   * A session with no repository of its own adopts the first it may show.
+   * `R-D34`.
+   *
+   * This is the layout the feature was asked from: `claude` started in the
+   * folder *holding* four checkouts is in none of them, so there is nothing to
+   * fall back to and the window would say "not in a git repo" beside a picker
+   * full of repositories. Picking one is a real pick — `repoOf` has to answer
+   * it, or every request would resolve to the session's own root and fail.
+   */
+  useEffect(() => {
+    if (id && !picked && !s?.repo_root && repos.length > 0) pickRepo(id, repos[0]);
+  }, [id, picked, s?.repo_root, repos]);
+
   useEffect(() => {
     if (!id || !repoRoot) return;
     // Because nobody has asked, not because the list is empty: a filtered
     // query empties the list on purpose. Reload clears the flag.
     if (!logAsked) askLog(id, 0);
-    if (!hasStatus) send({ cmd: "git_status", session_id: id });
-    if (!hasRefs) send({ cmd: "git_refs", session_id: id });
+    if (!hasStatus) send({ cmd: "git_status", session_id: id, repo: repoOf(id) });
+    if (!hasRefs) send({ cmd: "git_refs", session_id: id, repo: repoOf(id) });
   }, [id, repoRoot, logAsked, hasStatus, hasRefs, send]);
 
   if (!s) return <Empty>select a session</Empty>;
-  if (!s.repo_root) return <Empty hint="git needs a repository">this session is not in a git repo</Empty>;
+  // A session **outside** a repository is no longer the end of it: the whole
+  // point of `R-D34` is the workspace folder holding four checkouts, where the
+  // session's own root is not one of them.
+  if (!repoRoot) {
+    return (
+      <Empty hint={repos.length > 0 ? "pick one from the header" : "git needs a repository — add one in Files"}>
+        this session is not in a git repo
+      </Empty>
+    );
+  }
   const sid = s.id;
-  const root = s.repo_root;
+  const root = repoRoot;
 
   const focusLog = () => rootRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus();
   const focusInspector = () => rootRef.current?.querySelector<HTMLElement>('[aria-label="the selected commit"]')?.focus();
@@ -111,9 +174,29 @@ export function GitPane() {
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-[var(--border)] px-2">
-        <span className={sectionLabel} title={root}>
-          Git · <span className="font-mono tracking-normal text-[var(--text)] normal-case">{repoName(s)}</span>
-        </span>
+        {repos.length > 1 ? (
+          // More than one to choose from, so the name becomes the control.
+          // `R-D34`; below two it is a label, because a picker with one entry
+          // is a button that does nothing.
+          <Dropdown label="Git" value={baseName(root)} title={root} active={!!picked}>
+            <DropLabel>Repository</DropLabel>
+            {repos.map((r) => (
+              <DropItem
+                key={r}
+                mono
+                active={r === root}
+                onSelect={() => pickRepo(sid, r === s.repo_root ? null : r)}
+              >
+                {baseName(r)}
+                {r === s.repo_root && <Dim className="ml-auto text-2xs">this session's</Dim>}
+              </DropItem>
+            ))}
+          </Dropdown>
+        ) : (
+          <span className={sectionLabel} title={root}>
+            Git · <span className="font-mono tracking-normal text-[var(--text)] normal-case">{repoName(s)}</span>
+          </span>
+        )}
         <Segmented
           value={tab}
           onChange={setTab}
@@ -176,7 +259,7 @@ export function GitPane() {
             disabled={fetching}
             onClick={() => {
               patchGit(sid, { fetching: true });
-              send({ cmd: "git_fetch", session_id: sid });
+              send({ cmd: "git_fetch", session_id: sid, repo: repoOf(sid) });
             }}
           >
             <CloudDownload size={13} />

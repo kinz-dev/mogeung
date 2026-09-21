@@ -808,3 +808,43 @@ fn a_branch_with_no_upstream_reports_no_upstream() {
     assert_eq!((r.ahead, r.behind), (0, 0));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// -- Which roots a git verb may be pointed at. `R-D34`. ------------------------
+
+/// `repos()` is the picker's list, and it is the workspace filtered.
+///
+/// The session's own root comes first — that is what the picker shows selected
+/// before anybody has picked anything — and a folder that is not a checkout is
+/// simply not offered, which is how a workspace full of notes stays a workspace
+/// full of notes.
+#[test]
+fn only_the_roots_that_are_checkouts_are_offered() {
+    let own = repo("repos-own", false);
+    let sibling = repo("repos-sibling", false);
+    let plain = std::env::temp_dir().join(format!("mogeung-repos-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plain);
+    std::fs::create_dir_all(&plain).unwrap();
+
+    let dirs = vec![
+        plain.to_string_lossy().to_string(),
+        sibling.to_string_lossy().to_string(),
+    ];
+    let offered = mogeungd::workspace::repos(&own.to_string_lossy(), &dirs);
+
+    assert_eq!(
+        offered,
+        vec![
+            own.to_string_lossy().to_string(),
+            sibling.to_string_lossy().to_string()
+        ],
+        "own root first, the plain folder not at all"
+    );
+
+    // A session outside a repository offers only what was added to it.
+    let offered = mogeungd::workspace::repos(&plain.to_string_lossy(), &dirs);
+    assert_eq!(offered, vec![sibling.to_string_lossy().to_string()]);
+
+    for d in [own, sibling, plain] {
+        std::fs::remove_dir_all(&d).ok();
+    }
+}

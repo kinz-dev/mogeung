@@ -310,7 +310,7 @@ export interface ExplorerState {
    * one. `null` means nobody has asked yet — which is a different thing from
    * *asked, and there are none*, and the tree draws them differently.
    */
-  workspace: { dirs: string[]; missing: string[]; hints: WorkspaceHint[] } | null;
+  workspace: { dirs: string[]; missing: string[]; hints: WorkspaceHint[]; repos: string[] } | null;
 }
 
 export const emptyExplorer = (): ExplorerState => ({
@@ -340,6 +340,20 @@ export type GitPopup = null | "ops" | "branches";
 export type GitTab = "log" | "local" | "stash" | "console" | "more";
 
 export interface GitState {
+  /**
+   * Which repository this window is showing for the session. `R-D34`.
+   *
+   * `null` is the session's own root, which is what every git verb has always
+   * meant and what a session that has never picked anything shows. A picked
+   * one is an absolute path, and the daemon refuses any that is not among the
+   * session's roots — so this is a *view* preference with a fence behind it,
+   * not a capability.
+   *
+   * Everything else in this slice belongs to whichever repository that is, so
+   * picking clears it: a log, a status and a branch list from two different
+   * checkouts have nothing to say to each other.
+   */
+  repo: string | null;
   commits: CommitInfo[];
   done: boolean;
   /**
@@ -416,6 +430,7 @@ function remember(m: Record<string, FileChange[]>, key: string, files: FileChang
 }
 
 export const emptyGit = (): GitState => ({
+  repo: null,
   commits: [],
   done: false,
   logAsked: false,
@@ -2019,7 +2034,7 @@ export const useStore = create<AppState>((set, get) => ({
                 // `hints` defaults for a daemon older than `R-J39`: the field
                 // is `#[serde(default)]` on the wire, and an undefined array
                 // here would throw in the render rather than show one less row.
-                workspace: { dirs: msg.dirs, missing: msg.missing, hints: msg.hints ?? [] },
+                workspace: { dirs: msg.dirs, missing: msg.missing, hints: msg.hints ?? [], repos: msg.repos ?? [] },
               },
             },
           };
@@ -2117,6 +2132,12 @@ export const useStore = create<AppState>((set, get) => ({
           // it**, and not only the branch scope: checking `rev` alone let an
           // unfiltered page overwrite the filtered one it raced, which is what
           // "the filter does nothing" looked like from the outside.
+          // **And for the repository it is about.** `R-D34`: a write verb
+          // re-broadcasts to every window watching the session, so a second
+          // window pointed at another checkout would otherwise feed this one
+          // its status. A daemon from before that row echoes nothing, which
+          // `undefined` reads as "the session's own".
+          if ((msg.repo ?? null) !== (st.repo ?? null)) return {};
           if ((st.rev ?? null) !== (msg.rev ?? null)) return {};
           const echoed = (v: string | null | undefined, want: string) => (v ?? "") === want;
           // The `R-D27` fields are compared only when the daemon echoed them:
@@ -2174,7 +2195,10 @@ export const useStore = create<AppState>((set, get) => ({
         });
         break;
       case "git_local_changes":
-        get().patchGit(msg.session_id, { status: msg.entries });
+        // For the repository this window is showing, or not at all. `R-D34`.
+        if (((msg as { repo?: string | null }).repo ?? null) === (get().gitOf(msg.session_id).repo ?? null)) {
+          get().patchGit(msg.session_id, { status: msg.entries });
+        }
         break;
       case "git_file_diff":
         set((s) => {
@@ -2200,7 +2224,10 @@ export const useStore = create<AppState>((set, get) => ({
         });
         break;
       case "git_refs_info":
-        get().patchGit(msg.session_id, { refs: msg.info });
+        // For the repository this window is showing, or not at all. `R-D34`.
+        if (((msg as { repo?: string | null }).repo ?? null) === (get().gitOf(msg.session_id).repo ?? null)) {
+          get().patchGit(msg.session_id, { refs: msg.info });
+        }
         break;
       case "intellij_probe":
         set((s) => ({
@@ -2208,7 +2235,10 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
       case "git_stash_list":
-        get().patchGit(msg.session_id, { stashes: msg.stashes });
+        // For the repository this window is showing, or not at all. `R-D34`.
+        if (((msg as { repo?: string | null }).repo ?? null) === (get().gitOf(msg.session_id).repo ?? null)) {
+          get().patchGit(msg.session_id, { stashes: msg.stashes });
+        }
         break;
       case "git_submodule_list":
         get().patchGit(msg.session_id, { submodules: msg.submodules });

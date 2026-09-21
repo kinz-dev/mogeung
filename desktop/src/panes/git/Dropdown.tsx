@@ -176,17 +176,34 @@ export function Splitter({ onMouseDown, title }: { onMouseDown: (e: React.MouseE
   );
 }
 
-/** An element's width, watched — the ResizeObserver the rail's tools use.
- *  Zero before the first measurement, which callers treat as "unknown". */
+/**
+ * An element's width, watched — a ResizeObserver behind a ref. Zero before
+ * the first measurement, which callers treat as "unknown".
+ *
+ * No dependency list, on purpose. The element behind a ref can appear after
+ * the first render — the Git pane's body does, once a session is selected,
+ * after a render that showed *select a session* — and a ref changing is
+ * invisible to a dependency list, so an effect keyed on the ref alone
+ * observed nothing for the life of the pane, and every ceiling drawn from
+ * this width was `Infinity`. Found 2026-09-11 in a browser tab that had the
+ * Git tool open before it had a session: 220 and 380 of a 688-px dock, and
+ * 80 px of log. Re-observing is skipped while the element is the one already
+ * watched, so what runs per render is one pointer comparison.
+ */
 export function useWidth(ref: React.RefObject<HTMLElement | null>): number {
   const [w, setW] = useState(0);
+  const watched = useRef<{ el: HTMLElement; ro: ResizeObserver } | null>(null);
   useEffect(() => {
     const el = ref.current;
+    if (el === (watched.current?.el ?? null)) return;
+    watched.current?.ro.disconnect();
+    watched.current = null;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => setW(el.clientWidth));
     ro.observe(el);
+    watched.current = { el, ro };
     setW(el.clientWidth);
-    return () => ro.disconnect();
-  }, [ref]);
+  });
+  useEffect(() => () => watched.current?.ro.disconnect(), []);
   return w;
 }

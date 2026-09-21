@@ -95,13 +95,13 @@ describe("the pane", () => {
       </PaneScope>,
     );
     expect(screen.getByText(/reading aaaa\.\.bbbb/)).toBeInTheDocument();
-    expect(sent).toEqual([{ cmd: "git_diff_range", session_id: "s1", from: "aaaa", to: "bbbb" }]);
+    expect(sent).toEqual([{ cmd: "git_diff_range", session_id: "s1", repo: null, from: "aaaa", to: "bbbb" }]);
     render(
       <PaneScope id={diffPaneId("s1", "fa64b61", "a.rs")} visible>
         <DiffPane />
       </PaneScope>,
     );
-    expect(sent.at(-1)).toEqual({ cmd: "git_show", session_id: "s1", sha: "fa64b61" });
+    expect(sent.at(-1)).toEqual({ cmd: "git_show", session_id: "s1", repo: null, sha: "fa64b61" });
   });
 
   it("is filled by the answer whether or not the commit is still selected", () => {

@@ -48,6 +48,11 @@ function groupOf(e: StatusEntry): GroupKey {
 
 const NONE: never[] = [];
 
+/** What the diff in the middle keeps however wide the commit pane is dragged. */
+const DIFF_MIN = 320;
+/** `Splitter` is `w-1`. */
+const SPLITTER_PX = 4;
+
 export function LocalChanges({ id, repoRoot }: { id: string; repoRoot: string }) {
   const status = useStore((s) => s.git[id]?.status ?? null);
   const selectedPath = useStore((s) => s.git[id]?.selectedPath ?? null);
@@ -60,12 +65,16 @@ export function LocalChanges({ id, repoRoot }: { id: string; repoRoot: string })
   const saved = useStore((s) => s.prefs.gitSidebarWidth);
   const savedCommit = useStore((s) => s.prefs.gitInspectorWidth);
   const setPrefs = useStore((s) => s.setPrefs);
-  const [width, onDrag] = useDragWidth(saved, 220, 900, (px) => setPrefs({ gitSidebarWidth: px }));
-  const [commitWidth, onDragCommit] = useDragWidth(savedCommit, 240, 900, (px) => setPrefs({ gitInspectorWidth: px }), -1);
   const rootRef = useRef<HTMLDivElement>(null);
   const total = useWidth(rootRef);
+  const [width, onDrag] = useDragWidth(saved, 220, 900, (px) => setPrefs({ gitSidebarWidth: px }));
   const lw = total > 0 ? Math.min(width, Math.floor(total * 0.34)) : width;
-  const cw = total > 0 ? Math.min(commitWidth, Math.floor(total * 0.34)) : commitWidth;
+  // The commit pane shares the Log tab's inspector width and its ceiling:
+  // everything the diff's floor leaves, not a share of the pane, and the
+  // drag stops where the pane does.
+  const commitMax = total > 0 ? Math.max(240, total - lw - 2 * SPLITTER_PX - DIFF_MIN) : Infinity;
+  const [commitWidth, onDragCommit] = useDragWidth(savedCommit, 240, commitMax, (px) => setPrefs({ gitInspectorWidth: px }), -1);
+  const cw = Math.min(commitWidth, commitMax);
   const [onlySession, setOnlySession] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<GroupKey>>(() => new Set());
   const [discarding, setDiscarding] = useState<string[] | null>(null);

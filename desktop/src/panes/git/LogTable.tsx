@@ -12,10 +12,19 @@
  * first day of use (asked 2026-09-11: *"make the grid line clearer so that I
  * can resize the column, and make all column resizable"*). The header row
  * sticks above the rows; each divider is dragged the way every other edge in
- * this window is — local state during the drag, the preferences on release
- * — and resizes the fixed column beside it, since the subject is the one
- * that flexes. The graph column sizes itself from the lanes until a hand
- * sets it, and then clips.
+ * this window is — local state during the drag, the preferences on release.
+ *
+ * **The four text columns are shares of the width the graph leaves**, drawn
+ * as `fr` tracks, so the whole row scales with its pane (asked the same
+ * afternoon: *"auto resize all the column when the panel is resize"* — the
+ * first cut kept author, date and marks in pixels, gave every resize to the
+ * subject alone, and dropped columns below two breakpoints, which is what
+ * *strange* meant). A divider moves the boundary between its two neighbours
+ * and nothing else: the left column takes what the right one gives up, the
+ * row's width is unchanged, and the line follows the pointer. The graph
+ * column stays in pixels — its width is a count of lanes, not a share of
+ * anything — sized from the lanes until a hand sets it, and then clipped.
+ * Floors keep a column from being dragged, or squeezed, out of existence.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,7 +42,6 @@ import { rowSelected } from "@/ui/styles";
 import type { CommitInfo } from "@/wire/types";
 import type { LogColumns } from "@/store/prefs";
 import type { Only } from "./LogToolbar";
-import { useWidth } from "./Dropdown";
 
 /** How close to the end the scroll gets before the next page is asked for. */
 const AHEAD = 15;
@@ -41,14 +49,27 @@ const AHEAD = 15;
 const HEADER_PX = 22;
 
 /**
- * The columns give way from the right as the pane narrows: the author first,
- * then the date and the marks — the subject is what a row is for. Below the
- * last step the graph and the subject are all that is drawn.
+ * A column's floor in pixels: neither a divider nor a narrow pane takes it
+ * lower. The subject's is the largest — it is what a row is for.
  */
-const COLS = { wide: 700, mid: 480 };
+const MIN = { graph: 18, subject: 120, author: 40, date: 64, marks: 24 };
 
-/** A column's floor: a divider cannot drag it out of existence. */
-const MIN = { graph: 18, author: 40, date: 48, marks: 24 };
+/** The shared columns, left to right; a divider sits between each pair. */
+const SHARED = ["subject", "author", "date", "marks"] as const;
+
+/** The column to the right of each divider, keyed by the one on its left. */
+const NEXT = { subject: "author", author: "date", date: "marks" } as const;
+type Edge = keyof typeof NEXT;
+
+/**
+ * A share is a percentage, to two decimals — a pixel in a ten-thousand-pixel
+ * pane. Percentages rather than fractions of one because of a grid rule:
+ * flex factors that sum to less than 1 fill only that fraction of the free
+ * space, and once a column is pinned at its floor the rest sum below 1 —
+ * so `0.66fr 0.14fr …` left a 312-px log with 54 px of nothing on the right,
+ * where `66fr 14fr …` fills it.
+ */
+const share = (x: number) => Math.round(x * 100) / 100;
 
 function refChip(r: string) {
   if (r.startsWith("HEAD")) return <Chip key={r} color="var(--blue)">{r.replace("HEAD -> ", "HEAD → ")}</Chip>;
@@ -56,7 +77,7 @@ function refChip(r: string) {
   return <Chip key={r} color="var(--green)">{r}</Chip>;
 }
 
-const cell = "flex h-full min-w-0 items-center border-r border-[var(--border)]";
+const cell = "flex h-full min-w-0 items-center overflow-hidden border-r border-[var(--border)]";
 
 export function LogTable({ id, only, onEnter }: { id: string; only: Only; onEnter: () => void }) {
   const commits = useStore((s) => s.git[id]?.commits);
@@ -88,32 +109,38 @@ export function LogTable({ id, only, onEnter }: { id: string; only: Only; onEnte
   const gw = cols.graph ?? (graph ? graph.width * LANE_PX + 6 : 10);
 
   const parentRef = useRef<HTMLDivElement>(null);
-  const width = useWidth(parentRef);
-  // Zero before the first measurement — jsdom, and the first paint — draws
-  // every column rather than none.
-  const showAuthor = width === 0 || width >= COLS.wide;
-  const showDate = width === 0 || width >= COLS.mid;
-  const columns = showAuthor
-    ? `${gw}px minmax(120px, 1fr) ${cols.author}px ${cols.date}px ${cols.marks}px`
-    : showDate
-      ? `${gw}px minmax(120px, 1fr) ${cols.date}px ${cols.marks}px`
-      : `${gw}px minmax(0, 1fr)`;
+  // The graph in pixels, then each shared column as its percentage of the
+  // rest, over its floor — the grid scales the four together as the pane
+  // moves, with nothing measured and nothing to do on resize.
+  const columns = `${gw}px ${SHARED.map((k) => `minmax(${MIN[k]}px, ${cols[k]}fr)`).join(" ")}`;
 
   /**
-   * A divider is dragged: `key` is the column it resizes and `sign` which way
-   * a rightward drag goes — `+1` for the graph, whose divider is on its own
-   * right edge, `-1` for the columns to the right of the subject, whose
-   * divider is on their left.
+   * A divider is dragged. `at` is the column on its left: the graph's sits on
+   * its own right edge and sets its pixels; every other one sits between two
+   * shared columns and moves the boundary, the left taking what the right
+   * gives up. The width the shares divide is read once, at the grab — a
+   * pointer move must not touch the DOM, and a pane does not resize mid-drag.
    */
-  const startDrag = (e: React.MouseEvent, key: keyof LogColumns, sign: 1 | -1) => {
+  const startDrag = (e: React.MouseEvent, at: "graph" | Edge) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const from: LogColumns = { ...saved, graph: gw };
+    const span = (parentRef.current?.clientWidth ?? 0) - gw;
     let latest = from;
     const move = (ev: MouseEvent) => {
-      const w = Math.max(MIN[key], (from[key] ?? gw) + sign * (ev.clientX - startX));
-      latest = { ...from, [key]: w };
+      const dx = ev.clientX - startX;
+      if (at === "graph") {
+        latest = { ...from, graph: Math.max(MIN.graph, gw + dx) };
+      } else {
+        // Unmeasured — nothing to convert pixels against, so nothing moves.
+        if (span <= 0) return;
+        const right = NEXT[at];
+        const pair = from[at] + from[right];
+        const pct = (px: number) => (100 * px) / span;
+        const l = Math.min(pair - pct(MIN[right]), Math.max(pct(MIN[at]), from[at] + pct(dx)));
+        latest = { ...from, [at]: share(l), [right]: share(pair - l) };
+      }
       setDragging(latest);
     };
     const up = () => {
@@ -195,13 +222,13 @@ export function LogTable({ id, only, onEnter }: { id: string; only: Only; onEnte
     );
   }
 
-  const divider = (key: keyof LogColumns, sign: 1 | -1, title: string) => (
+  const divider = (at: "graph" | Edge, title: string) => (
     <div
       role="separator"
       aria-orientation="vertical"
       aria-label={title}
       title={title}
-      onMouseDown={(e) => startDrag(e, key, sign)}
+      onMouseDown={(e) => startDrag(e, at)}
       className="absolute top-0 -right-0.5 z-10 h-full w-1 cursor-col-resize hover:bg-[var(--blue)]"
     />
   );
@@ -213,7 +240,7 @@ export function LogTable({ id, only, onEnter }: { id: string; only: Only; onEnte
       aria-label="commits"
       tabIndex={0}
       onKeyDown={onKeyDown}
-      className="relative min-h-0 flex-1 overflow-y-auto outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
+      className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
     >
       <div
         role="row"
@@ -221,25 +248,20 @@ export function LogTable({ id, only, onEnter }: { id: string; only: Only; onEnte
         style={{ gridTemplateColumns: columns, height: HEADER_PX }}
         className="sticky top-0 z-10 grid select-none border-b border-[var(--border)] bg-[var(--bg-raised)] text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase"
       >
-        <div className={cn(cell, "relative pl-1")}>{divider("graph", 1, "drag to resize the graph column")}</div>
+        <div className={cn(cell, "relative pl-1")}>{divider("graph", "drag to resize the graph column")}</div>
         <div className={cn(cell, "relative pl-1")}>
           subject
-          {showAuthor && divider("author", -1, "drag to resize the author column")}
-          {!showAuthor && showDate && divider("date", -1, "drag to resize the date column")}
+          {divider("subject", "drag to resize the subject and author columns")}
         </div>
-        {showAuthor && (
-          <div className={cn(cell, "relative pl-1")}>
-            author
-            {divider("date", -1, "drag to resize the date column")}
-          </div>
-        )}
-        {showDate && (
-          <div className={cn(cell, "relative pl-1")}>
-            date
-            {divider("marks", -1, "drag to resize the marks column")}
-          </div>
-        )}
-        {showDate && <div className="flex h-full items-center justify-end pr-1.5">marks</div>}
+        <div className={cn(cell, "relative pl-1")}>
+          author
+          {divider("author", "drag to resize the author and date columns")}
+        </div>
+        <div className={cn(cell, "relative pl-1")}>
+          date
+          {divider("date", "drag to resize the date and marks columns")}
+        </div>
+        <div className="flex h-full items-center justify-end pr-1.5">marks</div>
       </div>
       <div style={{ height: virt.getTotalSize(), position: "relative" }}>
         {items.map((v) => {
@@ -252,8 +274,6 @@ export function LogTable({ id, only, onEnter }: { id: string; only: Only; onEnte
               c={c}
               top={v.start - HEADER_PX}
               columns={columns}
-              showAuthor={showAuthor}
-              showDate={showDate}
               graphSvg={graph && graphIndex >= 0 ? graphCell(graph.rows[graphIndex], graph.width) : null}
               selected={c.sha === selected}
               read={!!readBySha?.[c.sha]}
@@ -275,8 +295,6 @@ function LogRow({
   c,
   top,
   columns,
-  showAuthor,
-  showDate,
   graphSvg,
   selected,
   read,
@@ -289,8 +307,6 @@ function LogRow({
   c: CommitInfo;
   top: number;
   columns: string;
-  showAuthor: boolean;
-  showDate: boolean;
   graphSvg: string | null;
   selected: boolean;
   read: boolean;
@@ -338,18 +354,13 @@ function LogRow({
             </span>
             {c.refs.map(refChip)}
           </span>
-          {showAuthor && (
-            <Dim className={cn(cell, "truncate pl-1 text-xs")} title={c.author}>
-              {c.author}
-            </Dim>
-          )}
-          {showDate && (
-            <Dim className={cn(cell, "pl-1 text-2xs tabular-nums")} title={new Date(c.epoch * 1000).toLocaleString()}>
-              {stamp(c.epoch)}
-            </Dim>
-          )}
-          {showDate && (
-            <span className="flex h-full items-center justify-end gap-1 pr-1.5">
+          <Dim className={cn(cell, "truncate pl-1 text-xs")} title={c.author}>
+            {c.author}
+          </Dim>
+          <Dim className={cn(cell, "pl-1 text-2xs whitespace-nowrap tabular-nums")} title={new Date(c.epoch * 1000).toLocaleString()}>
+            {stamp(c.epoch)}
+          </Dim>
+          <span className="flex h-full items-center justify-end gap-1 pr-1.5">
               {marked && <Chip color="var(--amber)" title="marked — the next commit diffed against it makes a range">from</Chip>}
               {c.touches_session && (
                 <span
@@ -358,8 +369,7 @@ function LogRow({
                 />
               )}
               {read && <Chip color="var(--dim)" title="every hunk of this commit has been read (R-D17)">read</Chip>}
-            </span>
-          )}
+          </span>
         </div>
       }
     >

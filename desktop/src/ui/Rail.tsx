@@ -115,7 +115,11 @@ export function Rail() {
   const onDrag = (e: React.MouseEvent) => {
     const startX = e.clientX;
     const startW = widthRef.current;
-    const move = (ev: MouseEvent) => setWidth(Math.min(760, Math.max(220, startW - (ev.clientX - startX))));
+    // Bounded against the window rather than a fixed 760 px, the way the two
+    // docks' heights are: the centre keeps room for a pane, and a wide
+    // monitor gets a wide rail (asked 2026-09-11, of "the right hand side
+    // panel" — which this is, as much as the Git inspector is).
+    const move = (ev: MouseEvent) => setWidth(Math.min(window.innerWidth - 640, Math.max(220, startW - (ev.clientX - startX))));
     const up = () => {
       // Written on pointer-up only, so a drag does not save on every frame.
       setPrefs({ railWidth: widthRef.current });

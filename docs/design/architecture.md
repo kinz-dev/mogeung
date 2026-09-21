@@ -144,6 +144,13 @@ it a shortcut for a click and not a basis for a read boundary. Nothing widens
 until somebody presses `+`, and dismissing one is a client preference (keyed by
 the same repository root) rather than a fact about the session.
 
+**The workspace is also what the Git window may be pointed at** (`R-D34`,
+2026-09-16). A git command may name a repository, and the set it is checked
+against is `session_roots` — the same one every file read uses. So the fence is
+one fence: a repository can be picked exactly when its folder was already
+readable, and the daemon refuses anything else with the same sentence it gives
+a file outside the set.
+
 **A file dropped on the window is the second gesture that widens it** (`R-J94`,
 2026-09-16). A drop whose path falls under no root opens the same door: the
 file's folder is added to the selected session's workspace, and only then is

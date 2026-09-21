@@ -11,7 +11,7 @@ import { useStore } from "@/store";
 import { Button, Checkbox, Dim, Empty, Input, Mono } from "@/ui/primitives";
 import { Dialog } from "@/ui/Dialog";
 import { ContextMenu, MenuItem, MenuSeparator } from "@/ui/Menu";
-import { showStash, stashDrop, stashPop, stashPush } from "@/lib/gitActions";
+import { repoOf, showStash, stashDrop, stashPop, stashPush } from "@/lib/gitActions";
 import { stamp } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { row as rowCls, rowSelected } from "@/ui/styles";
@@ -31,7 +31,7 @@ export function StashTab({ id }: { id: string }) {
   const [dropping, setDropping] = useState<{ index: number; message: string } | null>(null);
 
   useEffect(() => {
-    if (stashes === null) send({ cmd: "git_stashes", session_id: id });
+    if (stashes === null) send({ cmd: "git_stashes", session_id: id, repo: repoOf(id) });
   }, [stashes, id, send]);
 
   return (

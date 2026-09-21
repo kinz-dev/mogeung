@@ -165,6 +165,20 @@ pub struct View {
     pub dirs: Vec<String>,
     pub missing: Vec<String>,
     pub hints: Vec<mogeung_core::wire::WorkspaceHint>,
+    /// Which of the roots above are git repositories. `R-D34`.
+    pub repos: Vec<String>,
+}
+
+/// The roots a git verb may be pointed at: the session's own first, then the
+/// added folders, keeping only the ones that are checkouts. `R-D34`.
+///
+/// Order is load-bearing — the first is the session's own, which is what the
+/// picker shows selected before anybody has picked anything.
+pub fn repos(root: &str, dirs: &[String]) -> Vec<String> {
+    std::iter::once(root.to_string())
+        .chain(dirs.iter().cloned())
+        .filter(|d| crate::git::is_repo(Path::new(d)))
+        .collect()
 }
 
 impl View {
@@ -175,6 +189,7 @@ impl View {
             dirs: self.dirs,
             missing: self.missing,
             hints: self.hints,
+            repos: self.repos,
         }
     }
 }

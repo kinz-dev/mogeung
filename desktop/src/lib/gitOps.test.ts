@@ -135,7 +135,7 @@ describe("where each entry sends you", () => {
   /** *Commit File…* is two verbs in git, and the popup owes you both. */
   it("stages the file before asking for a commit message", () => {
     op("commit_file").run(ctx({ selectedPath: "a.rs" }));
-    expect(sent[0]).toEqual({ cmd: "git_stage", session_id: "s1", paths: ["a.rs"] });
+    expect(sent[0]).toEqual({ cmd: "git_stage", session_id: "s1", repo: null, paths: ["a.rs"] });
     expect(useStore.getState().gitTab).toBe("local");
     expect(useStore.getState().commitFocus).toBe(1);
   });
@@ -153,12 +153,12 @@ describe("where each entry sends you", () => {
       expect(asked.body).toContain("a.rs");
       asked.then();
     }
-    expect(sent).toEqual([{ cmd: "git_discard", session_id: "s1", paths: ["a.rs"] }]);
+    expect(sent).toEqual([{ cmd: "git_discard", session_id: "s1", repo: null, paths: ["a.rs"] }]);
   });
 
   it("scopes the log to the file for history, and clears the scope without one", () => {
     op("history").run(ctx({ selectedPath: "src/a.rs" }));
-    expect(sent.at(-1)).toMatchObject({ cmd: "git_log", session_id: "s1", path: "src/a.rs" });
+    expect(sent.at(-1)).toMatchObject({ cmd: "git_log", session_id: "s1", repo: null, path: "src/a.rs" });
     expect(useStore.getState().gitTab).toBe("log");
 
     op("history").run(ctx());
@@ -180,7 +180,7 @@ describe("where each entry sends you", () => {
 
   it("fetches without merging anything, which is the only outbound call there is", () => {
     op("fetch").run(ctx());
-    expect(sent).toEqual([{ cmd: "git_fetch", session_id: "s1" }]);
+    expect(sent).toEqual([{ cmd: "git_fetch", session_id: "s1", repo: null }]);
   });
 
   it("does nothing at all for push", () => {

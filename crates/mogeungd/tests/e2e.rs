@@ -166,6 +166,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitRefs {
             session_id: ghost.clone(),
+            repo: None,
         },
     )
     .await;
@@ -173,6 +174,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitStashes {
             session_id: ghost.clone(),
+            repo: None,
         },
     )
     .await;
@@ -180,6 +182,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitStashShow {
             session_id: ghost.clone(),
+            repo: None,
             index: 9999,
             context: Some(u32::MAX),
             ignore_ws: Some(true),
@@ -190,6 +193,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitSubmodules {
             session_id: ghost.clone(),
+            repo: None,
         },
     )
     .await;
@@ -197,6 +201,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitDiffRange {
             session_id: ghost.clone(),
+            repo: None,
             from: "--output=/tmp/pwned".into(),
             to: "also not a sha".into(),
             context: None,
@@ -208,6 +213,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitFileAtRev {
             session_id: ghost.clone(),
+            repo: None,
             sha: "-x".into(),
             path: "../escape".into(),
         },
@@ -217,6 +223,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitLog {
             session_id: ghost.clone(),
+            repo: None,
             skip: 0,
             limit: 50,
             rev: Some("--all".into()),
@@ -235,6 +242,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitCompare {
             session_id: ghost.clone(),
+            repo: None,
             branch: "-D".into(),
         },
     )
@@ -243,6 +251,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitReflog {
             session_id: ghost.clone(),
+            repo: None,
         },
     )
     .await;
@@ -250,6 +259,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitWorktrees {
             session_id: ghost.clone(),
+            repo: None,
         },
     )
     .await;
@@ -257,6 +267,7 @@ async fn commands_about_unknown_sessions_are_harmless() {
         &mut ws,
         ClientMsg::GitConflictFile {
             session_id: ghost.clone(),
+            repo: None,
             path: "/etc/passwd".into(),
         },
     )
@@ -277,6 +288,51 @@ async fn commands_about_unknown_sessions_are_harmless() {
     })
     .await;
     assert!(alive.is_some(), "unknown session id killed the connection");
+}
+
+/// A named repository is refused unless the session could already read it.
+/// `R-D34`.
+///
+/// This is the fence the whole feature rests on: `repo` lets a client say
+/// *which* repository, and the answer must be one of the roots `R-J40`
+/// authorised. A socket that could name `/etc` — or any checkout on the
+/// machine — would have turned a picker into "read any repository by asking
+/// politely", which is the sentence `resolve_in_workspace` exists to prevent
+/// for files.
+#[tokio::test]
+async fn a_repository_outside_the_workspace_is_refused_by_name() {
+    let h = boot("repo-fence").await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(&h.url).await.unwrap();
+    wait_for(&mut ws, 5, |m| {
+        matches!(m, ServerMsg::Snapshot { .. }).then_some(())
+    })
+    .await
+    .unwrap();
+
+    let ghost = "00000000-0000-0000-0000-000000000000".to_string();
+    for repo in ["/etc", "/", "../../..", "/home"] {
+        send(
+            &mut ws,
+            ClientMsg::GitStatus {
+                session_id: ghost.clone(),
+                repo: Some(repo.to_string()),
+            },
+        )
+        .await;
+        let refused = wait_for(&mut ws, 5, |m| match m {
+            ServerMsg::Error { message } => Some(message.clone()),
+            _ => None,
+        })
+        .await;
+        assert!(refused.is_some(), "{repo} was not refused at all");
+    }
+
+    // And the socket is still the socket afterwards.
+    send(&mut ws, ClientMsg::Subscribe).await;
+    assert!(
+        wait_for(&mut ws, 5, |m| matches!(m, ServerMsg::Snapshot { .. }).then_some(())).await.is_some(),
+        "a refused repository killed the connection"
+    );
 }
 
 #[tokio::test]

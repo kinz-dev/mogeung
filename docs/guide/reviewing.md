@@ -154,8 +154,9 @@ click **scopes the log to that ref and checks nothing out**. In the middle,
 one row per commit — the graph, the subject with its refs as chips, author,
 date — and at the end of a row the two marks that are mogeung's: a blue dot
 for a commit that probably came from this session, and *read* once every hunk
-of it has been read. The columns have a header; drag a divider to resize a
-column, and the widths are kept. Above the rows, the filter bar: *text or hash*, then
+of it has been read. The columns have a header and share the pane's width,
+so they scale with it; drag a divider to move the line between two columns,
+and the shares are kept. Above the rows, the filter bar: *text or hash*, then
 Branch, User, Date and Paths. Enter runs the query; a hash selects that
 commit; `author:`, `path:` and `find:` in the box reach the same fields the
 dropdowns do. What is in force is named beneath the bar, with *clear* beside
@@ -251,4 +252,3 @@ that does.
 
 Merge, rebase and pull-into are not there, for the reason push is not: this
 window writes locally and never publishes.
-

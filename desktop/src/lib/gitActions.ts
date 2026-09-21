@@ -24,6 +24,39 @@ import type { LogQuery } from "@/lib/gitFilter";
 export const LOG_PAGE = 100;
 const RECENTS = 6;
 
+
+/**
+ * Which repository this session's Git window is pointed at. `R-D34`.
+ *
+ * Attached to **every** request below, which is why the picker cost so little:
+ * this module is the one door the whole Git window already goes through, so no
+ * call site had to learn a new argument. `null` is the session's own root,
+ * which is what the daemon has always meant by a message with no repository on
+ * it.
+ *
+ * Deliberately *not* used by blame, the file tree or the session's own diff —
+ * those answer "what has this agent done", which is a question about the
+ * session and not about whichever checkout you are reading.
+ */
+export function repoOf(id: SessionId): string | null {
+  return (useStore.getState().git[id] ?? emptyGit()).repo;
+}
+
+/**
+ * Point this session's Git window at a repository, or back at its own.
+ *
+ * **Everything is cleared**, because everything in the slice belongs to the
+ * repository it came from: the log, the status, the refs, the stashes, the
+ * selected commit and the diff under it. What follows is the ordinary first
+ * fetch, and it is the tool window's own effect that makes it — the same one
+ * that runs when the dock is opened for the first time.
+ */
+export function pickRepo(id: SessionId, repo: string | null): void {
+  const st = useStore.getState();
+  if ((st.git[id] ?? emptyGit()).repo === repo) return;
+  st.patchGit(id, { ...emptyGit(), repo });
+}
+
 export function queryOf(id: SessionId): LogQuery {
   const g = useStore.getState().git[id] ?? emptyGit();
   return { rev: g.rev, grep: g.grep, author: g.author, path: g.path, pickaxe: g.pickaxe, all: g.all, since: g.since, until: g.until };
@@ -43,6 +76,7 @@ export function askLog(id: SessionId, skip: number, over: Partial<LogQuery> = {}
   st.send({
     cmd: "git_log",
     session_id: id,
+    repo: repoOf(id),
     skip,
     limit: LOG_PAGE,
     rev: q.rev,
@@ -75,7 +109,7 @@ export function selectCommit(id: SessionId, sha: string): void {
     conflict: null,
     diffLabel: null,
   });
-  st.send({ cmd: "git_show", session_id: id, sha });
+  st.send({ cmd: "git_show", session_id: id, repo: repoOf(id), sha });
 }
 
 /** Select a working-tree file: its diff against HEAD, or its three stages
@@ -91,8 +125,8 @@ export function selectPath(id: SessionId, path: string, conflicted: boolean): vo
     conflict: null,
     diffLabel: null,
   });
-  if (conflicted) st.send({ cmd: "git_conflict_file", session_id: id, path });
-  else st.send({ cmd: "git_diff_file", session_id: id, path });
+  if (conflicted) st.send({ cmd: "git_conflict_file", session_id: id, repo: repoOf(id), path });
+  else st.send({ cmd: "git_diff_file", session_id: id, repo: repoOf(id), path });
 }
 
 /** One file of the shown diff, or all of them. No round trip — the files are
@@ -106,7 +140,7 @@ export function selectFile(id: SessionId, path: string | null): void {
 export function compareWith(id: SessionId, branch: string): void {
   const st = useStore.getState();
   st.patchGit(id, { selectedPath: null, selectedFile: null, conflict: null });
-  st.send({ cmd: "git_compare", session_id: id, branch });
+  st.send({ cmd: "git_compare", session_id: id, repo: repoOf(id), branch });
 }
 
 /** Mark a commit; the next one diffed against it is a range. */
@@ -119,13 +153,13 @@ export function diffAgainstMark(id: SessionId, to: string): void {
   const from = (st.git[id] ?? emptyGit()).rangeMark;
   if (!from || from === to) return;
   st.patchGit(id, { rangeMark: null, selectedPath: null, selectedFile: null, conflict: null });
-  st.send({ cmd: "git_diff_range", session_id: id, from, to });
+  st.send({ cmd: "git_diff_range", session_id: id, repo: repoOf(id), from, to });
 }
 
 export function showStash(id: SessionId, index: number): void {
   const st = useStore.getState();
   st.patchGit(id, { selected: null, selectedPath: null, selectedFile: null, detail: null, conflict: null, diff: null, diffLabel: `stash@{${index}}` });
-  st.send({ cmd: "git_stash_show", session_id: id, index });
+  st.send({ cmd: "git_stash_show", session_id: id, repo: repoOf(id), index });
 }
 
 // ---------------------------------------------------------------------------
@@ -182,19 +216,19 @@ export function hostLink(id: SessionId, sha: string): string | null {
 
 export function stage(id: SessionId, paths: string[]): void {
   if (paths.length === 0) return;
-  useStore.getState().send({ cmd: "git_stage", session_id: id, paths });
+  useStore.getState().send({ cmd: "git_stage", session_id: id, repo: repoOf(id), paths });
 }
 
 export function unstage(id: SessionId, paths: string[]): void {
   if (paths.length === 0) return;
-  useStore.getState().send({ cmd: "git_unstage", session_id: id, paths });
+  useStore.getState().send({ cmd: "git_unstage", session_id: id, repo: repoOf(id), paths });
 }
 
 /** The one verb with no undo — git keeps no copy of an untracked file. The
  *  confirmation that names every file lives in the component; this sends. */
 export function discard(id: SessionId, paths: string[]): void {
   if (paths.length === 0) return;
-  useStore.getState().send({ cmd: "git_discard", session_id: id, paths });
+  useStore.getState().send({ cmd: "git_discard", session_id: id, repo: repoOf(id), paths });
 }
 
 /** Commits what is staged, never `-a`. A blank message is refused here
@@ -202,35 +236,35 @@ export function discard(id: SessionId, paths: string[]): void {
  *  subject. */
 export function commit(id: SessionId, message: string, amend: boolean, sessionTrailer: boolean): boolean {
   if (!message.trim()) return false;
-  useStore.getState().send({ cmd: "git_commit", session_id: id, message, amend, session_trailer: sessionTrailer });
+  useStore.getState().send({ cmd: "git_commit", session_id: id, repo: repoOf(id), message, amend, session_trailer: sessionTrailer });
   return true;
 }
 
 export function branchCreate(id: SessionId, name: string, switchTo: boolean): void {
   if (!name.trim()) return;
-  useStore.getState().send({ cmd: "git_branch_create", session_id: id, name: name.trim(), switch_to: switchTo });
+  useStore.getState().send({ cmd: "git_branch_create", session_id: id, repo: repoOf(id), name: name.trim(), switch_to: switchTo });
 }
 
 /** Moves the worktree. `R-D21`'s warning — name the live sessions, proceed
  *  on confirm — belongs to the caller; see `liveSessionsIn`. */
 export function switchTo(id: SessionId, name: string, detach = false): void {
-  useStore.getState().send({ cmd: "git_switch", session_id: id, name, detach });
+  useStore.getState().send({ cmd: "git_switch", session_id: id, repo: repoOf(id), name, detach });
 }
 
 export function stashPush(id: SessionId, message: string, includeUntracked: boolean): void {
-  useStore.getState().send({ cmd: "git_stash_push", session_id: id, message, include_untracked: includeUntracked });
+  useStore.getState().send({ cmd: "git_stash_push", session_id: id, repo: repoOf(id), message, include_untracked: includeUntracked });
 }
 
 export function stashPop(id: SessionId, index: number): void {
-  useStore.getState().send({ cmd: "git_stash_pop", session_id: id, index });
+  useStore.getState().send({ cmd: "git_stash_pop", session_id: id, repo: repoOf(id), index });
 }
 
 export function stashDrop(id: SessionId, index: number): void {
-  useStore.getState().send({ cmd: "git_stash_drop", session_id: id, index });
+  useStore.getState().send({ cmd: "git_stash_drop", session_id: id, repo: repoOf(id), index });
 }
 
 export function resolve(id: SessionId, path: string, side: ResolveSide): void {
-  useStore.getState().send({ cmd: "git_resolve", session_id: id, path, side });
+  useStore.getState().send({ cmd: "git_resolve", session_id: id, repo: repoOf(id), path, side });
 }
 
 /**

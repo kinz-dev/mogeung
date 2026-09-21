@@ -92,9 +92,9 @@ describe("Local changes", () => {
     fireEvent.click(screen.getByLabelText("unstage b.rs"));
     fireEvent.click(screen.getByLabelText("stage new.txt"));
     expect(writes()).toEqual([
-      { cmd: "git_stage", session_id: "s1", paths: ["a.rs"] },
-      { cmd: "git_unstage", session_id: "s1", paths: ["b.rs"] },
-      { cmd: "git_stage", session_id: "s1", paths: ["new.txt"] },
+      { cmd: "git_stage", session_id: "s1", repo: null, paths: ["a.rs"] },
+      { cmd: "git_unstage", session_id: "s1", repo: null, paths: ["b.rs"] },
+      { cmd: "git_stage", session_id: "s1", repo: null, paths: ["new.txt"] },
     ]);
   });
 
@@ -107,7 +107,7 @@ describe("Local changes", () => {
     expect(screen.getByRole("dialog", { name: /Discard this change/ })).toBeInTheDocument();
     expect(screen.getAllByText("a.rs").length).toBeGreaterThan(1);
     fireEvent.click(screen.getByText("Discard it"));
-    expect(writes()).toEqual([{ cmd: "git_discard", session_id: "s1", paths: ["a.rs"] }]);
+    expect(writes()).toEqual([{ cmd: "git_discard", session_id: "s1", repo: null, paths: ["a.rs"] }]);
   });
 
   it("commits what is staged with the message, the amend flag and the trailer, and never a blank", () => {
@@ -119,7 +119,7 @@ describe("Local changes", () => {
     expect(commit).toBeDisabled();
     fireEvent.change(screen.getByLabelText("commit message"), { target: { value: "fix: the thing" } });
     fireEvent.click(commit);
-    expect(writes()).toEqual([{ cmd: "git_commit", session_id: "s1", message: "fix: the thing", amend: false, session_trailer: true }]);
+    expect(writes()).toEqual([{ cmd: "git_commit", session_id: "s1", repo: null, message: "fix: the thing", amend: false, session_trailer: true }]);
   });
 
   it("resolves a conflicted file from its three sides", () => {
@@ -128,8 +128,8 @@ describe("Local changes", () => {
     fireEvent.click(screen.getByRole("button", { name: "take theirs" }));
     fireEvent.click(screen.getByRole("button", { name: "mark resolved" }));
     expect(writes()).toEqual([
-      { cmd: "git_resolve", session_id: "s1", path: "c.rs", side: "theirs" },
-      { cmd: "git_resolve", session_id: "s1", path: "c.rs", side: "mine" },
+      { cmd: "git_resolve", session_id: "s1", repo: null, path: "c.rs", side: "theirs" },
+      { cmd: "git_resolve", session_id: "s1", repo: null, path: "c.rs", side: "mine" },
     ]);
   });
 });
@@ -139,7 +139,7 @@ describe("branches", () => {
     show({}, false);
     fireEvent.contextMenu(screen.getByText("git-fetch"));
     fireEvent.click(screen.getByText(/Check out — move/));
-    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", name: "git-fetch", detach: false }]);
+    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", repo: null, name: "git-fetch", detach: false }]);
   });
 
   it("names the live session and waits for a confirm when one is", () => {
@@ -149,7 +149,7 @@ describe("branches", () => {
     expect(writes()).toEqual([]);
     expect(screen.getByRole("dialog", { name: /Check out git-fetch/ })).toHaveTextContent("the session");
     fireEvent.click(screen.getByText("Check out anyway"));
-    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", name: "git-fetch", detach: false }]);
+    expect(writes()).toEqual([{ cmd: "git_switch", session_id: "s1", repo: null, name: "git-fetch", detach: false }]);
   });
 
   it("creates a branch from HEAD, checking it out when asked", () => {
@@ -157,7 +157,7 @@ describe("branches", () => {
     fireEvent.click(screen.getByRole("button", { name: /new branch from HEAD/ }));
     fireEvent.change(screen.getByLabelText("branch name"), { target: { value: "feat/x" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
-    expect(writes()).toEqual([{ cmd: "git_branch_create", session_id: "s1", name: "feat/x", switch_to: true }]);
+    expect(writes()).toEqual([{ cmd: "git_branch_create", session_id: "s1", repo: null, name: "feat/x", switch_to: true }]);
   });
 });
 
@@ -172,10 +172,10 @@ describe("stashes", () => {
     fireEvent.contextMenu(screen.getByText("WIP on main"));
     fireEvent.click(screen.getByText("Drop…"));
     expect(writes()).toEqual([
-      { cmd: "git_stash_push", session_id: "s1", message: "park it", include_untracked: true },
-      { cmd: "git_stash_pop", session_id: "s1", index: 0 },
+      { cmd: "git_stash_push", session_id: "s1", repo: null, message: "park it", include_untracked: true },
+      { cmd: "git_stash_pop", session_id: "s1", repo: null, index: 0 },
     ]);
     fireEvent.click(screen.getByText("Drop it"));
-    expect(writes().at(-1)).toEqual({ cmd: "git_stash_drop", session_id: "s1", index: 0 });
+    expect(writes().at(-1)).toEqual({ cmd: "git_stash_drop", session_id: "s1", repo: null, index: 0 });
   });
 });
