@@ -4,6 +4,8 @@ status: active
 updated: 2026-09-22
 covers:
   - crates/mogeungd/src/main.rs
+  - crates/mogeungd/src/lan.rs
+  - crates/mogeung-core/src/lan.rs
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/send.rs
@@ -405,15 +407,33 @@ daemon that `mogeungd` would have refused to be. The check is on the bound
 address rather than on what was asked for, which is what makes `0.0.0.0` and a
 `:0` port answer the same question honestly.
 
-**Daemons can announce themselves** (`R-I8`), over mDNS as `_mogeung._tcp`,
-**only** when `--advertise` says so. The broadcast is a disclosure in its own
-right — it names the machine and says there is something here worth reaching —
-and no code can tell a home network from conference wifi, so the default is off
-and stays off. Browsing produces a list the window renders; nothing dials
-anything. A loopback bind refuses to advertise, since nobody could reach it, and
-that refusal is what makes every discoverable daemon token-gated by construction:
-the only binds that *can* advertise are the ones `admit` already requires a
-token for.
+**Daemons announce themselves, by default** — every daemon, `mogeungd` and
+the one a window hosts alike, sends a small UDP beacon to each interface's
+broadcast address every 15 s, as a burst of two a second apart, saying its
+version, machine id, hostname, Claude home, API port, how it can be reached —
+`lan` beyond loopback and therefore token-gated, `ssh` with the configured
+target, `local` otherwise — and how many sessions are live and how many need
+someone. **Never the token**, and no field to put one in: the codec in
+`mogeung-core/src/lan.rs` is shared with the shell that listens, so the two
+ends cannot disagree, and the sender is `mogeungd/src/lan.rs`.
+[ADR-0039](../decisions/0039-the-daemon-announces-itself-by-default.md)
+(2026-09-22) is the default, reversing `R-I8`'s opt-in on the evidence that
+nobody turned it on; [ADR-0040](../decisions/0040-discovery-is-the-beacon.md)
+is the transport, measured across the Orbi mesh the same day, where broadcast
+crossed every leg and mDNS multicast did not pass between two Wi-Fi clients.
+`beacon = false` in `config.toml`, or `--no-beacon`, silences it. **The bind
+does not move with the beacon**: loopback by default, beyond it only by a hand
+and with a token, as `R-I10` requires — presence is not access, and a found
+daemon is an offer a hand takes up by typing the token. The loss the probe
+measured is the receiving Wi-Fi client's power save, so *gone* is four missed
+beacons, and a *gone* that comes *back* is a thing the Found list will show
+rather than hide.
+
+**The mDNS advert stays as it was, opt-in** (`R-I8`, `--advertise`,
+`_mogeung._tcp`), a record for other tools' browsers; a loopback bind refuses
+to advertise; and since ADR-0040 nothing of ours browses it — the probe found
+`mdns-sd`'s browse fine wherever multicast reaches, and this mesh not carrying
+multicast between two Wi-Fi clients.
 
 **The daemon may start a process you named** (`R-N4`), and never an agent.
 [ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) is the

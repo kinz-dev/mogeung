@@ -14,6 +14,7 @@ pub mod git;
 pub mod guide;
 pub mod insight;
 pub mod kit;
+pub mod lan;
 pub mod llmproxy;
 pub mod health;
 pub mod machine;

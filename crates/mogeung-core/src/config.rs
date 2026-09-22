@@ -48,6 +48,12 @@ pub struct Config {
     /// Daemon: announce over mDNS on the local network (`R-I8`). Absent means
     /// no, which is the only safe default for a broadcast.
     pub advertise: Option<bool>,
+    /// Daemon: send the LAN beacon (`R-I17`,
+    /// [ADR-0039](../../../docs/decisions/0039-the-daemon-announces-itself-by-default.md)).
+    /// Absent means **yes** — the one announcement that is on by default,
+    /// because it says presence and never access. `false` is the standing
+    /// way to be quiet; `--no-beacon` is the one-run way.
+    pub beacon: Option<bool>,
     /// Daemon: base URL of an OpenAI-compatible model API — the part before
     /// `/chat/completions`, e.g. `http://spark-7ecc:8000/v1`. `R-O1`.
     ///

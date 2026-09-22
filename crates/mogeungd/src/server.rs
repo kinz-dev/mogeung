@@ -32,6 +32,10 @@ pub struct Options {
     pub ssh_target: Option<String>,
     /// Announce this daemon over mDNS (`R-I8`). Off unless asked for.
     pub advertise: bool,
+    /// Send the LAN beacon (`R-I17`). **On unless asked not to** — ADR-0039:
+    /// it says presence and a route, never access, and the bind it does not
+    /// move is what `R-I10` gates. `beacon = false` / `--no-beacon` is off.
+    pub beacon: bool,
     /// Permit starting processes on a non-loopback bind. ADR-0025 clause 4.
     pub allow_run: bool,
     /// mogeung's own llmproxy, in front of the model. `R-O10`, ADR-0033.
@@ -56,6 +60,7 @@ impl Default for Options {
             token: None,
             ssh_target: None,
             advertise: false,
+            beacon: true,
             allow_run: false,
             proxy: mogeung_core::llmproxy::ProxySettings::default(),
             // On, matching the file's absent-means-yes: the history is the
@@ -328,6 +333,23 @@ where
         None
     };
 
+    // Every daemon says it exists, by default (ADR-0039), over the transport
+    // the probe measured (ADR-0040). Held for the life of the server like the
+    // advert above: dropping it stops the sending.
+    let _beacon = if opts.beacon {
+        let now = crate::lan::targets().unwrap_or_default();
+        tracing::info!(
+            "beacon: udp/{} to {} interface(s) every {} s — `beacon = false` in config.toml turns it off",
+            mogeung_core::lan::BEACON_PORT,
+            now.len(),
+            mogeung_core::lan::INTERVAL.as_secs()
+        );
+        Some(crate::lan::start(state.clone(), addr, mogeung_core::lan::BEACON_PORT, || {
+            crate::lan::targets().unwrap_or_default()
+        }))
+    } else {
+        None
+    };
     axum::serve(
         listener,
         api::router_with_token(state.clone(), opts.token.clone()),

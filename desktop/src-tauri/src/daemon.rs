@@ -382,6 +382,11 @@ fn host(listener: TcpListener) {
                     // the whole reason these are read from `config.toml` here.
                     embed_model: cfg.embed_model.clone(),
                 },
+                // The window-hosted daemon announces itself too — ADR-0039
+                // — or the machine that runs only the window is the one
+                // machine on the LAN nobody can find. `beacon = false` in
+                // the same file is the way to be quiet.
+                beacon: cfg.beacon.unwrap_or(true),
                 ..Default::default()
             };
             // Never resolves: the daemon stops when the process does, which is

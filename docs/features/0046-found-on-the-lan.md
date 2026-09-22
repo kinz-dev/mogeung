@@ -427,3 +427,24 @@ Three corrections to the first run's readings, in order of weight:
   an amendment to [ADR-0040](../decisions/0040-discovery-is-the-beacon.md),
   whose decision it strengthens: the beacon is the only transport that reached
   every leg.
+
+**Phase 1, step 4 built 2026-09-22 — the sender.** `mogeungd/src/lan.rs`:
+the daemon's beacon task, started in `server::run` beside the mDNS advert
+under `Options.beacon`, which is **on by default** and off under
+`beacon = false` or `--no-beacon` (the order is tested with the rest of
+`resolve`). Every 15 s ± 2 s of jitter derived from the machine id and the
+sequence number, a burst of two datagrams a second apart to every interface's
+directed broadcast, the interfaces re-read before each beacon so a laptop that
+changed networks announces on the one it is on. `reach` from the bind, the ssh
+target riding only when it is the route, and the counts from
+`AppState::beacon_counts` — `alive`, and `needs_human()` over the same
+`rank()` the queue publishes, so the number on a found row is the tab's
+number. The window-hosted daemon reads `beacon` from the config file and is
+otherwise on too, or the window-only machine would be the one nobody finds.
+The probe's `send` now rides the same helpers, so there is one list of
+interfaces and one rule for `reach`. Pinned by an integration test that
+receives the burst on loopback: one sequence number twice, `reach: local`, the
+board's counts, and no `token` in the bytes.
+
+Not yet: the shell's listener (step 5) and the Found section (step 6), so
+nothing of ours hears a beacon yet except the probe.

@@ -41,11 +41,12 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use mogeung_core::lan::{self, Beacon, CodecError, Heard, PeerTable, Reach, BEACON_PORT};
+use mogeung_core::lan::{self, Beacon, CodecError, Heard, PeerTable, BEACON_PORT};
+use mogeungd::lan::{beacon_of, send_to_all, Target};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -118,44 +119,10 @@ fn stamp(start: Instant) -> String {
 // ---------------------------------------------------------------------------
 // send
 
-/// One interface worth a datagram.
-#[derive(Debug, PartialEq, Eq)]
-struct Target {
-    iface: String,
-    ip: Ipv4Addr,
-    bcast: Ipv4Addr,
-}
-
-/// Which interfaces are worth a datagram. Pure, so it is tested without one.
-///
-/// Loopback is skipped for `R-I8`'s reason — a record reaching another host
-/// claiming `127.0.0.1` describes *their* loopback. A link with no broadcast
-/// address (point-to-point) has nothing to send to, and a `/32` (a tailscale
-/// address, say) reports itself as its own broadcast, which is the same thing.
-fn target_of(name: &str, ip: Ipv4Addr, broadcast: Option<Ipv4Addr>) -> Option<Target> {
-    if ip.is_loopback() {
-        return None;
-    }
-    let bcast = broadcast?;
-    if bcast == ip {
-        return None;
-    }
-    Some(Target {
-        iface: name.to_string(),
-        ip,
-        bcast,
-    })
-}
-
+/// The daemon's own list (`mogeungd::lan::targets`), plus the limited
+/// broadcast when asked — the one address the daemon never sends to.
 fn targets(limited: bool) -> Result<Vec<Target>> {
-    let mut out = Vec::new();
-    for i in if_addrs::get_if_addrs().context("listing interfaces")? {
-        if let if_addrs::IfAddr::V4(v4) = &i.addr {
-            if let Some(t) = target_of(&i.name, v4.ip, v4.broadcast) {
-                out.push(t);
-            }
-        }
-    }
+    let mut out = mogeungd::lan::targets().context("listing interfaces")?;
     if limited {
         out.push(Target {
             iface: "limited".into(),
@@ -164,16 +131,6 @@ fn targets(limited: bool) -> Result<Vec<Target>> {
         });
     }
     Ok(out)
-}
-
-/// From a socket bound to the interface's own address, so the datagram's
-/// source — the one address the listener will pair with the port — is the
-/// address that interface actually has.
-fn send_one(t: &Target, port: u16, bytes: &[u8]) -> std::io::Result<()> {
-    let sock = UdpSocket::bind(SocketAddrV4::new(t.ip, 0))?;
-    sock.set_broadcast(true)?;
-    sock.send_to(bytes, SocketAddrV4::new(t.bcast, port))?;
-    Ok(())
 }
 
 /// The identity the daemon would publish, and the config it would read.
@@ -186,33 +143,17 @@ fn who() -> (mogeung_core::wire::DaemonIdentity, mogeung_core::config::Config) {
     (identity, cfg)
 }
 
-/// What the real beacon will say, from the same identity the daemon publishes.
-/// `reach` follows the configured bind, exactly as the daemon's would: beyond
-/// loopback is `lan`, loopback with an `ssh_target` is `ssh`, and the rest is
-/// `local`. The counts are zero because a probe has no board.
+/// What the real beacon will say, from the same identity the daemon
+/// publishes and the same rule for `reach` — `mogeungd::lan::beacon_of`,
+/// against the bind the config file names. The counts are zero because a
+/// probe has no board.
 fn beacon(identity: &mogeung_core::wire::DaemonIdentity, cfg: &mogeung_core::config::Config, seq: u64) -> Beacon {
-    let listen: Option<SocketAddr> = cfg.listen.as_deref().and_then(|l| l.parse().ok());
-    let reach = match (listen.map(|a| a.ip().is_loopback()), identity.ssh_target.is_some()) {
-        (Some(false), _) => Reach::Lan,
-        (_, true) => Reach::Ssh,
-        _ => Reach::Local,
-    };
-    Beacon {
-        v: lan::VERSION,
-        machine: identity.machine_id.clone().unwrap_or_default(),
-        host: identity.host.clone(),
-        port: listen.map(|a| a.port()).unwrap_or(7717),
-        version: identity.version.clone(),
-        reach,
-        ssh: match reach {
-            Reach::Ssh => identity.ssh_target.clone(),
-            _ => None,
-        },
-        home: identity.claude_home.clone(),
-        live: 0,
-        waiting: 0,
-        seq,
-    }
+    let bind: SocketAddr = cfg
+        .listen
+        .as_deref()
+        .and_then(|l| l.parse().ok())
+        .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, 7717)));
+    beacon_of(identity, &bind, 0, 0, seq)
 }
 
 fn send(interval: u64, count: Option<u64>, port: u16, limited: bool, no_mdns: bool) -> Result<()> {
@@ -257,17 +198,13 @@ fn send(interval: u64, count: Option<u64>, port: u16, limited: bool, no_mdns: bo
         seq += 1;
         let b = if seq == 1 { first.clone() } else { beacon(&identity, &cfg, seq) };
         let bytes = lan::encode(&b)?;
-        let mut sent = 0;
-        for t in &targets {
-            match send_one(t, port, &bytes) {
-                Ok(()) => sent += 1,
-                // Once per interface: a down bridge fails the same way every
-                // time, and a log that says so every 15 s says nothing else.
-                Err(e) => {
-                    if failed.insert(t.iface.clone()) {
-                        println!("{:>8}  not via {} {}: {e}", stamp(start), t.iface, t.ip);
-                    }
-                }
+        let errors = send_to_all(&targets, port, &bytes);
+        let sent = targets.len() - errors.len();
+        // Once per interface: a down bridge fails the same way every time,
+        // and a log that says so every 15 s says nothing else.
+        for (iface, e) in errors {
+            if failed.insert(iface.clone()) {
+                println!("{:>8}  not via {iface}: {e}", stamp(start));
             }
         }
         println!("{:>8}  sent seq={seq} on {sent} interface(s) ({} bytes)", stamp(start), bytes.len());
@@ -502,27 +439,6 @@ fn listen(seconds: u64, interval: u64, port: u16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_an_interface_with_a_broadcast_address_of_its_own_gets_a_datagram() {
-        let ip = Ipv4Addr::new(10, 0, 0, 27);
-        let bcast = Ipv4Addr::new(10, 0, 0, 255);
-        assert_eq!(
-            target_of("wlp0s20f3", ip, Some(bcast)),
-            Some(Target {
-                iface: "wlp0s20f3".into(),
-                ip,
-                bcast
-            })
-        );
-        // Loopback describes our own machine, whoever hears it.
-        assert_eq!(target_of("lo", Ipv4Addr::LOCALHOST, Some(Ipv4Addr::new(127, 255, 255, 255))), None);
-        // A point-to-point link has nothing to broadcast to.
-        assert_eq!(target_of("ppp0", ip, None), None);
-        // A /32 reports itself as its own broadcast — a tailscale address.
-        let ts = Ipv4Addr::new(100, 69, 22, 4);
-        assert_eq!(target_of("tailscale0", ts, Some(ts)), None);
-    }
 
     #[test]
     fn expected_beacons_never_reads_zero() {

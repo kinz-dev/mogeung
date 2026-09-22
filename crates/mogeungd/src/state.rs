@@ -986,6 +986,20 @@ impl AppState {
         id
     }
 
+    /// The two numbers a beacon carries (`R-I17`): sessions alive, and
+    /// sessions in *needs you* — by the same rule the queue's tab applies,
+    /// so the count on a found row means what the tab means.
+    pub async fn beacon_counts(&self) -> (u32, u32) {
+        let sessions = self.sessions.read().await;
+        let live = sessions.values().filter(|s| s.alive).count() as u32;
+        let refs: Vec<&Session> = sessions.values().collect();
+        let waiting = rank(&refs, Utc::now(), &self.attention)
+            .iter()
+            .filter(|i| i.reason.needs_human())
+            .count() as u32;
+        (live, waiting)
+    }
+
     pub async fn publish_queue(&self) {
         // Ranked over borrows under the read lock: the full-map clone this
         // replaces copied every session on the board once per tick, and the

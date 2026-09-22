@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-09-11
+updated: 2026-09-22
 ---
 
 # Watching a remote machine
@@ -78,6 +78,14 @@ per interface and per address family, over several seconds. Expect a machine to
 appear with one address and gain others a moment later. Give it a few seconds
 before concluding nothing is there — the panel says *listening…* while it is
 still too early to tell.
+
+**Since 2026-09-22 every daemon also sends a beacon**, on by default: a small
+UDP datagram to the segment's broadcast address every 15 s saying the machine,
+the software, how it can be reached and how many sessions need someone — never
+the token. `beacon = false` in `config.toml`, or `--no-beacon`, turns it off.
+The window's list of found daemons is being rebuilt on it
+([feature 0046](../features/0046-found-on-the-lan.md)); until it lands, the
+paragraphs below describe the mDNS scan the old window had.
 
 A daemon only appears if it was started with `--advertise`, which is off by
 default: the broadcast tells everything on the segment that this machine is

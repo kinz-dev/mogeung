@@ -74,6 +74,16 @@ struct Args {
     #[arg(long)]
     advertise: bool,
 
+    /// Do not send the LAN beacon (ADR-0039).
+    ///
+    /// On by default since 2026-09-22: every daemon sends a small UDP beacon
+    /// to each interface's broadcast address every 15 s saying it exists,
+    /// how it can be reached and how many sessions need someone — never the
+    /// token. `beacon = false` in the config file is the standing way to be
+    /// quiet; this is the one-run way.
+    #[arg(long)]
+    no_beacon: bool,
+
     /// Let this daemon start processes when bound anywhere but loopback.
     ///
     /// ADR-0025 clause 4. A run verb means anyone who can reach the port can
@@ -136,6 +146,9 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             token: args.token.or(cfg.token),
             ssh_target: args.ssh_target.or(cfg.ssh_target),
             advertise: args.advertise || cfg.advertise.unwrap_or(false),
+            // The other way round from `advertise`: on unless somebody said
+            // no, and either no wins. ADR-0039.
+            beacon: !args.no_beacon && cfg.beacon.unwrap_or(true),
             allow_run: args.allow_run,
             // File only, and absent means yes. No flag: this is a standing
             // preference about what is kept on disk, not a property of one
@@ -221,6 +234,7 @@ mod tests {
             token: None,
             ssh_target: None,
             advertise: false,
+            no_beacon: false,
             allow_run: false,
             model_url: None,
             model_name: None,
@@ -261,6 +275,28 @@ mod tests {
         assert_eq!(listen, DEFAULT_LISTEN);
         assert_eq!(o.poll_ms, DEFAULT_POLL_MS);
         assert!(o.token.is_none());
+    }
+
+    /// ADR-0039: on unless somebody said no — in the file for good, or on the
+    /// line for this run — and either no wins.
+    #[test]
+    fn the_beacon_is_on_unless_the_file_or_the_flag_says_no() {
+        assert!(resolve(args(), Config::default()).1.beacon, "the default is on");
+        let quiet_file = Config {
+            beacon: Some(false),
+            ..Config::default()
+        };
+        assert!(!resolve(args(), quiet_file).1.beacon, "the file can say no");
+        let quiet_flag = Args {
+            no_beacon: true,
+            ..args()
+        };
+        assert!(!resolve(quiet_flag, Config::default()).1.beacon, "so can the flag");
+        let loud_file = Config {
+            beacon: Some(true),
+            ..Config::default()
+        };
+        assert!(resolve(args(), loud_file).1.beacon);
     }
 
     /// The endpoint follows the same order as everything else, and so does the
