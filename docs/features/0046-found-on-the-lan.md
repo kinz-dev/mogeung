@@ -67,12 +67,13 @@ streams"*, which is exactly the loss the ask names.
 
 **Phase 0 — the verdict on A44** (`R-I17`, first slice)
 
-- [ ] A throwaway `--bin beacon` sends one datagram every 15 s to each
+- [x] A throwaway `--bin beacon` sends one datagram every 15 s to each
       interface's broadcast address and prints every one it hears, and runs the
       mDNS browse beside it
-- [ ] Run on two hosts across the mesh — one wired to the base, one on a
-      satellite's Wi-Fi — for ten minutes, the ledger says for each transport
-      how many of 40 beacons arrived, and A44 takes its verdict from that
+- [x] Run on two hosts across the mesh — both on Wi-Fi as it turned out, the
+      laptop with power save on and the Mac mini — for ten minutes, the ledger
+      says for each transport how many of 40 beacons arrived, and A44 took its
+      verdict from that (`SUPPORTED`, 2026-09-22; the Notes have the numbers)
 
 **Phase 1 — found, and connected** (`R-I17`; the ask's *Day 1*)
 
@@ -208,7 +209,9 @@ collisions do not because each origin computed its own.
 
 4. `mogeungd/src/lan.rs`: the sender task, started in `server::run` beside
    `_advert` under `opts.beacon` (default **on**, `beacon = false` /
-   `--no-beacon` off), every 15 s ± 2 s jitter, one datagram per interface,
+   `--no-beacon` off), every 15 s ± 2 s jitter, **as a burst of two datagrams
+   a second apart** (ADR-0040 — the lossy end of the probe heard 62 % of
+   single datagrams), one burst per interface,
    `reach` from the bind and `ssh_target`, counts from the state's own *needs
    you* predicate. The hosted daemon in `src-tauri/src/daemon.rs` reads
    `beacon` from `config.toml` too, or it stays invisible.
@@ -344,3 +347,43 @@ Read the summary's `beacons` column against 40, its longest gap against 45 s
 (three misses), and the mDNS column for whether the same host resolved at all.
 Those three numbers, on both sides of the mesh, are A44's verdict. `--limited`
 on `send` adds `255.255.255.255` for the run where the directed address fails.
+
+**The run, 2026-09-22.** Laptop `kinz-xps14` (10.0.0.27, Wi-Fi, power save
+on) and Mac mini (10.0.0.39, Wi-Fi on `en1`), both on the Orbi; each ran
+`listen --for 600` and `send --count 41`, so both directions were measured at
+once, with the mDNS advert and browse running beside them. The summaries:
+
+```
+laptop:  Kinzs-Mac-mini.local  25/40 beacons   longest gap 45 s   live
+         (one GONE at +447.1 s, BACK at +447.4 s with seq 31)
+         mdns: 1 host resolved — itself
+mac:     kinz-xps14            36/40 beacons   longest gap 44 s   live
+         mdns: 1 host resolved — itself
+```
+
+Three readings, in the order they were reached:
+
+- **Broadcast crosses**, and it is lossy the way Wi-Fi is lossy: 90 % into
+  the always-on Mac, 62 % into a laptop whose Wi-Fi is in power save — a
+  client in power save wakes at the DTIM interval and misses broadcast frames
+  sent between. The loss is the client's, not the mesh's. At 62 % the
+  three-miss rule flickered once in ten minutes, which is why phase 1 sends a
+  burst of two.
+- **`mdns-sd`'s browse resolved nothing, either way, in ten minutes.** The
+  first reading was *multicast does not cross*, and it was wrong: the Mac's
+  own `dns-sd -B _mogeung._tcp local.` listed the laptop's record within a
+  second of the laptop advertising, both hosts resolve each other's `.local`
+  names, and the reverse cross-check — the Mac advertising, the laptop's
+  watcher browsing — again resolved nothing. So the advert works and the
+  library's browse does not, beside avahi on the laptop and mDNSResponder on
+  the Mac. A finding about `R-I8`'s implementation, not the network.
+- **The spec's decision rule had no branch for this.** It wrote *broadcast
+  only* and *both* and got *both cross, one implementation delivers*.
+  [ADR-0040](../decisions/0040-discovery-is-the-beacon.md) records the choice:
+  the beacon, as a burst of two; the mDNS advert kept opt-in as a record for
+  other tools; the browse retired.
+
+One more thing the run said in passing: `Kinzs-Mac-mini.local` and
+`spark-7ecc.local` resolve from the laptop, so a third host exists on this
+mesh for the wired-to-the-base leg the spec asked for and this run did not
+have.
