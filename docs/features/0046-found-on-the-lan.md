@@ -81,24 +81,24 @@ streams"*, which is exactly the loss the ask names.
       starting — headless or window-hosted, loopback-bound or not — and a
       window that opens later sees it at once. `beacon = false` in
       `config.toml` silences it ([ADR-0039](../decisions/0039-the-daemon-announces-itself-by-default.md))
-- [ ] Each found row says how that daemon can be reached: *Connect* for one
+- [x] Each found row says how that daemon can be reached: *Connect* for one
       bound beyond loopback, *over ssh* with the target for one that is not,
       and the window says it is announcing on this network
-- [ ] The Connections window has a **Found on your LAN** section listing each
+- [x] The Connections window has a **Found on your LAN** section listing each
       daemon heard: hostname, address and port, version, whether it wants a
       token, how many sessions are live and how many need you, and how long
       since it was last heard. This machine's own daemon is recognised and
       marked, not offered back
-- [ ] A daemon that stops being heard is shown as gone after three missed
+- [x] A daemon that stops being heard is shown as gone after four missed
       beacons, greyed and kept, not dropped
-- [ ] **Add** on a found row fills the Saved form with its name and URL; the
+- [x] **Add** on a found row fills the Saved form with its name and URL; the
       token is typed by a hand; Connect on the saved row is the switch that
       already exists. Nothing dials anything on its own
-- [ ] A saved row whose daemon is currently being heard shows as live
+- [x] A saved row whose daemon is currently being heard shows as live
 - [ ] `R-I16`'s panel — the file, its mode bits, the migration, a token
       composed into the dialled URL — is exercised in the **desktop build**
       against a real second daemon, and takes its verdict
-- [ ] A browser tab says it cannot listen for beacons, rather than showing an
+- [x] A browser tab says it cannot listen for beacons, rather than showing an
       empty list
 - [ ] A machine that runs only the window is **found** regardless (its hosted
       daemon beacons too) and can be **connected to** either because the
@@ -448,3 +448,25 @@ board's counts, and no `token` in the bytes.
 
 Not yet: the shell's listener (step 5) and the Found section (step 6), so
 nothing of ours hears a beacon yet except the probe.
+
+**Phase 1, steps 5 and 6 built 2026-09-22 — the listener and the Found
+section.** `src-tauri/src/lan.rs` binds udp/7717 with the reuse flags at app
+start, folds every datagram into a `PeerTable`, sweeps each second, and emits
+`lan:peers` on every beacon heard and every peer gone — per beacon rather than
+per datagram, since the table folds a burst and a multi-homed sender, and a
+beacon *is* a change: it moves *last heard*. `lan_peers` answers a window
+that opens later with the table as it stands, or with why there is no listener
+(a bind that failed is shown, not fatal). The window keeps the list in its own
+state while the panel is open rather than in the store — nothing else renders
+from it — and ticks *12 s ago* on its own clock from the epoch stamp each row
+carries. `lib/lan.ts` holds the pure decisions: a row dials the datagram's
+source and the announced port, a saved connection matches by any address it
+was heard from, the words for `reach`. Seven component tests and six pure ones.
+`remote.md`'s Found section now describes this panel instead of the egui one.
+
+**Verified in tests and in a browser tab, not yet in the desktop build**,
+which is what the ✅ waits for: the shell's listener and the hosted daemon's
+beacon need `install.sh` and a second daemon on the LAN, and that is
+dogfooding. Two of phase 1's acceptance lines stay open for it — *every daemon
+is heard within 15 s* and `R-I16`'s verdict — and step 7, whether the hosted
+daemon should honour `listen` and `token` from the file, stays a decision.

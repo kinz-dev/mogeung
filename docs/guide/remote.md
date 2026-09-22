@@ -69,33 +69,34 @@ wherever you say.
 > applied before the local-port check — it also stopped hosting a local daemon,
 > so the machine in front of you was not being watched and nothing said so.
 
-**On this network** lists daemons advertising nearby, and keeps listening for
-as long as the window is open — like a wifi picker rather than a search box.
-Rows accumulate; they are not cleared between rounds.
+**Found on your LAN** lists the daemons announcing themselves on the network
+this window is on, and keeps listening for as long as the app runs — like a
+wifi picker rather than a search box. Since 2026-09-22 every daemon sends a
+beacon by default: a small UDP datagram to the segment's broadcast address
+every 15 s saying the machine, the software, how it can be reached, and how
+many sessions are live and how many need someone — **never the token**.
+`beacon = false` in `config.toml`, or `--no-beacon`, turns it off
+([ADR-0039](../decisions/0039-the-daemon-announces-itself-by-default.md)).
 
-That matters because of how mDNS actually behaves: a host answers piecemeal,
-per interface and per address family, over several seconds. Expect a machine to
-appear with one address and gain others a moment later. Give it a few seconds
-before concluding nothing is there — the panel says *listening…* while it is
-still too early to tell.
+Each row says how a hand reaches that daemon. *Reachable* means it is bound
+beyond loopback — and therefore wants a token — so **Add** fills the form
+below with its address, you type the token, and Connect on the saved row is
+the switch. *Over ssh* names the target it was configured with, and *on its
+own machine only* means the daemon is loopback-bound and an ssh tunnel (Route
+A) is the way in. This machine's own daemon is marked rather than offered
+back. A saved connection lights up while the daemon it points at is being
+heard.
 
-**Since 2026-09-22 every daemon also sends a beacon**, on by default: a small
-UDP datagram to the segment's broadcast address every 15 s saying the machine,
-the software, how it can be reached and how many sessions need someone — never
-the token. `beacon = false` in `config.toml`, or `--no-beacon`, turns it off.
-The window's list of found daemons is being rebuilt on it
-([feature 0046](../features/0046-found-on-the-lan.md)); until it lands, the
-paragraphs below describe the mDNS scan the old window had.
+**Finding a daemon connects to nothing.** A beacon carries no secret and no
+proof of who sent it, so the list is an offer and the token is yours to type.
 
-A daemon only appears if it was started with `--advertise`, which is off by
-default: the broadcast tells everything on the segment that this machine is
-watching Claude Code sessions and where to reach it, and that is not a thing to
-do to someone on guest wifi without being asked.
-
-Finding a daemon connects to nothing. **Add** fills in the new-daemon form under
-**Saved**, you supply the token, you press Save — and then Connect on the row it
-made. A daemon can only advertise from a non-loopback bind, which already
-requires a token, so anything you find here will want one.
+A row that stops being heard goes grey after a minute and stays, saying when
+it was last heard — it is not dropped, because a laptop on Wi-Fi in power save
+misses a third of what is sent to it and a list that flickered would be
+reporting the laptop, not the network. The mDNS advert `--advertise` publishes
+is still there for other tools' browsers; nothing here browses it any more
+([ADR-0040](../decisions/0040-discovery-is-the-beacon.md)). A browser tab
+cannot listen for beacons, and says so.
 
 **What you hid, pinned, labelled, tagged or bookmarked belongs to the machine**,
 not to the window: it is filed under the daemon's machine id, so two windows

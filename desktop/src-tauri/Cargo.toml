@@ -56,6 +56,8 @@ tauri-plugin-dialog = "2.7.2"
 # a pty that could read the clipboard is a remote session reading this
 # machine's (`R-I6`).
 tauri-plugin-clipboard-manager = "2"
+# The beacon listener (`R-I17`): the socket options a shared UDP port needs.
+socket2 = "0.6"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -20,6 +20,7 @@
 
 mod connections;
 mod daemon;
+mod lan;
 mod popout;
 
 use std::collections::HashMap;
@@ -714,6 +715,10 @@ fn raise(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Hears the LAN's beacons for the life of the app (`R-I17`); the window
+    // asks for the table when it opens the Connections panel.
+    let lan = Arc::new(lan::Lan::new());
+    let lan_for_listener = lan.clone();
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -740,6 +745,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Ptys::default())
         .manage(DaemonOnce::default())
+        .manage(lan)
         .invoke_handler(tauri::generate_handler![
             pty_open,
             pty_write,
@@ -750,7 +756,8 @@ pub fn run() {
             open_local_url,
             daemon_acquire,
             connections::connections_load,
-            connections::connections_save
+            connections::connections_save,
+            lan::lan_peers
         ])
         .setup(|app| {
             // Built here rather than by the config, because `on_new_window` is
@@ -760,6 +767,7 @@ pub fn run() {
             // and therefore what lets dockview put a group in its own window
             // (`R-B55`, ADR-0037's 2026-09-08 amendment).
             popout::build_main(app.handle())?;
+            lan::start(app.handle().clone(), lan_for_listener);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("mogeung");
             }

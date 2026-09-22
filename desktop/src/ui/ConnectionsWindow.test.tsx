@@ -37,8 +37,13 @@ vi.mock("@tauri-apps/api/core", () => ({
       file.list = args?.list ?? [];
       return undefined;
     }
+    // The panel also asks what the LAN has said (`R-I17`); nothing, here.
+    if (cmd === "lan_peers") return [];
     throw new Error(`unexpected command ${cmd}`);
   }),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
 }));
 
 const HERE = "ws://127.0.0.1:7717/ws";

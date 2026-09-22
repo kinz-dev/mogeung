@@ -22,8 +22,20 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { useStore } from "@/store";
+import { cn } from "@/lib/cn";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, Input, Loading, Row } from "@/ui/primitives";
+import {
+  agoLabel,
+  foundName,
+  lanPeers,
+  matchesSaved,
+  onLanPeers,
+  reachLabel,
+  wsUrlOf,
+  type FoundDaemon,
+  type LanAnswer,
+} from "@/lib/lan";
 import {
   defaultName,
   dialledUrl,
@@ -48,6 +60,12 @@ export function ConnectionsWindow() {
   const [list, setList] = useState<Connection[] | null>(null);
   const [draftUrl, setDraftUrl] = useState("");
   const [draftName, setDraftName] = useState("");
+  // Daemons announcing themselves on this LAN (`R-I17`): the shell's table as
+  // it stood when the panel opened, then every change while it is open. Held
+  // here rather than in the store because nothing else renders from it, and
+  // `now` ticks so *12 s ago* stays true without the shell saying so.
+  const [lan, setLan] = useState<LanAnswer | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (!open) return;
@@ -60,9 +78,34 @@ export function ConnectionsWindow() {
     };
   }, [open, url]);
 
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    void lanPeers().then((answer) => {
+      if (alive) setLan(answer);
+    });
+    void onLanPeers((peers) => {
+      if (alive) setLan({ peers });
+    }).then((u) => {
+      if (alive) unlisten = u;
+      else u();
+    });
+    const tick = setInterval(() => setNow(Date.now()), 5000);
+    return () => {
+      alive = false;
+      unlisten?.();
+      clearInterval(tick);
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const close = () => useStore.setState({ showConnections: false });
+
+  const heard: FoundDaemon[] = lan && "peers" in lan ? lan.peers : [];
+  /** Is this saved connection the daemon being heard right now? */
+  const heardNow = (c: Connection) => heard.some((d) => !d.gone && matchesSaved(c, d));
 
   const write = (next: Connection[]) => {
     setList(next);
@@ -120,6 +163,13 @@ export function ConnectionsWindow() {
                   <span className="w-3 shrink-0">
                     {current && <Check size={11} className="text-[var(--green)]" />}
                   </span>
+                  {heardNow(c) && (
+                    <span
+                      data-live
+                      title="being heard on your LAN right now"
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--green)]"
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <Input
                       value={c.name}
@@ -207,6 +257,83 @@ export function ConnectionsWindow() {
             );
           })
         )}
+
+        {/*
+          Found on your LAN. `R-I17`: every daemon announces itself by default
+          (ADR-0039), the shell hears it, and this is the list. **Finding is
+          never connecting** — a row fills the form below, a hand types the
+          token, and Connect on the saved row is the switch that already exists.
+        */}
+        <div className="mt-3 border-t border-[var(--border)] pt-2">
+          <Dim className="mb-1 block text-2xs">
+            found on your LAN — daemons announcing themselves; nothing connects on its own
+          </Dim>
+          {lan === null ? null : "browser" in lan ? (
+            <Dim className="block text-2xs">
+              Not listening for beacons here: only the desktop window can, and it lists the
+              daemons found on your LAN.
+            </Dim>
+          ) : "error" in lan ? (
+            <Dim className="block text-2xs text-[var(--amber)]" data-lan-error>
+              {lan.error}
+            </Dim>
+          ) : lan.peers.length === 0 ? (
+            <Dim className="block text-2xs">
+              nothing heard yet — a daemon on this network announces itself within 15 s
+            </Dim>
+          ) : (
+            lan.peers.map((d) => {
+              const saved = list?.find((c) => matchesSaved(c, d));
+              return (
+                <div
+                  key={`${d.machine}\u0001${d.home}`}
+                  data-found={foundName(d)}
+                  data-gone={d.gone || undefined}
+                  data-mine={d.mine || undefined}
+                  className={cn("flex items-center gap-2 px-2 py-1", d.gone && "opacity-50")}
+                >
+                  <span
+                    title={d.gone ? "gone — not heard for a minute" : "heard"}
+                    className={cn(
+                      "h-2 w-2 shrink-0 rounded-full",
+                      d.gone ? "bg-[var(--dim)]" : "bg-[var(--green)]",
+                    )}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs">
+                      {foundName(d)}
+                      {d.mine && <Dim className="ml-1 text-2xs">(this machine)</Dim>}
+                      <Dim className="ml-2 font-mono text-2xs">
+                        {d.addr}:{d.port}
+                      </Dim>
+                    </div>
+                    <Dim className="block truncate text-2xs">
+                      {d.live} live · {d.waiting} need you ·{" "}
+                      {d.gone
+                        ? `gone — last heard ${agoLabel(d.last_seen_ms, now)}`
+                        : agoLabel(d.last_seen_ms, now)}{" "}
+                      · {reachLabel(d)}
+                    </Dim>
+                  </div>
+                  {saved ? (
+                    <Dim className="shrink-0 text-2xs">saved as {saved.name}</Dim>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      title="fill the form below with this daemon — you supply the token, then connect"
+                      onClick={() => {
+                        setDraftUrl(wsUrlOf(d));
+                        setDraftName(d.host ?? "");
+                      }}
+                    >
+                      <Plus size={11} /> add
+                    </Button>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
 
         <div className="mt-2 flex items-end gap-1">
           <div className="flex-1">

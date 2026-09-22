@@ -2481,6 +2481,7 @@ dependencies = [
  "portable-pty",
  "serde",
  "serde_json",
+ "socket2",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
