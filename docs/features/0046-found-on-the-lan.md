@@ -495,3 +495,16 @@ failed*. The second finding was the panel itself: one column of full forms
 was unreadable with three daemons, the token could not be checked, and there
 was no way to ask a daemon who it was without switching — `R-I19`, built the
 same day.
+
+**Correction, the same evening.** The first Test against the Mac was refused
+with a token in place, and the reason was in the daemon: the token contained
+a character `URLSearchParams` percent-encodes, and the gate compared the
+encoded bytes against the plain token — proved with a throwaway daemon and a
+token of `ab/cd+ef`, raw 200, encoded 401, Bearer 200. So the entry the panel
+composed was refused every time, Connect through it included; the five
+sockets to the Mac this laptop showed were WebKit's kept-alive leftovers of
+handshakes that had failed, and the empty board after "connecting" was most
+likely this and not only `R-J93`'s rule. The gate decodes now
+(`wire-protocol.md`, Security), and the reading above stands corrected: the
+tmux rule is real and would have hidden the Mac's one session, but it was
+not the first thing wrong.

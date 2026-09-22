@@ -128,3 +128,26 @@ async fn a_public_bind_with_a_token_is_allowed() {
     .unwrap();
     assert!(reachable.contains("200"), "got: {reachable}");
 }
+
+/// The token the panel composes is percent-encoded, and until 2026-09-22 the
+/// gate compared the encoded bytes and refused it — while the same token typed
+/// raw into the address passed. Both forms must pass now, and the raw one must
+/// keep passing for a URL typed by hand with a literal `+` in it.
+#[tokio::test]
+async fn an_encoded_query_token_passes_and_so_does_the_raw_one() {
+    let addr = serve("encoded", Some("ab/cd+ef")).await;
+    let (encoded, raw, header, wrong) = tokio::task::spawn_blocking(move || {
+        (
+            get(addr, "/api/health?token=ab%2Fcd%2Bef", None),
+            get(addr, "/api/health?token=ab/cd+ef", None),
+            get(addr, "/api/health", Some("Authorization: Bearer ab/cd+ef")),
+            get(addr, "/api/health?token=ab%2Fcd", None),
+        )
+    })
+    .await
+    .unwrap();
+    assert!(encoded.contains("200"), "the composed URL must pass, got: {encoded}");
+    assert!(raw.contains("200"), "the hand-typed URL must still pass, got: {raw}");
+    assert!(header.contains("200"), "got: {header}");
+    assert!(wrong.contains("401"), "a token that decodes to the wrong thing is still refused, got: {wrong}");
+}

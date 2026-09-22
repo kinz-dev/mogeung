@@ -803,6 +803,18 @@ Two things this still does *not* do, tracked under `R-I10`:
 Until then: loopback, or an ssh tunnel. See
 [guide/remote.md](../guide/remote.md).
 
+**The query token is decoded before it is compared** (2026-09-22). A
+WebSocket client cannot set a header, so the token rides `?token=…`, and a
+client that composes that URL properly percent-encodes it — `/` becomes
+`%2F`, `+` becomes `%2B`, a space becomes `+`. The gate compared the encoded
+bytes against the plain token until the first `R-I19` Test pressed against a
+real daemon was refused with a token that had a `/` in it, while the same
+token typed raw into the address had passed for weeks. Raw and decoded are
+both accepted now, each in constant time, so a hand-typed URL with a literal
+`+` keeps working; `an_encoded_query_token_passes_and_so_does_the_raw_one`
+pins it.
+
+
 ## The 2026-07-29 families
 
 The one-go pass (features 0015–0022) grew the contract in five places,

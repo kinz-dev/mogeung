@@ -57,14 +57,48 @@ fn request_authorized(req: &axum::extract::Request, token: &str) -> bool {
     if header_ok {
         return true;
     }
+    // Raw **or** decoded. A client that composes the URL properly — the
+    // window's `dialledUrl`, through `URLSearchParams` — percent-encodes a
+    // token with a `/`, `+`, `=` or a space in it, and until 2026-09-22 this
+    // compared the encoded bytes against the plain token and refused every
+    // such token, while a hand-typed raw one passed. Found on the first
+    // `R-I19` Test pressed against a real daemon. The raw form is still
+    // accepted, so a URL typed with a literal `+` keeps working.
     req.uri()
         .query()
         .map(|q| {
-            q.split('&')
-                .filter_map(|kv| kv.split_once('='))
-                .any(|(k, v)| k == "token" && constant_time_eq(v, token))
+            q.split('&').filter_map(|kv| kv.split_once('=')).any(|(k, v)| {
+                k == "token" && (constant_time_eq(v, token) || constant_time_eq(&percent_decode(v), token))
+            })
         })
         .unwrap_or(false)
+}
+
+/// `%XX` to the byte, `+` to a space, anything malformed left as it was —
+/// the decoding a `URLSearchParams` value needs, and no more. Lossy on
+/// invalid UTF-8, which a token never is.
+fn percent_decode(v: &str) -> String {
+    let bytes = v.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                match u8::from_str_radix(&v[i + 1..i + 3], 16) {
+                    Ok(b) if v.is_char_boundary(i + 1) && v.is_char_boundary(i + 3) => {
+                        out.push(b);
+                        i += 3;
+                        continue;
+                    }
+                    _ => out.push(b'%'),
+                }
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Length-leaking only — every byte is compared regardless of mismatches, so
@@ -2520,5 +2554,22 @@ mod write_guard_tests {
         assert!(!is_write(&ClientMsg::ForgetSession {
             session_id: "s".into()
         }));
+    }
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::percent_decode;
+
+    /// What `URLSearchParams` does to a token, undone — and nothing else.
+    #[test]
+    fn a_query_value_is_decoded_the_way_a_url_encoder_wrote_it() {
+        assert_eq!(percent_decode("ab%2Fcd%2Bef"), "ab/cd+ef");
+        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode("plain-token_1"), "plain-token_1");
+        // Malformed escapes are left alone rather than eaten.
+        assert_eq!(percent_decode("50%"), "50%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("%2"), "%2");
     }
 }
