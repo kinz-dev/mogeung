@@ -533,3 +533,12 @@ session, never in `localStorage`. Attaching reads the same file, so a daemon
 started by hand with that token is probed and dialled with it. ADR-0009's
 amendment has the reasoning and the one posture it cannot express, findable
 but not connectable, which is a `beacon`-only key if it is ever wanted.
+
+**Step 7's cost, found the same evening (`R-J102`).** Making the window's
+own daemon token-gated meant the window had to dial it with the token — and
+it did, at launch, and nowhere else. Switching to a remote and back dialled
+the saved local entry with no token and was refused, which read as *the
+daemon died*. The dial is now composed on every switch (`lib/dial.ts`), the
+window hosts this machine's daemon at every launch whatever it shows, and the
+remembered address carries no token. The top-bar switcher (`R-I20`) followed,
+with a status per saved daemon asked of the shell.

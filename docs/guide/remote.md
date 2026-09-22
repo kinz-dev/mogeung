@@ -43,6 +43,20 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 The flags below are how you reach a daemon the first time. After that, use the
 window: click the connection dot in the top bar, or press `Alt+D`.
 
+**To move between saved daemons, use the name beside the dot.** It opens a
+list of every saved daemon with its state, checked when the list opens:
+*up* with its host and version, *refused* — answering, but the token was
+turned away — or *down*, plus how many sessions are live and need you when the
+daemon is also heard on the LAN. Choosing one switches the window to it; *manage
+connections…* opens the full panel. The check is a health request the desktop
+window makes with each entry's own token, which never leaves the file to do it;
+a browser tab cannot make it and says so.
+
+**Switching back to this machine always works**, since 2026-09-22. The window
+keeps this machine's daemon running whichever board it shows, and gives it its
+own token on the way back — before that, a token-gated daemon refused the
+switch back and looked dead.
+
 The top of that window is where you are, not where you could go: the daemon
 you are connected to, whether the socket is up, and — from the identity it
 publishes (`R-I5`) — which `~/.claude` it is watching, on which host, at which

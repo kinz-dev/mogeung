@@ -31,6 +31,7 @@ import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
+import { composeDial } from "@/lib/dial";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, IconButton, Input, Loading, Row } from "@/ui/primitives";
 import {
@@ -72,6 +73,8 @@ export function ConnectionsWindow() {
   const daemon = useStore((s) => s.daemon);
   const conn = useStore((s) => s.conn);
   const setUrl = useStore((s) => s.setUrl);
+  const daemonStatus = useStore((s) => s.daemonStatus);
+  const localAddr = useStore((s) => s.localAddr);
 
   // A load rather than a value, since ADR-0036 — so there is a tick with no
   // rows, and an empty list rendered during it reads as a list that was lost.
@@ -172,13 +175,16 @@ export function ConnectionsWindow() {
   };
 
   const test = (c: Connection) => {
-    const missing = missingToken(c);
+    // This machine's own daemon takes its token from the shell, not the list —
+    // the same composition a switch makes (`lib/dial.ts`, `R-J102`).
+    const dial = composeDial(dialledUrl(c), { addr: localAddr, status: daemonStatus });
+    const missing = dial === dialledUrl(c) ? missingToken(c) : null;
     if (missing) {
       setProbe({ id: c.id, result: { ok: false, reason: missing } });
       return;
     }
     setProbe({ id: c.id, result: "testing" });
-    void probeConnection(dialledUrl(c)).then((result) => setProbe({ id: c.id, result }));
+    void probeConnection(dial).then((result) => setProbe({ id: c.id, result }));
   };
 
   const heard: FoundDaemon[] = lan && "peers" in lan ? lan.peers : [];
@@ -197,7 +203,7 @@ export function ConnectionsWindow() {
       <div className="flex min-h-[22rem] gap-3">
         {/* The list. Clicking a row selects it; Connect is on the right. */}
         <div className="flex w-60 shrink-0 flex-col border-r border-[var(--border)] pr-3">
-          <Dim className="mb-1 block text-2xs">saved</Dim>
+          <Dim className="mb-1 block text-sm">saved</Dim>
           {list === null ? (
             <Loading what="connections" />
           ) : (
@@ -222,8 +228,8 @@ export function ConnectionsWindow() {
                         className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--green)]"
                       />
                     )}
-                    <span className="min-w-0 flex-1 truncate">{labelOf(c)}</span>
-                    <Dim className="shrink-0 font-mono text-2xs">{hostPortOf(c.url) ?? ""}</Dim>
+                    <span className="min-w-0 flex-1 truncate text-base">{labelOf(c)}</span>
+                    <Dim className="shrink-0 font-mono text-sm">{hostPortOf(c.url) ?? ""}</Dim>
                   </Row>
                 );
               })}
@@ -240,18 +246,18 @@ export function ConnectionsWindow() {
             types the token, and Connect is the switch that already exists.
           */}
           <div className="mt-3 border-t border-[var(--border)] pt-2">
-            <Dim className="mb-1 block text-2xs">found on your LAN — nothing connects on its own</Dim>
+            <Dim className="mb-1 block text-sm">found on your LAN — nothing connects on its own</Dim>
             {lan === null ? null : "browser" in lan ? (
-              <Dim className="block text-2xs">
+              <Dim className="block text-sm">
                 Not listening for beacons here: only the desktop window can, and it lists the
                 daemons found on your LAN.
               </Dim>
             ) : "error" in lan ? (
-              <Dim className="block text-2xs text-[var(--amber)]" data-lan-error>
+              <Dim className="block text-sm text-[var(--amber)]" data-lan-error>
                 {lan.error}
               </Dim>
             ) : others.length === 0 ? (
-              <Dim className="block text-2xs">
+              <Dim className="block text-sm">
                 nothing else heard yet — a daemon on this network announces itself within 15 s
               </Dim>
             ) : (
@@ -272,13 +278,13 @@ export function ConnectionsWindow() {
                       )}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs">
+                      <div className="truncate text-base">
                         {foundName(d)}
-                        <Dim className="ml-2 font-mono text-2xs">
+                        <Dim className="ml-2 font-mono text-sm">
                           {d.addr}:{d.port}
                         </Dim>
                       </div>
-                      <Dim className="block truncate text-2xs">
+                      <Dim className="block truncate text-sm">
                         {d.live} live · {d.waiting} need you ·{" "}
                         {d.gone
                           ? `gone — last heard ${agoLabel(d.last_seen_ms, now)}`
@@ -288,7 +294,7 @@ export function ConnectionsWindow() {
                     </div>
                     {saved ? (
                       <Button variant="ghost" title={`saved as ${saved.name || saved.url}`} onClick={() => select(saved.id)}>
-                        <Dim className="text-2xs">saved as {labelOf(saved)}</Dim>
+                        <Dim className="text-sm">saved as {labelOf(saved)}</Dim>
                       </Button>
                     ) : (
                       <Button
@@ -309,7 +315,7 @@ export function ConnectionsWindow() {
         {/* The form: the selected connection, and what you can do to it. */}
         <div className="min-w-0 flex-1">
           {selected === null ? (
-            <Dim className="block text-2xs">pick a connection on the left, or add one</Dim>
+            <Dim className="block text-sm">pick a connection on the left, or add one</Dim>
           ) : (
             <ConnectionForm
               key={selected.id}
@@ -341,14 +347,14 @@ export function ConnectionsWindow() {
         </div>
       </div>
 
-      <Dim className="mt-3 block text-2xs">
+      <Dim className="mt-3 block text-sm">
         Switching clears the board: session ids do not survive the move, and a queue from the
         machine you just left is worse than an empty one. A daemon on another host needs to be
         reachable — a beacon row says how; `ssh -L 7717:localhost:7717 host` is the way in to
         one bound to its own machine — and local-versus-remote is then decided by the daemon&apos;s
         identity rather than by the address you dialled (`R-I5`).
       </Dim>
-      <Dim className="mt-1 block text-2xs">
+      <Dim className="mt-1 block text-sm">
         {storageKind() === "file" ? (
           <>
             Kept in <code>~/.mogeung/connections.json</code> on this machine, readable only by you
@@ -401,8 +407,9 @@ function ConnectionForm({
   return (
     <div className="flex flex-col gap-2">
       <div>
-        <Dim className="mb-0.5 block text-2xs">name</Dim>
+        <Dim className="mb-0.5 block text-sm">name</Dim>
         <Input
+          className="h-7 text-base"
           value={c.name}
           placeholder={c.url ? defaultName(c.url) : "dev box"}
           ariaLabel={`name for ${label}`}
@@ -410,8 +417,9 @@ function ConnectionForm({
         />
       </div>
       <div>
-        <Dim className="mb-0.5 block text-2xs">address</Dim>
+        <Dim className="mb-0.5 block text-sm">address</Dim>
         <Input
+          className="h-7 text-base"
           value={c.url}
           mono
           placeholder="ws://devbox:7717/ws"
@@ -420,10 +428,11 @@ function ConnectionForm({
         />
       </div>
       <div>
-        <Dim className="mb-0.5 block text-2xs">token (remote only)</Dim>
+        <Dim className="mb-0.5 block text-sm">token (remote only)</Dim>
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
             <Input
+              className="h-7 text-base"
               value={c.token ?? ""}
               secret={!showToken}
               placeholder="none"
@@ -442,10 +451,11 @@ function ConnectionForm({
         </div>
       </div>
       <div>
-        <Dim className="mb-0.5 block text-2xs">
+        <Dim className="mb-0.5 block text-sm">
           tunnel command — recorded so it is here when you need it, never run
         </Dim>
         <Input
+          className="h-7 text-base"
           value={c.note ?? ""}
           mono
           placeholder="ssh -L 7717:localhost:7717 devbox"
@@ -498,7 +508,7 @@ function ConnectionForm({
       </div>
 
       {probe !== null && (
-        <Dim className="block text-2xs" data-probe={probe === "testing" ? "testing" : probe.ok ? "ok" : "fail"}>
+        <Dim className="block text-sm" data-probe={probe === "testing" ? "testing" : probe.ok ? "ok" : "fail"}>
           {probe === "testing"
             ? "asking…"
             : probe.ok
@@ -510,7 +520,7 @@ function ConnectionForm({
       )}
 
       {current && (
-        <Dim className="block text-2xs">
+        <Dim className="block text-sm">
           {connState === "open" ? (daemonLine ? `connected — ${daemonLine}` : "connected") : connState}
         </Dim>
       )}

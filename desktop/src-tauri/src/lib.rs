@@ -757,6 +757,7 @@ pub fn run() {
             daemon_acquire,
             connections::connections_load,
             connections::connections_save,
+            connections::connections_status,
             lan::lan_peers
         ])
         .setup(|app| {

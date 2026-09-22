@@ -29,6 +29,19 @@
 
 import { isTauri } from "@/lib/tauri";
 
+/**
+ * The shell's IPC, loaded on demand so a browser bundle never runs it — and
+ * loaded **once**, through one promise. Every function below used to import
+ * it for itself; two of them in flight together (the switcher asks for the
+ * list and the status at once) is also the case Vitest's mocking resolves
+ * wrongly, which is how this was found.
+ */
+let shellModule: Promise<typeof import("@tauri-apps/api/core")> | null = null;
+function shell(): Promise<typeof import("@tauri-apps/api/core")> {
+  shellModule ??= import("@tauri-apps/api/core");
+  return shellModule;
+}
+
 export interface Connection {
   id: string;
   name: string;
@@ -104,7 +117,7 @@ export function storageKind(): "file" | "browser" {
 export async function loadConnections(): Promise<Connection[]> {
   if (!isTauri()) return readLocal();
 
-  const core = await import("@tauri-apps/api/core");
+  const core = await shell();
   const fromFile = await core.invoke<Connection[]>("connections_load");
   if (fromFile.length > 0) return fromFile.map(coerce).filter((c): c is Connection => c !== null);
 
@@ -125,7 +138,7 @@ export async function saveConnections(list: Connection[]): Promise<void> {
     localStorage.setItem(KEY, JSON.stringify(list));
     return;
   }
-  const core = await import("@tauri-apps/api/core");
+  const core = await shell();
   await core.invoke("connections_save", { list });
 }
 
@@ -297,4 +310,29 @@ export function probeConnection(
     ws.onclose = () =>
       finish({ ok: false, reason: "closed before it said who it was — the token was probably refused" });
   });
+}
+
+/** Is a saved daemon alive, and will it let us in? What the shell found. `R-I20`. */
+export interface Liveness {
+  id: string;
+  state: "up" | "refused" | "down" | "unknown";
+  host: string | null;
+  version: string | null;
+  detail: string | null;
+}
+
+/**
+ * Ask the shell to check every saved connection's health, each with its own
+ * token — which never leaves the shell to do it. `null` in a browser tab,
+ * which has no shell and cannot ask a daemon on another origin anything short
+ * of opening a socket and being sent its whole board.
+ */
+export async function connectionsStatus(): Promise<Liveness[] | null> {
+  if (!isTauri()) return null;
+  const core = await shell();
+  try {
+    return await core.invoke<Liveness[]>("connections_status");
+  } catch {
+    return null;
+  }
 }

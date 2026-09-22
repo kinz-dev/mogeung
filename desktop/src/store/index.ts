@@ -68,12 +68,13 @@ import type {
 } from "@/wire/types";
 import {
   daemonAcquire,
-  dialFor,
   isTauri,
   localAddrOf,
   machineId as machineIdFromShell,
   type DaemonStatus,
 } from "@/lib/tauri";
+import { loadConnections } from "@/lib/connections";
+import { composeDial, LOCAL_URL, rememberable } from "@/lib/dial";
 import { applyAppZoom } from "@/lib/zoom";
 import { answerFor, attachError, attachResult, gitSessionOf, pushCmd, type ConsoleEntry } from "@/lib/gitConsole";
 import { draftAsk, type FlaggedHunk } from "@/lib/prompt";
@@ -894,6 +895,10 @@ export interface AppState {
   machineId: string | null;
   /** Whether this process is hosting the daemon or attached to one. ADR-0009. */
   daemonStatus: DaemonStatus | null;
+  /** The address the shell was asked to acquire for this machine's daemon,
+   *  so a switch can tell that daemon from a tunnel on another loopback port.
+   *  `R-J102`. */
+  localAddr: string | null;
   /** A rescan is in flight — a button that does nothing visible reads as broken. */
   rescanning: boolean;
   /** The session whose label is being edited. `R-B26`. */
@@ -1173,6 +1178,7 @@ export const useStore = create<AppState>((set, get) => ({
   searchOpen: false,
   machineId: null,
   daemonStatus: null,
+  localAddr: null,
   rescanning: false,
   labelEditing: null,
   runConfigs: {},
@@ -1521,7 +1527,12 @@ export const useStore = create<AppState>((set, get) => ({
   patchSearch: (patch) => set((s) => ({ search: { ...s.search, ...patch } })),
 
   setUrl: (url) => {
-    localStorage.setItem("mogeung.url", url);
+    // Remember the address; dial the address with its token. `R-J102`: this
+    // wrote the token-bearing URL into `localStorage`, and the switch back to
+    // this machine's own daemon dialled it with no token at all.
+    localStorage.setItem("mogeung.url", rememberable(url));
+    const { daemonStatus, localAddr } = get();
+    url = composeDial(url, { addr: localAddr, status: daemonStatus });
     client?.setUrl(url);
     // Everything below is about the old machine. Session ids do not survive
     // the move, and a stale board is worse than an empty one.
@@ -2441,8 +2452,14 @@ export const useStore = create<AppState>((set, get) => ({
 export function startClient(): DaemonClient {
   if (client) return client;
   const store = useStore.getState();
+  // An older build remembered the token with the address; this one remembers
+  // the address alone and composes the token when it dials. `R-J102`.
+  const remembered = rememberable(store.url);
+  if (localStorage.getItem("mogeung.url") && localStorage.getItem("mogeung.url") !== remembered) {
+    localStorage.setItem("mogeung.url", remembered);
+  }
   client = new DaemonClient({
-    url: store.url,
+    url: remembered,
     onMessage: (msg) => useStore.getState().ingest(msg),
     onState: (conn, connDetail) => useStore.setState({ conn, connDetail: connDetail ?? null }),
   });
@@ -2456,40 +2473,47 @@ export function startClient(): DaemonClient {
   // Host a daemon if nothing is serving, **then** connect. ADR-0009: one
   // executable should be enough, so launching the app from a menu with nothing
   // else running has to work. Connecting first would race the bind.
-  void ensureDaemon(store.url).finally(() => client?.connect());
+  //
+  // **Whatever the window is pointed at** — ADR-0009's second amendment of
+  // 2026-09-22. A window last used on a remote used to host nothing, so this
+  // machine went unwatched and unannounced, and switching back found no
+  // daemon at all. The window's own daemon is this machine's; which daemon
+  // the window *shows* is a separate choice.
+  void (async () => {
+    await ensureDaemon(localAddrOf(remembered) ?? localAddrOf(LOCAL_URL)!);
+    const { daemonStatus, localAddr } = useStore.getState();
+    const local = { addr: localAddr, status: daemonStatus };
+    // A remote's token is in the saved connections, not in what was
+    // remembered, so a remote address needs them read first.
+    const saved = localAddrOf(remembered) ? [] : await loadConnections().catch(() => []);
+    const dial = composeDial(remembered, local, saved);
+    client?.setUrl(dial);
+    useStore.setState({ url: dial });
+  })().finally(() => client?.connect());
   return client;
 }
 
 /**
- * Make sure something is serving before the socket dials.
+ * Make sure this machine's daemon is serving, on `addr`, before the socket
+ * dials — and record what the shell did, so every later switch can compose
+ * the port and token for it (`lib/dial.ts`).
  *
- * Three ways to do nothing, and each is deliberate:
+ * Two ways to do nothing, and each is deliberate:
  *
  * - **A browser has no daemon to host.** The dev server is a real client, but
  *   it cannot bind a port, and the window says so rather than hanging.
- * - **A non-loopback URL is a decision already made.** You told this window to
- *   watch another machine; starting a local daemon would answer a question
- *   nobody asked.
  * - **Somebody else is already serving.** The Rust side confirms it is actually
  *   mogeungd — an unrelated service on 7717 would otherwise leave the window on
  *   a socket that never connects, with no explanation.
+ *
+ * There used to be a third — *a non-loopback URL is a decision already made*
+ * — and ADR-0009's second 2026-09-22 amendment retired it: see `startClient`.
  */
-async function ensureDaemon(url: string): Promise<void> {
+async function ensureDaemon(addr: string): Promise<void> {
   if (!isTauri()) return;
-  const addr = localAddrOf(url);
-  if (!addr) return;
   try {
     const status = await daemonAcquire(addr);
-    useStore.setState({ daemon: useStore.getState().daemon, daemonStatus: status });
-    // The file may have moved the port or named a token (ADR-0009's
-    // 2026-09-22 amendment). Dial what the shell actually bound, with the
-    // token it gates on — through the client's own setter, never the store's
-    // `setUrl`, which would write the token into `localStorage`.
-    const dial = dialFor(status, url);
-    if (dial !== url) {
-      client?.setUrl(dial);
-      useStore.setState({ url: dial });
-    }
+    useStore.setState({ daemon: useStore.getState().daemon, daemonStatus: status, localAddr: addr });
     if (status.mode === "none") {
       useStore.getState().pushError(
         status.reason

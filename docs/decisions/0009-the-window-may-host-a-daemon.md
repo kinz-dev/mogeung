@@ -144,3 +144,38 @@ What it comes with:
 *Revisit if* gains a line: a machine that should be findable but not
 connectable has no way to say so short of leaving `listen` out, and if that
 turns out to be a real want, a `beacon`-only posture is one key away.
+
+## Amendment — 2026-09-22, later
+
+**The window acquires this machine's daemon at every launch, whatever daemon
+it is pointed at.** This replaces a clause that lived in the client rather
+than above — *a non-loopback URL is a decision already made; starting a local
+daemon would answer a question nobody asked* — under which a window last used
+on a remote hosted nothing.
+
+The reason is `R-J102`, reported the same day: *"when I use the UI to switch
+to another session, I can't switch it back to the local session — I think the
+mogeungd will be killed once I connect to a remote session."* Two faults
+answered to that description. The daemon was never killed; the switch back
+dialled it without the token the first amendment made it require. But a
+window **relaunched** while pointed at a remote really did leave this machine
+with no daemon — unwatched, unannounced to the LAN, and nothing to switch back
+to. With the beacon and the first amendment, this machine's daemon is also its
+presence on the network, and that is not a thing to lose because of which
+board a window last showed.
+
+What it comes with:
+
+- **Which daemon runs and which daemon the window shows are now separate.**
+  The hosting chip and the notice mean *this window keeps this machine's
+  daemon alive*, whichever board is on screen.
+- **Tokens are composed at every dial, never remembered.** `lib/dial.ts`
+  gives this machine's daemon the port and token the shell reported, a saved
+  remote the token from the `0600` file, and a loopback address on another
+  port — an `ssh -L` tunnel — its own saved token rather than this machine's.
+  What `localStorage` keeps between launches is the address alone; before this
+  it kept the remote's token too, against ADR-0036.
+- A laptop that uses `ssh -L` on 7717 for a remote now finds the port taken
+  when it launches pointed elsewhere, and should tunnel on another port —
+  which the guide's Route A already recommends when a local daemon is running.
+

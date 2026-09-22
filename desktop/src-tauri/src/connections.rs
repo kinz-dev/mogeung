@@ -110,9 +110,223 @@ pub async fn connections_save(list: Vec<Connection>) -> Result<(), String> {
     save_to(&default_path(), &list)
 }
 
+/// Is a saved daemon alive, and will it let us in? `R-I20`.
+///
+/// The top bar's switcher shows this beside every saved connection. It is
+/// asked **here**, in the shell that owns the file, rather than in the
+/// webview, for two reasons: the tokens never have to leave the `0600` file
+/// to answer it (ADR-0036), and a plain `GET /api/health` is the cheapest
+/// honest question — where a WebSocket, the only thing the webview could open
+/// across origins, would be answered with the whole snapshot.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct Liveness {
+    pub id: String,
+    /// `up` — answered, and the token worked. `refused` — answered, and turned
+    /// the token away. `down` — nothing answered. `unknown` — not a thing this
+    /// can ask (a `wss://` address behind a TLS proxy).
+    pub state: &'static str,
+    pub host: Option<String>,
+    pub version: Option<String>,
+    /// Why, in words, when it is not `up`.
+    pub detail: Option<String>,
+}
+
+/// Host, port and whether it is TLS, out of a `ws://` or `wss://` address.
+pub fn target_of(url: &str) -> Option<(String, u16, bool)> {
+    let (rest, tls) = if let Some(r) = url.strip_prefix("ws://") {
+        (r, false)
+    } else if let Some(r) = url.strip_prefix("wss://") {
+        (r, true)
+    } else {
+        return None;
+    };
+    let authority = rest.split(['/', '?']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        let (h, after) = v6.split_once(']')?;
+        let port = after.strip_prefix(':').and_then(|p| p.parse().ok());
+        (h.to_string(), port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p.parse().ok()),
+            None => (authority.to_string(), None),
+        }
+    };
+    Some((host, port.unwrap_or(if tls { 443 } else { 80 }), tls))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+/// One health check, with a deadline on every step. Degrades to `down` or
+/// `unknown` with a reason; never panics on what a stranger sends back.
+pub fn liveness(id: &str, url: &str, token: Option<&str>, timeout: std::time::Duration) -> Liveness {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    let answer = |state: &'static str, detail: Option<String>| Liveness {
+        id: id.to_string(),
+        state,
+        host: None,
+        version: None,
+        detail,
+    };
+    let Some((host, port, tls)) = target_of(url) else {
+        return answer("unknown", Some("not a ws:// address".into()));
+    };
+    if tls {
+        return answer("unknown", Some("behind TLS — the switcher only asks plain ws:// daemons".into()));
+    }
+    let addr = match (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next()) {
+        Some(a) => a,
+        None => return answer("down", Some(format!("{host} does not resolve"))),
+    };
+    let mut sock = match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(s) => s,
+        Err(e) => return answer("down", Some(format!("nothing answered on {host}:{port} — {e}"))),
+    };
+    let _ = sock.set_read_timeout(Some(timeout));
+    let _ = sock.set_write_timeout(Some(timeout));
+    let auth = token
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let req = format!("GET /api/health HTTP/1.0\r\nHost: {host}\r\n{auth}\r\n");
+    if sock.write_all(req.as_bytes()).is_err() {
+        return answer("down", Some("the connection closed before it could be asked".into()));
+    }
+    let mut body = String::new();
+    let _ = sock.take(64 * 1024).read_to_string(&mut body);
+    let status = body
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse::<u16>().ok());
+    match status {
+        Some(200) => {
+            let json = body.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+            let v: serde_json::Value = serde_json::from_str(json.trim()).unwrap_or_default();
+            let daemon = v.get("daemon");
+            Liveness {
+                id: id.to_string(),
+                state: "up",
+                host: daemon.and_then(|d| d.get("host")).and_then(|h| h.as_str()).map(str::to_string),
+                version: v.get("version").and_then(|h| h.as_str()).map(str::to_string),
+                detail: None,
+            }
+        }
+        Some(401) => answer(
+            "refused",
+            Some(if token.is_some_and(|t| !t.is_empty()) {
+                "answering, and the token was refused".into()
+            } else {
+                "answering, and it wants a token".into()
+            }),
+        ),
+        Some(code) => answer("unknown", Some(format!("answered {code}, which is not a mogeung daemon's answer"))),
+        None => answer("unknown", Some("answered with something that is not HTTP".into())),
+    }
+}
+
+/// Every saved connection, checked at once. This machine's own daemon keeps
+/// no token in the list — it lives in `config.toml` — so a loopback entry with
+/// none is asked with that one.
+fn status_all(list: Vec<Connection>) -> Vec<Liveness> {
+    let local_token = mogeung_core::config::Config::load().0.token;
+    let timeout = std::time::Duration::from_millis(1500);
+    let handles: Vec<_> = list
+        .into_iter()
+        .map(|c| {
+            let token = c.token.clone().or_else(|| {
+                target_of(&c.url)
+                    .filter(|(h, _, _)| is_loopback_host(h))
+                    .and(local_token.clone())
+            });
+            std::thread::spawn(move || liveness(&c.id, &c.url, token.as_deref(), timeout))
+        })
+        .collect();
+    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+}
+
+#[tauri::command]
+pub async fn connections_status() -> Vec<Liveness> {
+    let list = load_from(&default_path());
+    tauri::async_runtime::spawn_blocking(move || status_all(list))
+        .await
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The address a switcher has to take apart — IPv6 brackets, a query with
+    /// a token in it, no port at all.
+    #[test]
+    fn an_address_comes_apart_into_host_port_and_tls() {
+        assert_eq!(target_of("ws://10.0.0.39:7717/ws"), Some(("10.0.0.39".into(), 7717, false)));
+        assert_eq!(target_of("ws://devbox:7717/ws?token=abc"), Some(("devbox".into(), 7717, false)));
+        assert_eq!(target_of("ws://[fd00::1]:7800/ws"), Some(("fd00::1".into(), 7800, false)));
+        assert_eq!(target_of("wss://mogeung.example/ws"), Some(("mogeung.example".into(), 443, true)));
+        assert_eq!(target_of("ws://devbox/ws"), Some(("devbox".into(), 80, false)));
+        assert_eq!(target_of("http://devbox:7717"), None);
+        assert_eq!(target_of("ws:///ws"), None);
+    }
+
+    /// A tiny server that answers every connection with `reply`, and hands
+    /// back the request it saw so a test can check the header went out.
+    fn serve_once(reply: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+        (format!("ws://127.0.0.1:{port}/ws"), rx)
+    }
+
+    #[test]
+    fn a_daemon_that_answers_is_up_and_says_who_it_is() {
+        let (url, seen) = serve_once(
+            "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"version\":\"0.1.0\",\"daemon\":{\"host\":\"devbox\"}}",
+        );
+        let l = liveness("a", &url, Some("s3cret"), std::time::Duration::from_secs(2));
+        assert_eq!((l.state, l.host.as_deref(), l.version.as_deref()), ("up", Some("devbox"), Some("0.1.0")));
+        assert!(seen.recv().unwrap().contains("Authorization: Bearer s3cret"), "the token went as a header");
+    }
+
+    #[test]
+    fn a_daemon_that_turns_the_token_away_is_refused_not_down() {
+        let (url, _) = serve_once("HTTP/1.0 401 Unauthorized\r\n\r\nmissing or wrong token");
+        let l = liveness("a", &url, Some("wrong"), std::time::Duration::from_secs(2));
+        assert_eq!(l.state, "refused");
+        assert!(l.detail.unwrap().contains("refused"));
+        let (url, _) = serve_once("HTTP/1.0 401 Unauthorized\r\n\r\n");
+        assert!(liveness("a", &url, None, std::time::Duration::from_secs(2)).detail.unwrap().contains("wants a token"));
+    }
+
+    #[test]
+    fn nothing_listening_is_down_and_says_where() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let l = liveness("a", &format!("ws://127.0.0.1:{port}/ws"), None, std::time::Duration::from_millis(500));
+        assert_eq!(l.state, "down");
+        assert!(l.detail.unwrap().contains(&port.to_string()));
+    }
+
+    #[test]
+    fn something_that_is_not_a_daemon_is_unknown_and_tls_is_not_asked() {
+        let (url, _) = serve_once("SSH-2.0-OpenSSH_9.6\r\n");
+        assert_eq!(liveness("a", &url, None, std::time::Duration::from_secs(2)).state, "unknown");
+        assert_eq!(liveness("a", "wss://x.example/ws", None, std::time::Duration::from_millis(100)).state, "unknown");
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mog-conn-{}-{tag}", std::process::id()));

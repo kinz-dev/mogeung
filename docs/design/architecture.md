@@ -751,7 +751,12 @@ amendment, `R-I17` step 7): the daemon a window hosts binds and gates as
 `mogeungd` would from the same file, `admit` refuses a public bind with no
 token and the refusal is shown, and the window dials its own daemon with the
 token the shell hands it. It still takes the defaults for `db`, `poll_ms` and
-the rest.
+the rest. **It is acquired at every launch, whatever the window is pointed
+at** (ADR-0009's second amendment, `R-J102`): which daemon runs and which board
+the window shows are separate choices, and every dial is composed in
+`lib/dial.ts` — this machine's daemon takes the shell's port and token, a
+saved remote its token from the `0600` file — while `localStorage` remembers
+the address alone.
 
 The consent is the third of those, and it was not there when this shipped.
 `--allow-remote-model` was given `--allow-run`'s shape, and the shapes differ in

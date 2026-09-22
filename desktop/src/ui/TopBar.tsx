@@ -17,6 +17,7 @@ import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
 import { showPane } from "@/lib/panes";
 import { WindowControls } from "@/ui/WindowControls";
+import { ConnectionSwitcher } from "@/ui/ConnectionSwitcher";
 import { bellState, ensurePermission } from "@/lib/notify";
 
 const THEMES = ["dark", "light", "system"] as const;
@@ -95,6 +96,8 @@ export function TopBar() {
           <span className="h-2 w-2 rounded-full" style={{ background: dot }} />
         </button>
       </Tooltip>
+
+      <ConnectionSwitcher />
 
       {daemonStatus?.mode === "hosting" && (
         <Chip
