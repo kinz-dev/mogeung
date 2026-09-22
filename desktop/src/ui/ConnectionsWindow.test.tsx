@@ -159,11 +159,22 @@ describe("the connections panel", () => {
     expect(useStore.getState().url).toBe(HERE);
   });
 
+  it("says before dialling that a LAN entry has no token saved", async () => {
+    await open([
+      { id: "a", name: "here", url: HERE },
+      { id: "b", name: "there", url: THERE },
+    ]);
+    pick("there");
+    fireEvent.click(screen.getByTitle(/without switching/));
+    expect(await screen.findByText(/no token saved/)).toBeInTheDocument();
+    expect(probe.asked).toEqual([]);
+  });
+
   it("says what a failed test could mean", async () => {
     probe.answer = { ok: false, reason: "refused — unreachable, or the token was wrong" };
     await open([
       { id: "a", name: "here", url: HERE },
-      { id: "b", name: "there", url: THERE },
+      { id: "b", name: "there", url: THERE, token: "wrong" },
     ]);
     pick("there");
     fireEvent.click(screen.getByTitle(/without switching/));

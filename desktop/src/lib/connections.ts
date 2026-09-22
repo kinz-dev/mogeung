@@ -184,6 +184,23 @@ export function reorder(list: Connection[], from: number, to: number): Connectio
   return next;
 }
 
+/**
+ * The one refusal a socket cannot explain, said before dialling: a daemon
+ * reachable beyond loopback requires a token (`R-I10`), so an entry with an
+ * address on the LAN and no token will be refused every time, and the reason
+ * is in the form, not on the wire. Loopback needs none, and is left alone.
+ */
+export function missingToken(c: Connection): string | null {
+  if (c.token) return null;
+  try {
+    const host = new URL(c.url).hostname.replace(/^\[|\]$/g, "");
+    if (host === "127.0.0.1" || host === "localhost" || host === "::1") return null;
+  } catch {
+    return null;
+  }
+  return "no token saved — a daemon reachable on the LAN requires one; type it above, then test again";
+}
+
 /** What a Test found at the other end of a connection. */
 export type ProbeResult =
   | { ok: true; host: string | null; version: string | null; queued: number | null }

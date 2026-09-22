@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { probeConnection } from "./connections";
+import { missingToken, probeConnection } from "./connections";
 
 class FakeSocket {
   static last: FakeSocket | null = null;
@@ -63,5 +63,22 @@ describe("testing a connection", () => {
       throw new Error("SyntaxError: bad url");
     };
     await expect(probeConnection("nope", 4000, bad)).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/a socket can dial/) });
+  });
+});
+
+describe("the refusal a socket cannot explain", () => {
+  const c = (url: string, token?: string) => ({ id: "x", name: "n", url, token });
+
+  it("is said before dialling a LAN address with no token", () => {
+    expect(missingToken(c("ws://10.0.0.39:7717/ws"))).toMatch(/no token saved/);
+    expect(missingToken(c("ws://devbox:7717/ws"))).toMatch(/no token saved/);
+  });
+
+  it("is not said for loopback, which needs none, nor when a token is there", () => {
+    expect(missingToken(c("ws://127.0.0.1:7717/ws"))).toBeNull();
+    expect(missingToken(c("ws://localhost:7717/ws"))).toBeNull();
+    expect(missingToken(c("ws://[::1]:7717/ws"))).toBeNull();
+    expect(missingToken(c("ws://10.0.0.39:7717/ws", "6f1c"))).toBeNull();
+    expect(missingToken(c("", undefined))).toBeNull();
   });
 });

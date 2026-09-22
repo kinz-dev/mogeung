@@ -37,6 +37,7 @@ import {
   defaultName,
   dialledUrl,
   loadConnections,
+  missingToken,
   newId,
   probeConnection,
   reorder,
@@ -170,6 +171,11 @@ export function ConnectionsWindow() {
   };
 
   const test = (c: Connection) => {
+    const missing = missingToken(c);
+    if (missing) {
+      setProbe({ id: c.id, result: { ok: false, reason: missing } });
+      return;
+    }
     setProbe({ id: c.id, result: "testing" });
     void probeConnection(dialledUrl(c)).then((result) => setProbe({ id: c.id, result }));
   };
