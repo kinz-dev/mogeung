@@ -22,13 +22,17 @@
 //! answer. A multi-homed sender sends once per interface, from a socket bound
 //! to that interface's address, so the source is right on each.
 //!
-//! # Three misses, not one
+//! # Four misses, not one
 //!
-//! A peer is *gone* when nothing has been heard for three intervals. One lost
+//! A peer is *gone* when nothing has been heard for four intervals. One lost
 //! datagram on Wi-Fi is the normal case, and a row that greys at sixteen
 //! seconds and returns at thirty reads as a flaky network, not a flaky
-//! network being reported honestly. Gone peers are kept and marked, never
-//! dropped — the wifi-picker rule `R-I8` paid for twice.
+//! network being reported honestly. Four rather than three since the
+//! three-host run of 2026-09-22: a laptop in Wi-Fi power save heard 60 % of
+//! what every other host heard in full, went 60 s without a word four times
+//! in ten minutes, and no sender — wired or not — could do anything about it
+//! (ADR-0040's amendment). Gone peers are kept and marked, never dropped —
+//! the wifi-picker rule `R-I8` paid for twice.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -43,8 +47,8 @@ pub const BEACON_PORT: u16 = 7717;
 /// on top is its own business and is not part of the contract.
 pub const INTERVAL: Duration = Duration::from_secs(15);
 
-/// Missed beacons before a peer is *gone*.
-pub const MISSES_BEFORE_GONE: u32 = 3;
+/// Missed beacons before a peer is *gone*. Sixty seconds at [`INTERVAL`].
+pub const MISSES_BEFORE_GONE: u32 = 4;
 
 /// The largest datagram produced or accepted. Under every common MTU, so a
 /// beacon is never fragmented — and a cap on what a stranger can make a
@@ -413,14 +417,14 @@ mod tests {
     }
 
     #[test]
-    fn three_misses_is_gone_and_one_more_beacon_is_back() {
+    fn missing_the_rule_is_gone_and_one_more_beacon_is_back() {
         let mut t = PeerTable::new();
         let t0 = Instant::now();
         t.heard(v4(30), beacon("abc", "/h", 1), t0);
-        // Two intervals of silence is still listening.
-        assert!(t.sweep(t0 + INTERVAL * 2).is_empty());
+        // One short of the rule is still listening.
+        assert!(t.sweep(t0 + INTERVAL * (MISSES_BEFORE_GONE - 1)).is_empty());
         assert!(!t.peers().next().unwrap().gone);
-        // Past the third, gone — reported once, and kept.
+        // Past the rule, gone — reported once, and kept.
         let late = t0 + INTERVAL * MISSES_BEFORE_GONE + Duration::from_secs(1);
         assert_eq!(t.sweep(late), vec![PeerKey { machine: "abc".into(), home: "/h".into() }]);
         assert!(t.sweep(late + Duration::from_secs(1)).is_empty());

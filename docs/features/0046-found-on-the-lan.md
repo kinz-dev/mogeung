@@ -195,7 +195,8 @@ collisions do not because each origin computed its own.
 1. `mogeung-core/src/lan.rs`: `Beacon` (`v`, `machine`, `host`, `port`,
    `version`, `reach` with its ssh target, `home`, `live`, `waiting`, `seq`), `encode`/`decode`
    with a 1200-byte cap and a version gate, `PeerTable` with `heard(from, beacon,
-   now)`, `sweep(now)` and the three-misses rule. Pure; unit-tested.
+   now)`, `sweep(now)` and the misses rule — three when planned, four since
+   the three-host run. Pure; unit-tested.
 2. `mogeungd/src/bin/beacon.rs`: `send` and `listen` modes over the codec, with
    `if-addrs` for per-interface broadcast addresses and `socket2` for
    `SO_BROADCAST` / `SO_REUSEADDR` / `SO_REUSEPORT`; `listen` also runs
@@ -344,7 +345,8 @@ cargo run -q -p mogeungd --bin beacon -- listen --for 600
 ```
 
 Read the summary's `beacons` column against 40, its longest gap against 45 s
-(three misses), and the mDNS column for whether the same host resolved at all.
+(four misses since the second run), and the mDNS column for whether the same
+host resolved at all.
 Those three numbers, on both sides of the mesh, are A44's verdict. `--limited`
 on `send` adds `255.255.255.255` for the run where the directed address fails.
 
@@ -387,3 +389,41 @@ One more thing the run said in passing: `Kinzs-Mac-mini.local` and
 `spark-7ecc.local` resolve from the laptop, so a third host exists on this
 mesh for the wired-to-the-base leg the spec asked for and this run did not
 have.
+
+**Three hosts, later the same day.** The spark (`spark-7ecc`, arm64 Linux,
+wired gigabit at 10.0.0.183 **and** Wi-Fi at 10.0.0.184, both up) joined, its
+probe built from a fresh clone. All three listened for 600 s and sent 41,
+and the probe's summary had learnt to count per source address in between.
+
+```
+into the mac:    laptop 40/40          spark 40/40  (wired ×39, wifi ×39)
+into the spark:  laptop 40/40 (×75)    mac    40/40 (×78)
+into the laptop: spark  24/40  (wired ×15, wifi ×23)   longest gap 60 s
+                 mac    25/40                          longest gap 60 s
+                 GONE/BACK: mac ×3, spark ×1
+mdns (mdns-sd):  spark resolved both (6 s, 9 s); laptop and mac each resolved
+                 the spark (0 s) and never each other
+```
+
+Three corrections to the first run's readings, in order of weight:
+
+- **The wire is not the variable; the receiver is.** The spark's wired
+  address reached the laptop 15 times and its wireless one 23 — both bad,
+  neither better — while the same beacons reached the Mac and the spark 40 of
+  40. A laptop in Wi-Fi power save misses broadcast frames whoever sends them.
+  Four flickers in ten minutes at three misses; `MISSES_BEFORE_GONE` is four
+  now, with the burst of two, and the Found list will still show a
+  *gone*-and-*back* honestly when it happens.
+- **The spark hears everything twice.** 75 and 78 datagrams for 40 beacons: a
+  broadcast reaches both of its interfaces and the socket bound to `0.0.0.0`
+  receives it on each. Free redundancy for a dual-homed listener, and the
+  reason the table counts sequence numbers rather than arrivals.
+- **The mDNS reading was wrong, and A44's second half was right.**
+  `mdns-sd` resolved every wired-to-Wi-Fi pair within nine seconds and neither
+  Wi-Fi-to-Wi-Fi pair in ten minutes, in both runs. The library works where
+  multicast reaches; this mesh does not carry multicast between two Wi-Fi
+  clients; and the `dns-sd` sighting on the Mac was its responder's cache of
+  the first run's record, listed at the instant the browse began. Recorded as
+  an amendment to [ADR-0040](../decisions/0040-discovery-is-the-beacon.md),
+  whose decision it strengthens: the beacon is the only transport that reached
+  every leg.

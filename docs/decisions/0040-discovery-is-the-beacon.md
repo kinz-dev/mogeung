@@ -111,3 +111,32 @@ disagree about who is there.
 A segment where the beacon fails and multicast works; an IPv6-only LAN; a
 platform where a shared UDP port cannot be bound; or a browse through the
 system responders that turns out to be one function rather than three.
+
+## Amendment — 2026-09-22
+
+The three-host run, later the same day, corrected the context above in one
+place and tightened the decision in one.
+
+**The mDNS reading was wrong, and the belief it corrected was right.** With
+the spark — wired gigabit and Wi-Fi, both up — on the segment, `mdns-sd`'s
+browse resolved every wired-to-Wi-Fi pair within nine seconds, in both
+directions, and neither Wi-Fi-to-Wi-Fi pair in ten minutes, exactly as in the
+first run. The library is fine. What this mesh does not carry is **multicast
+between two Wi-Fi clients**; the `dns-sd` sighting that said otherwise was
+mDNSResponder's cache of the first run's record, listed at the instant the
+browse started. The context's *"multicast crosses; the library's browse does
+not"* is replaced by: multicast crosses between a wired host and a Wi-Fi one
+and not between two Wi-Fi ones, and broadcast crosses both. The decision
+stands, on firmer ground: the transport that reached every leg is the beacon,
+and the alternative *browse through the platform's own responder* would not
+have reached the Wi-Fi-to-Wi-Fi leg either.
+
+**Gone is four misses, not three.** Into the laptop in Wi-Fi power save — the
+receiver every other host reached 40 of 40 — the spark's beacons arrived 24
+of 40 and the Mac's 25 of 40, with silences of 60 s and four *gone*-and-*back*
+flickers in ten minutes; the spark's wired address did no better than its
+wireless one (15 and 23), so the loss is the receiver's and no sender can fix
+it. At 60 % per datagram, three misses in a row happen every few minutes;
+with the burst of two and four misses they happen about once in a working
+day. `MISSES_BEFORE_GONE` is 4 — sixty seconds — and the burst of two stays.
+The fence in *Consequences* is unchanged, and so is *IPv4 only*.
