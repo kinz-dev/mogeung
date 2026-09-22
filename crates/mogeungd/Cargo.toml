@@ -1,5 +1,9 @@
 [package]
 name = "mogeungd"
+# The crate is the daemon; the other binaries are its instruments (`sweep`,
+# `runconfigs`, `why`, `judge`, `beacon`). `cargo run -p mogeungd` should run the
+# daemon rather than ask which — found the day the sixth binary arrived.
+default-run = "mogeungd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
