@@ -187,6 +187,10 @@ pub struct Peer {
     /// for the reason `discovery::Found` gives: a list that reorders between
     /// draws reads as a host that keeps moving.
     pub addrs: Vec<IpAddr>,
+    /// Datagrams heard from each address. A host with a wired and a wireless
+    /// interface on one segment sends on both, and which one delivered is a
+    /// question the probe has to answer per leg.
+    pub heard_by_addr: BTreeMap<IpAddr, u64>,
     pub first_seen: Instant,
     pub last_seen: Instant,
     /// Datagrams heard. A multi-homed sender is heard once per interface, so
@@ -253,6 +257,7 @@ impl PeerTable {
                 }
                 p.last_seen = now;
                 p.heard += 1;
+                *p.heard_by_addr.entry(from).or_insert(0) += 1;
                 p.beacon = beacon;
                 insert_addr(&mut p.addrs, from);
                 if p.gone {
@@ -272,6 +277,7 @@ impl PeerTable {
                         key,
                         beacon,
                         addrs: vec![from],
+                        heard_by_addr: BTreeMap::from([(from, 1)]),
                         first_seen: now,
                         last_seen: now,
                         heard: 1,
@@ -459,6 +465,9 @@ mod tests {
         let p = t.peers().next().unwrap();
         assert_eq!((p.heard, p.beacons), (3, 2));
         assert_eq!(p.addrs, vec![v4(30), v4(31)]);
+        // And which address delivered what — the wired-or-wireless question.
+        assert_eq!(p.heard_by_addr.get(&v4(30)), Some(&2));
+        assert_eq!(p.heard_by_addr.get(&v4(31)), Some(&1));
     }
 
     #[test]

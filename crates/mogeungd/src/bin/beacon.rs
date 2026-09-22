@@ -457,7 +457,14 @@ fn listen(seconds: u64, interval: u64, port: u16) -> Result<()> {
         ignored
     );
     for p in table.peers() {
-        let addrs = p.addrs.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
+        // Per address, so a host on a wire and a radio at once says which
+        // one delivered — the leg the verdict is about.
+        let addrs = p
+            .addrs
+            .iter()
+            .map(|a| format!("{a} ×{}", p.heard_by_addr.get(a).copied().unwrap_or(0)))
+            .collect::<Vec<_>>()
+            .join(", ");
         println!(
             "  {:<18} {:>3}/{:<3} beacons ({} datagram(s))   longest gap {:>4} s   {}   machine {}   from {}   api port {}   reach {:?}   v{}",
             p.beacon.host.as_deref().unwrap_or("?"),
