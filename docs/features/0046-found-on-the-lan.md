@@ -508,3 +508,18 @@ likely this and not only `R-J93`'s rule. The gate decodes now
 (`wire-protocol.md`, Security), and the reading above stands corrected: the
 tmux rule is real and would have hidden the Mac's one session, but it was
 not the first thing wrong.
+
+**And the tmux reading was wrong on its own terms.** The Mac has five tmux
+sessions; `tmux ls` over a plain ssh reported none because `ssh host cmd`
+runs a non-login shell and Homebrew's `tmux` is not on that PATH — the very
+gap `spawnAs` in `lib/tmux.ts` documents and works around with a login shell
+and a fallback path. So the empty board after the first switch was the 401
+and nothing else. Recorded because the wrong reading was written down twice
+before the right one, and the next person to see an empty board deserves
+the order the causes were actually found in: check the connection first.
+
+**First click on a remote session, 2026-09-22**: the Agent pane refused —
+*"that daemon is on another machine, and has not been told how to reach
+it"* — which is `R-I6`'s rule working as written: `ssh_target` in the Mac's
+config is the one thing missing, and the pane's wrapper was dry-run from the
+laptop and found tmux over the login shell it composes.
