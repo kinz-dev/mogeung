@@ -26,6 +26,10 @@ ignore = "0.4"
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 mdns-sd = { version = "0.20.3", default-features = false, features = ["logging"] }
+# The LAN beacon (`R-I17`): per-interface broadcast addresses, and the socket
+# options a shared UDP port needs. Both were already in the tree transitively.
+if-addrs = "0.15"
+socket2 = "0.6"
 
 [dev-dependencies]
 tokio-tungstenite = "0.30"

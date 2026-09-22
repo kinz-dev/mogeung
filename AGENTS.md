@@ -90,6 +90,7 @@ cd desktop && npm test      # the window's own suite; cargo does not run it
 
 cargo run -q -p mogeungd --bin sweep    # what the formats look like today
 cargo run -q -p mogeungd --bin runconfigs   # what run configurations exist here
+cargo run -q -p mogeungd --bin beacon -- listen   # does a LAN beacon cross the mesh? (A44)
 ```
 
 ### Run the sweep after a Claude Code or Codex upgrade

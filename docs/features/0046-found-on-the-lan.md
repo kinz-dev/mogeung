@@ -312,3 +312,35 @@ collisions do not because each origin computed its own.
 Planned 2026-09-21. The inventory above is the check the ask asked for, and it
 turned up one thing worth saying twice: the window's own daemon is invisible to
 the LAN no matter what this feature builds, until step 7 is decided.
+
+**Phase 0 built 2026-09-22**, steps 1 and 2. `mogeung_core::lan` is the codec
+and the table, pure, twelve tests; `--bin beacon` is the sockets around it.
+Two things changed on contact with a real machine:
+
+- **A beacon is heard once per interface**, because the sender sends once per
+  interface and Linux loops a broadcast back to every local listener. The
+  first smoke test reported *16/6* — sixteen datagrams for four beacons over
+  five interfaces, four of them Docker bridges. So the table counts
+  **beacons** (distinct sequence numbers) apart from datagrams, and the
+  probe's summary reads *3/5 beacons (15 datagrams)*. The shell will want the
+  same distinction for the same reason.
+- **`send` advertises over mDNS as well**, by default, from the same host and
+  the same identity — so one `listen` compares the two transports from one
+  sender, rather than needing a daemon started with `advertise = true` beside
+  the probe. On one host both arrived: the beacon within a second, mDNS
+  resolved after two.
+
+What the one-host run cannot say is anything about the mesh, which is the
+whole question. The run that can:
+
+```sh
+# on a host wired to the base, and on one on a satellite's Wi-Fi
+cargo run -q -p mogeungd --bin beacon -- send
+# on a third host, or on either of those — ten minutes, then the summary
+cargo run -q -p mogeungd --bin beacon -- listen --for 600
+```
+
+Read the summary's `beacons` column against 40, its longest gap against 45 s
+(three misses), and the mDNS column for whether the same host resolved at all.
+Those three numbers, on both sides of the mesh, are A44's verdict. `--limited`
+on `send` adds `255.255.255.255` for the run where the directed address fails.
