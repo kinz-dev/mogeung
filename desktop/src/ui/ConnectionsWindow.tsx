@@ -104,6 +104,11 @@ export function ConnectionsWindow() {
   const close = () => useStore.setState({ showConnections: false });
 
   const heard: FoundDaemon[] = lan && "peers" in lan ? lan.peers : [];
+  // This machine's own daemons stay off the list. The panel is for daemons
+  // you could go to, and asked for on the first day it was seen: *"we should
+  // remove the local machine"*. The shell still holds them — hearing yourself
+  // is how you know the listener works — and the probe still shows them.
+  const others = heard.filter((d) => !d.mine);
   /** Is this saved connection the daemon being heard right now? */
   const heardNow = (c: Connection) => heard.some((d) => !d.gone && matchesSaved(c, d));
 
@@ -277,19 +282,18 @@ export function ConnectionsWindow() {
             <Dim className="block text-2xs text-[var(--amber)]" data-lan-error>
               {lan.error}
             </Dim>
-          ) : lan.peers.length === 0 ? (
+          ) : others.length === 0 ? (
             <Dim className="block text-2xs">
-              nothing heard yet — a daemon on this network announces itself within 15 s
+              nothing else heard yet — a daemon on this network announces itself within 15 s
             </Dim>
           ) : (
-            lan.peers.map((d) => {
+            others.map((d) => {
               const saved = list?.find((c) => matchesSaved(c, d));
               return (
                 <div
                   key={`${d.machine}\u0001${d.home}`}
                   data-found={foundName(d)}
                   data-gone={d.gone || undefined}
-                  data-mine={d.mine || undefined}
                   className={cn("flex items-center gap-2 px-2 py-1", d.gone && "opacity-50")}
                 >
                   <span
@@ -302,7 +306,6 @@ export function ConnectionsWindow() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs">
                       {foundName(d)}
-                      {d.mine && <Dim className="ml-1 text-2xs">(this machine)</Dim>}
                       <Dim className="ml-2 font-mono text-2xs">
                         {d.addr}:{d.port}
                       </Dim>

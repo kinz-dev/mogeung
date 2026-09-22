@@ -83,9 +83,9 @@ beyond loopback — and therefore wants a token — so **Add** fills the form
 below with its address, you type the token, and Connect on the saved row is
 the switch. *Over ssh* names the target it was configured with, and *on its
 own machine only* means the daemon is loopback-bound and an ssh tunnel (Route
-A) is the way in. This machine's own daemon is marked rather than offered
-back. A saved connection lights up while the daemon it points at is being
-heard.
+A) is the way in. Your own machine's daemon is not listed — the panel is for
+daemons you could go to. A saved connection lights up while the daemon it
+points at is being heard.
 
 **Finding a daemon connects to nothing.** A beacon carries no secret and no
 proof of who sent it, so the list is an offer and the token is yours to type.

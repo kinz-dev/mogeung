@@ -87,8 +87,9 @@ streams"*, which is exactly the loss the ask names.
 - [x] The Connections window has a **Found on your LAN** section listing each
       daemon heard: hostname, address and port, version, whether it wants a
       token, how many sessions are live and how many need you, and how long
-      since it was last heard. This machine's own daemon is recognised and
-      marked, not offered back
+      since it was last heard. This machine's own daemon is left off the list
+      — marked at first, removed on the first day it was seen: *"we should
+      remove the local machine"*
 - [x] A daemon that stops being heard is shown as gone after four missed
       beacons, greyed and kept, not dropped
 - [x] **Add** on a found row fills the Saved form with its name and URL; the
@@ -470,3 +471,12 @@ beacon need `install.sh` and a second daemon on the LAN, and that is
 dogfooding. Two of phase 1's acceptance lines stay open for it — *every daemon
 is heard within 15 s* and `R-I16`'s verdict — and step 7, whether the hosted
 daemon should honour `listen` and `token` from the file, stays a decision.
+
+**First sight, 2026-09-22.** Both machines installed the build and each saw
+the other within a beacon, the Mac already reachable with a token. The first
+thing said was *"we should remove the local machine"* — the row marked *(this
+machine)* was noise above the one row that mattered — so it is off the list
+now; the shell keeps it, since hearing yourself is how a listener proves it
+works, and the probe still shows it. The `needs you` count carries the tab's
+rule, ended-and-unreviewed sessions included, which read as large (126) on a
+board that has not been reviewed in a while; left as the tab's number for now.

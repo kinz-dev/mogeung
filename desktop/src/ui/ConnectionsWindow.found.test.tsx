@@ -13,7 +13,9 @@
  * - **A gone daemon stays, greyed.** Dropping it is how a Wi-Fi client in
  *   power save — which misses 40 % of beacons — turns into a list that
  *   flickers.
- * - **This machine's own daemon is marked**, not offered back.
+ * - **This machine's own daemon is left off the list.** Asked for the day the
+ *   panel was first seen; a row you cannot go to is noise above the ones you
+ *   can.
  * - **A saved connection lights up when it is being heard.**
  * - **A browser tab says it cannot listen**, rather than showing an empty list.
  */
@@ -130,12 +132,17 @@ describe("found on your LAN", () => {
     expect(screen.getByText(/gone — last heard 3 min ago/)).toBeInTheDocument();
   });
 
-  it("marks this machine's own daemon rather than offering it back", async () => {
+  it("leaves this machine's own daemon off the list", async () => {
+    shell.peers = [found({ mine: true, host: "kinz-xps14" }), found({ machine: "def456", host: "spark", addr: "10.0.0.183" })];
+    await open();
+    expect(await screen.findByText("spark")).toBeInTheDocument();
+    expect(screen.queryByText("kinz-xps14")).toBeNull();
+  });
+
+  it("says nothing else is heard when only this machine is", async () => {
     shell.peers = [found({ mine: true, host: "kinz-xps14" })];
     await open();
-    const row = (await screen.findByText("kinz-xps14")).closest("[data-found]")!;
-    expect(row).toHaveAttribute("data-mine");
-    expect(screen.getByText("(this machine)")).toBeInTheDocument();
+    expect(await screen.findByText(/nothing else heard yet/)).toBeInTheDocument();
   });
 
   it("lights up a saved connection that is being heard, and offers no second add", async () => {
