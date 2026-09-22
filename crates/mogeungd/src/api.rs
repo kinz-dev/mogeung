@@ -84,14 +84,17 @@ fn percent_decode(v: &str) -> String {
     while i < bytes.len() {
         match bytes[i] {
             b'+' => out.push(b' '),
+            // Bytes, not a `&str` slice: a `%` followed by a multibyte
+            // character would make the slice panic, and a token is input.
             b'%' if i + 2 < bytes.len() => {
-                match u8::from_str_radix(&v[i + 1..i + 3], 16) {
-                    Ok(b) if v.is_char_boundary(i + 1) && v.is_char_boundary(i + 3) => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(b) => {
                         out.push(b);
                         i += 3;
                         continue;
                     }
-                    _ => out.push(b'%'),
+                    None => out.push(b'%'),
                 }
             }
             b => out.push(b),
@@ -2571,5 +2574,8 @@ mod token_tests {
         assert_eq!(percent_decode("50%"), "50%");
         assert_eq!(percent_decode("%zz"), "%zz");
         assert_eq!(percent_decode("%2"), "%2");
+        // A `%` before a multibyte character is input, not a reason to stop.
+        assert_eq!(percent_decode("%€"), "%€");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
     }
 }
