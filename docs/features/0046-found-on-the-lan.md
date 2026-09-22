@@ -480,3 +480,18 @@ now; the shell keeps it, since hearing yourself is how a listener proves it
 works, and the probe still shows it. The `needs you` count carries the tab's
 rule, ended-and-unreviewed sessions included, which read as large (126) on a
 board that has not been reviewed in a while; left as the tab's number for now.
+
+**First connection, 2026-09-22 — two findings and a redesign.** With the
+Mac's daemon bound to the LAN and its token typed, the switch worked and the
+board came up **empty of live sessions**. Not the connection: `R-J93`'s tmux
+rule, on by default, hides any session without a tmux pane from *needs you*
+and *live*, and the Mac had no tmux sessions at all — one `claude` started
+outside it. The panel says *N hidden — not under tmux* and the *all* scope
+shows them, and the rule is the same for a remote daemon as a local one, since
+a pane is what the window can host either way (`R-I6` reaches a remote tmux
+over ssh; a session outside tmux it cannot reach anywhere). Worth saying
+because the first reading of an empty board after a switch is *the switch
+failed*. The second finding was the panel itself: one column of full forms
+was unreadable with three daemons, the token could not be checked, and there
+was no way to ask a daemon who it was without switching — `R-I19`, built the
+same day.

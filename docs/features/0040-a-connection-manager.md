@@ -1,7 +1,7 @@
 ---
 title: A connection manager
 status: shipped
-updated: 2026-09-08
+updated: 2026-09-22
 roadmap: [R-I16]
 depends_on: [A24]
 ---
@@ -189,3 +189,8 @@ tunnel-command note, and up/down ordering.
 - **`R-I7`'s row is wrong about the `LOCAL` row** — see Risks. Found while
   writing the acceptance criteria, which is the argument for writing them before
   the code.
+
+**Reshaped 2026-09-22 by `R-I19`**: a list beside a form, a Test button that
+asks a daemon who it is over a socket without switching, and a token that can
+be shown while it is checked. The storage, the id-as-identity, the composed
+URL and the never-run tunnel command are all as this spec left them.

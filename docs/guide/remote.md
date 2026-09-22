@@ -57,8 +57,13 @@ unreachable is the one that must not be losable. Starting mogeung binds that
 port and hosts a daemon if nothing is there, exactly as it does with no
 connections saved at all.
 
-Saved daemons live in the window's own storage, alongside your other settings.
-Each has a name, a URL and an optional token. The row you last
+Saved daemons are a **list on the left** of the panel — name, host and port,
+a tick on the one you are watching — and the one you click is the **form on
+the right**: name, address, a token you can show with the eye while you check
+it, the tunnel command you use, and then *connect* and *test*. **Test asks the
+daemon who it is without switching**, and answers with its host, version and
+queue length; a refused token and an unreachable host look the same to a
+socket, and the line says so. Each entry has a name, a URL and an optional token. The row you last
 connected to is marked *last used*, but **no launch dials a remote for you** —
 you pick it, per session. `--url` on the command line still points that run
 wherever you say.

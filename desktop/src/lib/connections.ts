@@ -183,3 +183,74 @@ export function reorder(list: Connection[], from: number, to: number): Connectio
   next.splice(to, 0, moved);
   return next;
 }
+
+/** What a Test found at the other end of a connection. */
+export type ProbeResult =
+  | { ok: true; host: string | null; version: string | null; queued: number | null }
+  | { ok: false; reason: string };
+
+/**
+ * Ask a daemon who it is, without switching to it. `R-I19`.
+ *
+ * A socket rather than a fetch, because the daemon sets no CORS headers and a
+ * webview's `fetch` to another origin is refused before it leaves. The first
+ * frame a daemon sends is its snapshot, which carries its identity (`R-I5`),
+ * so one message is the whole answer. A refused token and an unreachable host
+ * both arrive as a socket that errors or closes before saying anything, and
+ * the browser tells a client nothing more than that — so the reason says both.
+ */
+export function probeConnection(
+  url: string,
+  timeoutMs = 4000,
+  make: (u: string) => WebSocket = (u) => new WebSocket(u),
+): Promise<ProbeResult> {
+  return new Promise((resolve) => {
+    let ws: WebSocket;
+    try {
+      ws = make(url);
+    } catch (e) {
+      resolve({ ok: false, reason: `not an address a socket can dial — ${String(e)}` });
+      return;
+    }
+    let done = false;
+    const finish = (r: ProbeResult) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // Already gone; nothing to close.
+      }
+      resolve(r);
+    };
+    const timer = setTimeout(
+      () =>
+        finish({
+          ok: false,
+          reason: `no answer in ${timeoutMs / 1000} s — unreachable, or the token was refused; a socket cannot tell which`,
+        }),
+      timeoutMs,
+    );
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(String(e.data)) as {
+          daemon?: { host?: string | null; version?: string | null } | null;
+          queue?: unknown;
+        };
+        finish({
+          ok: true,
+          host: msg.daemon?.host ?? null,
+          version: msg.daemon?.version ?? null,
+          queued: Array.isArray(msg.queue) ? msg.queue.length : null,
+        });
+      } catch {
+        // Not JSON — keep waiting for a frame that is.
+      }
+    };
+    ws.onerror = () =>
+      finish({ ok: false, reason: "refused — unreachable, or the token was wrong; a socket cannot tell which" });
+    ws.onclose = () =>
+      finish({ ok: false, reason: "closed before it said who it was — the token was probably refused" });
+  });
+}

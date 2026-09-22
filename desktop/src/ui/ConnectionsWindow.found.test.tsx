@@ -7,9 +7,9 @@
  * - **A row draws from what the shell holds, and follows what it emits.** A
  *   panel that only asked once would show a daemon that left an hour ago as
  *   present.
- * - **Add fills the form and dials nothing.** `R-I8`'s rule: finding is never
- *   connecting. A row that switched the window would drop the whole board on
- *   a click meant to save an address.
+ * - **Add makes a saved entry, selects it, and dials nothing.** `R-I8`'s
+ *   rule: finding is never connecting. A row that switched the window would
+ *   drop the whole board on a click meant to save an address.
  * - **A gone daemon stays, greyed.** Dropping it is how a Wi-Fi client in
  *   power save — which misses 40 % of beacons — turns into a list that
  *   flickers.
@@ -113,14 +113,16 @@ describe("found on your LAN", () => {
     expect(await screen.findByText("spark")).toBeInTheDocument();
   });
 
-  it("fills the form on add, and dials nothing", async () => {
+  it("saves a found daemon on add, selects it, and dials nothing", async () => {
     const setUrl = vi.fn();
     useStore.setState({ setUrl } as never);
     shell.peers = [found()];
     await open();
-    fireEvent.click(await screen.findByTitle(/fill the form below/));
-    expect(screen.getByDisplayValue("ws://10.0.0.30:7717/ws")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("devbox")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTitle(/save this daemon/));
+    // The form on the right is now that daemon, token field and all.
+    expect(screen.getByLabelText("address for devbox")).toHaveValue("ws://10.0.0.30:7717/ws");
+    expect(screen.getByLabelText("token for devbox")).toHaveValue("");
+    await waitFor(() => expect(shell.list.map((c) => (c as { url: string }).url)).toContain("ws://10.0.0.30:7717/ws"));
     expect(setUrl).not.toHaveBeenCalled();
   });
 
@@ -151,7 +153,7 @@ describe("found on your LAN", () => {
     await screen.findByText("devbox");
     expect(screen.getByTitle("being heard on your LAN right now")).toBeInTheDocument();
     expect(screen.getByText("saved as the dev box")).toBeInTheDocument();
-    expect(screen.queryByTitle(/fill the form below/)).toBeNull();
+    expect(screen.queryByTitle(/save this daemon/)).toBeNull();
   });
 
   it("says why when the shell is not listening", async () => {
