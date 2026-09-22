@@ -144,8 +144,14 @@ default.
 **On the dev box**, start a daemon that outlives your shell:
 
 ```sh
-mogeungd --notify &          # or under systemd, launchd, or a tmux session
+./scripts/mogeungd start -- --notify    # from a checkout: builds, starts, keeps a pid and a log
+mogeungd --notify &                     # or the installed binary, under systemd, launchd or tmux
 ```
+
+`scripts/mogeungd` also has `stop` (graceful, so nothing coasting in memory
+is lost), `restart` (builds first, so a broken tree leaves the running daemon
+alone), `status` and `logs -f`; `-h` lists the rest. It never stops a daemon
+it did not start: if a mogeung window already holds the port, it says so.
 
 **On your laptop**, forward the port and open the window:
 

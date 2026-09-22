@@ -80,6 +80,7 @@ Never edit its output.
 
 ```sh
 ./scripts/start.sh          # build + run daemon and window together
+./scripts/mogeungd start    # build, then a daemon that outlives the window — stop, restart, status, logs, -h
 mprocs                      # same two, side by side, with test/docs on a key
 
 cargo build --release

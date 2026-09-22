@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# Build and manage a mogeung daemon that outlives any window. `R-J101`.
+#
+#   ./scripts/mogeungd start       cargo build --release, then start it in the background
+#   ./scripts/mogeungd stop        stop it the graceful way
+#   ./scripts/mogeungd restart     build first, then stop and start — a failed build
+#                                  leaves the running daemon alone
+#   ./scripts/mogeungd status      running or not, on what, since when, beacon on or off
+#   ./scripts/mogeungd logs -f     follow its log
+#   ./scripts/mogeungd -h          every option
+#
+# Why a script when the window hosts a daemon of its own: a hosted daemon dies
+# with the window ([ADR-0009](../docs/decisions/0009-the-window-may-host-a-daemon.md)),
+# and a box with no window at all — the headless one in the corner — has
+# nothing to host one. `mogeungd` is the way to get a daemon that outlives
+# every window, and this is that daemon with a start and a stop.
+#
+# **The beacon is on** (`R-I17`, ADR-0039): every daemon announces itself on
+# the LAN every 15 s unless told not to, so a daemon started here is found by
+# every window on the network. `--no-beacon` starts it quiet. The daemon reads
+# `listen`, `token` and `ssh_target` from `~/.mogeung/config.toml` itself, so
+# whether it is *connectable* from elsewhere is the file's business, not this
+# script's.
+#
+# Decisions worth knowing before changing this:
+#
+# - **Stop sends SIGINT, not SIGTERM.** The daemon's graceful path — flushing
+#   the counters that coast in memory (`R-J54`), stopping its llmproxy — hangs
+#   off Ctrl-C, and a SIGTERM is simply death. `--force` adds SIGKILL.
+# - **It never kills what it did not start.** `start.sh` frees the port by
+#   killing the holder, which is right for a dev loop and wrong here: the usual
+#   holder is the window, hosting a daemon because nothing else was serving.
+#   This says so and stops.
+# - **The binary is `target/<profile>/mogeungd` in this checkout**, never
+#   `mogeungd` from `PATH` — which is `install.sh`'s copy, or, with `scripts/`
+#   on the path, this file calling itself.
+# - The pid and the log live beside the rest of mogeung's state:
+#   `~/.mogeung/mogeungd.pid` and `~/.mogeung/mogeungd.log`, the previous run's
+#   log kept as `mogeungd.log.1`.
+#
+# **bash 3.2**, which is what macOS ships: no `mapfile`, no associative arrays,
+# and an empty array is expanded as `${a[@]+"${a[@]}"}` because plain
+# `"${a[@]}"` is an error under `set -u` there.
+
+set -u -o pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+STATE="$HOME/.mogeung"
+PIDFILE="$STATE/mogeungd.pid"
+LOG="$STATE/mogeungd.log"
+
+usage() {
+    cat <<'EOF'
+Build and manage a mogeung daemon that outlives any window.
+
+Usage: scripts/mogeungd <command> [options] [-- daemon options]
+
+Commands:
+  start       cargo build --release, then start the daemon in the background
+  stop        stop it: SIGINT, the daemon's graceful path, waiting up to 10 s
+  restart     build, then stop and start — a failed build leaves it running
+  status      running or not, pid, uptime, address, token-gated, beacon
+  logs        print the end of its log (-f to follow)
+  build       only cargo build --release
+  run         build, then run it in the foreground (Ctrl-C stops it)
+
+Options:
+  --no-build        skip the build and use what is already in target/
+  --no-beacon       start without the LAN beacon (on by default, ADR-0039)
+  --debug           use a debug build instead of release
+  --force           stop: SIGKILL it if SIGINT has not worked in 10 s
+  -n, --lines N     logs: how many lines to print (default 50)
+  -f, --follow      logs: keep printing as it grows
+  -h, --help        this
+
+Anything after `--` is passed to mogeungd itself, and beats config.toml:
+  scripts/mogeungd start -- --notify
+  scripts/mogeungd start -- --listen 0.0.0.0:7717 --token "$(openssl rand -hex 24)"
+
+Where things are:
+  config   ~/.mogeung/config.toml   (listen, token, ssh_target, beacon — read by the daemon)
+  pid      ~/.mogeung/mogeungd.pid
+  log      ~/.mogeung/mogeungd.log  (the previous run's as mogeungd.log.1)
+
+Exit status: 0 on success; `status` exits 3 when the daemon is not running.
+EOF
+}
+
+# --- arguments ---------------------------------------------------------------
+
+CMD=""
+BUILD=1
+BEACON=1
+FORCE=0
+FOLLOW=0
+LINES=50
+PROFILE=release
+DAEMON_ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help|help) usage; exit 0 ;;
+        --no-build)     BUILD=0 ;;
+        --no-beacon)    BEACON=0 ;;
+        --debug)        PROFILE=debug ;;
+        --release)      PROFILE=release ;;
+        --force)        FORCE=1 ;;
+        -f|--follow)    FOLLOW=1 ;;
+        -n|--lines)     LINES="${2:?$1 needs a number}"; shift ;;
+        --)
+            shift
+            while [ $# -gt 0 ]; do DAEMON_ARGS+=("$1"); shift; done
+            break
+            ;;
+        -*) echo "unknown option: $1 — try: scripts/mogeungd -h" >&2; exit 2 ;;
+        *)
+            if [ -n "$CMD" ]; then
+                echo "one command at a time — got '$CMD' and '$1'" >&2
+                exit 2
+            fi
+            CMD="$1"
+            ;;
+    esac
+    shift
+done
+
+case "$LINES" in ''|*[!0-9]*) echo "--lines needs a number, got '$LINES'" >&2; exit 2 ;; esac
+
+BIN="$REPO/target/$PROFILE/mogeungd"
+
+# --- what is running ---------------------------------------------------------
+
+# Is this pid a mogeungd? `ps -o comm=` is the bare name on Linux and the full
+# path on macOS; both contain it. Guards against a stale pid file whose number
+# the system has since handed to something else.
+is_mogeungd() {
+    local comm
+    comm=$(ps -p "$1" -o comm= 2>/dev/null) || return 1
+    case "$comm" in *mogeungd*) return 0 ;; esac
+    return 1
+}
+
+# The pid this script started, if it is still that daemon. A stale file is
+# removed on the way past, so every command after it sees the truth.
+running_pid() {
+    [ -f "$PIDFILE" ] || return 1
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    case "$pid" in
+        ''|*[!0-9]*) rm -f "$PIDFILE"; return 1 ;;
+    esac
+    if kill -0 "$pid" 2>/dev/null && is_mogeungd "$pid"; then
+        echo "$pid"
+        return 0
+    fi
+    rm -f "$PIDFILE"
+    return 1
+}
+
+# Where the daemon will listen, by the daemon's own precedence: a `--listen`
+# passed through, else `listen` in config.toml, else the default.
+listen_addr() {
+    local a prev=""
+    for a in ${DAEMON_ARGS[@]+"${DAEMON_ARGS[@]}"}; do
+        if [ "$prev" = "--listen" ]; then echo "$a"; return; fi
+        case "$a" in --listen=*) echo "${a#--listen=}"; return ;; esac
+        prev="$a"
+    done
+    local v=""
+    if [ -f "$STATE/config.toml" ]; then
+        v=$(sed -n 's/^[[:space:]]*listen[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$STATE/config.toml" | head -1)
+    fi
+    echo "${v:-127.0.0.1:7717}"
+}
+
+# The pid listening on a TCP port, or nothing.
+holder_of() {
+    command -v lsof >/dev/null 2>&1 || return 0
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
+
+# Anything answering on the port, for a machine without lsof.
+port_answers() {
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+name_of() {
+    local n
+    n=$(ps -p "$1" -o comm= 2>/dev/null)
+    echo "${n##*/}"
+}
+
+# Say who holds the port, in words that say what to do about it. Never kills.
+explain_holder() {
+    local port="$1" pid="$2" name
+    if [ -z "$pid" ]; then
+        echo "✗ something already answers on port $port — not a daemon this script started" >&2
+        return
+    fi
+    name=$(name_of "$pid")
+    case "$name" in
+        mogeungd*)
+            echo "✗ port $port is held by a mogeungd this script did not start (pid $pid)." >&2
+            echo "  Leave it — it is already watching — or stop it with: kill -INT $pid" >&2
+            ;;
+        mogeung*)
+            echo "✗ port $port is held by the mogeung window (pid $pid), hosting a daemon of its" >&2
+            echo "  own because nothing else was serving when it opened. Close the window, run" >&2
+            echo "  this again, then reopen it: the window attaches to this daemon instead." >&2
+            ;;
+        *)
+            echo "✗ port $port is held by pid $pid ($name), which is not mogeung." >&2
+            ;;
+    esac
+}
+
+# The daemon's own account of itself, from the log it is writing.
+describe() {
+    local addr beacon
+    addr=$(sed -n 's/.*listening on http:\/\/\([^ ]*\).*/\1/p' "$LOG" 2>/dev/null | tail -1)
+    beacon=$(sed -n 's/.*beacon: \(udp\/[0-9]* to [0-9]* interface(s) every [0-9]* s\).*/\1/p' "$LOG" 2>/dev/null | tail -1)
+    if [ -n "$addr" ]; then
+        # `0.0.0.0` is a bind, not an address — `R-I8` shipped it in a record
+        # once and nobody could dial it.
+        case "$addr" in
+            0.0.0.0:*|\[::\]:*)
+                echo "  listen   $addr — every interface: ws://127.0.0.1:${addr##*:}/ws here, this machine's LAN address elsewhere" ;;
+            *)
+                echo "  listen   $addr — ws://$addr/ws" ;;
+        esac
+    fi
+    if grep -q 'with a shared token' "$LOG" 2>/dev/null; then
+        echo "  access   token-gated (token from config.toml or --token)"
+    elif [ -n "$addr" ]; then
+        echo "  access   this machine only"
+    fi
+    if [ -n "$beacon" ]; then
+        echo "  beacon   on — $beacon"
+    elif [ -n "$addr" ]; then
+        echo "  beacon   off"
+    fi
+    echo "  log      $LOG"
+}
+
+# --- commands ----------------------------------------------------------------
+
+build() {
+    [ "$BUILD" -eq 1 ] || return 0
+    echo "▸ cargo build --$PROFILE"
+    # Spelled out rather than built as an array: expanding an *empty* array
+    # under `set -u` is an error in bash 3.2.
+    if [ "$PROFILE" = release ]; then
+        (cd "$REPO" && cargo build --release)
+    else
+        (cd "$REPO" && cargo build)
+    fi || {
+        echo "✗ build failed — nothing was started or stopped" >&2
+        return 1
+    }
+}
+
+start() {
+    local pid
+    if pid=$(running_pid); then
+        echo "● already running — pid $pid"
+        describe
+        return 0
+    fi
+    build || return 1
+    if [ ! -x "$BIN" ]; then
+        echo "✗ $BIN is missing — build first, or drop --no-build" >&2
+        return 1
+    fi
+
+    local addr port holder
+    addr=$(listen_addr)
+    port="${addr##*:}"
+    holder=$(holder_of "$port")
+    if [ -n "$holder" ] || port_answers "$port"; then
+        explain_holder "$port" "$holder"
+        return 1
+    fi
+
+    mkdir -p "$STATE"
+    [ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"
+
+    local extra=()
+    [ "$BEACON" -eq 0 ] && extra+=(--no-beacon)
+
+    # `nohup` so closing the terminal does not take it down, stdin from
+    # nothing so it never waits on one, and NO_COLOR so the log is text
+    # rather than escape codes.
+    NO_COLOR=1 nohup "$BIN" ${extra[@]+"${extra[@]}"} ${DAEMON_ARGS[@]+"${DAEMON_ARGS[@]}"} \
+        >"$LOG" 2>&1 </dev/null &
+    pid=$!
+    echo "$pid" >"$PIDFILE"
+    echo "▸ started pid $pid — waiting for it to listen (it scans once first)"
+
+    # A Ctrl-C here reaches the daemon too — it shares this script's process
+    # group until the script exits — so say what that did rather than leave
+    # a half-started daemon and a pid file behind.
+    trap 'echo; echo "▸ cancelled — stopping pid $pid"; kill -TERM "$pid" 2>/dev/null; rm -f "$PIDFILE"; exit 130' INT
+
+    local i
+    for i in $(seq 1 180); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            trap - INT
+            rm -f "$PIDFILE"
+            echo "✗ mogeungd exited while starting. The end of its log:" >&2
+            tail -n 15 "$LOG" >&2
+            return 1
+        fi
+        if grep -q 'listening on http' "$LOG" 2>/dev/null; then
+            # The beacon's line follows the listening one by a moment.
+            sleep 0.5
+            trap - INT
+            echo "● mogeungd running — pid $pid"
+            describe
+            return 0
+        fi
+        sleep 0.5
+    done
+    trap - INT
+    echo "● still starting after 90 s — pid $pid. Watch it with: scripts/mogeungd logs -f"
+}
+
+stop() {
+    local pid
+    if ! pid=$(running_pid); then
+        echo "○ not running — nothing this script started"
+        local port holder
+        port="$(listen_addr)"; port="${port##*:}"
+        holder=$(holder_of "$port")
+        [ -n "$holder" ] && echo "  (port $port is held by pid $holder, $(name_of "$holder") — not ours to stop)"
+        return 0
+    fi
+    echo "▸ stopping pid $pid (SIGINT — it flushes before it exits)"
+    kill -INT "$pid" 2>/dev/null
+    local i
+    for i in $(seq 1 40); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$PIDFILE"
+            echo "○ stopped"
+            return 0
+        fi
+        sleep 0.25
+    done
+    if [ "$FORCE" -eq 1 ]; then
+        echo "▸ still running after 10 s — SIGKILL"
+        kill -KILL "$pid" 2>/dev/null
+        sleep 0.5
+        rm -f "$PIDFILE"
+        echo "○ killed — anything coasting in memory was lost"
+        return 0
+    fi
+    echo "✗ still running after 10 s. The end of its log:" >&2
+    tail -n 5 "$LOG" >&2
+    echo "  scripts/mogeungd stop --force sends SIGKILL" >&2
+    return 1
+}
+
+status() {
+    local pid
+    if pid=$(running_pid); then
+        echo "● mogeungd running — pid $pid, up $(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ')"
+        describe
+        return 0
+    fi
+    echo "○ mogeungd is not running (none started by this script)"
+    local addr port holder
+    addr=$(listen_addr)
+    port="${addr##*:}"
+    holder=$(holder_of "$port")
+    if [ -n "$holder" ]; then
+        echo "  port $port is held by pid $holder ($(name_of "$holder")) — something else is watching"
+    fi
+    return 3
+}
+
+restart() {
+    # Build before stopping, so a broken tree costs a message, not the daemon.
+    build || return 1
+    if running_pid >/dev/null; then
+        stop || return 1
+    fi
+    BUILD=0
+    start
+}
+
+logs() {
+    if [ ! -f "$LOG" ]; then
+        echo "○ no log yet — $LOG appears on the first start" >&2
+        return 1
+    fi
+    if [ "$FOLLOW" -eq 1 ]; then
+        tail -n "$LINES" -f "$LOG"
+    else
+        tail -n "$LINES" "$LOG"
+    fi
+}
+
+run_fg() {
+    local pid
+    if pid=$(running_pid); then
+        echo "✗ already running in the background — pid $pid. Stop it first." >&2
+        return 1
+    fi
+    build || return 1
+    local addr port holder
+    addr=$(listen_addr)
+    port="${addr##*:}"
+    holder=$(holder_of "$port")
+    if [ -n "$holder" ] || port_answers "$port"; then
+        explain_holder "$port" "$holder"
+        return 1
+    fi
+    local extra=()
+    [ "$BEACON" -eq 0 ] && extra+=(--no-beacon)
+    echo "▸ $BIN ${extra[*]+"${extra[*]}"} ${DAEMON_ARGS[*]+"${DAEMON_ARGS[*]}"}"
+    exec "$BIN" ${extra[@]+"${extra[@]}"} ${DAEMON_ARGS[@]+"${DAEMON_ARGS[@]}"}
+}
+
+case "$CMD" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) restart ;;
+    status)  status ;;
+    logs)    logs ;;
+    build)   BUILD=1; build ;;
+    run)     run_fg ;;
+    "")      usage >&2; exit 2 ;;
+    *)       echo "unknown command: $CMD — try: scripts/mogeungd -h" >&2; exit 2 ;;
+esac

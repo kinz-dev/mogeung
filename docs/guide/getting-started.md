@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-08-27
+updated: 2026-09-22
 ---
 
 # Getting started
@@ -38,7 +38,12 @@ cd desktop && npm install
 npm run tauri dev                    # terminal 2 — the window
 ```
 
-That is the development pair. To **install it on this machine** instead — so
+That is the development pair. For a daemon that keeps running after you close
+the terminal — a box you only reach from another machine, say —
+`./scripts/mogeungd start` builds it and starts it in the background, and
+`stop`, `restart`, `status` and `logs` manage it (`-h` for the rest).
+
+To **install it on this machine** instead — so
 mogeung is an application in the launcher rather than two terminals — one
 script does the lot:
 

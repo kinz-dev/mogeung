@@ -389,7 +389,11 @@ The window binds the daemon port at start-up. Winning the bind means hosting a
 daemon **on a thread in its own process**; losing it means attaching to the one
 already there. A hosted daemon dies with the window; an attached one is left
 alone. `mogeungd` is still a separate binary and is still how you get a daemon
-that outlives every window.
+that outlives every window — and since 2026-09-22 `scripts/mogeungd` (`R-J101`)
+builds it and manages it: a pid file and a log under `~/.mogeung`, a stop that
+sends SIGINT because the graceful shutdown hangs off Ctrl-C and SIGTERM is
+simply death, and a refusal rather than a kill when the port is already held —
+usually by a window hosting its own.
 
 The bind *is* the check — probing first and starting second races two windows
 against each other. A thread rather than a child process because a thread cannot
