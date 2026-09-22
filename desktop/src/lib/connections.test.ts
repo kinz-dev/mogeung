@@ -215,3 +215,24 @@ describe("the address in use", () => {
     expect(list).toHaveLength(1);
   });
 });
+
+/**
+ * The token is not part of the address. `R-I17` step 7: the window's own URL
+ * carries a token once the file names one, and a saved entry keeps its token
+ * in a field, so a string comparison would call the daemon you are watching
+ * "not saved" and add it again.
+ */
+describe("the same daemon, token or no token", () => {
+  it("compares addresses with the token taken out", async () => {
+    const { sameDaemon, withoutToken, withCurrent, maskToken } = await import("./connections");
+    expect(sameDaemon("ws://127.0.0.1:7717/ws?token=abc", "ws://127.0.0.1:7717/ws")).toBe(true);
+    expect(sameDaemon("ws://127.0.0.1:7717/ws?token=abc", "ws://127.0.0.1:7718/ws")).toBe(false);
+    expect(withoutToken("ws://h:7717/ws?token=abc")).toBe("ws://h:7717/ws");
+    expect(withoutToken("ws://h:7717/ws")).toBe("ws://h:7717/ws");
+    // The entry a connected-but-unsaved address gets keeps the address, not the token.
+    const list = withCurrent([], "ws://10.0.0.39:7717/ws?token=abc");
+    expect(list[0].url).toBe("ws://10.0.0.39:7717/ws");
+    expect(withCurrent([{ id: "a", name: "here", url: "ws://127.0.0.1:7717/ws" }], "ws://127.0.0.1:7717/ws?token=abc")).toHaveLength(1);
+    expect(maskToken("ws://h:7717/ws?token=abc&x=1")).toBe("ws://h:7717/ws?token=…&x=1");
+  });
+});

@@ -36,11 +36,51 @@ pub enum Status {
     Attached {
         pid: Option<u32>,
         claude_home: Option<String>,
+        /// The token `config.toml` names, for the window to dial with. A
+        /// daemon somebody else runs here reads the same file.
+        token: Option<String>,
     },
     /// Nothing was, so this process is hosting one. It dies when we do.
-    Hosting,
+    Hosting {
+        /// What it actually bound — `0.0.0.0:7717` when the file said so.
+        bound: String,
+        /// The port the window dials; the file may have moved it.
+        port: u16,
+        /// The token the window dials with, when the file names one.
+        token: Option<String>,
+    },
     /// Nothing is serving, and we did not or could not start one.
     None { reason: Option<String> },
+}
+
+/// What the window's hosted daemon binds and gates. `R-I17` step 7,
+/// [ADR-0009](../../../docs/decisions/0009-the-window-may-host-a-daemon.md)'s
+/// 2026-09-22 amendment.
+///
+/// Until then the hosted daemon bound the loopback address the window asked
+/// for and read only the model keys, so a machine that ran the window alone
+/// was found on the LAN and could not be connected to — *"otherwise I will
+/// have to remember starting the daemon on each box manually"*. Now `listen`,
+/// `token`, `ssh_target` and `advertise` in `config.toml` mean here what they
+/// mean to `mogeungd`, and a hand that wrote `listen = "0.0.0.0:7717"` into
+/// the file has done the opting-in `R-I10` asks for. `admit` still refuses a
+/// public bind with no token, and the refusal reaches the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hosting {
+    pub bind: String,
+    pub token: Option<String>,
+    pub ssh_target: Option<String>,
+    pub advertise: bool,
+}
+
+pub fn hosting_for(cfg: &mogeung_core::config::Config, asked: &str) -> Hosting {
+    let named = |v: &Option<String>| v.clone().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    Hosting {
+        bind: named(&cfg.listen).unwrap_or_else(|| asked.to_string()),
+        token: named(&cfg.token),
+        ssh_target: named(&cfg.ssh_target),
+        advertise: cfg.advertise.unwrap_or(false),
+    }
 }
 
 impl Status {
@@ -48,7 +88,7 @@ impl Status {
     /// the same situation should not read as two different products.
     pub fn detail(&self, addr: &str) -> String {
         match self {
-            Status::Attached { pid, claude_home } => format!(
+            Status::Attached { pid, claude_home, .. } => format!(
                 "Attached to a daemon already running on {addr}{}{}. Closing this \
                  window leaves it running.",
                 pid.map(|p| format!(" (pid {p})")).unwrap_or_default(),
@@ -57,10 +97,11 @@ impl Status {
                     .map(|h| format!(", watching {h}"))
                     .unwrap_or_default()
             ),
-            Status::Hosting => format!(
-                "This window is hosting the daemon on {addr}. Closing it stops \
+            Status::Hosting { bound, token, .. } => format!(
+                "This window is hosting the daemon on {bound}{}. Closing it stops \
                  watching — run mogeungd separately if you want notifications to \
-                 continue."
+                 continue.",
+                if token.is_some() { ", token-gated" } else { "" }
             ),
             Status::None { reason } => match reason {
                 Some(r) => format!("Nothing is serving {addr}: {r}. The board will stay empty."),
@@ -72,32 +113,59 @@ impl Status {
 
 /// Attach to a running daemon, or take the port and host one.
 pub fn acquire(addr: &str) -> Status {
-    match TcpListener::bind(addr) {
+    // A broken file costs its settings, never the daemon — `R-J3`'s rule,
+    // and the warning goes to stderr because there is no window to complain
+    // into yet.
+    let (cfg, cfg_warning) = mogeung_core::config::Config::load();
+    if let Some(w) = cfg_warning {
+        eprintln!("{w}");
+    }
+    acquire_with(cfg, addr)
+}
+
+/// [`acquire`], with the file's answers handed in — so a test can ask what a
+/// file would do without one on disk.
+pub fn acquire_with(cfg: mogeung_core::config::Config, addr: &str) -> Status {
+    let hosting = hosting_for(&cfg, addr);
+    match TcpListener::bind(&hosting.bind) {
         // Nobody home. We are the daemon now.
         Ok(listener) => {
             // The hosted daemon refuses the same binds `mogeungd` refuses
             // (`R-I10`), and it refuses them on a background thread where the
             // message is a line nobody reads. Ask the same question here, so
             // the refusal can be returned to the window and shown.
-            if let Ok(bound) = listener.local_addr() {
-                if let Err(e) = mogeungd::server::admit(&bound, None) {
+            let bound = match listener.local_addr() {
+                Ok(b) => b,
+                Err(e) => {
                     return Status::None {
-                        reason: Some(e.to_string()),
-                    };
+                        reason: Some(format!("bound {} but could not read the address back: {e}", hosting.bind)),
+                    }
                 }
+            };
+            if let Err(e) = mogeungd::server::admit(&bound, hosting.token.as_deref()) {
+                return Status::None {
+                    reason: Some(e.to_string()),
+                };
             }
-            host(listener);
-            Status::Hosting
+            let status = Status::Hosting {
+                bound: bound.to_string(),
+                port: bound.port(),
+                token: hosting.token.clone(),
+            };
+            host(listener, cfg, hosting);
+            status
         }
         Err(_) => {
             // Something holds the port. Confirm it is actually mogeung before
             // trusting it — otherwise an unrelated service on 7717 would leave
             // the window sitting on a websocket that never connects, with no
-            // explanation.
-            match probe(addr) {
+            // explanation. A daemon somebody runs here by hand reads the same
+            // file, so the same token opens it.
+            match probe(addr, hosting.token.as_deref()) {
                 Some(p) => Status::Attached {
                     pid: p.pid,
                     claude_home: p.claude_home,
+                    token: hosting.token,
                 },
                 None => Status::None {
                     reason: Some("something else holds the port".into()),
@@ -116,7 +184,7 @@ pub struct Probe {
 ///
 /// Hand-rolled HTTP/1.0 over a raw socket: this is one request, once, at
 /// start-up, and it is not worth an HTTP client dependency for it.
-pub fn probe(addr: &str) -> Option<Probe> {
+pub fn probe(addr: &str, token: Option<&str>) -> Option<Probe> {
     use std::io::{Read, Write};
     use std::time::Duration;
 
@@ -128,7 +196,10 @@ pub fn probe(addr: &str) -> Option<Probe> {
     let mut sock =
         std::net::TcpStream::connect_timeout(&target, Duration::from_millis(1500)).ok()?;
     sock.set_read_timeout(Some(Duration::from_millis(1500))).ok()?;
-    sock.write_all(b"GET /api/health HTTP/1.0\r\nHost: localhost\r\n\r\n")
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    sock.write_all(format!("GET /api/health HTTP/1.0\r\nHost: localhost\r\n{auth}\r\n").as_bytes())
         .ok()?;
 
     let mut body = String::new();
@@ -187,7 +258,7 @@ mod tests {
         });
         // `ok: true` alone is not enough — `headline` is the shape only
         // mogeungd produces, and requiring it is the whole point.
-        assert!(probe(&addr).is_none(), "a bare JSON server must not pass for a daemon");
+        assert!(probe(&addr, None).is_none(), "a bare JSON server must not pass for a daemon");
 
         match acquire(&addr) {
             Status::None { reason } => assert!(reason.is_some(), "a refusal has to say why"),
@@ -243,7 +314,56 @@ mod tests {
         );
         // `acquire` would start a real daemon here, so only the decision is
         // exercised: nothing is listening, therefore the bind is what happens.
-        assert!(probe(&addr).is_none(), "nothing is serving it yet");
+        assert!(probe(&addr, None).is_none(), "nothing is serving it yet");
+    }
+
+    /// The file decides what the hosted daemon binds and gates; the window's
+    /// own loopback address is the floor. `R-I17` step 7.
+    #[test]
+    fn the_file_names_the_bind_the_token_and_the_ssh_target() {
+        use mogeung_core::config::Config;
+        let bare = hosting_for(&Config::default(), "127.0.0.1:7717");
+        assert_eq!(bare.bind, "127.0.0.1:7717");
+        assert_eq!((bare.token, bare.ssh_target, bare.advertise), (None, None, false));
+        let full = Config {
+            listen: Some("0.0.0.0:7717".into()),
+            token: Some("s3cret".into()),
+            ssh_target: Some("kinz@devbox".into()),
+            advertise: Some(true),
+            ..Config::default()
+        };
+        let h = hosting_for(&full, "127.0.0.1:7717");
+        assert_eq!(h.bind, "0.0.0.0:7717");
+        assert_eq!(h.token.as_deref(), Some("s3cret"));
+        assert_eq!(h.ssh_target.as_deref(), Some("kinz@devbox"));
+        assert!(h.advertise);
+        // Blank strings are absent, not addresses.
+        let blank = Config {
+            listen: Some("  ".into()),
+            token: Some("".into()),
+            ..Config::default()
+        };
+        let h = hosting_for(&blank, "127.0.0.1:7717");
+        assert_eq!((h.bind.as_str(), h.token), ("127.0.0.1:7717", None));
+    }
+
+    /// A file that asks for a public bind and names no token is refused the
+    /// way `mogeungd` refuses it — and the refusal is a sentence the window
+    /// shows, not a line on a thread nobody reads.
+    #[test]
+    fn a_public_bind_with_no_token_in_the_file_is_refused_with_a_reason() {
+        use mogeung_core::config::Config;
+        let port = free_port();
+        let cfg = Config {
+            listen: Some(format!("0.0.0.0:{port}")),
+            ..Config::default()
+        };
+        match acquire_with(cfg, &format!("127.0.0.1:{port}")) {
+            Status::None { reason: Some(r) } => assert!(r.contains("refusing"), "got: {r}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        // And the port was let go of on the way out.
+        assert!(TcpListener::bind(format!("0.0.0.0:{port}")).is_ok());
     }
 }
 
@@ -303,7 +423,7 @@ pub fn stop_hosted_proxy() {
 }
 
 /// Start serving on `listener`, on a thread that dies with this process.
-fn host(listener: TcpListener) {
+fn host(listener: TcpListener, cfg: mogeung_core::config::Config, hosting: Hosting) {
     std::thread::Builder::new()
         .name("mogeungd".into())
         .spawn(move || {
@@ -314,13 +434,6 @@ fn host(listener: TcpListener) {
                     return;
                 }
             };
-            // A broken file costs its settings, never the daemon — `R-J3`'s rule,
-            // and the warning goes to stderr because this thread has no window
-            // to complain into yet.
-            let (cfg, cfg_warning) = mogeung_core::config::Config::load();
-            if let Some(w) = cfg_warning {
-                eprintln!("{w}");
-            }
             // Recorded before the daemon runs, because after this the thread
             // never returns.
             if let Ok(bound) = listener.local_addr() {
@@ -387,6 +500,13 @@ fn host(listener: TcpListener) {
                 // machine on the LAN nobody can find. `beacon = false` in
                 // the same file is the way to be quiet.
                 beacon: cfg.beacon.unwrap_or(true),
+                // And since ADR-0009's 2026-09-22 amendment it is reachable
+                // the way `mogeungd` would be from the same file: the token
+                // `admit` already checked, the ssh target the pane needs,
+                // and the mDNS advert if asked for.
+                token: hosting.token.clone(),
+                ssh_target: hosting.ssh_target.clone(),
+                advertise: hosting.advertise,
                 ..Default::default()
             };
             // Never resolves: the daemon stops when the process does, which is

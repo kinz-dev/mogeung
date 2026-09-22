@@ -101,11 +101,11 @@ streams"*, which is exactly the loss the ask names.
       against a real second daemon, and takes its verdict
 - [x] A browser tab says it cannot listen for beacons, rather than showing an
       empty list
-- [ ] A machine that runs only the window is **found** regardless (its hosted
-      daemon beacons too) and can be **connected to** either because the
-      hosted daemon honours `listen` and `token` from `config.toml`, or because
-      the guide says plainly to run `mogeungd` there; **which is a decision,
-      below**
+- [x] A machine that runs only the window is **found** regardless (its hosted
+      daemon beacons too) and can be **connected to**, because the hosted
+      daemon honours `listen`, `token` and `ssh_target` from `config.toml` —
+      decided 2026-09-22, ADR-0009's amendment: *"otherwise I will have to
+      remember starting the daemon on each box manually"*
 
 **Phase 2 — remote sessions in this window** (`R-I18`; the ask's *Day 2*)
 
@@ -523,3 +523,13 @@ the order the causes were actually found in: check the connection first.
 it"* — which is `R-I6`'s rule working as written: `ssh_target` in the Mac's
 config is the one thing missing, and the pane's wrapper was dry-run from the
 laptop and found tmux over the login shell it composes.
+
+**Step 7 decided and built, 2026-09-22.** The hosted daemon reads `listen`,
+`token`, `ssh_target` and `advertise` from `config.toml` before it binds;
+`admit` refuses a public bind with no token and the refusal reaches the window
+as a sentence; the hosting status carries what was bound, the port and the
+token, and the window composes its dial URL from them — in the store for the
+session, never in `localStorage`. Attaching reads the same file, so a daemon
+started by hand with that token is probed and dialled with it. ADR-0009's
+amendment has the reasoning and the one posture it cannot express, findable
+but not connectable, which is a `beacon`-only key if it is ever wanted.

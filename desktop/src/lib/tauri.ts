@@ -229,9 +229,35 @@ export async function onPtyClosed(cb: (id: string) => void): Promise<Unlisten> {
 
 /** What the shell found on the port, and what it did about it. ADR-0009. */
 export type DaemonStatus =
-  | { mode: "hosting" }
-  | { mode: "attached"; pid: number | null; claude_home: string | null }
+  | { mode: "hosting"; bound: string; port: number; token: string | null }
+  | { mode: "attached"; pid: number | null; claude_home: string | null; token: string | null }
   | { mode: "none"; reason: string | null };
+
+/**
+ * The URL the window dials its own daemon on, given what the shell did.
+ * `R-I17` step 7, ADR-0009's 2026-09-22 amendment.
+ *
+ * The file may have moved the port and named a token, and a token-gated
+ * daemon gates loopback too — so the shell hands both back with the status
+ * and the window composes the address here, the way `dialledUrl` does for a
+ * remote. Kept out of `localStorage` by the caller: the plain address is what
+ * the next launch starts from, and the file is read again then.
+ */
+export function dialFor(status: DaemonStatus, url: string): string {
+  if (status.mode === "none") return url;
+  try {
+    const u = new URL(url);
+    if (status.mode === "hosting" && status.port && u.port !== String(status.port)) {
+      u.port = String(status.port);
+    }
+    if (status.token && !u.searchParams.has("token")) {
+      u.searchParams.set("token", status.token);
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
 
 /**
  * Attach to a running daemon, or take the port and host one.

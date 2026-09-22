@@ -41,6 +41,7 @@ import {
   newId,
   probeConnection,
   reorder,
+  sameDaemon,
   saveConnections,
   storageKind,
   withCurrent,
@@ -94,7 +95,7 @@ export function ConnectionsWindow() {
       const next = withCurrent(loaded, url);
       setList(next);
       // Land on the daemon you are watching, so the form is about something.
-      setSelectedId((cur) => cur ?? next.find((c) => c.url === url)?.id ?? next[0]?.id ?? null);
+      setSelectedId((cur) => cur ?? next.find((c) => sameDaemon(c.url, url))?.id ?? next[0]?.id ?? null);
     });
     return () => {
       alive = false;
@@ -167,7 +168,7 @@ export function ConnectionsWindow() {
     if (!list) return;
     const next = list.filter((x) => x.id !== id);
     write(next);
-    if (selectedId === id) select(next.find((c) => c.url === url)?.id ?? next[0]?.id ?? "");
+    if (selectedId === id) select(next.find((c) => sameDaemon(c.url, url))?.id ?? next[0]?.id ?? "");
   };
 
   const test = (c: Connection) => {
@@ -202,7 +203,7 @@ export function ConnectionsWindow() {
           ) : (
             <div role="listbox" aria-label="saved connections">
               {list.map((c) => {
-                const current = c.url === url;
+                const current = sameDaemon(c.url, url);
                 return (
                   <Row
                     key={c.id}
@@ -314,7 +315,7 @@ export function ConnectionsWindow() {
               key={selected.id}
               c={selected}
               list={list ?? []}
-              current={selected.url === url}
+              current={sameDaemon(selected.url, url)}
               connState={conn}
               daemonLine={
                 daemon ? `${daemon.host ?? "unknown host"} · ${daemon.version}` : null

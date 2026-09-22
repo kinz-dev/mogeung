@@ -739,12 +739,15 @@ into a workspace that has managed without one. The body goes down **stdin**, so
 neither argv limits nor quoting can ever be part of a chat message.
 
 **The window's hosted daemon reads `model_url`, `model_name` and
-`allow_remote_model` from `config.toml`, and nothing else.** That daemon reads
-the config file for these three and no others — it takes the defaults for `db`,
-`poll_ms` and the rest — and widening that is a separate question. The model
-could not wait for it: a hosted daemon has no argv, so with nothing read there
-the chat panel would say *no model configured* for ever with no way to change
-its mind.
+`allow_remote_model` from `config.toml`** — the model could not wait: a hosted
+daemon has no argv, so with nothing read there the chat panel would say *no
+model configured* for ever — **and, since 2026-09-22, `listen`, `token`,
+`ssh_target`, `advertise` and `beacon`** ([ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md)'s
+amendment, `R-I17` step 7): the daemon a window hosts binds and gates as
+`mogeungd` would from the same file, `admit` refuses a public bind with no
+token and the refusal is shown, and the window dials its own daemon with the
+token the shell hands it. It still takes the defaults for `db`, `poll_ms` and
+the rest.
 
 The consent is the third of those, and it was not there when this shipped.
 `--allow-remote-model` was given `--allow-run`'s shape, and the shapes differ in

@@ -1,7 +1,7 @@
 ---
 title: The window may host a daemon, in its own process
 status: active
-updated: 2026-07-25
+updated: 2026-09-22
 decided: 2026-07-25
 ---
 
@@ -106,3 +106,41 @@ tested, but it is a state that did not exist before.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*
+
+## Amendment — 2026-09-22
+
+**The hosted daemon reads `listen`, `token`, `ssh_target` and `advertise`
+from `config.toml`, and binds and gates as `mogeungd` would from the same
+file.** It replaces the clause, implicit above and explicit in the code since
+`R-O1`, that the hosted daemon binds the loopback address the window asked
+for and reads only the model keys.
+
+The reason is `R-I17`. The beacon made every machine findable, and the one
+that ran only the window was the one machine nobody could connect to: its
+daemon was loopback-bound, token-less and published no ssh target, so the
+Found list said *on its own machine only* and every pane refused. The
+alternative — start `mogeungd` by hand on each box before the window — was
+the friction this ADR exists to remove, one row over: *"otherwise I will have
+to remember starting the daemon on each box manually."*
+
+What it comes with:
+
+- **A plain launch can now listen on the LAN, because a file said so.** That
+  is the opt-in `R-I10` requires — the file was written by a hand — and
+  `admit` still refuses a public bind with no token; the refusal now reaches
+  the window as a sentence rather than a line on a thread. The hosting notice
+  says what was bound and that it is token-gated.
+- **The window dials its own daemon with the token.** A token-gated daemon
+  gates loopback too, so the shell hands the token to the webview with the
+  hosting status and the window composes the URL, exactly as it does for a
+  remote. The composed URL lives in the store for the session and is never
+  written to `localStorage`, which keeps holding the plain address.
+- **Attaching reads the same file**, so a daemon somebody started by hand on
+  this machine with that token is probed and dialled with it.
+- The bind is still the test, the daemon is still a thread, and everything in
+  *Consequences* still holds — including that closing the window stops the
+  watching, now also for a daemon other machines were reaching.
+
+*Revisit if* gains a line: a machine that should be findable but not
+connectable has no way to say so short of leaving `listen` out, and if that
+turns out to be a real want, a `beacon`-only posture is one key away.

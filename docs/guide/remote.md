@@ -186,10 +186,21 @@ mogeungd 0.1.0 · pid 4242
 Fewer moving parts, and correct refusals in the window. Everything travels in
 clear text, so this is for a network you already trust.
 
-**On the dev box:**
+**On the dev box**, either run the daemon:
 
 ```sh
 mogeungd --listen 0.0.0.0:7717 --token "$(openssl rand -hex 24)"
+```
+
+or, since 2026-09-22, put the same two things in `~/.mogeung/config.toml` and
+just start the window — the daemon it hosts binds and gates from that file
+exactly as `mogeungd` would, and adding `ssh_target = "you@devbox"` lets a
+window elsewhere open this box's panes:
+
+```toml
+listen = "0.0.0.0:7717"
+token = "…"
+ssh_target = "you@devbox"
 ```
 
 Add `--advertise` if you want the window's network scan to find it. Off by

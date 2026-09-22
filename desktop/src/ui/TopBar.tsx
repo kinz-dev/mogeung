@@ -11,6 +11,7 @@
 
 import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun } from "lucide-react";
 import { useStore } from "@/store";
+import { maskToken } from "@/lib/connections";
 import { useChord } from "@/lib/keymap";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
@@ -80,8 +81,8 @@ export function TopBar() {
       <Tooltip
         content={
           conn === "open"
-            ? `connected to ${url}${daemon ? `\n${daemon.host ?? "unknown host"} · ${daemon.version}` : ""}\nclick to switch daemons`
-            : `${conn} — ${url}\nclick to switch daemons`
+            ? `connected to ${maskToken(url)}${daemon ? `\n${daemon.host ?? "unknown host"} · ${daemon.version}` : ""}\nclick to switch daemons`
+            : `${conn} — ${maskToken(url)}\nclick to switch daemons`
         }
       >
         {/* The dot is the connection, so it is also the way to change it. */}

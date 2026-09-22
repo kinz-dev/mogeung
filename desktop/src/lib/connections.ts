@@ -137,8 +137,35 @@ export async function saveConnections(list: Connection[]): Promise<void> {
  * to keep is the one they never had to type.
  */
 export function withCurrent(list: Connection[], url: string): Connection[] {
-  if (!url || list.some((c) => c.url === url)) return list;
-  return [{ id: newId(), name: defaultName(url), url }, ...list];
+  if (!url || list.some((c) => sameDaemon(c.url, url))) return list;
+  return [{ id: newId(), name: defaultName(url), url: withoutToken(url) }, ...list];
+}
+
+/** The address with any `token` taken out of its query. */
+export function withoutToken(url: string): string {
+  try {
+    const u = new URL(url);
+    if (!u.searchParams.has("token")) return url;
+    u.searchParams.delete("token");
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * The same daemon, whatever token either spelling carries. The store's URL
+ * has the token composed in — for a remote since `R-I16`, for the window's own
+ * daemon since ADR-0009's amendment — and a saved entry keeps it in a field,
+ * so comparing the strings would call the daemon you are watching *not saved*.
+ */
+export function sameDaemon(a: string, b: string): boolean {
+  return withoutToken(a) === withoutToken(b);
+}
+
+/** The address as a tooltip may show it: the token, if any, blanked. */
+export function maskToken(url: string): string {
+  return url.replace(/([?&]token=)[^&]*/g, "$1…");
 }
 
 /** A readable name for an address nobody has named: its host and port. */

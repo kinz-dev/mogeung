@@ -68,6 +68,7 @@ import type {
 } from "@/wire/types";
 import {
   daemonAcquire,
+  dialFor,
   isTauri,
   localAddrOf,
   machineId as machineIdFromShell,
@@ -2480,6 +2481,15 @@ async function ensureDaemon(url: string): Promise<void> {
   try {
     const status = await daemonAcquire(addr);
     useStore.setState({ daemon: useStore.getState().daemon, daemonStatus: status });
+    // The file may have moved the port or named a token (ADR-0009's
+    // 2026-09-22 amendment). Dial what the shell actually bound, with the
+    // token it gates on — through the client's own setter, never the store's
+    // `setUrl`, which would write the token into `localStorage`.
+    const dial = dialFor(status, url);
+    if (dial !== url) {
+      client?.setUrl(dial);
+      useStore.setState({ url: dial });
+    }
     if (status.mode === "none") {
       useStore.getState().pushError(
         status.reason
