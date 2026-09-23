@@ -2,7 +2,7 @@
 title: A model may read mogeung's evidence; the daemon holds it and the bytes stay on the machine
 status: superseded
 superseded_by: ADR-0031
-updated: 2026-08-28
+updated: 2026-09-23
 decided: 2026-08-28
 ---
 
@@ -151,6 +151,45 @@ and refused rather than never considered.
 - The GPU-and-sessions split turns out to be the normal case rather than the
   remote one, which would make clause 2's *daemon holds it* the wrong default
   instead of merely the inconvenient one.
+
+
+## Amendment — 2026-09-23
+
+**Clause 4 is decided per connection, not from the bind.** The chat — and the
+model's other asks made on a client's behalf — is refused to a client that is
+**not on this machine**; a client arriving over loopback is admitted whatever
+the daemon is bound to. It replaces clause 4's *"refused entirely on a
+non-loopback bind"*.
+
+The reason is `R-J103`, reported from the Ask Mogeung panel on 2026-09-23:
+*"chat is refused on a daemon bound beyond loopback"* — on the laptop whose
+window it was. `R-I17`'s step 7 had just taught the daemon a window hosts to
+bind the LAN when `config.toml` says so, which it does now on any machine that
+wants to be connectable, and a rule read from the bind cannot tell that
+machine's own window from a stranger on the LAN. Clause 4 was written against
+the stranger — *a daemon reachable over a LAN does not become a
+general-purpose LLM proxy* — and the stranger is still refused: a request from
+any other address is judged by the bind exactly as before, with no flag.
+
+What it comes with:
+
+- **Loopback means this machine, or an `ssh -L` tunnel into it** — the route
+  the refusal has always recommended, so this admits nothing the old rule did
+  not already admit through a loopback bind.
+- **The peer address comes from the server**, which `server::run` now serves
+  with connection info; a router served without it (a test harness, an
+  embedding) falls back to the bind, so no path opens by omission.
+- **The health row follows the client.** It is broadcast once, as everyone
+  else reads it; a client on this machine is shown its own on the way out.
+- **Federation keeps it closed across the hop.** A following daemon reaches its
+  peers from the LAN, so a peer judges it by its bind — which is what
+  ADR-0013's 2026-09-23 amendment asks of every hop.
+
+Not changed by this: `--allow-remote-model` (clause 3), and the two siblings
+decided the same way at start-up — `RunStart` (ADR-0025 clause 4) and
+`SendToSession` (ADR-0003's amendment, clause 4) — which still read the bind
+and so still refuse a LAN-bound machine's own window. The same per-connection
+test would fit both; each guards a different verb and is its own decision.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

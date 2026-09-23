@@ -84,11 +84,19 @@ impl Model {
 
     /// The Health row, including what the last ask did.
     pub fn health(&self) -> Option<ModelHealth> {
+        self.health_for(false)
+    }
+
+    /// The Health row as a client on **this machine** should read it.
+    /// `R-J103`, ADR-0030's 2026-09-23 amendment: clause 4 refuses the chat to
+    /// a client that is not on this machine, so the row a loopback client is
+    /// shown must not carry the refusal meant for everyone else.
+    pub fn health_for(&self, from_this_machine: bool) -> Option<ModelHealth> {
         let g = self.inner.lock().expect("model lock");
         // Nothing configured is still worth a row: the window needs to say
         // *no model configured* rather than render an empty panel, which reads
         // as broken. `None` is reserved for a daemon that predates all this.
-        let mut h = policy::health(&g.settings, g.chat_allowed);
+        let mut h = policy::health(&g.settings, g.chat_allowed || from_this_machine);
         h.last_error = g.last_error.clone();
         h.last_ok_ms = g.last_ok_ms;
         Some(h)
@@ -104,31 +112,49 @@ impl Model {
     /// The returned `Answer` still carries the whole text. That redundancy is
     /// the design: the deltas are an early view, the answer is the truth, and
     /// a caller that ignores `on_delta` entirely behaves exactly as before.
+    ///
+    /// `from_this_machine` is whether the client that asked is on this
+    /// machine — ADR-0030 clause 4 as amended 2026-09-23 refuses the chat to
+    /// any other client, whatever the daemon is bound to (`R-J103`).
     pub async fn chat_streaming<F>(
         &self,
         messages: &[ChatTurn],
+        from_this_machine: bool,
         mut on_delta: F,
     ) -> Result<Answer, String>
     where
         F: FnMut(String) + Send,
     {
-        self.ask(messages, &mut on_delta).await
+        self.ask(messages, from_this_machine, &mut on_delta).await
     }
 
     /// Ask, and answer. `Err` is a sentence for a human — every failure here is
     /// something the panel shows rather than something it hides.
+    ///
+    /// Judged by the bind alone: for the daemon's own asks and the binaries.
+    /// A client's request goes through [`Model::chat_as`].
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<Answer, String> {
-        self.ask(messages, &mut |_| {}).await
+        self.ask(messages, false, &mut |_| {}).await
+    }
+
+    /// Ask on behalf of a client, which may be on this machine. `R-J103`.
+    pub async fn chat_as(&self, messages: &[ChatTurn], from_this_machine: bool) -> Result<Answer, String> {
+        self.ask(messages, from_this_machine, &mut |_| {}).await
     }
 
     async fn ask(
         &self,
         messages: &[ChatTurn],
+        from_this_machine: bool,
         on_delta: &mut (dyn FnMut(String) + Send),
     ) -> Result<Answer, String> {
+        // Clause 4 keeps a daemon reachable from the LAN from becoming a
+        // general-purpose LLM proxy *for the LAN*. The window on this machine
+        // is not the LAN, whatever the bind — it could have asked the model
+        // directly — so it passes; any other client is judged by the bind.
         let (settings, chat_allowed) = {
             let g = self.inner.lock().expect("model lock");
-            (g.settings.clone(), g.chat_allowed)
+            (g.settings.clone(), g.chat_allowed || from_this_machine)
         };
         if let Err(r) = policy::admit_chat(&settings, chat_allowed) {
             // A refusal is not recorded as `last_error`: nothing was attempted,
@@ -707,6 +733,32 @@ mod tests {
         let err = m.chat(&turns()).await.unwrap_err();
         assert!(err.contains("loopback"), "{err}");
         assert!(!err.contains("--allow"), "must not imply a flag exists: {err}");
+        // Another machine's client is refused the same way.
+        let err = m.chat_as(&turns(), false).await.unwrap_err();
+        assert!(err.contains("loopback"), "{err}");
+    }
+
+    /// `R-J103`: a daemon bound to the LAN still answers the window on its
+    /// own machine. Admitted past clause 4 means the call goes to the
+    /// endpoint — which, on a port nobody holds, fails as a connection
+    /// rather than as the refusal.
+    #[tokio::test]
+    async fn a_client_on_this_machine_is_admitted_on_a_lan_bind() {
+        let m = Model::new();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        m.configure(ModelSettings {
+            url: Some(format!("http://127.0.0.1:{port}/v1")),
+            model: Some("m".into()),
+            consent: mogeung_core::model::RemoteConsent::None,
+            embed_model: None,
+        });
+        m.set_chat_allowed(false);
+        let err = m.chat_as(&turns(), true).await.unwrap_err();
+        assert!(!err.contains("beyond loopback"), "refused by clause 4 when it should have been admitted: {err}");
+        // And the health row a client on this machine is shown says so.
+        let h = m.health_for(true).unwrap();
+        assert!(h.chat_allowed);
+        assert!(!m.health().unwrap().chat_allowed, "everyone else still reads the refusal");
     }
 
     #[test]
