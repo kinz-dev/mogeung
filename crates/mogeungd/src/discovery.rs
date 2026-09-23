@@ -332,6 +332,7 @@ mod tests {
             pid: 1,
             version: "0.1.0".into(),
             ssh_target: None,
+            federation: None,
         }
     }
 

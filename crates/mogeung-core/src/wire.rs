@@ -730,6 +730,32 @@ pub enum ClientMsg {
     /// it published — see `kit::read_doc`, and note that this port has no token
     /// on loopback.
     FetchKitDoc { path: String },
+
+    // Federation. `R-I18`, `R-I21`–`R-I24`, [feature 0047](../../../docs/features/0047-daemon-federation/spec.md).
+    //
+    // **Accepted from a client on this machine only** (ADR-0013's and
+    // ADR-0036's 2026-09-23 amendments): following is a hand's act, and the
+    // follow list — tokens included — is never served to anyone else.
+    /// Follow another machine's daemon: hold a socket to it and mirror its
+    /// sessions here. `id` is the window's own connection id, so the panel and
+    /// the daemon agree on which entry is which. The token is kept in
+    /// `~/.mogeung/peers.json` (`0600`) and never sent back.
+    Follow {
+        id: String,
+        name: String,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+        /// Forward write and run verbs to this daemon. Off unless asked for —
+        /// `R-I23`, and the peer's own gates still decide on its side.
+        #[serde(default)]
+        allow_writes: bool,
+    },
+    Unfollow { id: String },
+    /// Change a followed daemon's consent to write verbs without re-following.
+    SetPeerWrites { id: String, allow: bool },
+    /// The follow list as it stands, with each daemon's state.
+    FetchPeers,
 }
 
 /// A folder this session has been seen working in, offered for the workspace
@@ -1173,6 +1199,13 @@ pub struct DaemonIdentity {
     /// separately and a field added later is a field half the fleet lacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_target: Option<String>,
+    /// The federation protocol this daemon speaks — `R-I24`. `None` is a
+    /// build from before federation: it can be *read*, but a daemon that
+    /// follows it cannot trust it to keep mirrored sessions to itself or to
+    /// answer forwarded commands the way this build expects, so a follow of
+    /// it is refused with the version it needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federation: Option<u32>,
 }
 
 impl DaemonIdentity {
@@ -1741,6 +1774,52 @@ pub enum ServerMsg {
         key: String,
         value: String,
     },
+    /// The daemons this one follows, and how each is doing. `R-I21`. Never a
+    /// token; sent to clients on this machine only.
+    Peers { peers: Vec<PeerState> },
+}
+
+/// One followed daemon, as the window is told about it. `R-I21`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerState {
+    /// The follow entry's id — the window's connection id.
+    pub id: String,
+    pub name: String,
+    /// The address, **without** any token.
+    pub url: String,
+    pub state: PeerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Sessions mirrored from it right now.
+    pub sessions: u32,
+    pub allow_writes: bool,
+    /// Why, in words, when it is not `up`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// When the state last changed, unix milliseconds.
+    pub since_ms: i64,
+}
+
+/// Where a followed daemon stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerStatus {
+    /// Dialling, or waiting to dial again.
+    Connecting,
+    /// Connected, and its sessions are mirrored.
+    Up,
+    /// Not answering. Its sessions are kept, stale, out of the ranking.
+    Down,
+    /// Answering, and the token was turned away.
+    Refused,
+    /// A build from before federation, or one this build cannot follow.
+    Incompatible,
+    /// This machine's own daemon — there is nothing to follow.
+    Myself,
 }
 
 #[cfg(test)]
@@ -1755,6 +1834,7 @@ mod identity_tests {
             pid: 4242,
             version: "0.1.0".into(),
             ssh_target: None,
+            federation: None,
         }
     }
 

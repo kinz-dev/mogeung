@@ -1203,7 +1203,7 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>, from_this_machine: boo
 
     // Push the full snapshot immediately so a client is useful before it sends
     // anything, and so reconnects self-heal.
-    if let Ok(txt) = serde_json::to_string(&state.snapshot().await) {
+    if let Ok(txt) = serde_json::to_string(&state.snapshot(from_this_machine).await) {
         if sink.send(Message::Text(txt.into())).await.is_err() {
             return;
         }
@@ -1228,6 +1228,21 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>, from_this_machine: boo
             };
             match msg {
                 Ok(mut msg) => {
+                    // **No re-export** (`R-I21`, ADR-0013's amendment): a
+                    // socket from another machine never learns what this
+                    // daemon mirrors, or whom it follows — so following is
+                    // never transitive, and two daemons following each other
+                    // cannot loop.
+                    if !from_this_machine {
+                        use mogeung_core::federation::is_mirrored;
+                        match &mut msg {
+                            ServerMsg::SessionUpdated { session } if is_mirrored(&session.id) => continue,
+                            ServerMsg::SessionRemoved { session_id } if is_mirrored(session_id) => continue,
+                            ServerMsg::Queue { queue } => queue.retain(|i| !is_mirrored(&i.session_id)),
+                            ServerMsg::Peers { .. } => continue,
+                            _ => {}
+                        }
+                    }
                     // Health is broadcast once for every window, with the
                     // model row as everyone but this machine reads it; a
                     // client on this machine is shown its own (`R-J103`).
@@ -1265,10 +1280,18 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>, from_this_machine: boo
         }
     });
 
+    // Commands about mirrored sessions go to the daemon that owns them, up a
+    // socket that belongs to this window (`R-I22`).
+    let mut relays = crate::federation::Relays::new(state.clone(), reply_tx.clone());
     while let Some(Ok(msg)) = stream.next().await {
         let Message::Text(txt) = msg else { continue };
         match serde_json::from_str::<ClientMsg>(&txt) {
-            Ok(cmd) => handle(&state, cmd, &reply_tx, from_this_machine).await,
+            Ok(cmd) => {
+                if relays.intercept(&cmd, from_this_machine) {
+                    continue;
+                }
+                handle(&state, cmd, &reply_tx, from_this_machine).await
+            }
             Err(e) => {
                 send_reply(
                     &reply_tx,
@@ -1598,6 +1621,32 @@ async fn handle(
             conversation,
             about,
         } => {
+            // This machine's model cannot read another machine's files, and
+            // the question is not forwarded: it is free-form text, which is
+            // exactly what ADR-0030 clause 4 keeps off other machines.
+            if let Some(a) = about.as_ref().filter(|a| mogeung_core::federation::is_mirrored(&a.session_id)) {
+                let host = state
+                    .federation
+                    .get(&a.session_id)
+                    .and_then(|s| s.origin.and_then(|o| o.host))
+                    .unwrap_or_else(|| "another machine".into());
+                send_reply(
+                    reply,
+                    ServerMsg::ModelReply {
+                        id,
+                        text: None,
+                        error: Some(format!(
+                            "that session is on {host} — ask about it from a window on that machine, whose model can read its files"
+                        )),
+                        model: String::new(),
+                        elapsed_ms: 0,
+                        cites: Vec::new(),
+                        basis: None,
+                        narration: false,
+                    },
+                );
+                return;
+            }
             let state = state.clone();
             let reply = reply.clone();
             tokio::spawn(async move {
@@ -1686,7 +1735,7 @@ async fn handle(
             // Direct, not broadcast: this used to make every *other* window
             // re-ingest the full board whenever any window reconnected —
             // which after a laptop sleep is all of them, at once.
-            let snap = state.snapshot().await;
+            let snap = state.snapshot(from_this_machine).await;
             send_reply(reply, snap);
         }
         ClientMsg::SetHunkReviewed {
@@ -1889,6 +1938,33 @@ async fn handle(
             let entries = crate::kit::scan(&state.claude_home);
             state.broadcast(ServerMsg::Kit { entries });
         }
+        // Federation. `R-I21`. Loopback clients only: following is a hand's
+        // act at this machine, and the follow list is never served elsewhere
+        // (ADR-0013's and ADR-0036's amendments).
+        ClientMsg::Follow { .. } | ClientMsg::Unfollow { .. } | ClientMsg::SetPeerWrites { .. } | ClientMsg::FetchPeers
+            if !from_this_machine =>
+        {
+            err(anyhow::anyhow!(
+                "following is managed from a window on this machine only"
+            ))
+        }
+        ClientMsg::Follow { id, name, url, token, allow_writes } => {
+            let entry = crate::federation::PeerEntry { id, name, url, token, allow_writes };
+            if let Err(e) = state.federation.follow(state, entry).await {
+                err(anyhow::anyhow!(e));
+            }
+        }
+        ClientMsg::Unfollow { id } => {
+            if let Err(e) = state.federation.unfollow(state, &id).await {
+                err(anyhow::anyhow!(e));
+            }
+        }
+        ClientMsg::SetPeerWrites { id, allow } => {
+            if let Err(e) = state.federation.set_writes(state, &id, allow) {
+                err(anyhow::anyhow!(e));
+            }
+        }
+        ClientMsg::FetchPeers => send_reply(reply, ServerMsg::Peers { peers: state.federation.peers() }),
         ClientMsg::FetchKitDoc { path } => match crate::kit::read_doc(&state.claude_home, &path) {
             Ok(doc) => state.broadcast(ServerMsg::KitDoc { doc }),
             Err(e) => err(anyhow::anyhow!(e)),
