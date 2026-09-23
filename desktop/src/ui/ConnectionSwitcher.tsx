@@ -15,6 +15,13 @@
  *
  * Choosing a row is the same switch the panel's *connect* is — `setUrl` with
  * the composed address, which drops the board and refills it.
+ *
+ * **Follow** sits at the end of each row (`R-I21`): not a switch, but this
+ * machine's daemon bringing that one's sessions into the Attention list. It
+ * appears only when the daemon being watched is this machine's own and says
+ * so by answering with its follow list — see `peers` in the store. The
+ * *allow changes* consent lives in the Connections panel, where there is room
+ * to say what it means.
  */
 
 import { useEffect, useState } from "react";
@@ -34,6 +41,7 @@ import {
   type Liveness,
 } from "@/lib/connections";
 import { hostPortOf, lanPeers, matchesSaved, type FoundDaemon } from "@/lib/lan";
+import { followMsg, followOf, peerLine, peerTrouble } from "@/lib/federation";
 
 type Checked = Record<string, Liveness> | "checking" | "browser";
 
@@ -64,6 +72,8 @@ export function ConnectionSwitcher() {
   const url = useStore((s) => s.url);
   const conn = useStore((s) => s.conn);
   const setUrl = useStore((s) => s.setUrl);
+  const peers = useStore((s) => s.peers);
+  const send = useStore((s) => s.send);
   const [list, setList] = useState<Connection[]>([]);
   const [checked, setChecked] = useState<Checked>("checking");
   const [heard, setHeard] = useState<FoundDaemon[]>([]);
@@ -148,6 +158,7 @@ export function ConnectionSwitcher() {
             const state =
               typeof checked === "object" ? (live?.state ?? "unknown") : checked === "browser" ? "unknown" : "checking";
             const beacon = heard.find((d) => !d.gone && matchesSaved(c, d));
+            const following = followOf(c, peers);
             return (
               <Menu.Item
                 key={c.id}
@@ -179,7 +190,45 @@ export function ConnectionSwitcher() {
                     {words(live, checked)}
                     {beacon ? ` · ${beacon.live} live · ${beacon.waiting} need you` : ""}
                   </span>
+                  {following && (
+                    <span
+                      data-following={following.state}
+                      className={cn(
+                        "block truncate text-xs",
+                        peerTrouble(following) ? "text-[var(--amber)]" : "text-[var(--blue)]",
+                      )}
+                    >
+                      {peerLine(following)}
+                    </span>
+                  )}
                 </span>
+                {/* Not on the daemon being watched — that would be following
+                    itself — and only where this window may follow at all. */}
+                {peers !== null && !isCurrent && c.url && (
+                  <button
+                    type="button"
+                    data-follow-toggle={following ? "unfollow" : "follow"}
+                    title={
+                      following
+                        ? "stop following — its sessions leave your Attention list"
+                        : "this machine's daemon follows it, and its sessions join your Attention list without switching"
+                    }
+                    // Its own act, not the row's: the row switches daemons.
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      send(following ? { cmd: "unfollow", id: following.id } : followMsg(c));
+                    }}
+                    className={cn(
+                      "mt-0.5 shrink-0 rounded-sm border border-[var(--border)] px-1.5 py-px text-xs",
+                      interactive,
+                      "hover:border-[var(--border-hover)]",
+                    )}
+                  >
+                    {following ? "unfollow" : "follow"}
+                  </button>
+                )}
               </Menu.Item>
             );
           })}

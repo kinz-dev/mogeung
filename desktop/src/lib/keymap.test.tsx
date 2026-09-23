@@ -639,6 +639,45 @@ describe("the keyboard", () => {
   });
 
   /**
+   * …and in the order it is **drawn**. Grouping by repository puts `a` and
+   * `c` together under one heading while rank says `a`, `b`, `c`, and the
+   * arrows walked rank — so `↓` from `a` jumped into the other group. The same
+   * two-lists bug, one layer down; grouping by machine (`R-I21`) would have
+   * made it the common case, since every remote row sits under its heading.
+   */
+  it("walks the grouped order, not the rank underneath it", async () => {
+    const { default: App } = await import("@/App");
+    const mk = (id: string, repo: string) =>
+      ({
+        id,
+        title: `session ${id}`,
+        cwd: repo,
+        repo_root: repo,
+        alive: true,
+        tmux_target: "work:0.0",
+        touched_files: [],
+        collisions: [],
+        verify_runs: [],
+        claims: [],
+        last_event_at: new Date().toISOString(),
+      }) as never;
+    render(<App />);
+    act(() => {
+      useStore.getState().setPrefs({ scope: "all", groupByRepo: true });
+      useStore.setState({
+        sessions: { a: mk("a", "/r/one"), b: mk("b", "/r/two"), c: mk("c", "/r/one") },
+        queue: ["a", "b", "c"].map((id) => ({ session_id: id, reason: "running", score: 0, detail: "" })) as never,
+        selected: "a",
+      });
+    });
+
+    press("ArrowDown");
+    expect(useStore.getState().selected, "c is drawn under a, in the same repository").toBe("c");
+    press("ArrowDown");
+    expect(useStore.getState().selected).toBe("b");
+  });
+
+  /**
    * The git popups, on IntelliJ's own chords. `R-D31`, `R-D32`.
    *
    * **Spelled by physical key**, and this test is where that has to hold:

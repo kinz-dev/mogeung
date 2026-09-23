@@ -256,8 +256,10 @@ async fn another_machine_never_sees_what_this_daemon_mirrors() {
     .await;
     assert!(sessions.iter().all(|s| !s.id.starts_with('@')), "a mirrored session was re-exported");
 
-    // Nor may it follow, list the follows, or reach through.
+    // Nor may it list the follows — asked, it is told nothing, since every
+    // window asks on connect — follow, or reach through.
     send(&mut foreign, ClientMsg::FetchPeers).await;
+    send(&mut foreign, follow(&peer_url, false)).await;
     let why = until(&mut foreign, 10, |m| match m {
         ServerMsg::Error { message } => Some(message.clone()),
         ServerMsg::Peers { .. } => Some("LEAKED".into()),
@@ -334,4 +336,92 @@ async fn following_this_machine_is_recognised_and_refused() {
     })
     .await;
     assert!(detail.contains("this machine"), "{detail}");
+}
+
+/// Phase C (`R-I23`): consent opens the hop, and **the peer's own gates still
+/// decide**. The follow's *allow changes* is this machine saying it may send a
+/// change; whether that machine acts on it is that machine's call — here, a
+/// peer bound beyond loopback without `--allow-run`, which starts nothing for
+/// a socket from elsewhere, and a relay is one.
+#[tokio::test]
+async fn consent_opens_the_hop_and_the_peer_s_own_gates_still_decide() {
+    let (peer, peer_dir) = daemon("peer5", "peer-m");
+    peer.runs.set_allowed(false);
+    waiting_session(&peer, "s1", &peer_dir).await;
+    let peer_url = serve(&peer, false).await;
+
+    let (home_d, _dir) = daemon("home5", "home-m");
+    let home_url = serve(&home_d, true).await;
+    let mut ws = connect(&home_url).await;
+    send(&mut ws, follow(&peer_url, false)).await;
+    until(&mut ws, 10, |m| match m {
+        ServerMsg::SessionUpdated { session } if session.id == MIRRORED => Some(()),
+        _ => None,
+    })
+    .await;
+
+    // Without consent the run panel is not runnable here — and a window on
+    // this machine is not shown *its own* authority over another machine's.
+    assert!(!run_flag(&mut ws).await, "no consent, so no run button");
+
+    // Consent given: the start crosses, and the peer refuses it in its words.
+    send(&mut ws, ClientMsg::SetPeerWrites { id: "c1".into(), allow: true }).await;
+    assert!(!run_flag(&mut ws).await, "the peer's own --allow-run is off, and the flag says so");
+    send(&mut ws, ClientMsg::RunStart { session_id: MIRRORED.into(), config_id: "anything".into() }).await;
+    let why = until(&mut ws, 10, |m| match m {
+        ServerMsg::Error { message } => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(why.contains("--allow-run"), "the peer's gate, in the peer's words: {why}");
+
+    // Consent withdrawn: refused here again, before anything is sent.
+    send(&mut ws, ClientMsg::SetPeerWrites { id: "c1".into(), allow: false }).await;
+    send(&mut ws, ClientMsg::ForgetSession { session_id: MIRRORED.into() }).await;
+    let why = until(&mut ws, 10, |m| match m {
+        ServerMsg::Error { message } => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(why.contains("allow changes"), "{why}");
+    assert!(peer.sessions.read().await.contains_key("s1"), "nothing reached the peer");
+    let _ = std::fs::remove_dir_all(peer_dir);
+}
+
+/// Whether the run panel for the mirrored session says it would run.
+async fn run_flag(ws: &mut Ws) -> bool {
+    send(ws, ClientMsg::FetchRunConfigs { session_id: MIRRORED.into() }).await;
+    until(ws, 10, |m| match m {
+        ServerMsg::RunConfigs { session_id, allowed, .. } if session_id == MIRRORED => Some(*allowed),
+        _ => None,
+    })
+    .await
+}
+
+/// Phase D (`R-I24`): a peer on a build from before federation is refused a
+/// follow, with the protocol it needs — not followed half-way and left to
+/// fail on the first forwarded command.
+#[tokio::test]
+async fn a_peer_from_before_federation_is_refused_with_what_it_needs() {
+    let (peer, peer_dir) = daemon("peer6", "peer-m");
+    let peer_url = {
+        // An older build: same wire, no `federation` in its identity.
+        let mut old = peer;
+        Arc::get_mut(&mut old).expect("nothing else holds it yet").identity.federation = None;
+        serve(&old, false).await
+    };
+    let (home_d, _dir) = daemon("home6", "home-m");
+    let mut ws = connect(&serve(&home_d, true).await).await;
+    send(&mut ws, follow(&peer_url, false)).await;
+    let (detail, sessions) = until(&mut ws, 10, |m| match m {
+        ServerMsg::Peers { peers } => peers
+            .iter()
+            .find(|p| p.state == PeerStatus::Incompatible)
+            .map(|p| (p.detail.clone().unwrap_or_default(), p.sessions)),
+        _ => None,
+    })
+    .await;
+    assert!(detail.contains("protocol"), "{detail}");
+    assert_eq!(sessions, 0, "nothing mirrored from a peer that cannot be followed");
+    let _ = std::fs::remove_dir_all(peer_dir);
 }

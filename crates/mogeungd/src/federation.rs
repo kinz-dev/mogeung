@@ -710,6 +710,10 @@ pub struct Relays {
 struct RelayConn {
     tx: tokio::sync::mpsc::UnboundedSender<String>,
     task: tokio::task::JoinHandle<()>,
+    /// The follow as it stood when this relay opened. A follow sent again
+    /// with a corrected token, or its consent turned on or off, reopens the
+    /// relay on the next command rather than carrying on with the old terms.
+    terms: (String, Option<String>, bool),
 }
 
 impl Drop for Relays {
@@ -771,8 +775,12 @@ impl Relays {
             return true;
         }
         let Some((_, value)) = outbound(cmd) else { return true };
-        let alive = self.open.get(&machine).is_some_and(|c| !c.task.is_finished());
+        let terms = (route.url.clone(), route.token.clone(), route.allow_writes);
+        let alive = self.open.get(&machine).is_some_and(|c| !c.task.is_finished() && c.terms == terms);
         if !alive {
+            if let Some(old) = self.open.remove(&machine) {
+                old.task.abort();
+            }
             let conn = open_relay(route, machine.clone(), self.reply.clone());
             self.open.insert(machine.clone(), conn);
         }
@@ -784,6 +792,7 @@ impl Relays {
 }
 
 fn open_relay(route: Route, machine: String, reply: tokio::sync::mpsc::Sender<ServerMsg>) -> RelayConn {
+    let terms = (route.url.clone(), route.token.clone(), route.allow_writes);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let task = tokio::spawn(async move {
         let say = |message: String| {
@@ -811,7 +820,7 @@ fn open_relay(route: Route, machine: String, reply: tokio::sync::mpsc::Sender<Se
                 msg = stream.next() => {
                     match msg {
                         Some(Ok(Message::Text(txt))) => {
-                            if let Some(m) = relayed(&txt, &machine) {
+                            if let Some(m) = relayed(&txt, &machine, route.allow_writes) {
                                 let _ = reply.try_send(m);
                             }
                         }
@@ -822,20 +831,29 @@ fn open_relay(route: Route, machine: String, reply: tokio::sync::mpsc::Sender<Se
             }
         }
     });
-    RelayConn { tx, task }
+    RelayConn { tx, task, terms }
 }
 
 /// One message from a relay, as the window should receive it — or nothing.
 /// A message this build cannot read (a newer peer's) is dropped rather than
 /// guessed at.
-pub fn relayed(txt: &str, machine: &str) -> Option<ServerMsg> {
+///
+/// A run panel's *will it run* is the one answer rewritten on the way: the
+/// peer says whether **it** would run for a socket from another machine (its
+/// `--allow-run`), and a run crossing this hop also needs this follow's
+/// consent (`R-I23`) — so the window is shown both, as one flag.
+pub fn relayed(txt: &str, machine: &str, allow_writes: bool) -> Option<ServerMsg> {
     use mogeung_core::federation::{inbound, relay_class, Relay};
     let msg: ServerMsg = serde_json::from_str(txt).ok()?;
     if relay_class(&msg) != Relay::Pass {
         return None;
     }
     let value: serde_json::Value = serde_json::from_str(txt).ok()?;
-    serde_json::from_value(inbound(value, machine)).ok()
+    let mut out: ServerMsg = serde_json::from_value(inbound(value, machine)).ok()?;
+    if let ServerMsg::RunConfigs { allowed, .. } = &mut out {
+        *allowed = *allowed && allow_writes;
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -846,18 +864,38 @@ mod relay_tests {
     #[test]
     fn a_relay_passes_an_answer_with_the_machine_in_its_ids() {
         let txt = r#"{"ev":"file_content","session_id":"abc","path":"a.rs","content":"x","truncated":false}"#;
-        match relayed(txt, "m1") {
+        match relayed(txt, "m1", false) {
             Some(ServerMsg::FileContent { session_id, path, .. }) => assert_eq!((session_id.as_str(), path.as_str()), ("@m1:abc", "a.rs")),
             other => panic!("{other:?}"),
         }
     }
 
+    /// Both gates, as one flag: the peer's `--allow-run` and this follow's
+    /// consent. Either off, and the window's run button says so before the
+    /// click rather than after it.
+    #[test]
+    fn a_relayed_run_panel_is_runnable_only_with_both_gates_open() {
+        let flag = |peer: bool, consent: bool| {
+            let txt = format!(r#"{{"ev":"run_configs","session_id":"abc","configs":[],"allowed":{peer}}}"#);
+            match relayed(&txt, "m1", consent) {
+                Some(ServerMsg::RunConfigs { session_id, allowed, .. }) => {
+                    assert_eq!(session_id, "@m1:abc");
+                    allowed
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(flag(true, true));
+        assert!(!flag(true, false));
+        assert!(!flag(false, true));
+    }
+
     #[test]
     fn a_relay_drops_the_board_what_is_theirs_and_what_it_cannot_read() {
-        assert!(relayed(r#"{"ev":"queue","queue":[]}"#, "m1").is_none());
-        assert!(relayed(r#"{"ev":"notes","notes":[]}"#, "m1").is_none());
-        assert!(relayed(r#"{"ev":"runs","runs":[]}"#, "m1").is_none());
-        assert!(relayed(r#"{"ev":"something_from_a_newer_build"}"#, "m1").is_none());
-        assert!(relayed("not json", "m1").is_none());
+        assert!(relayed(r#"{"ev":"queue","queue":[]}"#, "m1", false).is_none());
+        assert!(relayed(r#"{"ev":"notes","notes":[]}"#, "m1", false).is_none());
+        assert!(relayed(r#"{"ev":"runs","runs":[]}"#, "m1", false).is_none());
+        assert!(relayed(r#"{"ev":"something_from_a_newer_build"}"#, "m1", false).is_none());
+        assert!(relayed("not json", "m1", false).is_none());
     }
 }

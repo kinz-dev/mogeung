@@ -114,8 +114,13 @@ export interface ScopedPrefs {
    * nothing on the laptop.
    */
   tags: Record<SessionId, string>;
-  /** The panel's shells: `[tmux session name, worktree root]`. `R-B33`. */
-  shells: [string, string][];
+  /**
+   * The panel's shells: `[tmux session name, worktree root, ssh destination]`.
+   * `R-B33`. The third is set only for a shell opened on a session mirrored
+   * from another machine (`R-I22`) — rooted in *its* worktree, so it has to
+   * run there — and absent means the watched daemon's machine, as before.
+   */
+  shells: ([string, string] | [string, string, string])[];
   /**
    * Folders you keep in the New session window, in the order you added them.
    * `R-J45`. See [`lib/favourites.ts`](../lib/favourites.ts), which carries the
@@ -252,6 +257,13 @@ export interface Prefs {
 
   groupByRepo: boolean;
   /**
+   * Head the Attention list with each machine, this one first, when it shows
+   * sessions mirrored from a followed daemon. `R-I21`, feature 0047. On by
+   * default: a remote row with no heading over it is a row whose *where* you
+   * have to read off a chip, and where is the first thing a hop changes.
+   */
+  groupByMachine: boolean;
+  /**
    * Hide sessions with no tmux pane from the `needs you` and `live` scopes.
    * `R-J93`. On by default, and the `all` scope ignores it either way.
    *
@@ -374,6 +386,7 @@ export const defaultPrefs = (): Prefs => ({
   gitFavourites: {},
   gitRecents: {},
   groupByRepo: false,
+  groupByMachine: true,
   tmuxOnly: true,
   autoSelect: false,
   previewOnSelect: true,

@@ -22,6 +22,12 @@
  * makes a saved entry and selects it, so the next thing in front of you is the
  * token field.
  *
+ * **Follow** (`R-I21`, feature 0047) is the other thing a saved connection
+ * can be: not *go there* but *bring its sessions here*. This machine's daemon
+ * holds the connection, so it lasts with the window closed and needs no
+ * switch; the form shows where each follow stands, and — per follow, off
+ * until a hand turns it on — whether changes may cross to it (`R-I23`).
+ *
  * Switching drops the whole board on purpose. Session ids do not survive the
  * move, and a queue from the machine you just left is worse than an empty one:
  * it looks like current information about work that is not in front of you.
@@ -33,7 +39,9 @@ import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
 import { composeDial } from "@/lib/dial";
 import { Dialog } from "@/ui/Dialog";
-import { Button, Dim, IconButton, Input, Loading, Row } from "@/ui/primitives";
+import { Button, Checkbox, Dim, IconButton, Input, Loading, Row } from "@/ui/primitives";
+import { followMsg, followOf, peerLine, peerTrouble } from "@/lib/federation";
+import type { PeerState } from "@/wire/types";
 import {
   defaultName,
   dialledUrl,
@@ -75,6 +83,9 @@ export function ConnectionsWindow() {
   const setUrl = useStore((s) => s.setUrl);
   const daemonStatus = useStore((s) => s.daemonStatus);
   const localAddr = useStore((s) => s.localAddr);
+  // `null` is the daemon's word that this window may not follow — see the store.
+  const peers = useStore((s) => s.peers);
+  const send = useStore((s) => s.send);
 
   // A load rather than a value, since ADR-0036 — so there is a tick with no
   // rows, and an empty list rendered during it reads as a list that was lost.
@@ -229,6 +240,23 @@ export function ConnectionsWindow() {
                       />
                     )}
                     <span className="min-w-0 flex-1 truncate text-base">{labelOf(c)}</span>
+                    {(() => {
+                      const f = followOf(c, peers);
+                      return (
+                        f && (
+                          <span
+                            data-following={f.state}
+                            title={peerLine(f)}
+                            className={cn(
+                              "shrink-0 text-xs",
+                              peerTrouble(f) ? "text-[var(--amber)]" : "text-[var(--blue)]",
+                            )}
+                          >
+                            following
+                          </span>
+                        )
+                      );
+                    })()}
                     <Dim className="shrink-0 font-mono text-sm">{hostPortOf(c.url) ?? ""}</Dim>
                   </Row>
                 );
@@ -342,6 +370,19 @@ export function ConnectionsWindow() {
                 if (i >= 0) write(reorder(list ?? [], i, i + dir));
               }}
               onForget={() => forget(selected.id)}
+              follow={
+                // A daemon from before federation has nothing to offer here.
+                !daemon?.federation
+                  ? null
+                  : peers === null
+                    ? "elsewhere"
+                    : {
+                        peer: followOf(selected, peers),
+                        onFollow: (allow) => send(followMsg(selected, allow)),
+                        onUnfollow: (id) => send({ cmd: "unfollow", id }),
+                        onWrites: (id, allow) => send({ cmd: "set_peer_writes", id, allow }),
+                      }
+              }
             />
           )}
         </div>
@@ -387,6 +428,7 @@ function ConnectionForm({
   onTest,
   onMove,
   onForget,
+  follow,
 }: {
   c: Connection;
   list: Connection[];
@@ -401,6 +443,20 @@ function ConnectionForm({
   onTest: () => void;
   onMove: (dir: -1 | 1) => void;
   onForget: () => void;
+  /**
+   * What following this connection looks like from here: the controls, the
+   * reason there are none (`"elsewhere"` — this window is another machine's),
+   * or `null` for a daemon that cannot follow at all.
+   */
+  follow:
+    | null
+    | "elsewhere"
+    | {
+        peer: PeerState | null;
+        onFollow: (allowWrites: boolean) => void;
+        onUnfollow: (id: string) => void;
+        onWrites: (id: string, allow: boolean) => void;
+      };
 }) {
   const label = labelOf(c);
   const i = list.findIndex((x) => x.id === c.id);
@@ -524,6 +580,80 @@ function ConnectionForm({
           {connState === "open" ? (daemonLine ? `connected — ${daemonLine}` : "connected") : connState}
         </Dim>
       )}
+
+      {/*
+        **Follow.** `R-I21`, feature 0047. Not a switch: this machine's daemon
+        opens its own connection to that one and mirrors its sessions into this
+        Attention list, ranked with yours, for as long as it follows — window
+        open or not. Offered on every saved entry but the one you are watching,
+        which would be following itself.
+      */}
+      {follow === "elsewhere" ? (
+        <Dim className="mt-2 block border-t border-[var(--border)] pt-2 text-sm" data-follow="elsewhere">
+          Following is set up from a window on the machine that follows — this window is watching
+          another machine&apos;s daemon, which only shows its own sessions to a window elsewhere.
+        </Dim>
+      ) : follow && !current ? (
+        <div className="mt-2 flex flex-col gap-1 border-t border-[var(--border)] pt-2" data-follow>
+          <Dim className="block text-sm">
+            follow — this machine&apos;s daemon watches it too, and its sessions join your Attention
+            list without switching
+          </Dim>
+          {follow.peer ? (
+            <>
+              <div
+                data-peer-state={follow.peer.state}
+                className={cn(
+                  "text-sm",
+                  peerTrouble(follow.peer) ? "text-[var(--amber)]" : "text-[var(--text-strong)]",
+                )}
+              >
+                {peerLine(follow.peer)}
+              </div>
+              {/*
+                The consent for `R-I23`, per follow and off until a hand turns
+                it on (ADR-0013's 2026-09-23 amendment). It does not *grant*
+                anything on the other machine: that daemon's own gates still
+                decide — its `--allow-run`, and send-to-session from its own
+                screen only (ADR-0003's amendment).
+              */}
+              <Checkbox
+                checked={follow.peer.allow_writes}
+                onChange={(v) => follow.peer && follow.onWrites(follow.peer.id, v)}
+                label={`allow changes on ${follow.peer.host ?? label} from here`}
+                title="git stage, commit, push and the rest, run configurations, forgetting a session — sent to that machine and decided by its own gates. Off, they are refused here in words."
+              />
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  title="send the address and token above to the daemon again — how a corrected token reaches it"
+                  onClick={() => follow.peer && follow.onFollow(follow.peer.allow_writes)}
+                >
+                  follow again
+                </Button>
+                <Button
+                  variant="outline"
+                  title="stop following — its sessions leave this Attention list"
+                  onClick={() => follow.peer && follow.onUnfollow(follow.peer.id)}
+                >
+                  unfollow
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div>
+              <Button
+                variant="outline"
+                disabled={!c.url}
+                title="this machine's daemon connects to it with the token above and keeps its sessions in your Attention list"
+                onClick={() => follow.onFollow(false)}
+              >
+                follow
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

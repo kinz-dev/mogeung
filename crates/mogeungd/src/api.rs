@@ -1255,7 +1255,15 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>, from_this_machine: boo
                             // Likewise the run panel's *will this daemon run
                             // anything* (`R-J104`): broadcast as another
                             // machine reads it, shown to this one as its own.
-                            ServerMsg::RunConfigs { allowed, .. } => *allowed = true,
+                            // Not a mirrored session's: that flag is the other
+                            // machine's gate and this follow's consent, already
+                            // folded by the relay (`R-I23`), and this machine's
+                            // own authority says nothing about it.
+                            ServerMsg::RunConfigs { allowed, session_id, .. }
+                                if !mogeung_core::federation::is_mirrored(session_id) =>
+                            {
+                                *allowed = true
+                            }
                             _ => {}
                         }
                     }
@@ -1458,7 +1466,7 @@ async fn handle(
         // with no pane to aim at, and not with nothing to say. What it never
         // does is come back for a reply — one shot, and no loop.
         ClientMsg::SendToSession { session_id, text } => {
-            if let Some(why) = send_refusal(&state, from_this_machine) {
+            if let Some(why) = send_refusal(state, from_this_machine) {
                 return err(anyhow::anyhow!(why));
             }
             let Some(session) = state.get(&session_id).await else {
@@ -1941,7 +1949,11 @@ async fn handle(
         // Federation. `R-I21`. Loopback clients only: following is a hand's
         // act at this machine, and the follow list is never served elsewhere
         // (ADR-0013's and ADR-0036's amendments).
-        ClientMsg::Follow { .. } | ClientMsg::Unfollow { .. } | ClientMsg::SetPeerWrites { .. } | ClientMsg::FetchPeers
+        // Another machine's window asking what this one follows is told
+        // nothing rather than refused: every window asks on every snapshot,
+        // and a refusal would be a toast on each connect to a remote.
+        ClientMsg::FetchPeers if !from_this_machine => {}
+        ClientMsg::Follow { .. } | ClientMsg::Unfollow { .. } | ClientMsg::SetPeerWrites { .. }
             if !from_this_machine =>
         {
             err(anyhow::anyhow!(

@@ -8,14 +8,14 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Pin, Tag, TerminalSquare } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Monitor, Network, Pin, Tag, TerminalSquare } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } from "@/ui/primitives";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
-import { hiddenByTmux, matchesFilter, queueDetail, visibleQueue } from "@/lib/queue";
+import { groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
 import { revealSession } from "@/lib/panes";
@@ -227,6 +227,9 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   const snoozed = !!session.snoozed_until && Date.parse(session.snoozed_until) > Date.now();
   const live = liveText(session);
   const now = Date.now();
+  // Another machine's, mirrored from a daemon this one follows. `R-I21`.
+  const remote = machineName(session);
+  const stale = !!session.origin?.stale;
 
   // A live session cannot be hidden: it is still doing things, and hiding one
   // means you stop being told about it. Withheld by being **absent** rather
@@ -272,7 +275,11 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
             // neighbour and reads as a thick line on one edge only.
             isSelected && "outline-2 -outline-offset-2 outline-[var(--selection-stroke)]",
             isSelected && "font-medium text-[var(--text-strong)]",
+            // Last known, not current: its daemon has gone quiet, and the
+            // row is kept so the session is not simply gone. `R-I21`.
+            stale && "opacity-55",
           )}
+          data-stale={stale || undefined}
         >
           {/* The leading edge is the one strip of a dense row that carries no
               other signal, which is what keeps a tag from arguing with the
@@ -321,6 +328,24 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
                 className="shrink-0"
               >
                 not started writing
+              </Chip>
+            )}
+            {/*
+              Where it runs, when that is not here. `R-I21`, feature 0047.
+              Always said on the row, not only by the heading: grouping is a
+              toggle, and a remote row must never pass for a local one.
+            */}
+            {remote && (
+              <Chip
+                color={stale ? "var(--dim)" : "var(--blue)"}
+                title={
+                  stale
+                    ? `on ${remote} — its daemon has not been heard from; last known, not current`
+                    : `on ${remote} — mirrored from a daemon this one follows`
+                }
+                className="shrink-0"
+              >
+                {`on ${remote}`}
               </Chip>
             )}
             {/* `min-w-0 flex-1` is what makes `truncate` work at all: without
@@ -444,8 +469,12 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
         </MenuItem>
       )}
       <MenuSeparator />
-      <MenuItem onSelect={() => send({ cmd: "focus_terminal", session_id: session.id })}>
-        Raise its terminal window
+      {/* Its window is on another machine's screen when it is mirrored. `R-I22`. */}
+      <MenuItem
+        disabled={!!session.origin}
+        onSelect={() => send({ cmd: "focus_terminal", session_id: session.id })}
+      >
+        {session.origin ? `Its terminal window is on ${machineName(session)}` : "Raise its terminal window"}
       </MenuItem>
       <MenuItem onSelect={() => void navigator.clipboard?.writeText(session.id)}>
         Copy session id
@@ -463,11 +492,6 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   );
 }
 
-/** One line of the list: a repo heading, or a session. */
-type DisplayRow =
-  | { kind: "header"; repo: string; count: number; needing: number; collapsed: boolean }
-  | { kind: "row"; item: AttentionItem; session: Session };
-
 export function QueuePanel() {
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -480,42 +504,24 @@ export function QueuePanel() {
   const [width, setWidth] = useState(prefs.queueWidth);
   // The width as of *now*, for the pointer-up handler to read. See `onDrag`.
   const latest = useRef(width);
-  // Not persisted, matching the egui client: which repos you folded away is a
-  // property of this sitting, and a queue that opens with its urgent half
-  // collapsed from last week would hide the thing it exists to show.
-  const [collapsedRepos, setCollapsedRepos] = useState<string[]>([]);
+  const folded = useStore((s) => s.foldedGroups);
+  const here = useStore((s) => s.daemon?.host ?? null);
+  // Whether any row is another machine's — the machine toggle is offered only
+  // then, since with none it would do nothing.
+  const anyRemote = useStore((s) => Object.values(s.sessions).some((x) => x.origin));
 
-  // `R-B6`. Grouping preserves rank **within** a repo, and orders the repos by
-  // their most urgent session — first appearance in an already-ranked list is
-  // exactly that — so the top of the panel is still the top of the queue.
-  const display = useMemo<DisplayRow[]>(() => {
-    if (!prefs.groupByRepo) return rows.map((r) => ({ kind: "row", ...r }) as DisplayRow);
-    const order: string[] = [];
-    const by = new Map<string, typeof rows>();
-    for (const r of rows) {
-      const repo = repoName(r.session);
-      const bucket = by.get(repo);
-      if (bucket) bucket.push(r);
-      else {
-        by.set(repo, [r]);
-        order.push(repo);
-      }
-    }
-    const out: DisplayRow[] = [];
-    for (const repo of order) {
-      const items = by.get(repo) ?? [];
-      const collapsed = collapsedRepos.includes(repo);
-      out.push({
-        kind: "header",
-        repo,
-        count: items.length,
-        needing: items.filter((r) => needsHuman(r.item.reason)).length,
-        collapsed,
-      });
-      if (!collapsed) for (const r of items) out.push({ kind: "row", ...r });
-    }
-    return out;
-  }, [rows, prefs.groupByRepo, collapsedRepos]);
+  // `R-B6`, `R-I21`. One function, which the keyboard asks too — see
+  // `groupQueue` for the order it keeps and the one exception it makes.
+  const display = useMemo<QueueLine[]>(
+    () =>
+      groupQueue(rows, {
+        byRepo: prefs.groupByRepo,
+        byMachine: prefs.groupByMachine,
+        collapsed: folded,
+        here,
+      }),
+    [rows, prefs.groupByRepo, prefs.groupByMachine, folded, here],
+  );
 
   // Follow the selection with the viewport. Arrowing down a long queue that
   // does not scroll walks the highlight straight off the bottom, and the list
@@ -588,6 +594,15 @@ export function QueuePanel() {
             >
               <TerminalSquare size={13} />
             </IconButton>
+            {anyRemote && (
+              <IconButton
+                title="group by machine, this one first  (R-I21)"
+                active={prefs.groupByMachine}
+                onClick={() => setPrefs({ groupByMachine: !prefs.groupByMachine })}
+              >
+                <Network size={13} />
+              </IconButton>
+            )}
             <IconButton
               title="group by repository  (R-B6)"
               active={prefs.groupByRepo}
@@ -671,7 +686,7 @@ export function QueuePanel() {
                 const r = display[v.index];
                 return (
                   <div
-                    key={r.kind === "header" ? `repo:${r.repo}` : r.session.id}
+                    key={r.kind === "header" ? r.key : r.session.id}
                     ref={rowVirtualizer.measureElement}
                     data-index={v.index}
                     style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start}px)` }}
@@ -680,25 +695,41 @@ export function QueuePanel() {
                       <button
                         type="button"
                         onClick={() =>
-                          setCollapsedRepos((c) =>
-                            c.includes(r.repo) ? c.filter((x) => x !== r.repo) : [...c, r.repo],
-                          )
+                          useStore.setState((st) => ({
+                            foldedGroups: st.foldedGroups.includes(r.key)
+                              ? st.foldedGroups.filter((x) => x !== r.key)
+                              : [...st.foldedGroups, r.key],
+                          }))
                         }
-                        className="flex w-full items-center gap-1 bg-[var(--bg-faint)] px-2 py-0.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
+                        title={
+                          r.stale
+                            ? "not heard from — these rows are last known, not current, and rank below everything live"
+                            : undefined
+                        }
+                        data-stale={r.stale || undefined}
+                        className={cn(
+                          "flex w-full items-center gap-1 bg-[var(--bg-faint)] py-0.5 pr-2 text-left outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2",
+                          r.depth === 1 ? "pl-4" : "pl-2",
+                          r.stale && "opacity-60",
+                        )}
                       >
                         {r.collapsed ? (
                           <ChevronRight size={11} className="shrink-0 text-[var(--dim)]" />
                         ) : (
                           <ChevronDown size={11} className="shrink-0 text-[var(--dim)]" />
                         )}
+                        {r.key.startsWith("machine:") && (
+                          <Monitor size={11} className="shrink-0 text-[var(--dim)]" />
+                        )}
                         <span className="truncate text-xs font-semibold text-[var(--text-strong)]">
-                          {r.repo}
+                          {r.label}
                         </span>
                         <Dim className="shrink-0 text-2xs">
                           {r.count} session{r.count === 1 ? "" : "s"}
                           {/* Only when there are any: a repo that needs nothing
                               should read as quiet, not as a zero to check. */}
                           {r.needing > 0 && `, ${r.needing} need you`}
+                          {r.stale && " — not heard from"}
                         </Dim>
                       </button>
                     ) : (

@@ -175,3 +175,124 @@ export function hiddenByTmux(s: QueueView): number {
   }
   return n;
 }
+
+/**
+ * Which machine a session is on — `""` for this one. `R-I21`.
+ *
+ * A mirrored session carries its `origin`; everything else is the daemon's
+ * own, and so is this window's machine when the daemon is.
+ */
+export function machineOf(s: Session): string {
+  return s.origin?.machine_id ?? "";
+}
+
+/** Where to say a remote session is: its host, or its machine id. */
+export function machineName(s: Session): string | null {
+  if (!s.origin) return null;
+  return s.origin.host || s.origin.machine_id;
+}
+
+/** One line of the Attention list: a heading, or a session. */
+export type QueueLine =
+  | {
+      kind: "header";
+      /** What folding it remembers it by — stable across re-ranks. */
+      key: string;
+      label: string;
+      /** 0 for a machine, or a repo when machines are not grouped; 1 for a repo under a machine. */
+      depth: 0 | 1;
+      count: number;
+      needing: number;
+      collapsed: boolean;
+      /** A machine not heard from: every row under it is last known, not current. */
+      stale?: boolean;
+    }
+  | { kind: "row"; item: AttentionItem; session: Session };
+
+export interface Grouping {
+  byRepo: boolean;
+  byMachine: boolean;
+  /** Header keys folded away. */
+  collapsed: string[];
+  /** This machine's host, for its own heading. */
+  here?: string | null;
+}
+
+function bucket<K>(rows: VisibleRow[], key: (r: VisibleRow) => K): [K, VisibleRow[]][] {
+  const by = new Map<K, VisibleRow[]>();
+  for (const r of rows) {
+    const k = key(r);
+    const b = by.get(k);
+    if (b) b.push(r);
+    else by.set(k, [r]);
+  }
+  return [...by.entries()];
+}
+
+function header(
+  key: string,
+  label: string,
+  depth: 0 | 1,
+  items: VisibleRow[],
+  collapsed: string[],
+  stale = false,
+): QueueLine {
+  return {
+    kind: "header",
+    key,
+    label,
+    depth,
+    count: items.length,
+    needing: items.filter((r) => needsHuman(r.item.reason)).length,
+    collapsed: collapsed.includes(key),
+    ...(stale ? { stale } : {}),
+  };
+}
+
+/**
+ * The Attention list as it is drawn: headings and rows. `R-B6`, `R-I21`.
+ *
+ * **Grouping never re-ranks within a group.** Groups are ordered by first
+ * appearance in an already-ranked list, which is by their most urgent
+ * session — so with repositories alone, the top of the panel is still the top
+ * of the queue.
+ *
+ * Machines are the one exception to that, on purpose: **this machine first**,
+ * then the others by their most urgent session (feature 0047). The machine you
+ * are sitting at is the one whose sessions you can reach without a hop, and a
+ * list that reordered its machines under you whenever a peer's session
+ * started waiting would move the ground you work from. Each remote heading
+ * still carries its *need you* count, which is what makes the order safe.
+ *
+ * Machine headings appear only when a mirrored session is on the list: with
+ * none, this is `R-B6`'s grouping unchanged, keys and all.
+ */
+export function groupQueue(rows: VisibleRow[], g: Grouping): QueueLine[] {
+  const machines = g.byMachine && rows.some((r) => r.session.origin);
+  const repoLines = (items: VisibleRow[], prefix: string, depth: 0 | 1): QueueLine[] => {
+    if (!g.byRepo) return items.map((r) => ({ kind: "row", ...r }) as QueueLine);
+    const out: QueueLine[] = [];
+    for (const [repo, inRepo] of bucket(items, (r) => repoName(r.session))) {
+      const h = header(`repo:${prefix}${repo}`, repo, depth, inRepo, g.collapsed);
+      out.push(h);
+      if (!(h.kind === "header" && h.collapsed)) for (const r of inRepo) out.push({ kind: "row", ...r });
+    }
+    return out;
+  };
+  if (!machines) return repoLines(rows, "", 0);
+
+  const groups = bucket(rows, (r) => machineOf(r.session));
+  groups.sort(([a], [b]) => (a === "" ? -1 : 0) - (b === "" ? -1 : 0));
+  const out: QueueLine[] = [];
+  for (const [machine, items] of groups) {
+    const first = items[0].session;
+    const label =
+      machine === "" ? (g.here ? `this machine · ${g.here}` : "this machine") : (machineName(first) ?? machine);
+    const stale = machine !== "" && items.every((r) => r.session.origin?.stale);
+    const h = header(`machine:${machine}`, label, 0, items, g.collapsed, stale);
+    out.push(h);
+    if (h.kind === "header" && h.collapsed) continue;
+    out.push(...repoLines(items, `${machine}\u0001`, 1));
+  }
+  return out;
+}
