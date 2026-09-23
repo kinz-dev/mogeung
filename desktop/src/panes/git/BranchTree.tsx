@@ -46,7 +46,7 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
   /** Check out: straight away when nothing is running in this worktree,
    *  and behind a dialog naming what is when something is. */
   const checkOut = (ref: string) => {
-    const live = liveSessionsIn(repoRoot);
+    const live = liveSessionsIn(repoRoot, id);
     if (live.length === 0) switchTo(id, ref);
     else setCheckout({ ref, live });
   };
@@ -270,12 +270,12 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
               ariaLabel="branch name"
               onKeyDown={(e) => {
                 if (e.key !== "Enter" || !newName.trim()) return;
-                if (newSwitch && liveSessionsIn(repoRoot).length > 0) {
+                if (newSwitch && liveSessionsIn(repoRoot, id).length > 0) {
                   // The switch half of "create and switch" is a switch, and
                   // gets the same warning. Create first, then ask.
                   branchCreate(id, newName, false);
                   setCreating(false);
-                  setCheckout({ ref: newName.trim(), live: liveSessionsIn(repoRoot) });
+                  setCheckout({ ref: newName.trim(), live: liveSessionsIn(repoRoot, id) });
                   setNewName("");
                   return;
                 }
@@ -291,10 +291,10 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
                 variant="solid"
                 disabled={!newName.trim()}
                 onClick={() => {
-                  if (newSwitch && liveSessionsIn(repoRoot).length > 0) {
+                  if (newSwitch && liveSessionsIn(repoRoot, id).length > 0) {
                     branchCreate(id, newName, false);
                     setCreating(false);
-                    setCheckout({ ref: newName.trim(), live: liveSessionsIn(repoRoot) });
+                    setCheckout({ ref: newName.trim(), live: liveSessionsIn(repoRoot, id) });
                     setNewName("");
                     return;
                   }

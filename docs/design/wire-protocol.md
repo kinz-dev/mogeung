@@ -4,6 +4,7 @@ status: active
 updated: 2026-09-23
 covers:
   - crates/mogeung-core/src/wire.rs
+  - crates/mogeung-core/src/federation.rs
   - crates/mogeung-core/src/pricing.rs
   - crates/mogeung-core/src/usage.rs
   - crates/mogeungd/src/api.rs
@@ -734,6 +735,7 @@ same object under `daemon`:
 | `claude_home` | which world this daemon watches; two homes on one box are two worlds |
 | `pid`, `version` | so a client can name what to blame |
 | `ssh_target` | how to reach this machine, when configured. Declared for `R-I6` |
+| `federation` | the federation protocol it speaks, since `R-I21`; absent on an older build — see *Following other daemons* |
 
 This exists because the client used to answer *"am I looking at another
 machine?"* with a substring test on the address it had dialled — a question
@@ -754,6 +756,66 @@ does not send it falls back to the address guess rather than refusing
 everything, because daemon and window sit on different machines and upgrade at
 different times. Both directions are pinned by
 `a_snapshot_survives_a_version_gap_in_both_directions`.
+
+## Following other daemons (`R-I21`–`R-I24`, 2026-09-23)
+
+[Feature 0047](../features/0047-daemon-federation/spec.md). A daemon may
+**follow** others: it holds a socket to each, mirrors their sessions onto its
+own board, and forwards commands about a mirrored session to the daemon that
+owns it. The window still holds one socket and computes nothing.
+
+| Message | Direction | For |
+|---|---|---|
+| `follow { id, name, url, token?, allow_writes }` | → | follow a saved connection; the same `id` again replaces it, which is how a corrected token arrives. `url` without a token — the token has its own field |
+| `unfollow { id }` | → | stop, and take its sessions off the board |
+| `set_peer_writes { id, allow }` | → | the per-follow *allow changes* consent (`R-I23`), off by default |
+| `fetch_peers` | → | ask for the follow list |
+| `peers { peers: [PeerState] }` | ← | every follow: `id`, `name`, `url` (never a token), `state` (`connecting` · `up` · `down` · `refused` · `incompatible` · `myself`), `machine_id`, `host`, `version`, `sessions` mirrored, `allow_writes`, `detail` in words, `since_ms` |
+
+**All four commands are this machine's windows only.** `follow`, `unfollow`
+and `set_peer_writes` from a client on another machine are refused in words;
+`fetch_peers` from one is answered with **nothing** — every window asks on
+every snapshot, and a refusal would be a toast on each connect to a remote. So
+a window reads *no answer* as *this daemon will not let me follow*, which is
+the daemon's call rather than a guess from the address it dialled.
+
+**The id namespace.** A mirrored session's id is `@<machine_id>:<id>`, and so
+is a run's. Every `session_id` and `run_id` in a forwarded answer is rewritten
+on the way back (`federation::inbound`), and stripped on the way out
+(`federation::outbound`); the window treats ids as opaque and never splits one.
+`Session.origin` says where it runs — `machine_id`, `host`, `ssh_target`,
+`stale` — and is how a pane knows to attach over ssh to *that* machine.
+
+**Every variant is classified, with no wildcard arm**, so a message added next
+month does not compile until somebody decides what crossing a hop means for
+it. `federation::hop` sorts each `ClientMsg` into *here* (this machine's —
+notes, chat, config, insight, the follow commands), *read* (forwarded),
+*judge* (review marks and snooze — forwarded, since the marks live with the
+session), *write* (forwarded only with the consent on, then under the peer's
+own gates) and *desktop* (never forwarded: it acts on a screen nobody here is
+looking at). `federation::relay_class` sorts each `ServerMsg` a relay receives
+into *board* (dropped — the watch socket carries it), *pass* (to the asker,
+ids rewritten) and *theirs* (dropped — health, notes, the whole run list and
+the rest describe that daemon, and a window would read them as this one's).
+
+**Correlation is by socket.** The wire has no request ids, so each window gets
+its own relay socket per peer, opened on its first command for that peer and
+closed with it; what comes down it is that window's alone. A relay reopens
+when the follow's token or consent changes.
+
+**No re-export.** A socket from another machine never receives a mirrored
+session, a queue item for one, or a `peers` message, and a command it sends
+about a mirrored id is refused. Following is never transitive, so two daemons
+following each other cannot loop.
+
+**One answer is rewritten on the way through**: `run_configs.allowed` for a
+mirrored session is the peer's own gate *and* this follow's consent — never
+this machine's loopback authority, which the per-connection rewrite of
+`R-J104` applies only to this daemon's own sessions.
+
+`DaemonIdentity.federation` is the protocol a daemon speaks (`1`). A follow to
+a daemon that sends none, or an older one, stops at `incompatible` with the
+protocol it needs rather than half-following.
 
 ## There is no bundled second client (`R-C3`, removed)
 

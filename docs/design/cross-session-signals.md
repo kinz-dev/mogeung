@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -87,6 +87,16 @@ from what the working tree currently holds. So discarding a file, or committing
 it, leaves the warning standing until the window lapses or a side exits — which
 is right. Both agents did edit that file, and undoing the edit on disk does not
 unmake the fact that two of them were working on it at once.
+
+### Two machines are never a collision (`R-I21`, 2026-09-23)
+
+Sessions mirrored from a followed daemon are not in `AppState.sessions` at
+all — they live in the federation's own map — so `detect_collisions` never
+sees them, and two sessions on two machines editing one path are not reported:
+they are editing two files that happen to share a name. Two on one machine
+still are, **on that machine**: a mirrored session carries its own daemon's
+collisions across, with the other session's id namespaced by the same machine
+so the link resolves to the right row here.
 
 ### What a repair does to them
 
@@ -491,6 +501,16 @@ The delivery itself is `send.rs` — `load-buffer` on stdin, `paste-buffer -p -t
 corrected: tmux returns before the receiver has read, and `-p` inserts
 bracketed-paste markers only when the program in the pane has asked for that
 mode.
+
+### Across a hop (`R-I23`, 2026-09-23)
+
+A send to a mirrored session is forwarded to the daemon that owns it only
+with the follow's *allow changes* consent on, and that daemon then applies
+clause 4 to the relay as to any client — so over a LAN it is refused there,
+in its words ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s second
+amendment of 2026-09-23). **Jump to terminal never crosses**: raising a window
+on another machine's screen is an act nobody here would see, and the button
+says so rather than sending it.
 
 ## What the signals do not read (2026-08-28)
 

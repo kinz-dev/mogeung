@@ -1,7 +1,7 @@
 ---
 title: Fetch is admitted; publishing is not
 status: active
-updated: 2026-08-01
+updated: 2026-09-23
 decided: 2026-08-01
 supersedes: 0012
 ---
@@ -141,6 +141,22 @@ this ADR's caution.
 Also revisit if constraint 1 chafes: if the honest answer to "why is this
 stale" is repeatedly "I forgot to press it", automatic fetch was the right
 design and this ADR was too careful.
+
+## Amendment — 2026-09-23
+
+**Git writes and fetch may cross a federation hop, and nothing else moves.**
+Federation (`R-I23`, [ADR-0013](0013-one-window-one-daemon.md)'s second
+amendment of this date) forwards stage, unstage, discard, commit, branch,
+switch, stash, resolve and fetch for a mirrored session to the daemon that
+owns it — only with the follow's *allow changes* consent on, and then under
+that daemon's own write guard, which sees the relay as a client from elsewhere
+and so wants its token-gated posture. The three constraints above travel
+intact: a relayed fetch is still a human's explicit action, still
+non-interactive, still reported. `push` and `pull` are still out on every
+machine. And `R-D21`'s warning names the live sessions **on the machine the
+switch acts on** — found the same day: matched by path alone, a checkout on a
+peer warned about this machine's agents, since one person's machines spell
+the same repository the same way.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

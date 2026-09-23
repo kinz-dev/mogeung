@@ -191,7 +191,7 @@ export function BranchesPopup() {
    *  warning when something is. `R-D21`, the branch pane's rule. */
   const checkOut = (ref: string, detach: boolean) => {
     if (!id) return;
-    const live = repoRoot ? liveSessionsIn(repoRoot) : [];
+    const live = repoRoot ? liveSessionsIn(repoRoot, id) : [];
     if (live.length === 0) {
       switchTo(id, ref, detach);
       close();

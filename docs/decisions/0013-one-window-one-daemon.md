@@ -212,6 +212,50 @@ branch `daemon-federation` to [feature 0047](../features/0047-daemon-federation/
 - **A peer that goes quiet greys out and leaves the ranking.** Its last-known
   *waiting* must not sit at the top of the queue for ever.
 
+## Amendment — 2026-09-23, later
+
+**Phases B, C and D were built before A45's verdict, and phase C's gate moved
+from A24's verdict to a per-follow consent.** Both at the user's direction —
+*"finish all the phases from A to D for the complete daemon-federation
+feature"* — and both recorded here because each departs from what the
+amendment above and [feature 0047](../features/0047-daemon-federation/spec.md)
+said would happen. What this replaces, and what it does not:
+
+- **A45 still decides whether federation stays.** The plan was to build phase
+  A, use it for a week, and build B–D only if it was used. B–D exist now
+  instead; [A45](../product/assumptions.md) is still `UNTESTED` and still
+  takes its verdict from a week of use. If it comes back `REFUTED`, phase A is
+  the product and B–D come out — the code is layered so they can (relays and
+  the write path live in `federation.rs`'s `Relays`; phase A is the watch
+  socket and the fold).
+- **The fence above — *no write or run verb is forwarded until A24 has a
+  verdict* — is replaced by two gates, both of which must pass.** First, the
+  follow's own **consent**: *allow changes*, per follow, **off by default**,
+  settable only from a window on this machine, and refused here in words while
+  off. Second, **the owning daemon's own gates**, which see the relay as the
+  client it is: a relayed command carries exactly the authority a window on
+  this machine would have dialling that daemon over the same route with the
+  same token — never more. So over a LAN a relayed `send` is refused by the
+  peer (ADR-0003, clause 4), a relayed run needs the peer's `--allow-run`
+  (ADR-0025, clause 4), and a git write needs the peer's token-gated posture
+  (ADR-0014). Each of those ADRs is amended today to say so.
+- **A24 is not tested by this.** It stays `UNTESTED`. What changed is who
+  carries the risk: before, the code refused; now, a person turns it on for
+  one follow knowing the row is open. The row says so.
+- **Unchanged:** a desktop verb — raise a terminal, open a folder, open
+  IntelliJ — never crosses a hop, because it acts on a screen nobody at this
+  machine is looking at; the chat never asks about another machine's session;
+  no re-export; following is a loopback act.
+
+**As built**, where it differs from the plan: mirrored sessions live in a map
+of their own rather than in `AppState.sessions`, so no pass that walks the
+board — liveness, collisions, persistence, retention — can mistake one for
+this machine's, and they are merged only at the outputs (snapshot, queue,
+notifier); ids are `@<machine>:<id>`; a follow to a daemon older than the
+federation protocol is refused with the protocol it needs; staleness is
+measured from when a peer was *last heard*, not from when its socket is
+finally declared dead.
+
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

@@ -425,3 +425,72 @@ async fn a_peer_from_before_federation_is_refused_with_what_it_needs() {
     assert_eq!(sessions, 0, "nothing mirrored from a peer that cannot be followed");
     let _ = std::fs::remove_dir_all(peer_dir);
 }
+
+/// A peer that goes quiet **without closing** — a laptop asleep, Wi-Fi in
+/// power save — greys out a stale-window after it was *last heard*, not a
+/// stale-window after the socket is finally declared dead. Measured from the
+/// wrong end, the spec's *within a minute* was nearly two in practice (found
+/// 2026-09-23 against a live pair: 61 s for a peer that closed cleanly, and
+/// the half-open case adds the whole 45 s silence window on top).
+#[tokio::test]
+async fn a_peer_silent_on_an_open_socket_goes_stale_from_when_it_was_last_heard() {
+    // A fake peer: one snapshot, then silence on a socket it never closes.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}/ws", listener.local_addr().unwrap().port());
+    let (dir_peer, snapshot) = {
+        let dir = home("peer7");
+        let mut s = mogeungd::state::blank_session_with_id("s1");
+        s.title = Some("asleep".into());
+        s.alive = true;
+        let identity = mogeung_core::wire::DaemonIdentity {
+            machine_id: Some("peer-m".into()),
+            host: Some("peer-m-host".into()),
+            claude_home: "/nowhere".into(),
+            pid: 1,
+            version: "test".into(),
+            ssh_target: None,
+            federation: Some(mogeung_core::federation::PROTOCOL),
+        };
+        let msg = ServerMsg::Snapshot { sessions: vec![s], queue: vec![], daemon: Some(identity) };
+        (dir, serde_json::to_string(&msg).unwrap())
+    };
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<Ws2>();
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        ws.send(Message::Text(snapshot.into())).await.unwrap();
+        // Held, never read: pings go unanswered, and nothing closes.
+        let _ = held_tx.send(ws);
+        // Later dials find nobody listening.
+        drop(listener);
+    });
+
+    let (home_d, _dir) = daemon("home7", "home-m");
+    home_d.federation.stale_after.set(Duration::from_secs(2)).unwrap();
+    home_d.federation.silence.set(Duration::from_millis(900)).unwrap();
+    let mut ws = connect(&serve(&home_d, true).await).await;
+    send(&mut ws, follow(&url, false)).await;
+    until(&mut ws, 10, |m| match m {
+        ServerMsg::SessionUpdated { session } if session.id == MIRRORED => Some(()),
+        _ => None,
+    })
+    .await;
+    let heard = std::time::Instant::now();
+    let _held = held_rx.await.unwrap();
+
+    until(&mut ws, 10, |m| match m {
+        ServerMsg::SessionUpdated { session } if session.id == MIRRORED && session.origin.as_ref().is_some_and(|o| o.stale) => {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+    let after = heard.elapsed();
+    // Two seconds after it was last heard, give or take a ping. Measured from
+    // the end of the silence instead, and waiting out a redial backoff, this
+    // came in past four.
+    assert!(after < Duration::from_millis(3200), "stale {after:?} after it was last heard");
+    let _ = std::fs::remove_dir_all(dir_peer);
+}
+
+type Ws2 = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;

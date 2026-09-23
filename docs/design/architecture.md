@@ -23,6 +23,9 @@ covers:
   - crates/mogeungd/src/codex.rs
   - crates/mogeungd/src/qwen.rs
   - crates/mogeung-tray/src/main.rs
+  - crates/mogeungd/src/federation.rs
+  - desktop/src/lib/federation.ts
+  - desktop/src/lib/queue.ts
 ---
 
 # Architecture
@@ -585,6 +588,68 @@ launch-terminal) compare that id against this machine's, rather than guessing
 from the address dialled. Both ends resolve identity through one function in
 `mogeungd::machine`, deliberately: two processes computing it differently could
 disagree about whether they are on the same desk.
+
+## One daemon following others (`R-I18`, feature 0047, 2026-09-23)
+
+A daemon may follow daemons on other machines and show their sessions on its
+own board — the shape [ADR-0013](../decisions/0013-one-window-one-daemon.md)
+named when it refused an aggregating window, admitted by its amendments of
+2026-09-23. **The window still watches one daemon and computes nothing**;
+everything below happens in the daemon, in `federation.rs`.
+
+```
+this machine                                      a followed machine
+┌──────────┐  one socket  ┌──────────────────┐    ┌──────────────┐
+│ window   │ ───────────→ │ mogeungd         │    │ mogeungd     │
+│          │              │  own sessions    │    │              │
+│          │              │  + Federation ───┼──→ │ watch socket │  board only
+│          │              │    mirrored map  │    │              │
+│          │  relay per   │    Relays ───────┼──→ │ relay socket │  one per window
+│          │  window,peer │                  │    │              │
+└──────────┘              └──────────────────┘    └──────────────┘
+```
+
+- **The follow list** is `~/.mogeung/peers.json`, `0600`, written atomically,
+  holding each follow's token ([ADR-0036](../decisions/0036-the-connection-list-is-the-clients-and-its-file-is-the-shells.md)'s
+  amendment). Written only by a *Follow* from a window on this machine, never
+  served, never re-exported.
+- **A watch socket per follow** carries the peer's board — snapshot, session
+  updates and removals — with a `Bearer` header, a ping every 15 s, silence
+  for 45 s counted as lost, and a redial backoff from 1 s to 30 s. It never
+  carries a command.
+- **Mirrored sessions live in a map of their own**, not in
+  `AppState.sessions`. Liveness, collision detection, persistence and
+  retention all walk that map, and each would do the wrong thing to another
+  machine's session; merging only at the outputs — the snapshot, the ranked
+  queue, the notifier — is what keeps them out without a guard in every pass.
+- **Staleness is measured from when a peer was last heard.** A minute later
+  its sessions are marked `origin.stale`, ranked below everything live, and
+  greyed in the window; the watch loop sleeps no later than that moment, so a
+  30 s backoff cannot make it late. Reconnecting clears it.
+- **A relay socket per (window, peer)** carries forwarded commands and their
+  answers back to exactly the window that asked — see
+  [the wire protocol](wire-protocol.md#following-other-daemons-r-i21r-i24-2026-09-23)
+  for the classification that decides what crosses.
+- **Writes cross only under two gates**: the follow's *allow changes* consent,
+  and the peer's own gates judging the relay as the client it is.
+
+**Measured 2026-09-23**, two debug-build daemons on one box, one following
+the other (92 sessions): the follower's snapshot to a window grows from
+~348 KB to ~712 KB, since it now carries both boards; steady state costs the
+follower about +0.1 % CPU and +4.5 MB resident; a forwarded read on a warm
+relay adds 10–30 ms over asking the peer directly (git status 65–73 ms against
+56–70 ms; a 187 KB tree listing 79 ms against 50 ms), and the first command
+to a peer pays ~140 ms to open its relay. A peer killed outright shows `down`
+at once and greys out at the minute; restarted, it is `up` and fresh within
+one backoff step. Three peers and a week on Wi-Fi are `R-I24`'s still.
+
+**In the window**, three things are per session rather than per daemon:
+where a pane attaches (`reachForSession` — the origin's `ssh_target`), which
+live sessions `R-D21`'s warning names (the switched session's machine only),
+and whether the screen-acting buttons are offered (never for another
+machine's). The Attention list groups by machine, this machine first
+(`groupQueue` in `lib/queue.ts`, which the keyboard walks too), and marks
+every remote row *on HOST*.
 
 ## Client contract
 

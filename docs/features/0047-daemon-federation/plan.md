@@ -1,6 +1,6 @@
 ---
 title: Daemon federation — plan
-status: draft
+status: active
 updated: 2026-09-23
 ---
 
@@ -131,6 +131,38 @@ greys and leaves the ranking; a forwarded read comes back to the client that
 asked and to no other; a write across the hop is refused in words. And one
 guarantee by construction: no `ClientMsg` or `ServerMsg` variant compiles
 without a classification.
+
+## As built (2026-09-23)
+
+Where the build departed from the steps above, and why:
+
+- **Step 2's fold goes into a map of its own, not into `AppState.sessions`.**
+  Every pass that walks the board — liveness, collisions, persistence,
+  retention — would have needed a guard against another machine's session;
+  a separate map needs none, and the merge happens only at the outputs:
+  `snapshot`, `rank_board` behind `publish_queue`, and the notifier.
+- **The id is `@<machine_id>:<id>`**, not `<machine_id>/<id>`. A machine id
+  is hex and never holds a colon, so splitting at the first one recovers an
+  id that has its own (`pane:%3`); and no id a CLI mints starts with `@`, so
+  one character says *mirrored* without a lookup.
+- **Step 1's messages as shipped:** `Follow { id, name, url, token,
+  allow_writes }` keyed by the connection's own id, `Unfollow { id }`,
+  `SetPeerWrites { id, allow }`, `FetchPeers`, and `Peers { peers }`.
+  `DaemonIdentity.federation` carries the protocol for step 13.
+- **Step 4's click-to-switch fallback was not built**; phase B came in the
+  same change.
+- **Step 12 is behind a per-follow consent instead of A24's verdict**, at the
+  owner's direction — [ADR-0013](../../decisions/0013-one-window-one-daemon.md)'s
+  second amendment of 2026-09-23.
+- **Staleness is measured from when the peer was last heard**, and the watch
+  loop wakes at the moment it is due; measured from the end of the silence
+  window and checked between redials, it came in nearly two minutes late for a
+  peer asleep on Wi-Fi.
+- **Step 13's measurement** is one peer, on one box, in debug builds — see
+  [architecture.md](../../design/architecture.md#one-daemon-following-others-r-i18-feature-0047-2026-09-23).
+  The relay was cheap there (10–30 ms over direct on a warm socket, ~140 ms to
+  open one); three peers over Wi-Fi remain to be measured, and request ids on
+  the wire stay the alternative if that bites.
 
 ## Risks
 

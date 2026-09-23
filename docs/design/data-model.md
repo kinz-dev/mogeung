@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-09-10
+updated: 2026-09-23
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -279,6 +279,22 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
   JSON blobs, so a row written yesterday must still load. Nothing reads it as
   permission — what the daemon will serve is still only what someone added
   through the UI, which is `R-J40`'s file and not this field.
+
+## Session fields added 2026-09-23
+
+- `origin` — the machine a session runs on, when it is not this daemon's own
+  (`R-I21`, [feature 0047](../features/0047-daemon-federation/spec.md)):
+  `machine_id`, `host`, the `ssh_target` its own daemon declared, and `stale`
+  once that daemon has gone quiet. **Set only on a mirrored session**, whose id
+  is then `@<machine>:<id>` — so it is never written to the store: mirrored
+  sessions live in the federation's own map, are rebuilt from the peer's
+  snapshot on every reconnect, and are gone on restart until the follow
+  reconnects. A row in `sessions` has no `origin`, and `#[serde(default)]`
+  keeps it that way for every blob already there. `provisional` (`R-J75`,
+  [ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md))
+  is the other flag this struct gained since the section above, and is the same
+  shape: defaulted, and never persisted, because the row it marks is rebuilt
+  every scan.
 
 The store also grew a `signals` table (per-repo signal command and its
 last run, `R-E2`) — a real table rather than a blob because it is keyed

@@ -19,6 +19,7 @@ import type { ResolveSide, SessionId } from "@/wire/types";
 import { writeClipboard } from "@/lib/clipboard";
 import { hostUrl } from "@/lib/gitTree";
 import type { LogQuery } from "@/lib/gitFilter";
+import { machineOf } from "@/lib/queue";
 
 /** A page. One past it is fetched daemon-side so `done` costs no second call. */
 export const LOG_PAGE = 100;
@@ -273,10 +274,17 @@ export function resolve(id: SessionId, path: string, side: ResolveSide): void {
  * work; what it cannot see is an agent reading files that silently became
  * different content, and that is the one thing this window knows that git
  * does not. `R-D21`.
+ *
+ * **On the machine the switch acts on**, which is the machine of the session
+ * it is asked from (`near`). A path names a different checkout on every
+ * machine, so with sessions mirrored from followed daemons (`R-I23`) a match
+ * by path alone would warn about this machine's agents before switching
+ * another machine's worktree — and say nothing about the ones really there.
  */
-export function liveSessionsIn(repoRoot: string): { id: string; title: string }[] {
+export function liveSessionsIn(repoRoot: string, near?: SessionId | null): { id: string; title: string }[] {
   const { sessions } = useStore.getState();
+  const machine = near && sessions[near] ? machineOf(sessions[near]) : "";
   return Object.values(sessions)
-    .filter((s) => s.alive && (s.repo_root ?? s.cwd) === repoRoot)
+    .filter((s) => s.alive && (s.repo_root ?? s.cwd) === repoRoot && machineOf(s) === machine)
     .map((s) => ({ id: s.id, title: s.title || s.id }));
 }

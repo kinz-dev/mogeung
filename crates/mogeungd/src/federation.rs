@@ -41,10 +41,9 @@ use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 /// A peer silent this long has its sessions marked stale — four beacons'
 /// worth, the same patience the Found list has (ADR-0040's amendment).
 pub const STALE_AFTER: Duration = Duration::from_secs(60);
-/// Between pings on a watch socket. A peer that has gone to sleep leaves a
-/// TCP connection open and silent; a ping unanswered is how that is noticed.
-const PING_EVERY: Duration = Duration::from_secs(15);
-/// Silence on a watch socket, pings included, that counts as a lost peer.
+/// Silence on a watch socket, pings included, that counts as a lost peer. A
+/// peer that has gone to sleep leaves a TCP connection open and silent; a
+/// ping unanswered is how that is noticed, and one goes every third of this.
 const SILENCE: Duration = Duration::from_secs(45);
 /// How long a dial may take before it counts as a failure.
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -132,6 +131,9 @@ pub struct Federation {
     /// How long a peer may be silent before its sessions go stale;
     /// [`STALE_AFTER`] unless a test says otherwise.
     pub stale_after: OnceLock<Duration>,
+    /// How long a watch socket may be silent before it counts as lost;
+    /// [`SILENCE`] unless a test says otherwise.
+    pub silence: OnceLock<Duration>,
     inner: Mutex<BTreeMap<String, Peer>>,
 }
 
@@ -425,6 +427,20 @@ struct Tag {
     ev: String,
 }
 
+/// Mark a quiet peer's sessions stale once it has been quiet long enough.
+async fn stale_if_due(st: &AppState, id: &str, quiet_since: Instant) {
+    if quiet_since.elapsed() < *st.federation.stale_after.get().unwrap_or(&STALE_AFTER) {
+        return;
+    }
+    let changed = st.federation.go_stale(id);
+    if !changed.is_empty() {
+        for m in changed {
+            st.broadcast(m);
+        }
+        st.publish_queue().await;
+    }
+}
+
 fn spawn_watch(state: Weak<AppState>, id: String) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
@@ -451,33 +467,42 @@ fn spawn_watch(state: Weak<AppState>, id: String) -> tokio::task::JoinHandle<()>
                     st.federation.set_status(&id, status, Some(detail));
                     st.federation.announce(&st);
                 }
-                Watch::Served => {
-                    // It was up; the silence starts now, and the backoff over.
-                    quiet_since = Instant::now();
+                Watch::Served(last_heard) => {
+                    // It was up. The silence started when it was last heard —
+                    // not now: a socket that went quiet in Wi-Fi power save is
+                    // only called dead `SILENCE` later, and a minute from
+                    // *then* would grey its rows out nearly two minutes late.
+                    quiet_since = last_heard;
                     backoff = Duration::from_secs(1);
                     st.federation.set_status(&id, PeerStatus::Down, Some("the connection closed".into()));
                     st.federation.announce(&st);
                 }
             }
-            if quiet_since.elapsed() >= *st.federation.stale_after.get().unwrap_or(&STALE_AFTER) {
-                let changed = st.federation.go_stale(&id);
-                if !changed.is_empty() {
-                    for m in changed {
-                        st.broadcast(m);
-                    }
-                    st.publish_queue().await;
-                }
-            }
+            stale_if_due(&st, &id, quiet_since).await;
+            // Asleep no later than the moment it goes stale: the redial
+            // backoff grows to 30 s, and waiting it out would grey the rows
+            // out up to half a minute after the minute the spec promises.
+            let limit = *st.federation.stale_after.get().unwrap_or(&STALE_AFTER);
+            let due = limit.saturating_sub(quiet_since.elapsed());
             drop(st);
-            tokio::time::sleep(backoff).await;
+            if due > Duration::ZERO && due < backoff {
+                tokio::time::sleep(due).await;
+                let Some(st) = state.upgrade() else { return };
+                stale_if_due(&st, &id, quiet_since).await;
+                drop(st);
+                tokio::time::sleep(backoff - due).await;
+            } else {
+                tokio::time::sleep(backoff).await;
+            }
             backoff = (backoff * 2).min(Duration::from_secs(30));
         }
     })
 }
 
 enum Watch {
-    /// Connected, mirrored, and then the connection ended.
-    Served,
+    /// Connected, mirrored, and then the connection ended — carrying when the
+    /// peer was last heard, which on a half-open socket is well before the end.
+    Served(Instant),
     /// Could not connect, or was turned away. Retry.
     Lost(PeerStatus, String),
     /// Connected to something that should not be followed. Retry slowly.
@@ -535,28 +560,32 @@ async fn watch_once(state: &Weak<AppState>, id: &str, entry: &PeerEntry, local: 
         Ok(Ok((ws, _))) => ws,
     };
     let (mut sink, mut stream) = ws.split();
-    let mut ping = tokio::time::interval(PING_EVERY);
+    let silence = state
+        .upgrade()
+        .and_then(|st| st.federation.silence.get().copied())
+        .unwrap_or(SILENCE);
+    let mut ping = tokio::time::interval(silence / 3);
     ping.tick().await;
     let mut last_heard = Instant::now();
     let mut served = false;
     loop {
         tokio::select! {
             _ = ping.tick() => {
-                if last_heard.elapsed() > SILENCE {
-                    return if served { Watch::Served } else { Watch::Lost(PeerStatus::Down, "went silent".into()) };
+                if last_heard.elapsed() > silence {
+                    return if served { Watch::Served(last_heard) } else { Watch::Lost(PeerStatus::Down, "went silent".into()) };
                 }
                 if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
-                    return if served { Watch::Served } else { Watch::Lost(PeerStatus::Down, "the connection closed".into()) };
+                    return if served { Watch::Served(last_heard) } else { Watch::Lost(PeerStatus::Down, "the connection closed".into()) };
                 }
             }
             msg = stream.next() => {
                 let Some(Ok(msg)) = msg else {
-                    return if served { Watch::Served } else { Watch::Lost(PeerStatus::Down, "the connection closed".into()) };
+                    return if served { Watch::Served(last_heard) } else { Watch::Lost(PeerStatus::Down, "the connection closed".into()) };
                 };
                 last_heard = Instant::now();
                 let Message::Text(txt) = msg else { continue };
                 let Ok(tag) = serde_json::from_str::<Tag>(&txt) else { continue };
-                let Some(st) = state.upgrade() else { return Watch::Served };
+                let Some(st) = state.upgrade() else { return Watch::Served(last_heard) };
                 match tag.ev.as_str() {
                     "snapshot" => {
                         let Ok(ServerMsg::Snapshot { sessions, daemon, .. }) = serde_json::from_str::<ServerMsg>(&txt) else {
