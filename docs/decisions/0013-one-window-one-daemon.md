@@ -1,7 +1,7 @@
 ---
 title: One window watches one daemon
 status: active
-updated: 2026-07-31
+updated: 2026-09-23
 decided: 2026-07-31
 ---
 
@@ -148,6 +148,69 @@ alternative is being judged at its best rather than with a known bug in it.
 
 And when it is reopened, the question is *federation*, not an aggregating
 window.
+
+
+## Amendment — 2026-09-23
+
+**Federation in the daemon is admitted, as the shape this ADR named.** The
+decision above stands word for word — *a window watches exactly one daemon at
+a time; it does not aggregate, and it never computes what a daemon computes*
+— and what changes is the one thing it left open: this machine's daemon may
+**follow** daemons on other machines, mirror their sessions onto its own board
+tagged with their origin, rank the merged board itself, and forward a
+session's commands to the daemon that owns it. The window still holds one
+socket to one daemon and computes nothing. `R-I9`'s aggregating window stays
+refused; `R-I18` is the federation this ADR said to reconsider first. Built on
+branch `daemon-federation` to [feature 0047](../features/0047-daemon-federation/spec.md).
+
+**The conditions this ADR set for reopening, one by one:**
+
+- *A named failure rather than a feeling.* Named on 2026-09-21 — *"allow me to
+  connect but display the session on the same local UI, with some indication
+  that it is a remote session and with grouping"* — and again on 2026-09-23,
+  after the three shapes were costed side by side and federation chosen over
+  the three-day overview. The cost it names is the one the Consequences above
+  called *a genuine loss*: switching drops the board, one machine is on screen
+  at a time, and the session waiting on the machine you are not watching is
+  not in front of you.
+- *`R-I11` has shipped.* It has — ✅ 2026-07-31.
+- *[A24](../product/assumptions.md) has a verdict.* **It has not.** It is
+  still `UNTESTED`, and federation adds a second hop to it. This amendment
+  does not pretend otherwise; it fences instead. Mirroring and every
+  **read** verb may cross the hop; **no write or run verb is forwarded until
+  A24 has a verdict** — git writes, `RunStart`, `SendToSession` and the rest
+  answer across the hop with a refusal in words. That is `R-I23`, and it is
+  gated.
+
+**What the arguments above become, since they were right:**
+
+- *The identifier gives no help.* Still true, and answered in the daemon:
+  a mirrored session's id is namespaced by its machine, so a `pane:%3` on two
+  machines is two sessions, and the window treats every id as opaque, as it
+  already does. The routing surface, recounted: **54 of 94** `ClientMsg`
+  variants and **29 of 66** `ServerMsg` variants carry a session id.
+- *The queue is the cheapest thing to merge and the least valuable.* The
+  reason federation is the whole of `R-I18` rather than a merged list: every
+  pane behind a click is forwarded, so the merge does not stop at the first
+  click.
+- *The intelligence does not merge.* Collisions stay per machine — two
+  sessions on two machines editing one path are not colliding — so mirrored
+  sessions are left out of `detect_collisions`. Ranking merges because it is
+  one function over one board, in a daemon, which is where the rule wants it.
+- *Terminal tabs are keyed by machine-free strings.* A pane's reach becomes
+  per-session — the origin's `ssh_target` — rather than per-daemon.
+
+**New fences, which are the price:**
+
+- **No re-export.** Mirrored sessions go to loopback clients only. A machine
+  that connects to *your* daemon sees *your* sessions, never your peers', so
+  following is never transitive and two daemons following each other cannot
+  loop.
+- **Following is a loopback act.** Only a client on this machine may follow or
+  unfollow, and no command returns a follow entry's token. ADR-0036's
+  amendment of the same day is where the tokens rest.
+- **A peer that goes quiet greys out and leaves the ranking.** Its last-known
+  *waiting* must not sit at the top of the queue for ever.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

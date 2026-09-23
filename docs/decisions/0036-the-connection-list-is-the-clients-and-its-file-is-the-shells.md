@@ -1,7 +1,7 @@
 ---
 title: The connection list is the client's, and its file is the shell's
 status: active
-updated: 2026-09-08
+updated: 2026-09-23
 decided: 2026-09-08
 ---
 
@@ -158,3 +158,43 @@ alternative above and is deliberately left costed.
 Or: a second client appears that is not this window. The reasoning here leans
 on there being exactly one, and [ADR-0020](0020-the-egui-client-is-retired.md)
 is what made that true.
+
+## Amendment — 2026-09-23
+
+**The connection list stays the client's. A second, separate list — the
+daemons this machine's daemon *follows* — is the daemon's, in
+`~/.mogeung/peers.json`, mode `0600`.** Nothing above is reversed: which
+daemons a window can switch to is still client-side taste in the shell's file.
+What is new is a thing this ADR did not have to consider, because
+[ADR-0013](0013-one-window-one-daemon.md) had refused it: federation (`R-I18`,
+ADR-0013's amendment of the same day), where the daemon itself connects to its
+peers and therefore has to hold their tokens.
+
+The alternative this ADR rejected — *"a daemon holding the addresses and
+tokens of its peers is a lateral-movement store, which is a strange thing to
+build into a read-only observer"* — is being built, deliberately, and the
+objection is answered with fences rather than waved away:
+
+- **Only what you chose to follow.** An entry is written by an explicit
+  *Follow* from a client on this machine, never by discovery, never by a peer,
+  never by copying the connection list wholesale.
+- **The token never leaves.** No command returns a follow entry's token; the
+  wire carries an entry's name, address and state and nothing else. The only
+  reads of `peers.json` are the daemon's own.
+- **Nothing is re-exported** (ADR-0013's amendment): a client reaching this
+  daemon from another machine sees this machine's sessions only, so holding a
+  peer's token does not hand that peer to anyone who can reach you.
+- **Read-only across the hop until A24 has a verdict** — so what the store
+  opens, for now, is reading.
+
+**Why a second file rather than a flag in `connections.json`.** One file, two
+writers, two lifecycles: the shell writes the connection list when you edit the
+panel, the daemon would write follow state when you follow, and a daemon that
+outlives the window (`scripts/mogeungd`) would be reading a file whose owner
+is not running. It would also make the daemon depend on the client's format.
+Two files, each with one writer, is the same trade this ADR made the first
+time.
+
+*Revisit if* gains: a peer's token turns up anywhere but `peers.json` — a log
+line, a wire message, an error — which would mean the fence above has a hole.
+

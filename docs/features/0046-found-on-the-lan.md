@@ -1,8 +1,8 @@
 ---
 title: Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window
 status: draft
-updated: 2026-09-22
-roadmap: [R-I17, R-I18]
+updated: 2026-09-23
+roadmap: [R-I17]
 depends_on: [A44, A24]
 ---
 
@@ -109,6 +109,10 @@ streams"*, which is exactly the loss the ask names.
 
 **Phase 2 — remote sessions in this window** (`R-I18`; the ask's *Day 2*)
 
+> **Moved 2026-09-23 to [feature 0047](0047-daemon-federation/spec.md)**, its own spec
+> and plan on branch `daemon-federation`, once it was chosen and costed. The lines
+> below are kept as they were first written; 0047 is the one that is current.
+
 - [ ] A followed daemon's sessions appear in this window's Attention list,
       each marked as remote and grouped under the machine they run on, with
       this machine's own first
@@ -137,7 +141,7 @@ streams"*, which is exactly the loss the ask names.
 - **An aggregating window.** Phase 2 is federation in the daemon or it is not
   done: the window stays single-socket and computes nothing, which is the rule
   ADR-0013 was defending and the routing cost it counted — now **114** send
-  sites and **85 of 149** `ClientMsg` variants carrying a bare-`String`
+  sites and **54 of 94** *(recounted 2026-09-23; first written as 85 of 149)* `ClientMsg` variants carrying a bare-`String`
   session id — has only grown.
 - Pushing, merging, or any write verb reaching across machines that does not
   reach across today.
