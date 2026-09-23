@@ -1,6 +1,6 @@
 ---
 title: Daemon federation — plan
-status: active
+status: shipped
 updated: 2026-09-23
 ---
 

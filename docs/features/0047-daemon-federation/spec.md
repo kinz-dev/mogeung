@@ -1,6 +1,6 @@
 ---
 title: Daemon federation — every machine's sessions in this window, as if they were local
-status: active
+status: shipped
 updated: 2026-09-23
 roadmap: [R-I18, R-I21, R-I22, R-I23, R-I24]
 depends_on: [A45, A24]
@@ -66,9 +66,9 @@ good enough. The person running three machines says they are not.
 - [x] Within one refresh, the followed daemon's sessions are in this window's
       Attention list, marked remote, grouped under their machine — this
       machine first — and ranked together with local ones by one ranking
-- [ ] A waiting session on a followed machine notifies here and counts in the
+- [x] A waiting session on a followed machine notifies here and counts in the
       tray, with the window closed if the daemon is standalone
-      (`scripts/mogeungd`)
+      (`scripts/mogeungd`) — accepted with the rest on 2026-09-23
 - [x] A followed machine that goes quiet greys out and leaves the ranking
       within a minute, and comes back when it does
 - [x] ~~Clicking a remote session switches the window to its daemon and selects
@@ -76,7 +76,8 @@ good enough. The person running three machines says they are not.
       directly; see *Notes*
 - [x] A client connecting to this daemon **from another machine** sees this
       machine's sessions only — never a peer's
-- [ ] A45 takes a verdict after a week of use
+- [x] ~~A45 takes a verdict after a week of use~~ — **waived 2026-09-23**: the owner tested federation across machines and closed the feature with no follow-ups; A45 stays in
+      the assumptions as the bet under a shipped feature
 
 **Phase B — open remote sessions in place** (`R-I22`)
 
@@ -103,9 +104,10 @@ per-follow consent — see *Notes*)
 **Phase D — hardening and verdicts** (`R-I24`)
 
 - [x] A peer on an older build is refused a follow with the version it needs
-- [ ] Three peers, one of them on Wi-Fi in power save, for a week without a
-      stale row, a lost notification or a leaked token
-- [ ] `R-I16`, `R-I17`, `R-I18` take their verdicts
+- [x] ~~Three peers, one of them on Wi-Fi in power save, for a week without a
+      stale row, a lost notification or a leaked token~~ — **waived 2026-09-23**: the owner tested federation across machines and closed the feature with no follow-ups
+- [x] `R-I18` takes its verdict — ✅ 2026-09-23; `R-I16` and `R-I17` carry theirs
+      on their own rows
 
 ### Explicitly out of scope
 
@@ -178,7 +180,13 @@ true, and useless, since every build says `0.1.0`; it now says what to do. The
 Connections panel was also made bigger and resizable by its corner, with
 draggable edges between its parts, on the same day's ask.
 
-**Not verified yet:** a notification and the tray count from a real second
+**Closed 2026-09-23.** The owner tested it across machines — following the
+Macs from the Ubuntu box, their sessions in one list, opened in place — and
+accepted it with no follow-up items. What the paragraph below listed as
+unverified was accepted with the rest, and the acceptance items that asked
+for a week of use were waived rather than met.
+
+**Not verified by the implementer, before that:** a notification and the tray count from a real second
 machine; the Agent pane attaching over ssh to a peer's `ssh_target` from the
 desktop build (the browser has no pty); three peers and Wi-Fi power save for
 a week.
