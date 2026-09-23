@@ -177,7 +177,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// the guide is about the same change the Changes view is showing. Every
 /// failure arrives as `error` on the same message: a panel that shows nothing
 /// reads as broken, which is `R-O5`'s lesson applied one surface over.
-async fn reading_guide(state: &AppState, session_id: String) -> ServerMsg {
+async fn reading_guide(state: &AppState, session_id: String, from_this_machine: bool) -> ServerMsg {
     let fail = |e: String| ServerMsg::ReadingGuideReady {
         session_id: session_id.clone(),
         files: Vec::new(),
@@ -198,7 +198,7 @@ async fn reading_guide(state: &AppState, session_id: String) -> ServerMsg {
     let prompt = crate::guide::prompt(&asked);
     match state
         .model
-        .chat(&[mogeung_core::model::ChatTurn::user(prompt)])
+        .chat_as(&[mogeung_core::model::ChatTurn::user(prompt)], from_this_machine)
         .await
     {
         Ok(a) => {
@@ -221,8 +221,8 @@ async fn reading_guide(state: &AppState, session_id: String) -> ServerMsg {
 /// Two reasons and they are different sentences, because they send you
 /// somewhere different: a bind beyond loopback is a property of how this
 /// daemon was started, and `chat_history = false` is a line you wrote.
-fn chat_refusal(state: &AppState) -> Option<String> {
-    if !state.model.chat_allowed() {
+fn chat_refusal(state: &AppState, from_this_machine: bool) -> Option<String> {
+    if !state.model.chat_allowed() && !from_this_machine {
         return Some(
             "the chat history is not served by a daemon bound beyond loopback              (ADR-0031 clause 4): it holds the same free-form text the ask              does. Bind 127.0.0.1 and reach it over ssh."
                 .to_string(),
@@ -240,14 +240,14 @@ fn chat_refusal(state: &AppState) -> Option<String> {
 }
 
 /// The kept conversations, or the sentence saying why there are none.
-fn chat_history_msg(state: &AppState) -> ServerMsg {
-    let refusal = chat_refusal(state);
+fn chat_history_msg(state: &AppState, from_this_machine: bool) -> ServerMsg {
+    let refusal = chat_refusal(state, from_this_machine);
     ServerMsg::ChatHistory {
         // Still listed when history is *off*: what was kept before the line
         // was written is still kept, and a list that hid it would be lying
         // about what is on disk — and would take away the only way to delete
         // it. The bind refusal is the one that returns nothing.
-        chats: if state.model.chat_allowed() {
+        chats: if state.model.chat_allowed() || from_this_machine {
             state.store.load_chats().unwrap_or_default()
         } else {
             Vec::new()
@@ -284,6 +284,7 @@ async fn ask_about(
     id: &str,
     messages: &[mogeung_core::model::ChatTurn],
     about: &mogeung_core::wire::AskAbout,
+    from_this_machine: bool,
 ) -> ServerMsg {
     use mogeung_core::wire::{AnswerBasis, Citation};
 
@@ -358,7 +359,10 @@ async fn ask_about(
         );
     };
 
-    let answered = state.model.chat(&[mogeung_core::model::ChatTurn::user(prompt)]).await;
+    let answered = state
+        .model
+        .chat_as(&[mogeung_core::model::ChatTurn::user(prompt)], from_this_machine)
+        .await;
     let a = match answered {
         Ok(a) => a,
         Err(e) => return fail(e),
@@ -411,8 +415,14 @@ async fn ask_about(
 /// `--bin why`'s own number, so the panel is asking what the harness measured.
 const ASK_TURNS: usize = 6;
 
-fn keep_conversation(state: &AppState, id: &str, sent: &[mogeung_core::model::ChatTurn], answer: &str) {
-    if chat_refusal(state).is_some() {
+fn keep_conversation(
+    state: &AppState,
+    id: &str,
+    sent: &[mogeung_core::model::ChatTurn],
+    answer: &str,
+    from_this_machine: bool,
+) {
+    if chat_refusal(state, from_this_machine).is_some() {
         return;
     }
     // What was sent already **is** the conversation: the client filters
@@ -1114,11 +1124,67 @@ const EVENT_REPLAY_CAP: u64 = 5000;
 /// retry (reconnect, re-select) asks again.
 const REPLY_LANE_DEPTH: usize = 256;
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| ws_conn(socket, state))
+/// The address a request came from, when the server was started with it.
+///
+/// `server::run` serves with `into_make_service_with_connect_info`, so every
+/// request carries it; a router served without it — a test harness, an
+/// embedding — has none, and the caller falls back to the bind. An extractor
+/// of our own rather than `ConnectInfo` itself, because that one rejects a
+/// request that lacks it, and a missing address is a fact to reason about, not
+/// an error to answer with a 500.
+struct Peer(Option<std::net::SocketAddr>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Peer {
+    type Rejection = std::convert::Infallible;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Peer(
+            parts
+                .extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|c| c.0),
+        ))
+    }
 }
 
-async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
+/// Loopback, including an IPv4 loopback address arriving on a dual-stack
+/// socket as `::ffff:127.0.0.1` — which `is_loopback` on the v6 form denies.
+pub fn is_loopback_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v) => v.is_loopback(),
+        std::net::IpAddr::V6(v) => v.is_loopback() || v.to_ipv4_mapped().is_some_and(|m| m.is_loopback()),
+    }
+}
+
+/// Is the client on this machine? `R-J103`, ADR-0030's 2026-09-23 amendment.
+///
+/// ADR-0030 clause 4 exists so a daemon reachable from the LAN does not become
+/// an LLM proxy *for the LAN*, and it was decided from the **bind** — so the
+/// day the window's own daemon learnt to bind the LAN from `config.toml`
+/// (`R-I17` step 7), the window on this very machine was refused its own chat.
+/// Decided per connection instead: a loopback peer is on this machine — or on
+/// the far end of an `ssh -L` tunnel, the route the refusal itself has always
+/// recommended — and anyone else is judged by the bind, as before.
+fn from_this_machine(peer: Option<std::net::SocketAddr>, state: &AppState) -> bool {
+    match peer {
+        Some(addr) => is_loopback_ip(addr.ip()),
+        // No address to go on: the bind is the only fact, and it decides.
+        None => state.model.chat_allowed(),
+    }
+}
+
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let local = from_this_machine(peer, &state);
+    ws.on_upgrade(move |socket| ws_conn(socket, state, local))
+}
+
+async fn ws_conn(socket: WebSocket, state: Arc<AppState>, from_this_machine: bool) {
     let (mut sink, mut stream) = socket.split();
     let mut rx = state.tx.subscribe();
     // The connection's own lane. `R-J59`. The daemon still *volunteers* state
@@ -1138,6 +1204,7 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
+    let health_state = state.clone();
     let send_task = tokio::spawn(async move {
         loop {
             // Unbiased select, so neither lane can starve the other. The two
@@ -1155,7 +1222,15 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
                 m = rx.recv() => m,
             };
             match msg {
-                Ok(msg) => {
+                Ok(mut msg) => {
+                    // Health is broadcast once for every window, with the
+                    // model row as everyone but this machine reads it; a
+                    // client on this machine is shown its own (`R-J103`).
+                    if from_this_machine {
+                        if let ServerMsg::Health { health } = &mut msg {
+                            health.model = health_state.model.health_for(true);
+                        }
+                    }
                     let Ok(txt) = serde_json::to_string(&msg) else {
                         continue;
                     };
@@ -1180,7 +1255,7 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>) {
     while let Some(Ok(msg)) = stream.next().await {
         let Message::Text(txt) = msg else { continue };
         match serde_json::from_str::<ClientMsg>(&txt) {
-            Ok(cmd) => handle(&state, cmd, &reply_tx).await,
+            Ok(cmd) => handle(&state, cmd, &reply_tx, from_this_machine).await,
             Err(e) => {
                 send_reply(
                     &reply_tx,
@@ -1303,6 +1378,7 @@ async fn handle(
     state: &Arc<AppState>,
     cmd: ClientMsg,
     reply: &tokio::sync::mpsc::Sender<ServerMsg>,
+    from_this_machine: bool,
 ) {
     // Your mistake is your toast: an error provoked by one window's command
     // used to be broadcast, so every other window raised it too.
@@ -1479,7 +1555,7 @@ async fn handle(
             let state = state.clone();
             let reply = reply.clone();
             tokio::spawn(async move {
-                let msg = reading_guide(&state, session_id).await;
+                let msg = reading_guide(&state, session_id, from_this_machine).await;
                 send_reply(&reply, msg);
             });
         }
@@ -1488,20 +1564,20 @@ async fn handle(
         // Refused wherever the ask itself is: these rows hold the same
         // free-form text, and a daemon that will not take a question has no
         // business handing back the last two hundred.
-        ClientMsg::ChatList {} => send_reply(&reply, chat_history_msg(&state)),
+        ClientMsg::ChatList {} => send_reply(&reply, chat_history_msg(&state, from_this_machine)),
         ClientMsg::ChatLoad { id } => {
-            if chat_refusal(&state).is_none() {
+            if chat_refusal(&state, from_this_machine).is_none() {
                 let turns = state.store.load_chat(&id).unwrap_or_default();
                 send_reply(&reply, ServerMsg::ChatConversation { id, turns });
             }
         }
         ClientMsg::ChatDelete { id } => {
-            if chat_refusal(&state).is_none() {
+            if chat_refusal(&state, from_this_machine).is_none() {
                 if let Err(e) = state.store.delete_chat(&id) {
                     err(anyhow::anyhow!("could not forget that conversation: {e}"));
                 }
             }
-            send_reply(&reply, chat_history_msg(&state));
+            send_reply(&reply, chat_history_msg(&state, from_this_machine));
         }
         ClientMsg::ModelChat {
             id,
@@ -1522,7 +1598,7 @@ async fn handle(
                 // before it is shown, and streaming the scaffolding into a
                 // panel would put the form on screen instead of the answer.
                 if let Some(about) = about {
-                    let msg = ask_about(&state, &id, &messages, &about).await;
+                    let msg = ask_about(&state, &id, &messages, &about, from_this_machine).await;
                     send_reply(&reply, msg);
                     state.broadcast(ServerMsg::Health {
                         health: Box::new(state.health().await),
@@ -1541,7 +1617,7 @@ async fn handle(
                 let chunk_id = id.clone();
                 let msg = match state
                     .model
-                    .chat_streaming(&messages, |delta| {
+                    .chat_streaming(&messages, from_this_machine, |delta| {
                         send_reply(
                             &chunk_reply,
                             ServerMsg::ModelChunk { id: chunk_id.clone(), delta },
@@ -1555,7 +1631,7 @@ async fn handle(
                         // a refusal or a dead endpoint leaves no half-thread
                         // behind that would be re-sent as context next time.
                         if let Some(cid) = conversation.as_deref() {
-                            keep_conversation(&state, cid, &messages, &a.text);
+                            keep_conversation(&state, cid, &messages, &a.text, from_this_machine);
                         }
                         ServerMsg::ModelReply {
                             id,
@@ -2577,5 +2653,22 @@ mod token_tests {
         // A `%` before a multibyte character is input, not a reason to stop.
         assert_eq!(percent_decode("%€"), "%€");
         assert_eq!(percent_decode("caf%C3%A9"), "café");
+    }
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::is_loopback_ip;
+
+    /// A dual-stack socket reports an IPv4 loopback client as a mapped v6
+    /// address, and `Ipv6Addr::is_loopback` says no to it.
+    #[test]
+    fn loopback_is_loopback_in_every_spelling() {
+        assert!(is_loopback_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_loopback_ip("::1".parse().unwrap()));
+        assert!(is_loopback_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_loopback_ip("10.0.0.39".parse().unwrap()));
+        assert!(!is_loopback_ip("::ffff:10.0.0.39".parse().unwrap()));
+        assert!(!is_loopback_ip("fd00::1".parse().unwrap()));
     }
 }

@@ -350,9 +350,12 @@ where
     } else {
         None
     };
+    // With the peer's address on every request, so a gate can tell a client on
+    // this machine from one on the LAN (`R-J103`, ADR-0030's amendment).
     axum::serve(
         listener,
-        api::router_with_token(state.clone(), opts.token.clone()),
+        api::router_with_token(state.clone(), opts.token.clone())
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
     .await?;

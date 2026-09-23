@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/pricing.rs
@@ -462,9 +462,15 @@ query — which is the discipline
 [ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) clause 1
 set and the reason a client cannot make this daemon do something arbitrary.
 [ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) clause 4 names this
-as the exception and pays for it at the bind: `chat_allowed` is false on any
-non-loopback listen and there is **no flag** that opens it, because a daemon
-anyone can reach must not become a general-purpose LLM proxy.
+as the exception and pays for it at the door: the chat is refused to any
+client **not on this machine** and there is **no flag** that opens it, because a
+daemon anyone can reach must not become a general-purpose LLM proxy. Until
+2026-09-23 that was read from the bind — `chat_allowed` false on any
+non-loopback listen — which refused a LAN-bound machine's own window too
+(`R-J103`); it is decided per connection now, from the peer address the server
+records, with a loopback client admitted and everyone else judged by the bind.
+The `Health` broadcast carries the model row as everyone else reads it, and a
+client on this machine is shown its own on the way out of its socket.
 
 **The daemon stores no conversation.** `messages` carries the thread each time
 and nothing is kept, so the panel is ephemeral by construction rather than by a
