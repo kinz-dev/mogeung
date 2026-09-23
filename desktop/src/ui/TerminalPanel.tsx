@@ -21,7 +21,7 @@ import { TerminalView } from "@/ui/Terminal";
 import { CommandBox } from "@/ui/CommandBox";
 import { cursorToPlaceholder } from "@/lib/command";
 import { ptyWrite } from "@/lib/tauri";
-import { hostLabel, reachFor, shellArgs, shellSessionName, spawnAs } from "@/lib/tmux";
+import { hostLabel, reachFor, shellArgs, shellSessionName, spawnAs, type Reach } from "@/lib/tmux";
 import { cn } from "@/lib/cn";
 import { base } from "@/lib/format";
 import { useChord } from "@/lib/keymap";
@@ -38,7 +38,7 @@ export function TerminalPanel() {
   const [active, setActive] = useState(0);
   const [height, setHeight] = useState(260);
 
-  const reach = useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
+  const daemonReach = useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
   const askChord = useChord("terminal.command_box");
   const shells = scoped.shells;
 
@@ -65,12 +65,22 @@ export function TerminalPanel() {
     // `-c` is read only on creation, so an existing shell keeps wherever you
     // left it — the behaviour every terminal has.
     const root = session?.repo_root ?? session?.cwd ?? "";
+    // A session on another machine (`R-I22`) has its worktree *there*, so the
+    // shell goes there too — or, with no way to reach it, opens here at home
+    // rather than `cd`-ing into a path this filesystem does not have.
+    const o = session?.origin;
+    const away = o && o.machine_id !== machineId;
     // Names are reused across clients on purpose: the egui window's `mog-0` and
     // this one's are two views of one tmux session, not two shells.
     const used = new Set(shells.map(([name]) => name));
     let n = 0;
     while (used.has(shellSessionName(n))) n += 1;
-    setScoped({ shells: [...shells, [shellSessionName(n), root]] });
+    const entry: [string, string] | [string, string, string] = !away
+      ? [shellSessionName(n), root]
+      : o.ssh_target
+        ? [shellSessionName(n), root, o.ssh_target]
+        : [shellSessionName(n), ""];
+    setScoped({ shells: [...shells, entry] });
     setActive(shells.length);
   };
 
@@ -82,6 +92,8 @@ export function TerminalPanel() {
   };
 
   const current = shells[active];
+  // A shell remembers where it was opened; the rest follow the daemon.
+  const reach: Reach | null = current?.[2] ? { kind: "ssh", dest: current[2] } : daemonReach;
   const host = reach ? hostLabel(reach) : null;
 
   return (
@@ -89,7 +101,9 @@ export function TerminalPanel() {
       <div onMouseDown={onDrag} className="h-1 cursor-row-resize hover:bg-[var(--blue)]" title="drag to resize" />
 
       <div className="flex h-7 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1">
-        {shells.map(([name, root], i) => (
+        {shells.map(([name, root, dest], i) => {
+          const where = dest ?? (daemonReach ? hostLabel(daemonReach) : null);
+          return (
           <div
             key={name}
             onClick={() => setActive(i)}
@@ -100,8 +114,8 @@ export function TerminalPanel() {
                 : "text-[var(--dim)] hover:bg-[var(--bg-faint)]",
             )}
             title={
-              host
-                ? `${name} — a tmux session on ${host}. It survives mogeung closing, and \`tmux attach -t ${name}\` reaches it from any terminal there.`
+              where
+                ? `${name} — a tmux session on ${where}. It survives mogeung closing, and \`tmux attach -t ${name}\` reaches it from any terminal there.`
                 : `${name} — a tmux session in ${root}. It survives mogeung closing, and \`tmux attach -t ${name}\` reaches it from any terminal.`
             }
           >
@@ -118,7 +132,8 @@ export function TerminalPanel() {
               <X size={10} />
             </button>
           </div>
-        ))}
+          );
+        })}
         <IconButton title="a new shell, rooted in the selected session's worktree" onClick={addShell}>
           <Plus size={13} />
         </IconButton>

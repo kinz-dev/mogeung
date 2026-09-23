@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { hiddenByTmux, queueDetail, visibleQueue } from "@/lib/queue";
+import { groupQueue, hiddenByTmux, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 import { emptyScoped, type ScopedPrefs } from "@/store/prefs";
 import type { AttentionItem, Session } from "@/wire/types";
 
@@ -243,5 +243,72 @@ describe("the queue row's clock", () => {
     };
     const s = session("a", { snoozed_until: "2026-08-26T11:00:00Z" } as Partial<Session>);
     expect(queueDetail(it0, s, now)).toBe("waiting for you — 30s");
+  });
+});
+
+/**
+ * The list as drawn, with machines in it. `R-I21`, feature 0047.
+ *
+ * The spec's words: *grouped under their machine — this machine first — and
+ * ranked together with local ones by one ranking*.
+ */
+describe("grouping by machine", () => {
+  const remote = (id: string, host: string, extra: Partial<Session> = {}) =>
+    session(`@${host}-id:${id}`, { origin: { machine_id: `${host}-id`, host }, ...extra });
+  const rowsOf = (sessions: Session[], reasons: Record<string, AttentionItem["reason"]> = {}) =>
+    sessions.map((s) => ({ item: item(s.id, reasons[s.id] ?? "running"), session: s }));
+  const shape = (lines: QueueLine[]) =>
+    lines.map((l) => (l.kind === "header" ? `${"  ".repeat(l.depth)}# ${l.label}` : `${l.session.id}`));
+
+  it("adds no heading while every row is this machine's", () => {
+    const lines = groupQueue(rowsOf([session("a"), session("b")]), {
+      byRepo: false,
+      byMachine: true,
+      collapsed: [],
+      here: "ubuntu",
+    });
+    expect(shape(lines)).toEqual(["a", "b"]);
+  });
+
+  it("puts this machine first even when a remote session outranks it", () => {
+    const rows = rowsOf([remote("w", "mac"), session("a"), remote("x", "mini"), session("b")], {
+      "@mac-id:w": "awaiting_input",
+    });
+    const lines = groupQueue(rows, { byRepo: false, byMachine: true, collapsed: [], here: "ubuntu" });
+    expect(shape(lines)).toEqual([
+      "# this machine · ubuntu",
+      "a",
+      "b",
+      "# mac",
+      "@mac-id:w",
+      "# mini",
+      "@mini-id:x",
+    ]);
+    const mac = lines.find((l) => l.kind === "header" && l.label === "mac");
+    expect(mac).toMatchObject({ count: 1, needing: 1 });
+  });
+
+  it("nests repositories under their machine, keyed apart so one fold does not fold both", () => {
+    const rows = rowsOf([session("a"), remote("w", "mac")]);
+    const lines = groupQueue(rows, { byRepo: true, byMachine: true, collapsed: [], here: null });
+    expect(shape(lines)).toEqual(["# this machine", "  # repo", "a", "# mac", "  # repo", "@mac-id:w"]);
+    const keys = lines.flatMap((l) => (l.kind === "header" ? [l.key] : []));
+    expect(new Set(keys).size).toBe(keys.length);
+
+    const folded = groupQueue(rows, { byRepo: true, byMachine: true, collapsed: ["machine:mac-id"], here: null });
+    expect(shape(folded)).toEqual(["# this machine", "  # repo", "a", "# mac"]);
+  });
+
+  it("marks a machine gone quiet as stale", () => {
+    const rows = rowsOf([session("a"), remote("w", "mac", { origin: { machine_id: "mac-id", host: "mac", stale: true } })]);
+    const lines = groupQueue(rows, { byRepo: false, byMachine: true, collapsed: [], here: null });
+    expect(lines.find((l) => l.kind === "header" && l.label === "mac")).toMatchObject({ stale: true });
+    expect(lines.find((l) => l.kind === "header" && l.label === "this machine")).not.toHaveProperty("stale");
+  });
+
+  it("keeps rank order flat when machines are not grouped — the chip on the row says where", () => {
+    const rows = rowsOf([remote("w", "mac"), session("a")]);
+    const lines = groupQueue(rows, { byRepo: false, byMachine: false, collapsed: [], here: null });
+    expect(shape(lines)).toEqual(["@mac-id:w", "a"]);
   });
 });

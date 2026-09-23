@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -108,6 +108,28 @@ a scan, and it never earns the within-tier tie-break, so it sits at exactly
 session takes the pane and is ranked on its own, so the row moves the moment it
 becomes real. `R-J75` names that as its cost; this document names it as what
 ranking on evidence rather than on a flag has to do.
+
+## Sessions from another machine (`R-I21`, 2026-09-23)
+
+A daemon that follows others ([feature 0047](../features/0047-daemon-federation/spec.md))
+ranks **one board**: its own sessions and the ones it mirrors go through
+`attention::rank` together, in `AppState::rank_board`, so a peer's waiting
+session outranks a local idle one by the same rule two local ones would. No
+second ranking exists, in the daemon or in the window — which is
+[ADR-0013](../decisions/0013-one-window-one-daemon.md)'s whole reason for
+putting federation in the daemon.
+
+The one exception is a peer that has gone quiet. Its sessions are kept —
+a session that simply vanishes when Wi-Fi drops is worse than one marked old —
+but they are **not ranked**: they are appended below everything live as
+`Idle`, score `-1`, with the detail *"on HOST — not heard from; last known, not
+current"*. Last-known *waiting* must not sit at the top of the queue for ever,
+and ranking a stale row by its stale reason would do exactly that. They go
+stale a minute after the peer was last heard, and rank normally again the
+moment it is.
+
+The notifier reads the merged queue, so a waiting session on a followed
+machine notifies here — labelled *"… — on HOST"* — and counts in the tray.
 
 ## Configuration
 

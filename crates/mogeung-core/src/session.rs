@@ -121,6 +121,26 @@ pub struct Collision {
 /// Everything here is derived from files Claude Code writes for its own
 /// purposes. mogeung never starts, steers or stops a session — that is what
 /// made v0.1 feel like a worse terminal.
+/// Where a mirrored session lives. `R-I21`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOrigin {
+    /// The followed daemon's `machine_id` — the key everything is filed under.
+    pub machine_id: String,
+    /// For people: the name its daemon publishes. Never compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// How a pane reaches that machine (`R-I6`). Per session, not per daemon:
+    /// the window is connected to *this* daemon, which is not where the
+    /// session's tmux is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_target: Option<String>,
+    /// The followed daemon has not been heard from for a while. Kept, greyed,
+    /// and out of the ranking — its last *waiting* must not sit at the top of
+    /// the queue for ever.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
@@ -235,6 +255,16 @@ pub struct Session {
     /// id, which does not outlive the pane.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provisional: bool,
+
+    /// The machine this session runs on, when it is not this one. `R-I21`,
+    /// [feature 0047](../../../docs/features/0047-daemon-federation/spec.md).
+    ///
+    /// Set only on a session this daemon **mirrors** from a daemon it follows;
+    /// its id is then namespaced by that machine (`federation::mirrored_id`),
+    /// and every command about it is forwarded there. `None` — the only value
+    /// anything but federation ever writes — means this machine's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
 
     /// Recent `tool:path` keys, newest last, capped. Feeds loop detection.
     #[serde(default)]

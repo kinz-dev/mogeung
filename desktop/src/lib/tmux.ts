@@ -208,6 +208,25 @@ export function reachFor(
   return daemon.ssh_target ? { kind: "ssh", dest: daemon.ssh_target } : null;
 }
 
+/**
+ * Which machine to drive tmux on **for this session**. `R-I22`, feature 0047.
+ *
+ * A session mirrored from a followed daemon runs on *that* daemon's machine,
+ * not on the one this window is watching, so its pane attaches over ssh to
+ * the `ssh_target` its own daemon declared — and is refused in a sentence if
+ * it declared none, for the reason `reachFor` refuses. Anything else is the
+ * watched daemon's, as it always was.
+ */
+export function reachForSession(
+  session: { origin?: { machine_id: string; ssh_target?: string | null } | null } | null | undefined,
+  daemon: { machine_id?: string | null; ssh_target?: string | null } | null,
+  localMachineId: string | null,
+): Reach | null {
+  const o = session?.origin;
+  if (!o) return reachFor(daemon, localMachineId);
+  return reachFor({ machine_id: o.machine_id, ssh_target: o.ssh_target ?? null }, localMachineId);
+}
+
 /** The tmux session name for the panel's n-th shell. Shared with the egui
  * client on purpose: they are two views of the same shells, not two sets. */
 export function shellSessionName(index: number): string {

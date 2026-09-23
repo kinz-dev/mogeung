@@ -4,14 +4,14 @@
 
 | | |
 |---|---|
-| Branch | `main` |
-| Tests | 696 passing |
-| Rust | 48580 lines |
-| Docs | 116 files, 40 ADRs |
+| Branch | `daemon-federation` |
+| Tests | 717 passing |
+| Rust | 50648 lines |
+| Docs | 118 files, 40 ADRs |
 
 ## Assumptions
 
-Untested: **18** · At risk: **5** · Supported: 19 · Refuted: 2
+Untested: **19** · At risk: **5** · Supported: 19 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before

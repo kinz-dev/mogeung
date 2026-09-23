@@ -26,7 +26,7 @@ import { closeFile } from "@/lib/explorer";
 import { fullPath } from "@/ui/PaneChrome";
 import { writeClipboard } from "@/lib/clipboard";
 import { nudgeAppZoom } from "@/lib/zoom";
-import { visibleQueue } from "@/lib/queue";
+import { groupQueue, visibleQueue } from "@/lib/queue";
 import { repoOf } from "@/lib/gitActions";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 import type { Direction } from "@/lib/spatial";
@@ -940,8 +940,8 @@ export function defaultKeys(action: Action, platform: Platform = currentPlatform
  * it was that there were two lists.
  */
 function moveSelection(delta: number): void {
-  const { queue, sessions, selected, select, prefs, filter, scoped } = useStore.getState();
-  const ids = visibleQueue({
+  const { queue, sessions, selected, select, prefs, filter, scoped, foldedGroups, daemon } = useStore.getState();
+  const rows = visibleQueue({
     queue,
     sessions,
     scope: prefs.scope,
@@ -951,7 +951,17 @@ function moveSelection(delta: number): void {
     // hid is a row the arrows must not stop on, which is the whole point of
     // there being one definition.
     tmuxOnly: prefs.tmuxOnly,
-  }).map((r) => r.session.id);
+  });
+  // **In the order it is drawn**, headings and folds included. Grouping by
+  // repository reordered rows on screen while this still walked rank order,
+  // so `j` jumped between groups — the same two-lists bug, one layer down;
+  // machine grouping (`R-I21`) would have made it the common case.
+  const ids = groupQueue(rows, {
+    byRepo: prefs.groupByRepo,
+    byMachine: prefs.groupByMachine,
+    collapsed: foldedGroups,
+    here: daemon?.host,
+  }).flatMap((l) => (l.kind === "row" ? [l.session.id] : []));
   if (ids.length === 0) return;
   const at = selected ? ids.indexOf(selected) : -1;
   // A selection that is filtered *out* is not "before the first row" — landing

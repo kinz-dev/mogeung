@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 
 # Watching a remote machine
@@ -337,6 +337,57 @@ see below.
 
 A refusal is a message in the error strip, not a silent no-op, and it names the
 machine — a refusal you cannot act on reads as a bug.
+
+## Every machine in one list: following
+
+Switching shows one machine at a time, and drops the board each way. If your
+agents run on two or three machines, **follow** them instead: this machine's
+daemon connects to each one you follow, and their sessions join your
+Attention list — ranked with yours by one ranking, grouped under their
+machine, this machine first, each row marked **on HOST**.
+[Feature 0047](../features/0047-daemon-federation/spec.md).
+
+1. Save the other machine's daemon as a connection with its token, as for
+   switching — the LAN list's **add** is the quickest way.
+2. Press **follow** on it — in the Connections panel's form, or at the end of
+   its row in the top-bar switcher. The panel then says where the follow
+   stands: *following HOST — N sessions mirrored here*, *connecting*, *not
+   answering*, or *the token was turned away* with the fix.
+3. That is all. Click a remote session and it opens **in place**: transcript,
+   changes, diff, files, search and the whole of git reading answer about
+   *that* machine, and the Agent pane attaches over ssh to it — using the
+   `ssh_target` **its** daemon declares, so set one there (Route B's config
+   lines). No `ssh_target`, and the pane says so rather than guessing.
+
+**Changes are off until you turn them on**, per follow: *allow changes on
+HOST from here* in the panel. Off, a git write, a run, a send or *forget* on a
+remote session is refused here, in words. On, it is sent — and **that
+machine's own rules still decide**: over a LAN it will not type into a session
+(only a person at that machine may), will not start a run unless it was
+started with `--allow-run`, and writes git only because it is token-gated.
+Turning it on grants nothing that machine does not already grant a window
+connecting to it directly. It does mean this machine now reaches that one on
+your behalf with a token over a network with no TLS — the same bet as the
+warning at the top of this page, one hop further; turn it on for machines on
+a network you trust.
+
+**What never crosses:** raising a terminal window, opening a folder or
+IntelliJ — they would happen on a screen nobody here is looking at, so the
+buttons are off with the reason. Ask Mogeung about a remote session from a
+window on that machine. And a machine that connects to *your* daemon sees
+*your* sessions only — never the ones you follow.
+
+**A machine that goes quiet** — asleep, off the network — shows *not
+answering* at once, and a minute after it was last heard its rows grey out
+with *not heard from* and drop below everything live. They are last known,
+not current. When it comes back they return to the ranking by themselves.
+
+**Following needs the other daemon to be a recent build**; an older one is
+shown as not followable with the version it needs. Following is set up from a
+window on the machine that follows — a window watching another machine's
+daemon is told so, rather than offered the controls. The follow lasts with
+the window closed if the daemon is standalone (`scripts/mogeungd`); a window
+hosting its own daemon follows while it is open.
 
 ## Terminals, when the daemon is elsewhere
 

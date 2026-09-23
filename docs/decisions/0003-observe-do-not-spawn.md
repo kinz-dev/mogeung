@@ -190,6 +190,20 @@ end of an `ssh -L` into it — the route the refusal has always recommended.
 Clauses 1–3 and 5–6 are untouched: one shot, never a loop, only a session
 mogeung can name a pane for, and the clipboard stays.
 
+## Amendment — 2026-09-23, later
+
+**A send that crosses a hop is decided by the daemon that owns the session,
+exactly as it decides a window's.** Federation (`R-I23`,
+[ADR-0013](0013-one-window-one-daemon.md)'s second amendment of this date)
+forwards `SendToSession` for a mirrored session up a relay socket to the peer,
+and the peer applies clause 4 to that relay as to any client: over a LAN it is
+not a person at that machine, and the send is refused in the peer's words;
+through an `ssh -L` into the peer it arrives on loopback, which is the route
+this clause has always named as a person's. Nothing here opens a path around
+the clause — no token, no flag, and no *allow changes* consent can make a LAN
+relay count as loopback. The consent is a second gate on this machine, never a
+substitute for the one on that machine. Clauses 1–3 and 5–6 are untouched.
+
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an
 `## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A

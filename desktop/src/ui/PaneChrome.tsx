@@ -24,7 +24,7 @@ import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { IntellijGlyph } from "@/ui/IdeGlyphs";
-import { hostLabel, reachFor } from "@/lib/tmux";
+import { hostLabel, reachForSession } from "@/lib/tmux";
 import { closeFile, revealInFiles } from "@/lib/explorer";
 import { closeAllTabs, closeOtherTabs, closeTab } from "@/lib/closeTabs";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
@@ -274,15 +274,20 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
   const machineId = useStore((s) => s.machineId);
   const send = useStore((s) => s.send);
 
-  const reach = React.useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
+  const reach = React.useMemo(() => reachForSession(session, daemon, machineId), [session, daemon, machineId]);
   const host = session?.tmux_target && reach ? hostLabel(reach) : null;
 
   // Whether this session's project is IntelliJ's, asked once per session
   // and before the click, so the button can say why it is dead. `R-J92`.
   const probe = useStore((s) => (session ? s.intellij[session.id] : undefined));
+  // A session mirrored from another machine (`R-I22`). The three buttons
+  // below act on *a screen* — a file manager, an IDE, a terminal window — and
+  // that session's screen is the other machine's, where nobody is looking. The
+  // daemon refuses them across the hop; the buttons say so before the click.
+  const away = session?.origin ? session.origin.host || session.origin.machine_id : null;
   React.useEffect(() => {
-    if (kind === "agent" && session && !probe) send({ cmd: "probe_intellij", session_id: session.id });
-  }, [kind, session, probe, send]);
+    if (kind === "agent" && session && !away && !probe) send({ cmd: "probe_intellij", session_id: session.id });
+  }, [kind, session, away, probe, send]);
 
   if (kind !== "agent" || !paneId) return null;
 
@@ -346,11 +351,13 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
       */}
       <IconButton
         title={
-          session?.cwd
-            ? `show ${session.cwd} in the file manager`
-            : "no folder to show — this pane has no session"
+          away
+            ? `that folder is on ${away} — open it from a window there`
+            : session?.cwd
+              ? `show ${session.cwd} in the file manager`
+              : "no folder to show — this pane has no session"
         }
-        disabled={!session?.cwd}
+        disabled={!session?.cwd || !!away}
         onClick={() => session && send({ cmd: "open_folder", session_id: session.id })}
       >
         <FolderOpen className="h-3.5 w-3.5" />
@@ -369,7 +376,9 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         title={
           !session
             ? "no project to open — this pane has no session"
-            : !probe
+            : away
+              ? `that project is on ${away} — open it in IntelliJ from a window there`
+              : !probe
               ? "checking whether this is an IntelliJ project…"
               : !probe.project
                 ? `not an IntelliJ project — no .idea folder in ${probe.root}`
@@ -377,7 +386,7 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
                   ? "IntelliJ IDEA was not found on the daemon's machine"
                   : `open ${probe.root} in IntelliJ IDEA`
         }
-        disabled={!session || !probe?.project || !probe?.launcher}
+        disabled={!session || !!away || !probe?.project || !probe?.launcher}
         onClick={() => session && send({ cmd: "open_in_intellij", session_id: session.id })}
       >
         <IntellijGlyph className="h-3.5 w-3.5" />
@@ -422,8 +431,13 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         <button
           type="button"
           onClick={() => send({ cmd: "focus_terminal", session_id: session.id })}
-          className="rounded-sm border border-[var(--border)] px-1.5 py-px text-2xs outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:border-[var(--border-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]"
-          title="raise the terminal application this session runs in — it moves your window, then you type"
+          disabled={!!away}
+          className="rounded-sm border border-[var(--border)] px-1.5 py-px text-2xs outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:border-[var(--border-hover)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)] disabled:opacity-40"
+          title={
+            away
+              ? `its terminal window is on ${away}'s screen — this pane is the way in from here`
+              : "raise the terminal application this session runs in — it moves your window, then you type"
+          }
         >
           raise
         </button>

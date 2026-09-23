@@ -36,6 +36,7 @@ import type {
   CommitInfo,
   ContentMatch,
   DaemonIdentity,
+  PeerState,
   DayDigest,
   DecisionCandidate,
   DirEntry,
@@ -645,6 +646,24 @@ export interface AppState {
   usage: UsageReport | null;
   notes: Note[];
   /**
+   * The daemons this one follows, and where each stands. `R-I21`.
+   *
+   * `null` until the daemon answers, and it answers **only a window on its
+   * own machine** — so `null` is also the daemon's word that this window may
+   * not follow anything, which is why the Connections panel asks this rather
+   * than guessing from the address it dialled (an `ssh -L` tunnel is loopback
+   * here and remote there).
+   */
+  peers: PeerState[] | null;
+  /**
+   * Which Attention-list headings are folded, by `groupQueue`'s keys. In the
+   * store rather than the panel so the keyboard walks what is drawn (`R-J13`)
+   * — and not persisted, because which groups you folded is a property of
+   * this sitting, and a queue that opens with its urgent half collapsed from
+   * last week hides the thing it exists to show.
+   */
+  foldedGroups: string[];
+  /**
    * Which note the Notes tool has open, or `null`.
    *
    * In the store rather than in `NotesTool` since `R-L3`, because the Tasks
@@ -1118,6 +1137,8 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  peers: null,
+  foldedGroups: [],
   noteOpenId: null,
   tasks: [],
   closedToday: 0,
@@ -1593,6 +1614,10 @@ export const useStore = create<AppState>((set, get) => ({
         // every snapshot rather than once, because a reconnect is a new
         // daemon's worth of state and the notes may be another machine's.
         client?.send({ cmd: "note_list" });
+        // The follow list too, from a daemon that has one. Cleared first: a
+        // remote answers nothing, and the last daemon's list must not show.
+        set({ peers: null });
+        if (msg.daemon?.federation) client?.send({ cmd: "fetch_peers" });
         // Keep the selection if it survived the reconnect; otherwise fall to
         // the top of the queue when auto-select is on.
         if (prev.selected && !sessions[prev.selected]) set({ selected: null });
@@ -1805,6 +1830,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "notes":
         set({ notes: msg.notes });
+        break;
+      case "peers":
+        set({ peers: msg.peers });
         break;
       case "tasks":
         set({ tasks: msg.tasks, closedToday: msg.closed_today });

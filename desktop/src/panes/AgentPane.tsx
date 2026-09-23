@@ -24,7 +24,7 @@ import { useMemo } from "react";
 import { usePaneBinding, useSelectedSession } from "@/store";
 import { Empty } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
-import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
+import { attachArgs, reachForSession, spawnAs } from "@/lib/tmux";
 import { usePaneId } from "@/lib/paneScope";
 import { useStore } from "@/store";
 
@@ -35,7 +35,8 @@ export function AgentPane() {
   const daemon = useStore((st) => st.daemon);
   const machineId = useStore((st) => st.machineId);
 
-  const reach = useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
+  // Per session: a mirrored one attaches on its own machine. `R-I22`.
+  const reach = useMemo(() => reachForSession(s, daemon, machineId), [s, daemon, machineId]);
 
   const command = useMemo(() => {
     if (!s?.tmux_target || !reach) return null;
@@ -119,7 +120,11 @@ export function AgentPane() {
             ) : (
               <div className="max-w-md space-y-2">
                 <div className="text-sm font-semibold text-[var(--text-strong)]">
-                  That daemon is on another machine, and has not been told how to reach it.
+                  {/* A mirrored session names its own machine: the daemon this
+                      window watches is not the one that has to be told. */}
+                  {s.origin
+                    ? `This session is on ${s.origin.host || s.origin.machine_id}, and its daemon has not been told how to reach it.`
+                    : "That daemon is on another machine, and has not been told how to reach it."}
                 </div>
                 <p className="text-xs text-[var(--dim)]">
                   tmux owns this session over there, so the pane would have to run{" "}

@@ -114,8 +114,13 @@ export interface ScopedPrefs {
    * nothing on the laptop.
    */
   tags: Record<SessionId, string>;
-  /** The panel's shells: `[tmux session name, worktree root]`. `R-B33`. */
-  shells: [string, string][];
+  /**
+   * The panel's shells: `[tmux session name, worktree root, ssh destination]`.
+   * `R-B33`. The third is set only for a shell opened on a session mirrored
+   * from another machine (`R-I22`) — rooted in *its* worktree, so it has to
+   * run there — and absent means the watched daemon's machine, as before.
+   */
+  shells: ([string, string] | [string, string, string])[];
   /**
    * Folders you keep in the New session window, in the order you added them.
    * `R-J45`. See [`lib/favourites.ts`](../lib/favourites.ts), which carries the
@@ -227,6 +232,15 @@ export interface Prefs {
    */
   gitSidebarWidth: number;
   /**
+   * The Connections panel, sized by hand (2026-09-23, *"make the popup of
+   * connections bigger and allow resizing the layout inside"*): the window
+   * itself, the saved list's width beside the form, and the saved list's
+   * height above the LAN list.
+   */
+  connectionsSize: { width: number; height: number };
+  connectionsListWidth: number;
+  connectionsSavedHeight: number;
+  /**
    * The Git tool window's three panes. `R-D26`. Widths of the two outer
    * panes in pixels — the log takes the rest — and whether the branch pane
    * is open at all; the shape a window was left in is the shape it opens in.
@@ -251,6 +265,13 @@ export interface Prefs {
   gitRecents: Record<string, string[]>;
 
   groupByRepo: boolean;
+  /**
+   * Head the Attention list with each machine, this one first, when it shows
+   * sessions mirrored from a followed daemon. `R-I21`, feature 0047. On by
+   * default: a remote row with no heading over it is a row whose *where* you
+   * have to read off a chip, and where is the first thing a hop changes.
+   */
+  groupByMachine: boolean;
   /**
    * Hide sessions with no tmux pane from the `needs you` and `live` scopes.
    * `R-J93`. On by default, and the `all` scope ignores it either way.
@@ -367,6 +388,9 @@ export const defaultPrefs = (): Prefs => ({
   launchHeadless: false,
   queueWidth: 380,
   gitSidebarWidth: 340,
+  connectionsSize: { width: 1080, height: 720 },
+  connectionsListWidth: 340,
+  connectionsSavedHeight: 240,
   gitBranchesWidth: 210,
   gitInspectorWidth: 360,
   gitBranchesOpen: true,
@@ -374,6 +398,7 @@ export const defaultPrefs = (): Prefs => ({
   gitFavourites: {},
   gitRecents: {},
   groupByRepo: false,
+  groupByMachine: true,
   tmuxOnly: true,
   autoSelect: false,
   previewOnSelect: true,

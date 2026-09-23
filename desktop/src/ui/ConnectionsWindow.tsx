@@ -22,6 +22,12 @@
  * makes a saved entry and selects it, so the next thing in front of you is the
  * token field.
  *
+ * **Follow** (`R-I21`, feature 0047) is the other thing a saved connection
+ * can be: not *go there* but *bring its sessions here*. This machine's daemon
+ * holds the connection, so it lasts with the window closed and needs no
+ * switch; the form shows where each follow stands, and — per follow, off
+ * until a hand turns it on — whether changes may cross to it (`R-I23`).
+ *
  * Switching drops the whole board on purpose. Session ids do not survive the
  * move, and a queue from the machine you just left is worse than an empty one:
  * it looks like current information about work that is not in front of you.
@@ -33,7 +39,10 @@ import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
 import { composeDial } from "@/lib/dial";
 import { Dialog } from "@/ui/Dialog";
-import { Button, Dim, IconButton, Input, Loading, Row } from "@/ui/primitives";
+import { Splitter, useDragWidth } from "@/ui/drag";
+import { Button, Checkbox, Dim, IconButton, Input, Loading, Row } from "@/ui/primitives";
+import { followMsg, followOf, peerLine, peerTrouble } from "@/lib/federation";
+import type { PeerState } from "@/wire/types";
 import {
   defaultName,
   dialledUrl,
@@ -75,6 +84,25 @@ export function ConnectionsWindow() {
   const setUrl = useStore((s) => s.setUrl);
   const daemonStatus = useStore((s) => s.daemonStatus);
   const localAddr = useStore((s) => s.localAddr);
+  // `null` is the daemon's word that this window may not follow — see the store.
+  const peers = useStore((s) => s.peers);
+  const send = useStore((s) => s.send);
+  const prefs = useStore((s) => s.prefs);
+  const setPrefs = useStore((s) => s.setPrefs);
+  // Every part of the panel is sized by hand since 2026-09-23 — the window by
+  // its corner, the list beside the form and the saved list above the LAN
+  // one by their edges — and each is remembered on release.
+  const [listWidth, dragList] = useDragWidth(prefs.connectionsListWidth, 220, 640, (px) =>
+    setPrefs({ connectionsListWidth: px }),
+  );
+  const [savedHeight, dragSaved] = useDragWidth(
+    prefs.connectionsSavedHeight,
+    96,
+    720,
+    (px) => setPrefs({ connectionsSavedHeight: px }),
+    1,
+    "y",
+  );
 
   // A load rather than a value, since ADR-0036 — so there is a tick with no
   // rows, and an empty list rendered during it reads as a list that was lost.
@@ -199,176 +227,224 @@ export function ConnectionsWindow() {
   const selected = list?.find((c) => c.id === selectedId) ?? null;
 
   return (
-    <Dialog title="Connections" subtitle="which daemon this window is watching" onClose={close} wide>
-      <div className="flex min-h-[22rem] gap-3">
-        {/* The list. Clicking a row selects it; Connect is on the right. */}
-        <div className="flex w-60 shrink-0 flex-col border-r border-[var(--border)] pr-3">
-          <Dim className="mb-1 block text-sm">saved</Dim>
-          {list === null ? (
-            <Loading what="connections" />
-          ) : (
-            <div role="listbox" aria-label="saved connections">
-              {list.map((c) => {
-                const current = sameDaemon(c.url, url);
-                return (
-                  <Row
-                    key={c.id}
-                    selected={c.id === selectedId}
-                    onClick={() => select(c.id)}
-                    data-current={current || undefined}
-                    className="flex items-center gap-2"
-                  >
-                    <span className="w-3 shrink-0">
-                      {current && <Check size={11} className="text-[var(--green)]" />}
-                    </span>
-                    {heardNow(c) && (
-                      <span
-                        data-live
-                        title="being heard on your LAN right now"
-                        className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--green)]"
-                      />
-                    )}
-                    <span className="min-w-0 flex-1 truncate text-base">{labelOf(c)}</span>
-                    <Dim className="shrink-0 font-mono text-sm">{hostPortOf(c.url) ?? ""}</Dim>
-                  </Row>
-                );
-              })}
+    <Dialog
+      title="Connections"
+      subtitle="which daemon this window is watching"
+      onClose={close}
+      resizable={{ ...prefs.connectionsSize, onResized: (size) => setPrefs({ connectionsSize: size }) }}
+    >
+      <div className="flex h-full min-h-0 flex-col p-3">
+        <div className="flex min-h-0 flex-1">
+          {/* The list. Clicking a row selects it; Connect is on the right. */}
+          <div className="flex min-h-0 shrink-0 flex-col pr-2" style={{ width: listWidth }} data-connections-list>
+            <div className="flex min-h-0 shrink-0 flex-col" style={{ height: savedHeight }}>
+              <Dim className="mb-1 block text-sm">saved</Dim>
+              {list === null ? (
+                <Loading what="connections" />
+              ) : (
+                <div role="listbox" aria-label="saved connections" className="min-h-0 flex-1 overflow-y-auto">
+                  {list.map((c) => {
+                    const current = sameDaemon(c.url, url);
+                    return (
+                      <Row
+                        key={c.id}
+                        selected={c.id === selectedId}
+                        onClick={() => select(c.id)}
+                        data-current={current || undefined}
+                        className="flex items-center gap-2"
+                      >
+                        <span className="w-3 shrink-0">
+                          {current && <Check size={11} className="text-[var(--green)]" />}
+                        </span>
+                        {heardNow(c) && (
+                          <span
+                            data-live
+                            title="being heard on your LAN right now"
+                            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--green)]"
+                          />
+                        )}
+                        <span className="min-w-0 flex-1 truncate text-base">{labelOf(c)}</span>
+                        {(() => {
+                          const f = followOf(c, peers);
+                          return (
+                            f && (
+                              <span
+                                data-following={f.state}
+                                title={peerLine(f)}
+                                className={cn(
+                                  "shrink-0 text-xs",
+                                  peerTrouble(f) ? "text-[var(--amber)]" : "text-[var(--blue)]",
+                                )}
+                              >
+                                following
+                              </span>
+                            )
+                          );
+                        })()}
+                        <Dim className="shrink-0 font-mono text-sm">{hostPortOf(c.url) ?? ""}</Dim>
+                      </Row>
+                    );
+                  })}
+                </div>
+              )}
+              <Button variant="outline" className="mt-1 shrink-0 self-start" onClick={addBlank} title="a connection you will type in">
+                <Plus size={11} /> new
+              </Button>
             </div>
-          )}
-          <Button variant="outline" className="mt-1 self-start" onClick={addBlank} title="a connection you will type in">
-            <Plus size={11} /> new
-          </Button>
+            <Splitter
+              orientation="horizontal"
+              onMouseDown={dragSaved}
+              title="drag to share this column between saved connections and the LAN list"
+            />
 
-          {/*
-            Found on your LAN. `R-I17`: every daemon announces itself by default
-            (ADR-0039), the shell hears it, and this is the list. **Finding is
-            never connecting** — Add makes a saved entry and selects it, a hand
-            types the token, and Connect is the switch that already exists.
-          */}
-          <div className="mt-3 border-t border-[var(--border)] pt-2">
-            <Dim className="mb-1 block text-sm">found on your LAN — nothing connects on its own</Dim>
-            {lan === null ? null : "browser" in lan ? (
-              <Dim className="block text-sm">
-                Not listening for beacons here: only the desktop window can, and it lists the
-                daemons found on your LAN.
-              </Dim>
-            ) : "error" in lan ? (
-              <Dim className="block text-sm text-[var(--amber)]" data-lan-error>
-                {lan.error}
-              </Dim>
-            ) : others.length === 0 ? (
-              <Dim className="block text-sm">
-                nothing else heard yet — a daemon on this network announces itself within 15 s
-              </Dim>
-            ) : (
-              others.map((d) => {
-                const saved = list?.find((c) => matchesSaved(c, d));
-                return (
-                  <div
-                    key={`${d.machine}\u0001${d.home}`}
-                    data-found={foundName(d)}
-                    data-gone={d.gone || undefined}
-                    className={cn("flex items-center gap-2 py-1", d.gone && "opacity-50")}
-                  >
-                    <span
-                      title={d.gone ? "gone — not heard for a minute" : "heard"}
-                      className={cn(
-                        "h-2 w-2 shrink-0 rounded-full",
-                        d.gone ? "bg-[var(--dim)]" : "bg-[var(--green)]",
-                      )}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-base">
-                        {foundName(d)}
-                        <Dim className="ml-2 font-mono text-sm">
-                          {d.addr}:{d.port}
+            {/*
+              Found on your LAN. `R-I17`: every daemon announces itself by default
+              (ADR-0039), the shell hears it, and this is the list. **Finding is
+              never connecting** — Add makes a saved entry and selects it, a hand
+              types the token, and Connect is the switch that already exists.
+            */}
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border)] pt-2">
+              <Dim className="mb-1 block text-sm">found on your LAN — nothing connects on its own</Dim>
+              {lan === null ? null : "browser" in lan ? (
+                <Dim className="block text-sm">
+                  Not listening for beacons here: only the desktop window can, and it lists the
+                  daemons found on your LAN.
+                </Dim>
+              ) : "error" in lan ? (
+                <Dim className="block text-sm text-[var(--amber)]" data-lan-error>
+                  {lan.error}
+                </Dim>
+              ) : others.length === 0 ? (
+                <Dim className="block text-sm">
+                  nothing else heard yet — a daemon on this network announces itself within 15 s
+                </Dim>
+              ) : (
+                others.map((d) => {
+                  const saved = list?.find((c) => matchesSaved(c, d));
+                  return (
+                    <div
+                      key={`${d.machine}\u0001${d.home}`}
+                      data-found={foundName(d)}
+                      data-gone={d.gone || undefined}
+                      className={cn("flex items-center gap-2 py-1", d.gone && "opacity-50")}
+                    >
+                      <span
+                        title={d.gone ? "gone — not heard for a minute" : "heard"}
+                        className={cn(
+                          "h-2 w-2 shrink-0 rounded-full",
+                          d.gone ? "bg-[var(--dim)]" : "bg-[var(--green)]",
+                        )}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-base">
+                          {foundName(d)}
+                          <Dim className="ml-2 font-mono text-sm">
+                            {d.addr}:{d.port}
+                          </Dim>
+                        </div>
+                        <Dim className="block truncate text-sm">
+                          {d.live} live · {d.waiting} need you ·{" "}
+                          {d.gone
+                            ? `gone — last heard ${agoLabel(d.last_seen_ms, now)}`
+                            : agoLabel(d.last_seen_ms, now)}{" "}
+                          · {reachLabel(d)}
                         </Dim>
                       </div>
-                      <Dim className="block truncate text-sm">
-                        {d.live} live · {d.waiting} need you ·{" "}
-                        {d.gone
-                          ? `gone — last heard ${agoLabel(d.last_seen_ms, now)}`
-                          : agoLabel(d.last_seen_ms, now)}{" "}
-                        · {reachLabel(d)}
-                      </Dim>
+                      {saved ? (
+                        <Button variant="ghost" title={`saved as ${saved.name || saved.url}`} onClick={() => select(saved.id)}>
+                          <Dim className="text-sm">saved as {labelOf(saved)}</Dim>
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          title="save this daemon — you supply the token, then connect"
+                          onClick={() => addFound(d)}
+                        >
+                          <Plus size={11} /> add
+                        </Button>
+                      )}
                     </div>
-                    {saved ? (
-                      <Button variant="ghost" title={`saved as ${saved.name || saved.url}`} onClick={() => select(saved.id)}>
-                        <Dim className="text-sm">saved as {labelOf(saved)}</Dim>
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        title="save this daemon — you supply the token, then connect"
-                        onClick={() => addFound(d)}
-                      >
-                        <Plus size={11} /> add
-                      </Button>
-                    )}
-                  </div>
-                );
-              })
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <Splitter onMouseDown={dragList} title="drag to resize the list" />
+
+          {/* The form: the selected connection, and what you can do to it. */}
+          <div className="min-w-0 flex-1 overflow-y-auto pl-3">
+            {selected === null ? (
+              <Dim className="block text-sm">pick a connection on the left, or add one</Dim>
+            ) : (
+              <ConnectionForm
+                key={selected.id}
+                c={selected}
+                list={list ?? []}
+                current={sameDaemon(selected.url, url)}
+                connState={conn}
+                daemonLine={
+                  daemon ? `${daemon.host ?? "unknown host"} · ${daemon.version}` : null
+                }
+                showToken={showToken}
+                setShowToken={setShowToken}
+                probe={probe?.id === selected.id ? probe.result : null}
+                onPatch={(field, value) => patch(selected.id, field, value)}
+                onConnect={() => {
+                  // Composed here, so the token reaches the socket without
+                  // ever being part of what this panel displays.
+                  setUrl(dialledUrl(selected));
+                  close();
+                }}
+                onTest={() => test(selected)}
+                onMove={(dir) => {
+                  const i = (list ?? []).findIndex((x) => x.id === selected.id);
+                  if (i >= 0) write(reorder(list ?? [], i, i + dir));
+                }}
+                onForget={() => forget(selected.id)}
+                follow={
+                  // A daemon from before federation has nothing to offer here.
+                  !daemon?.federation
+                    ? null
+                    : peers === null
+                      ? "elsewhere"
+                      : {
+                          peer: followOf(selected, peers),
+                          onFollow: (allow) => send(followMsg(selected, allow)),
+                          onUnfollow: (id) => send({ cmd: "unfollow", id }),
+                          onWrites: (id, allow) => send({ cmd: "set_peer_writes", id, allow }),
+                        }
+                }
+              />
             )}
           </div>
         </div>
 
-        {/* The form: the selected connection, and what you can do to it. */}
-        <div className="min-w-0 flex-1">
-          {selected === null ? (
-            <Dim className="block text-sm">pick a connection on the left, or add one</Dim>
-          ) : (
-            <ConnectionForm
-              key={selected.id}
-              c={selected}
-              list={list ?? []}
-              current={sameDaemon(selected.url, url)}
-              connState={conn}
-              daemonLine={
-                daemon ? `${daemon.host ?? "unknown host"} · ${daemon.version}` : null
-              }
-              showToken={showToken}
-              setShowToken={setShowToken}
-              probe={probe?.id === selected.id ? probe.result : null}
-              onPatch={(field, value) => patch(selected.id, field, value)}
-              onConnect={() => {
-                // Composed here, so the token reaches the socket without
-                // ever being part of what this panel displays.
-                setUrl(dialledUrl(selected));
-                close();
-              }}
-              onTest={() => test(selected)}
-              onMove={(dir) => {
-                const i = (list ?? []).findIndex((x) => x.id === selected.id);
-                if (i >= 0) write(reorder(list ?? [], i, i + dir));
-              }}
-              onForget={() => forget(selected.id)}
-            />
-          )}
+        <div className="shrink-0">
+          <Dim className="mt-3 block text-sm">
+            Switching clears the board: session ids do not survive the move, and a queue from the
+            machine you just left is worse than an empty one. A daemon on another host needs to be
+            reachable — a beacon row says how; `ssh -L 7717:localhost:7717 host` is the way in to
+            one bound to its own machine — and local-versus-remote is then decided by the daemon&apos;s
+            identity rather than by the address you dialled (`R-I5`).
+          </Dim>
+          <Dim className="mt-1 block text-sm">
+            {storageKind() === "file" ? (
+              <>
+                Kept in <code>~/.mogeung/connections.json</code> on this machine, readable only by you
+                — not on the daemon&apos;s machine, and not synced anywhere.
+              </>
+            ) : (
+              <>
+                <strong>This is a browser tab, so the list is in this browser&apos;s storage</strong>{" "}
+                rather than in <code>~/.mogeung/connections.json</code>. A token typed here is not
+                protected by the file&apos;s permissions — use the desktop window for anything you mean
+                to keep.
+              </>
+            )}
+          </Dim>
         </div>
       </div>
-
-      <Dim className="mt-3 block text-sm">
-        Switching clears the board: session ids do not survive the move, and a queue from the
-        machine you just left is worse than an empty one. A daemon on another host needs to be
-        reachable — a beacon row says how; `ssh -L 7717:localhost:7717 host` is the way in to
-        one bound to its own machine — and local-versus-remote is then decided by the daemon&apos;s
-        identity rather than by the address you dialled (`R-I5`).
-      </Dim>
-      <Dim className="mt-1 block text-sm">
-        {storageKind() === "file" ? (
-          <>
-            Kept in <code>~/.mogeung/connections.json</code> on this machine, readable only by you
-            — not on the daemon&apos;s machine, and not synced anywhere.
-          </>
-        ) : (
-          <>
-            <strong>This is a browser tab, so the list is in this browser&apos;s storage</strong>{" "}
-            rather than in <code>~/.mogeung/connections.json</code>. A token typed here is not
-            protected by the file&apos;s permissions — use the desktop window for anything you mean
-            to keep.
-          </>
-        )}
-      </Dim>
     </Dialog>
   );
 }
@@ -387,6 +463,7 @@ function ConnectionForm({
   onTest,
   onMove,
   onForget,
+  follow,
 }: {
   c: Connection;
   list: Connection[];
@@ -401,6 +478,20 @@ function ConnectionForm({
   onTest: () => void;
   onMove: (dir: -1 | 1) => void;
   onForget: () => void;
+  /**
+   * What following this connection looks like from here: the controls, the
+   * reason there are none (`"elsewhere"` — this window is another machine's),
+   * or `null` for a daemon that cannot follow at all.
+   */
+  follow:
+    | null
+    | "elsewhere"
+    | {
+        peer: PeerState | null;
+        onFollow: (allowWrites: boolean) => void;
+        onUnfollow: (id: string) => void;
+        onWrites: (id: string, allow: boolean) => void;
+      };
 }) {
   const label = labelOf(c);
   const i = list.findIndex((x) => x.id === c.id);
@@ -524,6 +615,80 @@ function ConnectionForm({
           {connState === "open" ? (daemonLine ? `connected — ${daemonLine}` : "connected") : connState}
         </Dim>
       )}
+
+      {/*
+        **Follow.** `R-I21`, feature 0047. Not a switch: this machine's daemon
+        opens its own connection to that one and mirrors its sessions into this
+        Attention list, ranked with yours, for as long as it follows — window
+        open or not. Offered on every saved entry but the one you are watching,
+        which would be following itself.
+      */}
+      {follow === "elsewhere" ? (
+        <Dim className="mt-2 block border-t border-[var(--border)] pt-2 text-sm" data-follow="elsewhere">
+          Following is set up from a window on the machine that follows — this window is watching
+          another machine&apos;s daemon, which only shows its own sessions to a window elsewhere.
+        </Dim>
+      ) : follow && !current ? (
+        <div className="mt-2 flex flex-col gap-1 border-t border-[var(--border)] pt-2" data-follow>
+          <Dim className="block text-sm">
+            follow — this machine&apos;s daemon watches it too, and its sessions join your Attention
+            list without switching
+          </Dim>
+          {follow.peer ? (
+            <>
+              <div
+                data-peer-state={follow.peer.state}
+                className={cn(
+                  "text-sm",
+                  peerTrouble(follow.peer) ? "text-[var(--amber)]" : "text-[var(--text-strong)]",
+                )}
+              >
+                {peerLine(follow.peer)}
+              </div>
+              {/*
+                The consent for `R-I23`, per follow and off until a hand turns
+                it on (ADR-0013's 2026-09-23 amendment). It does not *grant*
+                anything on the other machine: that daemon's own gates still
+                decide — its `--allow-run`, and send-to-session from its own
+                screen only (ADR-0003's amendment).
+              */}
+              <Checkbox
+                checked={follow.peer.allow_writes}
+                onChange={(v) => follow.peer && follow.onWrites(follow.peer.id, v)}
+                label={`allow changes on ${follow.peer.host ?? label} from here`}
+                title="git stage, commit, push and the rest, run configurations, forgetting a session — sent to that machine and decided by its own gates. Off, they are refused here in words."
+              />
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  title="send the address and token above to the daemon again — how a corrected token reaches it"
+                  onClick={() => follow.peer && follow.onFollow(follow.peer.allow_writes)}
+                >
+                  follow again
+                </Button>
+                <Button
+                  variant="outline"
+                  title="stop following — its sessions leave this Attention list"
+                  onClick={() => follow.peer && follow.onUnfollow(follow.peer.id)}
+                >
+                  unfollow
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div>
+              <Button
+                variant="outline"
+                disabled={!c.url}
+                title="this machine's daemon connects to it with the token above and keeps its sessions in your Attention list"
+                onClick={() => follow.onFollow(false)}
+              >
+                follow
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

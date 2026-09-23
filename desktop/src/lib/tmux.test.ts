@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachArgs, reachFor, shellArgs, shellQuote, spawnAs } from "./tmux";
+import { attachArgs, reachFor, reachForSession, shellArgs, shellQuote, spawnAs } from "./tmux";
 
 describe("attachArgs", () => {
   /**
@@ -237,5 +237,42 @@ describe("reachFor", () => {
     expect(reachFor({ machine_id: "devbox" }, "laptop")).toBeNull();
     expect(reachFor({ machine_id: null }, "laptop")).toBeNull();
     expect(reachFor({ machine_id: "devbox" }, null)).toBeNull();
+  });
+});
+
+/**
+ * A mirrored session attaches on **its** machine. `R-I22`, feature 0047.
+ *
+ * The daemon this window watches is the ubuntu box; the session is the Mac's,
+ * mirrored because ubuntu follows the Mac. Reached through the daemon's
+ * identity, the pane would run tmux on ubuntu and find nothing — or another
+ * session that happens to share the pane's name.
+ */
+describe("reachForSession", () => {
+  const ubuntu = { machine_id: "ubuntu-id", ssh_target: null };
+
+  it("attaches a mirrored session over ssh to the machine it runs on", () => {
+    const s = { origin: { machine_id: "mac-id", ssh_target: "kinz@mac.local" } };
+    expect(reachForSession(s, ubuntu, "ubuntu-id")).toEqual({ kind: "ssh", dest: "kinz@mac.local" });
+  });
+
+  it("refuses rather than guessing when that machine declared no ssh_target", () => {
+    expect(reachForSession({ origin: { machine_id: "mac-id" } }, ubuntu, "ubuntu-id")).toBeNull();
+  });
+
+  it("is local when the mirrored session's machine is this window's own", () => {
+    // A window on the Mac watching ubuntu, which follows the Mac.
+    const s = { origin: { machine_id: "mac-id", ssh_target: "kinz@mac.local" } };
+    expect(reachForSession(s, { machine_id: "ubuntu-id", ssh_target: "ubuntu" }, "mac-id")).toEqual({
+      kind: "local",
+    });
+  });
+
+  it("follows the daemon for a session of its own", () => {
+    expect(reachForSession({}, { machine_id: "devbox", ssh_target: "devbox" }, "laptop")).toEqual({
+      kind: "ssh",
+      dest: "devbox",
+    });
+    expect(reachForSession(null, ubuntu, "ubuntu-id")).toEqual({ kind: "local" });
   });
 });

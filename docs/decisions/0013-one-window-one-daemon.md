@@ -1,7 +1,7 @@
 ---
 title: One window watches one daemon
 status: active
-updated: 2026-07-31
+updated: 2026-09-23
 decided: 2026-07-31
 ---
 
@@ -148,6 +148,113 @@ alternative is being judged at its best rather than with a known bug in it.
 
 And when it is reopened, the question is *federation*, not an aggregating
 window.
+
+
+## Amendment — 2026-09-23
+
+**Federation in the daemon is admitted, as the shape this ADR named.** The
+decision above stands word for word — *a window watches exactly one daemon at
+a time; it does not aggregate, and it never computes what a daemon computes*
+— and what changes is the one thing it left open: this machine's daemon may
+**follow** daemons on other machines, mirror their sessions onto its own board
+tagged with their origin, rank the merged board itself, and forward a
+session's commands to the daemon that owns it. The window still holds one
+socket to one daemon and computes nothing. `R-I9`'s aggregating window stays
+refused; `R-I18` is the federation this ADR said to reconsider first. Built on
+branch `daemon-federation` to [feature 0047](../features/0047-daemon-federation/spec.md).
+
+**The conditions this ADR set for reopening, one by one:**
+
+- *A named failure rather than a feeling.* Named on 2026-09-21 — *"allow me to
+  connect but display the session on the same local UI, with some indication
+  that it is a remote session and with grouping"* — and again on 2026-09-23,
+  after the three shapes were costed side by side and federation chosen over
+  the three-day overview. The cost it names is the one the Consequences above
+  called *a genuine loss*: switching drops the board, one machine is on screen
+  at a time, and the session waiting on the machine you are not watching is
+  not in front of you.
+- *`R-I11` has shipped.* It has — ✅ 2026-07-31.
+- *[A24](../product/assumptions.md) has a verdict.* **It has not.** It is
+  still `UNTESTED`, and federation adds a second hop to it. This amendment
+  does not pretend otherwise; it fences instead. Mirroring and every
+  **read** verb may cross the hop; **no write or run verb is forwarded until
+  A24 has a verdict** — git writes, `RunStart`, `SendToSession` and the rest
+  answer across the hop with a refusal in words. That is `R-I23`, and it is
+  gated.
+
+**What the arguments above become, since they were right:**
+
+- *The identifier gives no help.* Still true, and answered in the daemon:
+  a mirrored session's id is namespaced by its machine, so a `pane:%3` on two
+  machines is two sessions, and the window treats every id as opaque, as it
+  already does. The routing surface, recounted: **54 of 94** `ClientMsg`
+  variants and **29 of 66** `ServerMsg` variants carry a session id.
+- *The queue is the cheapest thing to merge and the least valuable.* The
+  reason federation is the whole of `R-I18` rather than a merged list: every
+  pane behind a click is forwarded, so the merge does not stop at the first
+  click.
+- *The intelligence does not merge.* Collisions stay per machine — two
+  sessions on two machines editing one path are not colliding — so mirrored
+  sessions are left out of `detect_collisions`. Ranking merges because it is
+  one function over one board, in a daemon, which is where the rule wants it.
+- *Terminal tabs are keyed by machine-free strings.* A pane's reach becomes
+  per-session — the origin's `ssh_target` — rather than per-daemon.
+
+**New fences, which are the price:**
+
+- **No re-export.** Mirrored sessions go to loopback clients only. A machine
+  that connects to *your* daemon sees *your* sessions, never your peers', so
+  following is never transitive and two daemons following each other cannot
+  loop.
+- **Following is a loopback act.** Only a client on this machine may follow or
+  unfollow, and no command returns a follow entry's token. ADR-0036's
+  amendment of the same day is where the tokens rest.
+- **A peer that goes quiet greys out and leaves the ranking.** Its last-known
+  *waiting* must not sit at the top of the queue for ever.
+
+## Amendment — 2026-09-23, later
+
+**Phases B, C and D were built before A45's verdict, and phase C's gate moved
+from A24's verdict to a per-follow consent.** Both at the user's direction —
+*"finish all the phases from A to D for the complete daemon-federation
+feature"* — and both recorded here because each departs from what the
+amendment above and [feature 0047](../features/0047-daemon-federation/spec.md)
+said would happen. What this replaces, and what it does not:
+
+- **A45 still decides whether federation stays.** The plan was to build phase
+  A, use it for a week, and build B–D only if it was used. B–D exist now
+  instead; [A45](../product/assumptions.md) is still `UNTESTED` and still
+  takes its verdict from a week of use. If it comes back `REFUTED`, phase A is
+  the product and B–D come out — the code is layered so they can (relays and
+  the write path live in `federation.rs`'s `Relays`; phase A is the watch
+  socket and the fold).
+- **The fence above — *no write or run verb is forwarded until A24 has a
+  verdict* — is replaced by two gates, both of which must pass.** First, the
+  follow's own **consent**: *allow changes*, per follow, **off by default**,
+  settable only from a window on this machine, and refused here in words while
+  off. Second, **the owning daemon's own gates**, which see the relay as the
+  client it is: a relayed command carries exactly the authority a window on
+  this machine would have dialling that daemon over the same route with the
+  same token — never more. So over a LAN a relayed `send` is refused by the
+  peer (ADR-0003, clause 4), a relayed run needs the peer's `--allow-run`
+  (ADR-0025, clause 4), and a git write needs the peer's token-gated posture
+  (ADR-0014). Each of those ADRs is amended today to say so.
+- **A24 is not tested by this.** It stays `UNTESTED`. What changed is who
+  carries the risk: before, the code refused; now, a person turns it on for
+  one follow knowing the row is open. The row says so.
+- **Unchanged:** a desktop verb — raise a terminal, open a folder, open
+  IntelliJ — never crosses a hop, because it acts on a screen nobody at this
+  machine is looking at; the chat never asks about another machine's session;
+  no re-export; following is a loopback act.
+
+**As built**, where it differs from the plan: mirrored sessions live in a map
+of their own rather than in `AppState.sessions`, so no pass that walks the
+board — liveness, collisions, persistence, retention — can mistake one for
+this machine's, and they are merged only at the outputs (snapshot, queue,
+notifier); ids are `@<machine>:<id>`; a follow to a daemon older than the
+federation protocol is refused with the protocol it needs; staleness is
+measured from when a peer was *last heard*, not from when its socket is
+finally declared dead.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

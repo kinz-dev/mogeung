@@ -164,6 +164,13 @@ export interface Session {
    * unstuck.
    */
   provisional?: boolean;
+  /**
+   * The machine this session runs on, when it is not the daemon's own.
+   * `R-I21`, feature 0047. Set only on a session the daemon **mirrors** from
+   * one it follows; its id is then `@<machine>:<id>`, and the daemon forwards
+   * every command about it to that machine.
+   */
+  origin?: SessionOrigin | null;
   recent_tools: string[];
   limit_hit_at: Timestamp | null;
   limit_resets: string | null;
@@ -1020,6 +1027,36 @@ export interface DaemonIdentity {
   pid: number;
   version: string;
   ssh_target?: string | null;
+  /** The federation protocol it speaks; absent on a build from before it. */
+  federation?: number | null;
+}
+
+/** Where a mirrored session lives. `R-I21`. */
+export interface SessionOrigin {
+  machine_id: string;
+  host?: string | null;
+  /** How a pane reaches that machine — per session, not per daemon. */
+  ssh_target?: string | null;
+  /** Its daemon has not been heard from: last known, not current. */
+  stale?: boolean;
+}
+
+/** Where a followed daemon stands. `R-I21`. */
+export type PeerStatus = "connecting" | "up" | "down" | "refused" | "incompatible" | "myself";
+
+/** One followed daemon. Never carries a token. */
+export interface PeerState {
+  id: string;
+  name: string;
+  url: string;
+  state: PeerStatus;
+  machine_id?: string | null;
+  host?: string | null;
+  version?: string | null;
+  sessions: number;
+  allow_writes: boolean;
+  detail?: string | null;
+  since_ms: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,6 +1204,11 @@ export type ClientMsg =
   | { cmd: "git_fetch"; session_id: SessionId; repo?: string | null }
   | { cmd: "fetch_kit" }
   | { cmd: "fetch_kit_doc"; path: string }
+  // Federation (`R-I21`). This machine's windows only.
+  | { cmd: "follow"; id: string; name: string; url: string; token?: string | null; allow_writes: boolean }
+  | { cmd: "unfollow"; id: string }
+  | { cmd: "set_peer_writes"; id: string; allow: boolean }
+  | { cmd: "fetch_peers" }
   | { cmd: "note_list" }
   | {
       cmd: "note_save";
@@ -1541,7 +1583,8 @@ export type ServerMsg =
   | { ev: "run_output"; line: RunLine }
   | { ev: "run_ended"; run: Run }
   | { ev: "run_output_history"; run_id: string; lines: RunLine[] }
-  | { ev: "run_env_value"; config_id: string; key: string; value: string };
+  | { ev: "run_env_value"; config_id: string; key: string; value: string }
+  | { ev: "peers"; peers: PeerState[] };
 
 // ---------------------------------------------------------------------------
 // Derived helpers — the Rust `impl` blocks this client actually needs.

@@ -34,9 +34,12 @@ mdns-sd = { version = "0.20.3", default-features = false, features = ["logging"]
 # options a shared UDP port needs. Both were already in the tree transitively.
 if-addrs = "0.15"
 socket2 = "0.6"
+# Federation (`R-I18`): this daemon is a client of the daemons it follows —
+# a watch socket per peer and a relay per window and peer. Was a dev
+# dependency for the end-to-end tests until then.
+tokio-tungstenite = "0.30"
 
 [dev-dependencies]
-tokio-tungstenite = "0.30"
 futures-util = "0.3"
 # Encoder side of zstd, only to build `.jsonl.zst` fixtures in tests; the
 # daemon itself decodes with the pure-Rust `ruzstd`.

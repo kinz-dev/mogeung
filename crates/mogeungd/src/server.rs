@@ -336,6 +336,10 @@ where
     // Every daemon says it exists, by default (ADR-0039), over the transport
     // the probe measured (ADR-0040). Held for the life of the server like the
     // advert above: dropping it stops the sending.
+    // The daemons this one follows (`R-I18`), from `~/.mogeung/peers.json`.
+    // Each is a watch socket that redials on its own; none can stop this
+    // daemon from serving its own board.
+    state.federation.start(&state);
     let _beacon = if opts.beacon {
         let now = crate::lan::targets().unwrap_or_default();
         tracing::info!(

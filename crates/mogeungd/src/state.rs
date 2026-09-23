@@ -137,6 +137,9 @@ pub struct AppState {
     /// left orphan files in a user's own notes folder, one per run, discovered
     /// 2026-09-10 while looking for something else.
     pub notes_dir: std::sync::OnceLock<PathBuf>,
+    /// The daemons this one follows, and what it mirrors from them. `R-I18`,
+    /// feature 0047. **Not in `sessions`**: see `federation.rs` for why.
+    pub federation: crate::federation::Federation,
     /// Every run this daemon owns. `R-N4`.
     pub runs: crate::run::Runs,
     /// The local model seam, when one is configured. `R-O1`, ADR-0030.
@@ -459,6 +462,20 @@ pub fn provisional_session(
     s
 }
 
+/// A session with nothing in it but its id — for tests and fixtures, here and
+/// in `tests/`.
+pub fn blank_session_with_id(id: &str) -> Session {
+    blank_session(id.to_string(), mogeung_core::session::SessionSource::ClaudeCode, Utc::now(), Utc::now())
+}
+
+/// What a notification calls a session on another machine.
+fn remote_label(s: &Session) -> String {
+    match s.origin.as_ref().and_then(|o| o.host.as_deref()) {
+        Some(host) => format!("{} — on {host}", s.label()),
+        None => s.label(),
+    }
+}
+
 fn blank_session(
     id: SessionId,
     source: mogeung_core::session::SessionSource,
@@ -505,6 +522,7 @@ fn blank_session(
         // becomes known.
         tmux_target: None,
         provisional: false,
+        origin: None,
         limit_hit_at: None,
         limit_resets: None,
         verify_runs: Vec::new(),
@@ -596,6 +614,7 @@ impl AppState {
             provisional: tokio::sync::RwLock::new(Vec::new()),
             scratch_dir: std::sync::OnceLock::new(),
             notes_dir: std::sync::OnceLock::new(),
+            federation: crate::federation::Federation::default(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
             proxy: crate::llmproxy::Proxy::new(),
@@ -924,14 +943,20 @@ impl AppState {
         let _ = self.tx.send(msg);
     }
 
-    pub async fn snapshot(&self) -> ServerMsg {
+    /// The board for one client. `mirrored` is whether it may see the
+    /// sessions this daemon mirrors from others — a client on this machine
+    /// may, anyone else may not (no re-export, ADR-0013's amendment).
+    pub async fn snapshot(&self, mirrored: bool) -> ServerMsg {
         let mut sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
         // Panes running an agent that has not written anything yet. `R-J75`.
         // Appended here rather than kept in `self.sessions`, because they are
         // a view of running processes rather than a record of conversations —
         // ADR-0038 clause 3.
         sessions.extend(self.provisional.read().await.iter().cloned());
-        let queue = rank(&sessions, Utc::now(), &self.attention);
+        let remote = if mirrored { self.federation.sessions() } else { Vec::new() };
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let queue = self.rank_board(&refs, &remote);
+        sessions.extend(remote);
         ServerMsg::Snapshot {
             sessions,
             queue,
@@ -1005,12 +1030,15 @@ impl AppState {
         // replaces copied every session on the board once per tick, and the
         // board only grows. Labels for the notifier are the one owned thing
         // actually needed.
+        let remote = self.federation.sessions();
         let (queue, labels) = {
             let sessions = self.sessions.read().await;
             let refs: Vec<&Session> = sessions.values().collect();
-            let queue = rank(&refs, Utc::now(), &self.attention);
-            let labels: HashMap<String, String> =
+            let queue = self.rank_board(&refs, &remote);
+            let mut labels: HashMap<String, String> =
                 sessions.values().map(|s| (s.id.clone(), s.label())).collect();
+            // A notification about another machine's session says which one.
+            labels.extend(remote.iter().map(|s| (s.id.clone(), remote_label(s))));
             (queue, labels)
         };
         self.notify_for(&queue, &labels).await;
@@ -1026,14 +1054,40 @@ impl AppState {
         self.broadcast(ServerMsg::Queue { queue });
     }
 
+    /// One ranking over this machine's sessions and every mirrored one —
+    /// `R-I21`: *who needs me most* across machines is answered once, here,
+    /// by the same function that answers it for one. A mirrored session whose
+    /// daemon has gone quiet keeps its row, idle and at the very bottom: its
+    /// last *waiting* must not sit on top of the queue for ever.
+    fn rank_board(&self, local: &[&Session], remote: &[Session]) -> Vec<AttentionItem> {
+        let stale = |s: &Session| s.origin.as_ref().is_some_and(|o| o.stale);
+        let mut refs: Vec<&Session> = local.to_vec();
+        refs.extend(remote.iter().filter(|s| !stale(s)));
+        let mut queue = rank(&refs, Utc::now(), &self.attention);
+        let mut quiet: Vec<&Session> = remote.iter().filter(|s| stale(s)).collect();
+        quiet.sort_by(|a, b| a.id.cmp(&b.id));
+        queue.extend(quiet.into_iter().map(|s| AttentionItem {
+            session_id: s.id.clone(),
+            reason: mogeung_core::attention::AttentionReason::Idle,
+            score: -1,
+            detail: format!(
+                "on {} — not heard from; last known, not current",
+                s.origin.as_ref().and_then(|o| o.host.clone()).unwrap_or_else(|| "another machine".into())
+            ),
+            since: None,
+        }));
+        queue
+    }
+
     /// Announce the queue as it stands, gate bypassed. For the request paths:
     /// a client that explicitly asked to rescan is owed the answer even when
     /// it is the same answer, and only the periodic loop may stay silent.
     pub async fn republish_queue(&self) {
+        let remote = self.federation.sessions();
         let queue = {
             let sessions = self.sessions.read().await;
             let refs: Vec<&Session> = sessions.values().collect();
-            rank(&refs, Utc::now(), &self.attention)
+            self.rank_board(&refs, &remote)
         };
         self.last_queue.lock().await.clone_from(&queue);
         self.broadcast(ServerMsg::Queue { queue });
@@ -4947,7 +5001,7 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         deletions, error, transcript_path, reviewed,
         open_tools, snoozed_until, collisions, loop_signal,
         tmux_target, provisional, limit_hit_at, limit_resets, verify_runs,
-        claims, source, announced_dirs,
+        claims, source, announced_dirs, origin,
     } = after;
 
     *id != before.id
@@ -4984,6 +5038,7 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         || *claims != before.claims
         || *source != before.source
         || *announced_dirs != before.announced_dirs
+        || *origin != before.origin
 }
 
 /// Equal, ignoring the fields that move every scan by construction. `R-J55`.

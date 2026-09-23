@@ -100,6 +100,8 @@ pub fn identity(claude_home: &Path, ssh_target: Option<String>) -> DaemonIdentit
         pid: std::process::id(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         ssh_target,
+        // `R-I24`: the protocol a daemon following this one may rely on.
+        federation: Some(mogeung_core::federation::PROTOCOL),
     }
 }
 

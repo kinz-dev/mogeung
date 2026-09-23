@@ -14,13 +14,23 @@ export function DebtPane() {
   const s = useSelectedSession();
   const debt = useStore((st) => st.debt);
   const send = useStore((st) => st.send);
-  const repo = s?.repo_root ?? null;
+  // Asked by path, and a path names a different checkout on every machine: a
+  // mirrored session's repository (`R-I22`) would be counted against *this*
+  // machine's copy, if it has one, and look like an answer.
+  const away = s?.origin ? s.origin.host || s.origin.machine_id : null;
+  const repo = away ? null : (s?.repo_root ?? null);
 
   useEffect(() => {
     if (repo) send({ cmd: "fetch_review_debt", repo });
   }, [repo, send]);
 
   if (!s) return <Empty>select a session</Empty>;
+  if (away)
+    return (
+      <Empty hint="review debt is counted across one machine's sessions, by that machine's daemon">
+        this session is on {away}
+      </Empty>
+    );
   if (!repo) return <Empty hint="review debt is counted per repository">this session is not in a git repo</Empty>;
   if (!debt || debt.repo !== repo) return <Empty>counting…</Empty>;
 

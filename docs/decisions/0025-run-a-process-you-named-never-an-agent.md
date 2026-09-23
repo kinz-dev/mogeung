@@ -189,6 +189,23 @@ shown to a client on this machine as its own. Clauses 1 to 3 are untouched:
 an id the repository did not produce, or a configuration that would start an
 agent, is refused to every client, local or not.
 
+## Amendment — 2026-09-23, later
+
+**A run that crosses a hop is decided by the daemon that would run it.**
+Federation (`R-I23`) forwards `RunStart`, `RunStop`, `RunSignal` and
+`RevealRunEnv` for a mirrored session only when the follow's *allow changes*
+consent is on, and the peer then judges the relay as the client it is: over a
+LAN, clause 4 wants that peer's `--allow-run`. The run panel's *will this run*
+flag for a mirrored session is therefore **the peer's gate and this follow's
+consent, both** — and never this machine's own loopback authority, which says
+nothing about another machine's processes. That last part is a fix found on
+the day: the per-connection rewrite of the morning amendment above was applied
+to relayed answers too, and would have shown a run button the peer was about
+to refuse. An environment value never crosses without the same consent.
+Clauses 1–3 are untouched: an id the repository did not produce, or a
+configuration that would start an agent, is refused by the peer to every
+client.
+
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

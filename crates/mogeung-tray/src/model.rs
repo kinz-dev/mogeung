@@ -142,6 +142,7 @@ mod tests {
             recent_tools: vec![],
             tmux_target: None,
             provisional: false,
+            origin: None,
             limit_hit_at: None,
             limit_resets: None,
             verify_runs: Vec::new(),
