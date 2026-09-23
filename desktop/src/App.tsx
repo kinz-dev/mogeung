@@ -48,6 +48,7 @@ import { WallOverlay } from "@/ui/WallOverlay";
 import { FileDrop } from "@/ui/FileDrop";
 import { GitOpsPopup } from "@/ui/GitOpsPopup";
 import { BranchesPopup } from "@/ui/BranchesPopup";
+import { MentalMath } from "@/ui/MentalMath";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { FilePane } from "@/panes/FilePane";
@@ -400,6 +401,8 @@ export default function App() {
         {/* IntelliJ's two git popups, on `Alt+\`` and `7`. `R-D31`, `R-D32`. */}
         <GitOpsPopup />
         <BranchesPopup />
+        {/* Not in the keymap, on purpose. */}
+        <MentalMath />
         <NoticesWindow />
         <Toasts />
         <ResizeGrip />

@@ -1153,7 +1153,7 @@ const VIEWER_KEYS = new Set([
  * - **A real text box owns everything bare.** Typing `c` into the queue filter
  *   must not throw you into another pane.
  */
-function focusOwns(key: string): boolean {
+export function focusOwns(key: string): boolean {
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
   if (el.closest(".xterm")) return true;
