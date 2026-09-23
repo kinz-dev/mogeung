@@ -1,11 +1,14 @@
-//! ADR-0030 clause 4, decided per connection. `R-J103`.
+//! The gates that judged by the bind, decided per connection. `R-J103`,
+//! `R-J104`.
 //!
 //! Reported 2026-09-23 from the window on the laptop whose `config.toml` binds
 //! the LAN: *"chat is refused on a daemon bound beyond loopback"* — in the Ask
-//! Mogeung panel of that same machine. The clause keeps a LAN-reachable daemon
-//! from becoming an LLM proxy for the LAN; it was judged from the bind, so it
-//! refused the machine's own window too. These run a real server, the way
-//! `server::run` serves it, with a daemon marked as bound beyond loopback.
+//! Mogeung panel of that same machine. Three gates were read from the bind —
+//! the chat (ADR-0030 clause 4), starting a run configuration (ADR-0025 clause
+//! 4) and typing into a session (ADR-0003's amendment, clause 4) — and each
+//! refused the machine's own window along with the LAN it was written against.
+//! These run a real server, the way `server::run` serves it, with a daemon
+//! marked as bound beyond loopback on all three.
 
 use futures_util::{SinkExt, StreamExt};
 use mogeung_core::{ClientMsg, ServerMsg};
@@ -18,8 +21,11 @@ async fn lan_bound_daemon(tag: &str, with_peer_address: bool) -> String {
     std::fs::create_dir_all(&dir).unwrap();
     let store = Store::open(&dir.join("t.db")).unwrap();
     let state = AppState::with_home(store, dir.join("claude")).unwrap();
-    // What `server::run` decides for a bind like 0.0.0.0:7717.
+    // What `server::run` decides for a bind like 0.0.0.0:7717, with no
+    // `--allow-run`.
     state.model.set_chat_allowed(false);
+    state.runs.set_allowed(false);
+    let _ = state.send_allowed.set(false);
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -84,4 +90,49 @@ async fn without_a_peer_address_the_bind_still_decides() {
     let refusal = ask(&url, ClientMsg::ChatList {}, history_refusal).await;
     assert!(refusal.is_some_and(|r| r.contains("beyond loopback")));
     assert!(!ask(&url, ClientMsg::FetchHealth, model_chat_allowed).await);
+}
+
+fn runs_allowed(msg: ServerMsg) -> Option<bool> {
+    match msg {
+        ServerMsg::RunConfigs { allowed, .. } => Some(allowed),
+        _ => None,
+    }
+}
+
+fn error_text(msg: ServerMsg) -> Option<String> {
+    match msg {
+        ServerMsg::Error { message } => Some(message),
+        _ => None,
+    }
+}
+
+fn send(session_id: &str) -> ClientMsg {
+    ClientMsg::SendToSession { session_id: session_id.into(), text: "hello".into() }
+}
+
+/// `R-J104`: the run panel a client on this machine is shown says it will run.
+#[tokio::test]
+async fn the_window_on_this_machine_is_offered_its_run_configurations() {
+    let url = lan_bound_daemon("run-local", true).await;
+    let allowed = ask(&url, ClientMsg::FetchRunConfigs { session_id: "any".into() }, runs_allowed).await;
+    assert!(allowed, "a loopback client is on this machine, and the panel should draw its buttons");
+}
+
+/// `R-J104`: typing into a session is refused to everyone but this machine.
+/// Past the gate, what stops an unknown session is the lookup — the next
+/// refusal in line — so the error names the session, not the bind.
+#[tokio::test]
+async fn the_window_on_this_machine_is_past_the_send_gate() {
+    let url = lan_bound_daemon("send-local", true).await;
+    let why = ask(&url, send("no-such-session"), error_text).await;
+    assert!(!why.contains("beyond loopback"), "refused by the bind when it should not have been: {why}");
+    assert!(why.contains("not one this daemon knows"), "{why}");
+}
+
+#[tokio::test]
+async fn without_a_peer_address_run_and_send_are_still_judged_by_the_bind() {
+    let url = lan_bound_daemon("run-send-unknown", false).await;
+    assert!(!ask(&url, ClientMsg::FetchRunConfigs { session_id: "any".into() }, runs_allowed).await);
+    let why = ask(&url, send("no-such-session"), error_text).await;
+    assert!(why.contains("beyond loopback"), "{why}");
 }

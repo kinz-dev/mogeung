@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `daemon-federation` |
-| Tests | 692 passing |
-| Rust | 48476 lines |
+| Tests | 696 passing |
+| Rust | 48580 lines |
 | Docs | 118 files, 40 ADRs |
 
 ## Assumptions

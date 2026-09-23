@@ -1,7 +1,7 @@
 ---
 title: Run and debug
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 covers:
   - crates/mogeung-core/src/run.rs
   - crates/mogeungd/src/detect.rs
@@ -210,7 +210,10 @@ around by anything that rewrites one:
 3. Runs live on `AppState`, so one survives the window closing.
 4. `runs_allowed(bind, --allow-run)` mirrors `writes_allowed` exactly — one
    place computes *is this safe*, so the start-up refusal and the per-request
-   gate cannot come to disagree.
+   gate cannot come to disagree. **A client on this machine passes it whatever
+   the bind** (`Runs::start_as`, `R-J104`, ADR-0025's 2026-09-23 amendment):
+   the reason for the gate is a stranger on the LAN, and a loopback client
+   could run anything here without asking.
 
 **Children get their own process group** (`setsid`), and stopping signals the
 group. A `cargo test` that leaves its test binary running is a stop button that

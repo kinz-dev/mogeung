@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/lan.rs
@@ -446,7 +446,13 @@ outlives the window that started it, and that spawning is **opt-in past
 loopback** by `--allow-run`. That flag is read the same way `writes_allowed` is
 — from the bind address, once, by the code that bound the socket — so the
 start-up refusal and the per-request gate cannot come to disagree. Loopback
-needs no flag, because it is the trust boundary the terminal panel already has.
+needs no flag, because it is the trust boundary the terminal panel already has
+— and since 2026-09-23 that boundary is the **client's** as well as the bind's
+(`R-J104`, ADR-0025's amendment): a client on this machine may start a run on a
+LAN-bound daemon, which is what a window hosting its own daemon from a
+`config.toml` that binds the LAN needs. The chat (`R-J103`) and sending to a
+session follow the same per-connection rule; the config editor still reads the
+bind.
 See [run-and-debug.md](run-and-debug.md).
 
 **The daemon can be changed without restarting** (`R-I7`, `R-I16`). The window

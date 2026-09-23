@@ -467,8 +467,13 @@ fn config_refusal(state: &AppState) -> Option<String> {
 /// agents**, and the ADR says plainly that no flag opens it. `may_write` is not
 /// the gate here and must not become it: that one accepts a token, and a shared
 /// secret on a LAN is not the same thing as a person at this machine.
-fn send_refusal(state: &AppState) -> Option<String> {
-    if *state.send_allowed.get().unwrap_or(&true) {
+///
+/// Asked per connection since 2026-09-23 (`R-J104`, ADR-0003's amendment of
+/// that date): the clause wants *a person at this machine*, and a client on
+/// loopback is one — or is at the far end of an `ssh -L` into it, which is
+/// the route this refusal itself recommends. Still no token and no flag.
+fn send_refusal(state: &AppState, from_this_machine: bool) -> Option<String> {
+    if *state.send_allowed.get().unwrap_or(&true) || from_this_machine {
         return None;
     }
     Some(
@@ -1226,9 +1231,17 @@ async fn ws_conn(socket: WebSocket, state: Arc<AppState>, from_this_machine: boo
                     // Health is broadcast once for every window, with the
                     // model row as everyone but this machine reads it; a
                     // client on this machine is shown its own (`R-J103`).
+                    // The run panel's flag follows the same rule.
                     if from_this_machine {
-                        if let ServerMsg::Health { health } = &mut msg {
-                            health.model = health_state.model.health_for(true);
+                        match &mut msg {
+                            ServerMsg::Health { health } => {
+                                health.model = health_state.model.health_for(true);
+                            }
+                            // Likewise the run panel's *will this daemon run
+                            // anything* (`R-J104`): broadcast as another
+                            // machine reads it, shown to this one as its own.
+                            ServerMsg::RunConfigs { allowed, .. } => *allowed = true,
+                            _ => {}
                         }
                     }
                     let Ok(txt) = serde_json::to_string(&msg) else {
@@ -1422,7 +1435,7 @@ async fn handle(
         // with no pane to aim at, and not with nothing to say. What it never
         // does is come back for a reply — one shot, and no loop.
         ClientMsg::SendToSession { session_id, text } => {
-            if let Some(why) = send_refusal(&state) {
+            if let Some(why) = send_refusal(&state, from_this_machine) {
                 return err(anyhow::anyhow!(why));
             }
             let Some(session) = state.get(&session_id).await else {
@@ -1737,7 +1750,7 @@ async fn handle(
             };
             match state
                 .runs
-                .start(&repo, &config_id, Some(session_id), &configs)
+                .start_as(&repo, &config_id, Some(session_id), &configs, from_this_machine)
                 .await
             {
                 Ok(_) => {}

@@ -439,7 +439,11 @@ to this file that would matter most, and it should never be made.
 
 `allowed` carries clause 4 to the client, so a panel can explain that a daemon
 was started without `--allow-run` instead of drawing buttons that will be
-refused.
+refused. It is broadcast as a client on another machine reads it, and a client
+on this machine is shown `true` on the way out of its socket, because clause 4
+no longer applies to it (`R-J104`). `send_to_session` is decided per connection
+the same way: refused in words to a client not on this machine, with no token
+and no flag.
 
 **`reveal_run_env` takes one key.** `R-N6`: values never travel in
 `run_configs`, which carries variable *names* only, and unmasking is a per-value

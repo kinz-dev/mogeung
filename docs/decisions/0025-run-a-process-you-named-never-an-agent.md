@@ -1,7 +1,7 @@
 ---
 title: mogeung runs a process you named, and never an agent
 status: active
-updated: 2026-08-09
+updated: 2026-09-23
 decided: 2026-08-09
 ---
 
@@ -162,6 +162,32 @@ a subprocess and a socket, which is not harder to hold than a pty.
   known rather than overlooked. If it happens in practice, this ADR needs a
   successor that says what mogeung does about it — not a quiet widening of the
   check.
+
+## Amendment — 2026-09-23
+
+**Clause 4 is decided per connection, not from the bind alone.** A client on
+this machine — a loopback peer — may start a run configuration whatever the
+daemon is bound to; every other client is judged by the bind and
+`--allow-run`, exactly as before. It replaces *"on any other bind, runs are
+refused unless `--allow-run` is passed"* for the one client that was never
+what that sentence was about.
+
+The reason is `R-J104`, the sibling of `R-J103` found the same day. `R-I17`'s
+step 7 lets the daemon a window hosts bind the LAN from `config.toml`, so a
+machine that wants to be connectable now has a LAN-bound daemon under its own
+window — and a rule read from the bind refused that window's Run panel along
+with the LAN. The clause's reason is *"anyone who can reach the port can then
+cause code to execute on this machine"*; a client already on this machine, or
+at the end of an `ssh -L` into it, can do that without asking, which is the
+same argument this ADR used for loopback in the first place — *"the same trust
+boundary as the terminal panel, which can already run anything at all"*.
+
+What it comes with: the peer address is the server's (`server::run` records
+it on every request), a router served without it falls back to the bind, and
+the run panel's `allowed` flag — broadcast as another machine reads it — is
+shown to a client on this machine as its own. Clauses 1 to 3 are untouched:
+an id the repository did not produce, or a configuration that would start an
+agent, is refused to every client, local or not.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
