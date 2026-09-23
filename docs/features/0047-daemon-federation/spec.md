@@ -168,6 +168,16 @@ declared dead, and checked only between redials — nearly two minutes late on
 Wi-Fi; `j`/`k` walked rank order while grouping by repository reordered rows
 on screen (`R-J13`'s bug, one layer down).
 
+**Found on first use, 2026-09-23, and fixed:** *follow* in the top-bar
+switcher switched daemons instead — the button sat inside the row's menu item,
+and Radix selects an item on pointer-up, so a button that swallowed the
+pointer-down made the row click itself; it is an item of its own now, and a
+test presses it the way a mouse does. And a follow to a machine rebuilt from
+`main` rather than this branch said only *version 0.1.0 predates federation* —
+true, and useless, since every build says `0.1.0`; it now says what to do. The
+Connections panel was also made bigger and resizable by its corner, with
+draggable edges between its parts, on the same day's ask.
+
 **Not verified yet:** a notification and the tray count from a real second
 machine; the Agent pane attaching over ssh to a peer's `ssh_target` from the
 desktop build (the browser has no pty); three peers and Wi-Fi power save for

@@ -232,6 +232,15 @@ export interface Prefs {
    */
   gitSidebarWidth: number;
   /**
+   * The Connections panel, sized by hand (2026-09-23, *"make the popup of
+   * connections bigger and allow resizing the layout inside"*): the window
+   * itself, the saved list's width beside the form, and the saved list's
+   * height above the LAN list.
+   */
+  connectionsSize: { width: number; height: number };
+  connectionsListWidth: number;
+  connectionsSavedHeight: number;
+  /**
    * The Git tool window's three panes. `R-D26`. Widths of the two outer
    * panes in pixels — the log takes the rest — and whether the branch pane
    * is open at all; the shape a window was left in is the shape it opens in.
@@ -379,6 +388,9 @@ export const defaultPrefs = (): Prefs => ({
   launchHeadless: false,
   queueWidth: 380,
   gitSidebarWidth: 340,
+  connectionsSize: { width: 1080, height: 720 },
+  connectionsListWidth: 340,
+  connectionsSavedHeight: 240,
   gitBranchesWidth: 210,
   gitInspectorWidth: 360,
   gitBranchesOpen: true,

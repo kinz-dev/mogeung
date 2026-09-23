@@ -135,3 +135,34 @@ describe("following from the connections panel", () => {
     expect(screen.queryByText(/machine that follows/)).toBeNull();
   });
 });
+
+/**
+ * The panel is sized by hand. Asked 2026-09-23: *"make the popup of
+ * connections bigger and allow resizing the layout inside that"*.
+ */
+describe("sizing the connections panel", () => {
+  it("opens at the remembered size, and the list's edge drags and is remembered", async () => {
+    const { defaultPrefs } = await import("@/store/prefs");
+    useStore.setState({ prefs: defaultPrefs() } as never);
+    await open([]);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.style.width).toBe("1080px");
+    expect(dialog.style.height).toBe("720px");
+    expect(dialog.className).toContain("resize");
+
+    const list = document.querySelector<HTMLElement>("[data-connections-list]")!;
+    expect(list.style.width).toBe("340px");
+    const edge = screen.getByTitle("drag to resize the list");
+    fireEvent.mouseDown(edge, { clientX: 400 });
+    fireEvent.mouseMove(window, { clientX: 480 });
+    fireEvent.mouseUp(window);
+    expect(list.style.width).toBe("420px");
+    expect(useStore.getState().prefs.connectionsListWidth).toBe(420);
+
+    const split = screen.getByTitle(/share this column/);
+    fireEvent.mouseDown(split, { clientY: 300 });
+    fireEvent.mouseMove(window, { clientY: 200 });
+    fireEvent.mouseUp(window);
+    expect(useStore.getState().prefs.connectionsSavedHeight).toBe(140);
+  });
+});

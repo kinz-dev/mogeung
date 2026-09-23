@@ -160,14 +160,19 @@ export function ConnectionSwitcher() {
             const beacon = heard.find((d) => !d.gone && matchesSaved(c, d));
             const following = followOf(c, peers);
             return (
+              // The row and its follow toggle are **two items side by side**,
+              // not a button inside the row. Radix selects an item on
+              // pointer-up, so a button nested in the row that swallowed the
+              // pointer-down made the row click itself — and switch daemons —
+              // on every press of *follow*. Reported 2026-09-23 on first use.
+              <div key={c.id} className="flex items-start gap-1">
               <Menu.Item
-                key={c.id}
                 data-connection={c.name}
                 data-liveness={state}
                 onSelect={() => {
                   if (!isCurrent) setUrl(dialledUrl(c));
                 }}
-                className="flex cursor-default items-start gap-2 rounded-sm px-2 py-1.5 outline-none select-none data-[highlighted]:bg-[var(--state-focus)]"
+                className="flex min-w-0 flex-1 cursor-default items-start gap-2 rounded-sm px-2 py-1.5 outline-none select-none data-[highlighted]:bg-[var(--state-focus)]"
               >
                 <span
                   aria-hidden
@@ -202,34 +207,32 @@ export function ConnectionSwitcher() {
                     </span>
                   )}
                 </span>
-                {/* Not on the daemon being watched — that would be following
-                    itself — and only where this window may follow at all. */}
-                {peers !== null && !isCurrent && c.url && (
-                  <button
-                    type="button"
-                    data-follow-toggle={following ? "unfollow" : "follow"}
-                    title={
-                      following
-                        ? "stop following — its sessions leave your Attention list"
-                        : "this machine's daemon follows it, and its sessions join your Attention list without switching"
-                    }
-                    // Its own act, not the row's: the row switches daemons.
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      send(following ? { cmd: "unfollow", id: following.id } : followMsg(c));
-                    }}
-                    className={cn(
-                      "mt-0.5 shrink-0 rounded-sm border border-[var(--border)] px-1.5 py-px text-xs",
-                      interactive,
-                      "hover:border-[var(--border-hover)]",
-                    )}
-                  >
-                    {following ? "unfollow" : "follow"}
-                  </button>
-                )}
               </Menu.Item>
+              {/* Not on the daemon being watched — that would be following
+                  itself — and only where this window may follow at all. An
+                  item of its own, so the arrow keys reach it too; the menu
+                  stays open, so the row can say what the follow became. */}
+              {peers !== null && !isCurrent && c.url && (
+                <Menu.Item
+                  data-follow-toggle={following ? "unfollow" : "follow"}
+                  title={
+                    following
+                      ? "stop following — its sessions leave your Attention list"
+                      : "this machine's daemon follows it, and its sessions join your Attention list without switching"
+                  }
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    send(following ? { cmd: "unfollow", id: following.id } : followMsg(c));
+                  }}
+                  className={cn(
+                    "mt-1.5 mr-1 shrink-0 cursor-default rounded-sm border border-[var(--border)] px-1.5 py-px text-xs outline-none select-none",
+                    "hover:border-[var(--border-hover)] data-[highlighted]:bg-[var(--state-focus)]",
+                  )}
+                >
+                  {following ? "unfollow" : "follow"}
+                </Menu.Item>
+              )}
+              </div>
             );
           })}
           <Menu.Separator className="my-1 h-px bg-[var(--border)]" />

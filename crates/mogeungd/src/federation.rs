@@ -603,8 +603,13 @@ async fn watch_once(state: &Weak<AppState>, id: &str, entry: &PeerEntry, local: 
                         if identity.federation.unwrap_or(0) < PROTOCOL {
                             return Watch::Stop(
                                 PeerStatus::Incompatible,
+                                // Not the version string alone: every build says
+                                // `0.1.0`, so it cannot tell anyone what to do.
+                                // Found 2026-09-23, a peer rebuilt from `main`.
                                 format!(
-                                    "version {} predates federation — it needs a build that speaks protocol {PROTOCOL}",
+                                    "its build has no federation (it says version {}) — update that machine to a build \
+                                     that speaks protocol {PROTOCOL} and restart its daemon; this retries every minute, \
+                                     or press follow again",
                                     identity.version
                                 ),
                             );

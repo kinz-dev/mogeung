@@ -114,3 +114,41 @@ describe("switching daemons from the top bar", () => {
     localStorage.removeItem("mogeung.connections");
   });
 });
+
+/**
+ * Follow, from the switcher's rows. `R-I21`.
+ *
+ * Found 2026-09-23 on first use: *"when I click the follow button in the
+ * switch panel, it actually switched to that connection"*. The button sat
+ * inside the row's menu item, and Radix selects an item on **pointer-up** — a
+ * button that swallowed the pointer-down left the item thinking the press
+ * began elsewhere, so it clicked itself. A test that only fires `click` never
+ * sees that; this one presses the way a mouse does.
+ */
+describe("following from the switcher", () => {
+  const press = (el: Element) => {
+    fireEvent.pointerDown(el, { button: 0, pointerType: "mouse" });
+    fireEvent.pointerUp(el, { button: 0, pointerType: "mouse" });
+    fireEvent.click(el);
+  };
+
+  it("follows without switching", async () => {
+    const setUrl = vi.fn();
+    const sent: unknown[] = [];
+    useStore.setState({ setUrl, peers: [], send: (m: unknown) => void sent.push(m) } as never);
+    await openMenu();
+    const row = await waitFor(() => {
+      const r = document.querySelector('[data-connection="mac-m4p"]');
+      expect(r).not.toBeNull();
+      return r!;
+    });
+    const follow = row.parentElement!.querySelector('[data-follow-toggle="follow"]')!;
+    press(follow);
+    expect(setUrl).not.toHaveBeenCalled();
+    expect(sent).toEqual([
+      expect.objectContaining({ cmd: "follow", id: "m", url: "ws://10.0.0.39:7717/ws", token: "theirs" }),
+    ]);
+    // Still open, so the row can say it is following.
+    expect(document.querySelector('[data-connection="mac-m1p"]')).not.toBeNull();
+  });
+});
