@@ -137,7 +137,26 @@ impl Runs {
         session_id: Option<SessionId>,
         configs: &[RunConfig],
     ) -> Result<Run, String> {
-        if !self.allowed() {
+        self.start_as(repo, config_id, session_id, configs, false).await
+    }
+
+    /// [`Runs::start`], on behalf of a client that may be on this machine.
+    /// `R-J104`, ADR-0025's 2026-09-23 amendment.
+    ///
+    /// Clause 4 exists because *anyone who can reach the port can then cause
+    /// code to execute on this machine*. A client on this machine — or at the
+    /// far end of an `ssh -L` tunnel into it — could already run anything it
+    /// likes here, so the bind does not decide for it; every other client is
+    /// judged by the bind and `--allow-run`, exactly as before.
+    pub async fn start_as(
+        &self,
+        repo: &Path,
+        config_id: &str,
+        session_id: Option<SessionId>,
+        configs: &[RunConfig],
+        from_this_machine: bool,
+    ) -> Result<Run, String> {
+        if !self.allowed() && !from_this_machine {
             return Err(
                 "this daemon is bound to an address other than loopback and was started without \
                  `--allow-run`, so it will not start processes (ADR-0025 clause 4)"
@@ -532,6 +551,27 @@ mod tests {
         let c = cfg("/bin/echo", &["hi"]);
         let err = runs
             .start(Path::new("/tmp"), &c.id, None, std::slice::from_ref(&c))
+            .await
+            .expect_err("must refuse");
+        assert!(err.contains("--allow-run"), "{err}");
+    }
+
+    /// `R-J104`: on the same daemon, a client on this machine is past clause 4
+    /// — so what stops an unknown id is clause 1, the next refusal in line,
+    /// not the bind.
+    #[tokio::test]
+    async fn a_client_on_this_machine_is_past_the_bind_but_not_past_clause_one() {
+        let runs = Runs::new();
+        runs.set_allowed(false);
+        let err = runs
+            .start_as(Path::new("/tmp"), "detected:rm-rf", None, &[], true)
+            .await
+            .expect_err("must still refuse an id the repository did not produce");
+        assert!(err.contains("clause 1"), "{err}");
+        assert!(!err.contains("--allow-run"), "judged by the bind when it should not have been: {err}");
+        // Another machine's client is still stopped at the bind.
+        let err = runs
+            .start_as(Path::new("/tmp"), "detected:rm-rf", None, &[], false)
             .await
             .expect_err("must refuse");
         assert!(err.contains("--allow-run"), "{err}");

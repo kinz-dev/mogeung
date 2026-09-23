@@ -1,7 +1,7 @@
 ---
 title: Observe sessions, never spawn them
 status: active
-updated: 2026-08-29
+updated: 2026-09-23
 decided: 2026-07-25
 supersedes: The v0.1 spawning model
 ---
@@ -172,6 +172,23 @@ should then be rebuilt on it, and the hazard above goes with the terminal.
 [A39](../product/assumptions.md) is what is actually being bet — not the
 mechanism, which is proven and tested, but that a button stays a button — and it
 carries the removal condition.
+
+## Amendment — 2026-09-23
+
+**The 2026-08-29 amendment's clause 4 is decided per connection.** *"Loopback
+only, with no flag"* meant, in its own words, *a person at this machine* — and
+it was read from the daemon's bind, which cannot tell a person at this machine
+from a stranger once the daemon listens on the LAN. From 2026-09-23 a client
+arriving over loopback may send to a session whatever the bind; every other
+client is refused exactly as before, still with **no token and no flag**,
+because a shared secret on a LAN is still not a person at this machine.
+
+The reason is `R-J104`: `R-I17`'s step 7 lets the daemon a window hosts bind
+the LAN from `config.toml`, and the window on that same machine was refused
+its own *send*. A loopback client is a person at this machine or at the far
+end of an `ssh -L` into it — the route the refusal has always recommended.
+Clauses 1–3 and 5–6 are untouched: one shot, never a loop, only a session
+mogeung can name a pane for, and the clipboard stays.
 
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an

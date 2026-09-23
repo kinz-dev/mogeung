@@ -191,6 +191,14 @@ decided the same way at start-up — `RunStart` (ADR-0025 clause 4) and
 and so still refuse a LAN-bound machine's own window. The same per-connection
 test would fit both; each guards a different verb and is its own decision.
 
+## Amendment — 2026-09-23, later
+
+The amendment above ends by saying `RunStart` and `SendToSession` *still read
+the bind*. They do not, since the same day: both are decided per connection
+too (`R-J104`), by [ADR-0025](0025-run-a-process-you-named-never-an-agent.md)'s
+and [ADR-0003](0003-observe-do-not-spawn.md)'s own amendments. The config
+editor (`R-J79`) is the one bind-read gate left, and is its own decision.
+
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*
