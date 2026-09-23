@@ -8,7 +8,8 @@ pub type SessionId = String;
 
 /// Which agent CLI a session belongs to. `R-I1` — the test of whether the
 /// Session model generalises (A23) — and `R-I15`, which is the first source to
-/// put real sessions through it.
+/// put real sessions through it. `R-I25` added the fourth, and the first whose
+/// sessions live in a database rather than files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionSource {
@@ -16,6 +17,10 @@ pub enum SessionSource {
     ClaudeCode,
     Codex,
     QwenCode,
+    /// opencode. On the wire as `opencode`, the product's own one-word
+    /// spelling, rather than the `open_code` its variant name would give.
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl SessionSource {
@@ -24,6 +29,7 @@ impl SessionSource {
             SessionSource::ClaudeCode => "claude",
             SessionSource::Codex => "codex",
             SessionSource::QwenCode => "qwen",
+            SessionSource::OpenCode => "opencode",
         }
     }
 
@@ -35,11 +41,12 @@ impl SessionSource {
     /// silently gives the wrong answer the moment a third source exists, and
     /// gives it by marking every one of that source's sessions dead on every
     /// pass. Qwen Code has a registry of its own, in its own directory with its
-    /// own key names, so the answer is still no.
+    /// own key names, so the answer is still no. opencode has no registry at
+    /// all — its liveness is its process — and the answer is no again.
     pub fn in_claude_live_registry(&self) -> bool {
         match self {
             SessionSource::ClaudeCode => true,
-            SessionSource::Codex | SessionSource::QwenCode => false,
+            SessionSource::Codex | SessionSource::QwenCode | SessionSource::OpenCode => false,
         }
     }
 
@@ -53,7 +60,7 @@ impl SessionSource {
     pub fn has_claude_event_history(&self) -> bool {
         match self {
             SessionSource::ClaudeCode => true,
-            SessionSource::Codex | SessionSource::QwenCode => false,
+            SessionSource::Codex | SessionSource::QwenCode | SessionSource::OpenCode => false,
         }
     }
 }

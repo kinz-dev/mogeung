@@ -136,6 +136,18 @@ describe("choosing which CLI to start", () => {
     expect(screen.queryByText("--dangerously-skip-permissions")).toBeNull();
   });
 
+  /** `R-I25`. opencode is offered, and its line is `agent_command`'s: `--auto`. */
+  it("offers opencode, started with its own --auto", () => {
+    open();
+    fireEvent.click(screen.getByTitle(/^start opencode/));
+    expect(screen.getByText("--auto")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByText(/open an opencode terminal/));
+    expect(launches()).toEqual([
+      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "opencode", headless: false },
+    ]);
+  });
+
   /**
    * Codex is offered since `R-J72` — and started with flags that are
    * deliberately **not** its CLI's most dangerous ones.

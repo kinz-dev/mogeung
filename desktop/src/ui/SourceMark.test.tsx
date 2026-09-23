@@ -22,8 +22,8 @@ describe("the source mark", () => {
   });
 
   it("gives each CLI its own glyph, so colour is not doing the work alone", () => {
-    const glyphs = ["claude_code", "codex", "qwen_code"].map(sourceIcon);
-    expect(new Set(glyphs).size).toBe(3);
+    const glyphs = ["claude_code", "codex", "qwen_code", "opencode"].map(sourceIcon);
+    expect(new Set(glyphs).size).toBe(4);
   });
 
   /** A CLI this build has never heard of says what it is. */

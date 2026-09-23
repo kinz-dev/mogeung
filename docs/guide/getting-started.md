@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 
 # Getting started
@@ -51,15 +51,15 @@ script does the lot:
 ./scripts/install.sh
 ```
 
-It builds both halves, puts `mogeungd`, `yolomo`, `yolomop`, `qwenmo` and
-`codexmo` in `~/.local/bin`, and
+It builds both halves, puts `mogeungd`, `yolomo`, `yolomop`, `qwenmo`,
+`codexmo` and `opencodemo` in `~/.local/bin`, and
 installs the window's `.deb` with `dpkg -i`, asking for `sudo` at that step and
 no other. `./scripts/install.sh --uninstall` takes it all back off. See
 [desktop/README.md](../../desktop/README.md) for the bundles themselves — the
 `.rpm` and the AppImage, and what each is for.
 
 There is nothing to configure and no repos to register. If you have run `claude`,
-`codex` or `qwen` anywhere in the last 14 days, it appears.
+`codex`, `qwen` or `opencode` anywhere in the last 14 days, it appears.
 
 ## Seen, or hosted
 
@@ -69,18 +69,19 @@ has exactly one master, and that terminal owns it, so mogeung's Agent pane can
 only point you at it. Start it under tmux instead and the same live session can
 be in your terminal and in a mogeung pane at once ([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)).
 
-That is all `yolomo`, `yolomop`, `qwenmo` and `codexmo` do:
+That is all `yolomo`, `yolomop`, `qwenmo`, `codexmo` and `opencodemo` do:
 
 ```sh
 yolomo          # claude, under tmux
 yolomop         # the same claude session, through `llmproxy --claude`
 qwenmo          # qwen, under tmux
 codexmo         # codex, under tmux
+opencodemo      # opencode, under tmux
 codexmo -d      # ...headless: mogeung's pane becomes its only terminal
 ```
 
-Run one in the directory you want the agent working in. Plain `claude`, `qwen`
-or `codex` still works and is still watched — you just get a pane that points
+Run one in the directory you want the agent working in. Plain `claude`, `qwen`,
+`codex` or `opencode` still works and is still watched — you just get a pane that points
 rather than one that attaches, which is the usual reason an agent shows up
 correctly and the Terminal pane stays empty.
 
@@ -98,6 +99,13 @@ usual Codex session minus the prompts. Ask for the full bypass and it wins:
 ```sh
 codexmo -- --dangerously-bypass-approvals-and-sandbox
 ```
+
+`opencodemo` passes opencode's own `--auto`, which approves everything your
+opencode config does not explicitly deny. opencode is the one CLI here that
+*does* write a blocked prompt down, so an opencode session started without
+`--auto` still reads correctly: it ranks **APPROVE** — *needs approval for
+bash: …* — while it waits for you, and a question the agent asks you with its
+`question` tool reads as **WAITING** with the question as its activity.
 
 mogeung never runs these for you ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
 You start the agent; mogeung notices.

@@ -66,8 +66,9 @@ describe("agentSlots", () => {
 
 describe("agentColor", () => {
   it("gives each CLI its own colour, keyed by the label the daemon sends", () => {
-    const colours = ["claude", "codex", "qwen"].map(agentColor);
-    expect(new Set(colours).size).toBe(3);
+    const colours = ["claude", "codex", "qwen", "opencode"].map(agentColor);
+    expect(new Set(colours).size).toBe(4);
+    expect(colours).not.toContain("var(--fg-dim)");
   });
 
   /// The daemon can be newer than the window. An unknown CLI must render, not

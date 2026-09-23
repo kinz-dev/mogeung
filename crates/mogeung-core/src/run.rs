@@ -299,6 +299,9 @@ pub const AGENTS: &[&str] = &[
     "gemini",
     "qwen",
     "qwen-code",
+    // `opencode.exe` is what the npm package actually runs; the stem rule
+    // below catches it.
+    "opencode",
     "aider",
     "cursor-agent",
     "amp",
@@ -372,6 +375,8 @@ mod tests {
         // Qwen Code installs its CLI as `qwen`, and is named `qwen-code`.
         assert!(is_agent("qwen"));
         assert!(is_agent("qwen-code"));
+        assert!(is_agent("opencode"));
+        assert!(is_agent("/home/me/.local/lib/node_modules/opencode-ai/bin/opencode.exe"));
         assert!(!is_agent("cargo"));
         assert!(!is_agent("npm"));
         // Not a substring match: a project of one's own must not be refused.

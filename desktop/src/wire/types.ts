@@ -28,7 +28,7 @@ export type Timestamp = string;
 // session.rs
 // ---------------------------------------------------------------------------
 
-export type SessionSource = "claude_code" | "codex" | "qwen_code";
+export type SessionSource = "claude_code" | "codex" | "qwen_code" | "opencode";
 export type LiveStatus = "busy" | "idle" | "unknown";
 
 /// How each agent CLI is named and coloured. One table rather than a ternary
@@ -38,12 +38,14 @@ export const SOURCE_LABEL: Record<SessionSource, string> = {
   claude_code: "claude",
   codex: "codex",
   qwen_code: "qwen",
+  opencode: "opencode",
 };
 
 export const SOURCE_COLOR: Record<SessionSource, string> = {
   claude_code: "var(--blue)",
   codex: "var(--purple)",
   qwen_code: "var(--graph-2)",
+  opencode: "var(--graph-4)",
 };
 
 /// Falls back rather than throwing: the daemon may be newer than this client,
@@ -515,7 +517,7 @@ export interface ChatSummary {
 
 /// What mogeung can see of one other agent CLI's install.
 export interface AgentHealth {
-  /// The wire name of the `SessionSource` — `codex`, `qwen`.
+  /// The wire name of the `SessionSource` — `codex`, `qwen`, `opencode`.
   source: string;
   present: boolean;
   /// Sessions seen there. Zero with `present` is itself information:

@@ -262,14 +262,23 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
   prose bound to that evidence, `contradicted` when the run said
   otherwise (`R-E1`/`R-E3`). Both capped.
 - `source` — which CLI wrote the session (`claude_code` default, `codex`,
-  `qwen_code`); each CLI's scan maps its own on-disk state into this same
-  struct, which is A23's test (`R-I1`, `R-I15`). **Absorbing the third one
-  added no field here**, which is most of what that assumption was asking.
-  Two questions are asked of a `SessionSource` as named methods rather than
-  as equality — `in_claude_live_registry()` and `has_claude_event_history()` —
-  so each `match` is exhaustive and a fourth CLI is a compile error at every
-  site that has to think about it. See
+  `qwen_code`, `opencode`); each CLI's scan maps its own on-disk state into
+  this same struct, which is A23's test (`R-I1`, `R-I15`, `R-I25`).
+  **Absorbing the third one added no field here, and nor did the fourth**,
+  which is most of what that assumption was asking. `opencode` is spelled as
+  the product spells itself — an explicit `serde` rename, not the `open_code`
+  the variant name would give. Two questions are asked of a `SessionSource`
+  as named methods rather than as equality — `in_claude_live_registry()` and
+  `has_claude_event_history()` — so each `match` is exhaustive and a fourth
+  CLI is a compile error at every site that has to think about it; it was,
+  twice (the tmux session name and the launch recipe). See
   [ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md).
+- `transcript_path` is a file for every source but one. An opencode session
+  lives in a database, so its value is `<opencode.db>#<session id>`: a
+  locator that opens nothing, so the panels that stream a transcript as
+  Claude JSONL find nothing rather than megabytes of binary — and not empty,
+  because an empty one tells the diff there is nothing to attribute and it
+  computes none (feature 0048).
 
 ## Session fields added 2026-08-22
 

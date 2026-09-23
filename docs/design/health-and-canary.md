@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-08-28
+updated: 2026-09-23
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -259,6 +259,25 @@ discriminator is `subtype`, so an unclassified one is reported as
 `--bin sweep` now walks three corpora and folds their unknown counts rather
 than summing two hand-written terms — that sum would have been a silent zero
 for the third, and so a clean bill of health for a format nobody swept.
+
+## A fourth corpus, and it is a database (2026-09-23)
+
+`R-I25` added opencode, whose sessions are rows of `opencode.db` rather than
+lines of a file. The canary is the same idea one layer over: every `message`
+and `part` row read is classified, and an unknown one is reported by row id so
+a re-read at the watermark does not count it twice. Two levels, as for Codex
+and Qwen — `part/<type>` for a part type nobody has classified, `tool/<status>`
+for a tool state outside `pending`/`running`/`completed`/`error` — plus
+`message/<role>`. So `opencode/part/telepathy` sits in the same list as
+`qwen/system/telepathy`.
+
+A database can drift in a way a file cannot: its **layout**. The `session`
+table is read with `SELECT *` and mapped by name, as Codex's index is, and a
+column the reader depends on going missing is put in the slot's `error` —
+*"opencode.db's session table has no directory — its layout has changed"* —
+rather than silently producing no sessions. `--bin sweep` walks the database
+too, read-only, with the scan's own `classify_part` and `classify_message`,
+and inventories `finish` values, error names and tool names beneath them.
 
 **Nothing unobserved sits in `HANDLED`.** A guessed structured
 rate-limit type did for a day — `R-G1` was written believing the CLI

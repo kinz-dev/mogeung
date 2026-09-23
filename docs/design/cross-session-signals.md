@@ -211,8 +211,15 @@ when a tool blocks on approval, so under `auto` a session waiting for a human
 reads as one busily working — the blind spot feature 0036 records, avoided by
 not creating the prompt in the first place.
 
+opencode's is its own `--auto` (`R-I25`, `scripts/opencodemo`), and for the
+opposite reason from Qwen's it is *not* buying anything back: opencode writes a
+blocked prompt to its database and mogeung reads it, so a session started
+without `--auto` would rank APPROVE when it asks. `--auto` is there because
+this is the approve-everything launcher, as the other three are; a `deny` in
+the opencode config still denies.
+
 The tmux session name carries the CLI for everything that is not Claude
-(`mogeung-qwen-<place>-<stamp>`), which is `qwenmo`'s convention: two agents
+(`mogeung-qwen-<place>-<stamp>`, `mogeung-opencode-…`), which is `qwenmo`'s convention: two agents
 started in one directory are then tellable apart in `tmux ls`. Claude keeps the
 bare `mogeung-<place>-<stamp>` it has always had — a name already written into
 `tmux attach` lines should not move for a feature that did not touch it.

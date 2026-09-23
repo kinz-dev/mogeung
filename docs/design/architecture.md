@@ -22,6 +22,7 @@ covers:
   - crates/mogeungd/src/docscan.rs
   - crates/mogeungd/src/codex.rs
   - crates/mogeungd/src/qwen.rs
+  - crates/mogeungd/src/opencode.rs
   - crates/mogeung-tray/src/main.rs
   - crates/mogeungd/src/federation.rs
   - desktop/src/lib/federation.ts
@@ -1081,7 +1082,16 @@ staleness, GC proposals), `codex.rs` (the `~/.codex` adapter; its scan
 pass maps threads into the same `Session`), `qwen.rs` (the `~/.qwen`
 adapter, `R-I15`; a live registry plus per-session JSONL, so structurally
 it is `watcher.rs` rather than `codex.rs`, and its records are Gemini's
-rather than Anthropic's). The three readers share only `LineClass` —
+rather than Anthropic's), `opencode.rs` (the opencode adapter, `R-I25`;
+**a database, not files** — `~/.local/share/opencode/opencode.db`, opened
+read-only, and only the sessions whose `event_sequence` moved re-read, so
+an idle install costs one small query a tick). opencode keeps no pid
+registry, so its liveness is a process match — an `opencode` process whose
+`$PWD` is the session's directory and which started before the session last
+moved, read from `/proc` with no fork on Linux — and it is the one non-Claude
+CLI that writes a blocked permission prompt down: a tool `running` with no
+`metadata`, which the pass surfaces as an open tool so it ranks APPROVE
+([feature 0048](../features/0048-opencode-adapter.md)). The readers share only `LineClass` —
 [ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)
 records why that stays a variant-and-a-module rather than becoming a
 trait, and why every "is this Claude?" question is now a named method on

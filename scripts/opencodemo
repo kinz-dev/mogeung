@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# Start `opencode` inside a tmux session that mogeung can host in a pane.
+#
+#   opencodemo                     start a NEW session for this directory
+#   opencodemo -d                  same, but headless: don't attach this terminal.
+#                                  mogeung's Terminal pane becomes the session's
+#                                  only head; the session name is printed for
+#                                  scripting.
+#   opencodemo -- -m spark/model   anything after the flags is passed through to
+#                                  opencode
+#
+# This is `qwenmo` for opencode (`R-I25`, feature 0048), and a deliberate
+# sibling rather than a flag on it, for the reason ADR-0029 gives: the scripts
+# differ in the binary and its approve-everything flag, and visible
+# duplication is cheaper than an abstraction you have to hold in your head to
+# know what runs. **They must move together.** A fix to the tmux handling below
+# belongs in `yolomo`, `qwenmo` and `codexmo` too, and vice versa.
+#
+# Every run starts a fresh agent: two runs in one directory are two sessions
+# (mogeung-opencode-api, mogeung-opencode-api-2, …), not two clients of one
+# agent. To re-attach to a session you detached from (or started with -d):
+#
+#   tmux attach -t mogeung-opencode-<dir>
+#
+# The name carries `opencode` so sessions of different CLIs in one directory
+# are tellable apart in `tmux ls`. Nothing in mogeung parses it — panes are
+# matched by process ancestry, not by name — so it is for you.
+#
+# Why tmux at all: a pty has exactly one master. An `opencode` started in a bare
+# terminal is owned by that terminal and nothing else can ever attach to it,
+# which is why mogeung can only *point at* such a session. tmux owns the pty
+# instead, so the same live session can be in a mogeung pane and in your
+# terminal at once. See ADR-0010.
+#
+# `--auto` is opencode's own "auto-approve permissions that are not explicitly
+# denied" — the sibling of `claude --dangerously-skip-permissions` and qwen's
+# `--approval-mode yolo`. It is **not** buying back a blind spot the way Qwen's
+# flag does: opencode writes a blocked permission prompt to its database, and
+# mogeung reads it and ranks the session APPROVE (feature 0048). It is here
+# because this is the approve-everything launcher, as the other three are. A
+# `deny` in your opencode config still denies. Leave `--auto` out by running
+# `opencode` yourself under tmux, and mogeung will show you each prompt.
+#
+# opencode takes its working directory from `$PWD`, not from the process's
+# cwd. `tmux new-session -c` sets both, so the session opens where you are.
+#
+# Nothing here traps the session. Detach and it keeps running; attach from any
+# terminal with `tmux attach -t <name>`; kill mogeung and nothing happens to it.
+#
+# mogeung never runs this for you. You run it; mogeung notices. ADR-0003.
+#
+# bash 3.2, which is what macOS ships.
+
+set -uo pipefail
+
+detach=0
+if [ "${1:-}" = "-d" ] || [ "${1:-}" = "--detach" ]; then
+  detach=1
+  shift
+fi
+# Allow `opencodemo -- <opencode args>` so a leading `-m` is not mistaken for ours.
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+
+# The npm package links the binary into ~/.local/bin, the install script uses
+# ~/.opencode/bin, and bun its own — none of them on every shell's PATH.
+# Resolving it here beats a "command not found" from inside a detached tmux
+# session, where nobody sees the error.
+oc_bin=""
+if command -v opencode >/dev/null 2>&1; then
+  oc_bin="opencode"
+else
+  for candidate in \
+    "$HOME/.local/bin/opencode" \
+    "$HOME/.opencode/bin/opencode" \
+    "$HOME/.bun/bin/opencode" \
+    "/usr/local/bin/opencode" \
+    "/opt/homebrew/bin/opencode"; do
+    if [ -x "$candidate" ]; then
+      oc_bin="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$oc_bin" ]; then
+  echo "opencodemo: cannot find the opencode binary." >&2
+  echo "            Looked on PATH, then in ~/.local/bin, ~/.opencode/bin," >&2
+  echo "            ~/.bun/bin, /usr/local/bin and /opt/homebrew/bin." >&2
+  exit 1
+fi
+
+# Already inside tmux. Nesting gains nothing and would make the pane mapping
+# ambiguous, so just run opencode here — unless -d, where no attach happens and
+# so nothing nests: creating a detached session from inside tmux is fine.
+if [ "$detach" -eq 0 ] && [ -n "${TMUX:-}" ]; then
+  exec "$oc_bin" --auto ${1+"$@"}
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  if [ "$detach" -eq 1 ]; then
+    # A plain fallback would run opencode in *this* terminal — the opposite of
+    # headless — so refuse loudly instead of surprising the caller.
+    echo "opencodemo: -d needs tmux, and tmux is not installed." >&2
+    exit 1
+  fi
+  echo "opencodemo: tmux is not installed — falling back to a plain session." >&2
+  echo "            mogeung will be able to see it but not host it." >&2
+  exec "$oc_bin" --auto ${1+"$@"}
+fi
+
+dir=$(pwd)
+# tmux parses ':' and '.' as target separators, so a session named after a
+# directory containing them would be unaddressable. Everything outside a safe
+# set becomes a dash rather than being dropped, so two different directories
+# cannot collapse onto one name.
+safe=$(basename "$dir" | sed 's/[^A-Za-z0-9_-]/-/g')
+base="mogeung-opencode-${safe}"
+
+# Each run gets its own session. First free suffix wins, so names stay
+# predictable. `=` is tmux's exact-match prefix: without it `has-session -t
+# foo` also matches `foobar`.
+name="$base"
+n=2
+while tmux has-session -t "=${name}" 2>/dev/null; do
+  name="${base}-${n}"
+  n=$((n + 1))
+done
+
+tmux new-session -d -s "$name" -c "$dir" \
+  "$oc_bin" --auto ${1+"$@"} || {
+    echo "opencodemo: could not create the tmux session" >&2
+    exit 1
+  }
+
+# Size to whichever client is being used, rather than to the smallest one, so
+# a narrow mogeung pane cannot shrink a full-screen terminal attached to the
+# same session. `-w` and the trailing `:` are both load-bearing — see qwenmo.
+tmux set-option -w -t "=${name}:" window-size latest >/dev/null
+
+if [ "$detach" -eq 1 ]; then
+  # The name on stdout so scripts can capture it; the human note on stderr.
+  echo "$name"
+  echo "opencodemo: started headless — mogeung will pick it up on its next scan." >&2
+  echo "            attach a terminal any time with: tmux attach -t ${name}" >&2
+  exit 0
+fi
+
+exec tmux attach-session -t "=${name}"

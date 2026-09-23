@@ -41,8 +41,14 @@
 //! nineteen `system` subtypes had ever been *seen* when its parser was written,
 //! so the other twelve are classified from the writer's source and have never
 //! met a real byte.
+//!
+//! Four since `R-I25`: opencode's corpus is a **database**, not files — every
+//! `message` and `part` row of `opencode.db`, opened read-only, classified by
+//! `opencode::classify_message` and `classify_part`, the functions the scan
+//! itself calls. Three of its part types (`subtask`, `compaction`, `retry`)
+//! are classified from the writer and had not been seen when it was written.
 
-use mogeungd::{adapter, codex, qwen, watcher};
+use mogeungd::{adapter, codex, opencode, qwen, watcher};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -94,6 +100,7 @@ fn main() {
     let claude_home = watcher::default_home();
     let codex_home = codex::default_home();
     let qwen_home = qwen::default_home();
+    let opencode_home = opencode::default_home();
 
     // A list rather than a variable per CLI: the unknown count below used to be
     // a hand-written sum of exactly two terms, which is a silent zero for the
@@ -102,6 +109,7 @@ fn main() {
         ("Claude Code", claude_home.clone(), sweep_claude(&claude_home.join("projects"))),
         ("Codex", codex_home.clone(), sweep_codex(&codex_home.join("sessions"))),
         ("Qwen Code", qwen_home.clone(), sweep_qwen(&qwen_home.join("projects"))),
+        ("opencode", opencode_home.clone(), sweep_opencode(&opencode_home.join("opencode.db"))),
     ];
 
     for (name, home, tally) in &corpora {
@@ -227,6 +235,74 @@ fn sweep_codex(sessions: &Path) -> Tally {
                     let known =
                         codex::HANDLED.contains(&ty) || codex::KNOWN_IGNORED.contains(&ty);
                     t.hit(known, ty.to_string(), line);
+                }
+            }
+        }
+    }
+    t
+}
+
+/// Every message and part row, read-only. "Files" are sessions and "lines"
+/// are rows, so the report reads the same as the other three.
+fn sweep_opencode(db: &Path) -> Tally {
+    use rusqlite::{Connection, OpenFlags};
+    let mut t = Tally::default();
+    if !db.is_file() {
+        return t;
+    }
+    // Read-only, as the scan opens it: never a side file beside opencode's
+    // database, which also holds its credentials — tables this never reads.
+    let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) else {
+        t.malformed += 1;
+        return t;
+    };
+    t.files = conn
+        .query_row("SELECT count(*) FROM session", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as u64;
+    for (table, is_part) in [("message", false), ("part", true)] {
+        let Ok(mut stmt) = conn.prepare(&format!("SELECT data FROM {table}")) else {
+            t.malformed += 1;
+            continue;
+        };
+        let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else { continue };
+        for data in rows.filter_map(Result::ok) {
+            t.lines += 1;
+            let Ok(v) = serde_json::from_str::<Value>(&data) else {
+                t.malformed += 1;
+                continue;
+            };
+            if is_part {
+                let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("<none>");
+                match opencode::classify_part(&v) {
+                    Some(kind) => t.hit(false, kind, &data),
+                    None => {
+                        let name = match v.pointer("/state/status").and_then(|x| x.as_str()) {
+                            Some(status) => format!("part/{ty}/{status}"),
+                            None => format!("part/{ty}"),
+                        };
+                        t.hit(true, name, &data);
+                    }
+                }
+                if let Some(tool) = v.get("tool").and_then(|x| x.as_str()) {
+                    t.note("tools", tool);
+                }
+            } else {
+                match opencode::classify_message(&v) {
+                    Some(kind) => t.hit(false, kind, &data),
+                    None => {
+                        let role = v.get("role").and_then(|x| x.as_str()).unwrap_or_default();
+                        t.hit(true, format!("message/{role}"), &data);
+                    }
+                }
+                // Below the type: the values `derive_status` reads.
+                if let Some(f) = v.get("finish").and_then(|x| x.as_str()) {
+                    t.note("finish", f);
+                }
+                if let Some(e) = v.pointer("/error/name").and_then(|x| x.as_str()) {
+                    t.note("errors", e);
+                }
+                if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
+                    t.note("models", m);
                 }
             }
         }

@@ -18,6 +18,7 @@ const BY_LABEL: Record<string, SessionSource> = {
   claude: "claude_code",
   codex: "codex",
   qwen: "qwen_code",
+  opencode: "opencode",
 };
 
 /// The colour for a health slot. Falls back rather than throwing: the daemon

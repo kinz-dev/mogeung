@@ -18,8 +18,9 @@
 #   2. **The daemon and the launchers** into $PREFIX (default ~/.local/bin, no
 #      sudo). `mogeungd` is what watches; `yolomo` starts claude, `yolomop`
 #      starts the same claude session through `llmproxy --claude`, `qwenmo`
-#      starts qwen and `codexmo` starts codex, each under tmux so mogeung can
-#      host it in a pane rather than only point at it (ADR-0010).
+#      starts qwen, `codexmo` starts codex and `opencodemo` starts opencode,
+#      each under tmux so mogeung can host it in a pane rather than only point
+#      at it (ADR-0010).
 #   3. **The window**. On Linux that is a `.deb` installed with `dpkg -i`, which
 #      is the whole reason this script grew: the Tauri bundler already produces
 #      a package that carries the icon and the desktop entry properly, and the
@@ -142,7 +143,7 @@ else
 fi
 
 # The complete list of what this script installs into $PREFIX.
-INSTALLABLES="mogeungd yolomo yolomop qwenmo codexmo"
+INSTALLABLES="mogeungd yolomo yolomop qwenmo codexmo opencodemo"
 
 # What --uninstall removes: what it installs, plus the retired window it used
 # to. Left in the sweep deliberately — a machine that ran the old script has a
@@ -331,6 +332,7 @@ install -m 755 scripts/yolomo          "$PREFIX/yolomo"   || exit 1
 install -m 755 scripts/yolomop         "$PREFIX/yolomop"  || exit 1
 install -m 755 scripts/qwenmo          "$PREFIX/qwenmo"   || exit 1
 install -m 755 scripts/codexmo         "$PREFIX/codexmo"  || exit 1
+install -m 755 scripts/opencodemo      "$PREFIX/opencodemo" || exit 1
 
 for name in $INSTALLABLES; do
     give_back "$PREFIX/$name"

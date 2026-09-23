@@ -42,6 +42,7 @@ async fn boot(claude: PathBuf, codex: PathBuf) -> Arc<AppState> {
     let homes = mogeungd::state::AgentHomes {
         codex,
         qwen: claude.parent().unwrap().join("qwen"),
+        opencode: claude.parent().unwrap().join("opencode"),
     };
     let state = AppState::with_homes(store, claude.clone(), homes).unwrap();
     state.scan().await;

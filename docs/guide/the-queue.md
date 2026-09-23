@@ -1,7 +1,7 @@
 ---
 title: The attention queue
 status: active
-updated: 2026-09-16
+updated: 2026-09-23
 ---
 
 # The attention queue
@@ -81,8 +81,8 @@ outside the current scope.
 ### Under tmux only
 
 **needs you** and **live** show only sessions mogeung can attach to — ones
-running in a tmux pane, which is what `yolomo`, `codexmo` and `qwenmo` give
-you. A session started in a plain terminal or in iTerm2 is owned by that
+running in a tmux pane, which is what `yolomo`, `codexmo`, `qwenmo` and
+`opencodemo` give you. A session started in a plain terminal or in iTerm2 is owned by that
 terminal and has no pane to host, so there is no Agent pane to open and nothing
 to type into: it is a row you can only read past.
 

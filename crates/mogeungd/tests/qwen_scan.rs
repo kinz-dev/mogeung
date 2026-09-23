@@ -115,6 +115,7 @@ async fn boot(claude: PathBuf, qwen: PathBuf) -> Arc<AppState> {
         // about Qwen and never reaches the developer's real `~/.codex`.
         codex: claude.parent().unwrap().join("codex"),
         qwen,
+        opencode: claude.parent().unwrap().join("opencode"),
     };
     let state = AppState::with_homes(store, claude.clone(), homes).unwrap();
     state.scan().await;
@@ -456,6 +457,7 @@ async fn a_qwen_session_whose_transcript_vanishes_stops_being_alive() {
     let homes = AgentHomes {
         codex: claude.parent().unwrap().join("codex"),
         qwen: qwen.clone(),
+        opencode: claude.parent().unwrap().join("opencode"),
     };
     let state = AppState::with_homes(store, claude.clone(), homes).unwrap();
     state.scan().await;

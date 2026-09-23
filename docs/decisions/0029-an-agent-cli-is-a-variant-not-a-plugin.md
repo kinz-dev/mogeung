@@ -1,7 +1,7 @@
 ---
 title: An agent CLI is a variant on the Session, not a plugin
 status: active
-updated: 2026-08-25
+updated: 2026-09-23
 decided: 2026-08-25
 ---
 
@@ -145,6 +145,59 @@ the blind spot above and is worth checking on every Qwen upgrade.
 Or a CLI appears whose sessions are not files on this machine —
 [`R-I13`](../product/roadmap.md)'s container case — since the assumption that a
 source is a directory under `$HOME` is baked into every reader here.
+
+## Amendment — 2026-09-23
+
+**A fourth CLI arrived — opencode, `R-I25`, [feature 0048](../features/0048-opencode-adapter.md) —
+and this ADR's first *revisit if* was checked against it. The decision
+stands.** What changed is recorded here so the ADR stays the one place it
+lives.
+
+*The shared tailer was not extracted, because opencode has nothing to tail.*
+The *revisit if* said: extract the tailer before writing a fourth parser. It
+assumed the fourth would be files. It is one SQLite database —
+`~/.local/share/opencode/opencode.db`, sessions as rows of `session`,
+`message` and `part` — so its reader shares nothing with the two tailers and
+its shape with `codex.rs` instead: read-only, `SELECT *` mapped by column
+name, a missing column reported rather than fatal. Extracting a tailer now
+would be refactoring three copies for a reader that uses none. **The trigger
+moves to a fifth CLI that is files again.** The four readers are two tailers
+and two databases, which differ in kind, not detail — so the trait stays
+refused on this ADR's original reasoning, now with twice the evidence.
+
+*The uncomfortable part does not apply to this CLI.* Qwen cannot say on disk
+whether it is waiting for you; opencode can. A tool blocked on a permission
+prompt is written as `running` with **no `metadata`**, and the moment it is
+allowed the row gains `metadata` — before it has printed anything. That was
+watched, not inferred: a real `opencode` in tmux, a prompt raised, approved
+from outside, the row polled read-only throughout, for `bash` and for `edit`.
+The `question` tool — opencode asking you something — has the same shape
+with the question in its input. So for opencode `R-B4`'s distinction is
+available, and it is surfaced the way the Codex pass surfaces an explicit
+approval request: an `OpenTool`, so attention ranks it APPROVE. The rule is
+applied only to tools it was seen for and their `edit` siblings; a tool that
+is merely slow without metadata (`webfetch`) is working, not asking.
+
+*A third shape of liveness: none on disk at all.* Claude and Qwen keep a
+per-pid registry; Codex has a lock. opencode keeps nothing — its `locks/`
+directory stays empty while it runs — so a session is live when an `opencode`
+process is working in its directory: its `$PWD` (which opencode itself uses
+over the real cwd), a path argument, or `-s <id>` naming the session, and
+which started before the session last moved. Read from `/proc` with no fork on
+Linux, by one `ps` and one `lsof` elsewhere. Its known limit — two opencode
+processes active in one directory may be paired crosswise — is stated where
+the rule is written.
+
+*And the home is not a dot-directory beside `~/.claude`.* opencode follows
+XDG, so `AgentHomes::beside` derives `<home>/.local/share/opencode` from an
+injected Claude home, and honours `XDG_DATA_HOME` only for the real one — the
+same guarantee [ADR-0006](0006-inject-the-watch-root.md) asks for, in a layout
+`sibling_home` could not express. `SessionSource::OpenCode` is on the wire as
+`opencode`, the product's own spelling, by explicit rename.
+
+This replaces nothing in the decision. It answers the first *revisit if*
+with *not yet, and here is why*, and it narrows the uncomfortable part to the
+CLI it is about.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

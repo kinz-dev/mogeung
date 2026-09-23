@@ -49,7 +49,7 @@ export function InfoPane() {
           Shown apart from *started/last event* because it answers the question
           those two cannot: wall time counts the hour a session sat idle, and
           this does not. Absent when the CLI has not said — which is every
-          Codex and Qwen session, and every Claude one before 2026-08-26.
+          Codex, Qwen and opencode session, and every Claude one before 2026-08-26.
         */}
         {(s.api_ms ?? 0) + (s.tool_ms ?? 0) > 0 && (
           <Field label="time in">

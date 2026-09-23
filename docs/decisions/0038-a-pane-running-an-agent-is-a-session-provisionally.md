@@ -1,7 +1,7 @@
 ---
 title: A tmux pane running an agent is a session, provisionally
 status: active
-updated: 2026-09-10
+updated: 2026-09-23
 decided: 2026-09-10
 ---
 
@@ -141,3 +141,64 @@ precisely the stuck case this exists for.
 - **A second adoption source appears** (`R-I13`'s containers, `R-I14`'s pods).
   The identity rule here is tmux-shaped; a container has no pane, and pretending
   otherwise would be the location-as-identity mistake in a new place.
+
+## Amendment — 2026-09-23
+
+**Clause 4 is widened by one CLI: a provisional opencode row carries a status,
+*waiting for you*.** What changed, why, and what it replaces.
+
+*What.* A provisional session is still recomputed, never persisted, and
+identified by its pane (clauses 1–3 untouched). But for opencode —
+`R-I25`, [feature 0048](../features/0048-opencode-adapter.md) — the row is
+published with `live_status: Idle` and named *waiting for your first
+prompt*, so attention ranks it **WAITING**, and its *waiting since* clock is the
+opencode process's own start time rather than the scan's. Every other CLI's
+provisional row is unchanged, and the choice is an exhaustive `match` on the
+source so the next CLI has to make it.
+
+*Why this is still "only what the pane can prove".* opencode writes its
+session row the moment a prompt is sent, and the opencode pass then claims the
+process for that session by its directory and start time — which suppresses
+this row, by clause 2. So an opencode whose pane is still unclaimed **has sent
+nothing**: it is at its prompt. That is not a guess about what the agent is
+doing; it is what the absence of a row, from a CLI that always writes one when
+spoken to, means. The Codex pass makes the same call for a thread nobody has
+spoken to (`R-J73`), from its lock.
+
+*Why it mattered.* Left as clause 4 first had it, the row carried no status
+and ranked **running** — and the default *needs you* scope hides running rows
+until they have been silent for five minutes. A headless opencode started from
+the New session window therefore appeared nowhere the owner looked, though it
+had been on the board the whole time. Reported 2026-09-23: *"the window
+closed. But nothing appear in the ATTENTION list."* For the other CLIs the gap
+is a moment, not a state — each writes a registry record or a lock before any
+prompt, which its own pass turns into a real session that claims the pane.
+
+*What it replaces.* The sentence in clause 4 that a provisional row's
+counts are zero *"because they are"* stands; the implication that it says
+nothing about status does not, for opencode.
+
+*And a second change the same day, to clause 3.* Clause 3 said a provisional
+session *"exists only in the snapshot"*, and the code took that literally: a
+pane row was sent to a window in the snapshot it got on connecting, and in no
+broadcast after — not even in the queue broadcasts, which ranked stored
+sessions only. So a window that was already open when an agent started in a
+pane never saw the row, and a window that had seen it lost it from its queue
+at the next broadcast. For a CLI that writes a registry record within a second
+this went unnoticed; for an opencode that writes nothing until spoken to it
+meant a headless start appeared nowhere. Reported the same evening: *"I still
+can't see it if I start a new headless opencode."*
+
+Clause 3's substance stands — **never persisted**, recomputed from tmux each
+scan, nothing in SQLite refers to it. What changes is what *"only in the
+snapshot"* is taken to mean: a pane row is now **ranked in every queue
+broadcast** and **announced as it appears or changes**, keeping the times it
+was first seen so an unchanged row is not re-announced every tick. When it
+goes, it is announced **dead, then removed** — dead first because the usual
+reason it goes is that its agent spoke and a real session, published earlier
+in the same scan, now claims the pane; a dead row and a live session sharing a
+pid and a cwd is the window's succession rule, which moves the selection and
+any held pane onto the real session. For that, the row's `pid` is now the
+agent's own rather than the pane's, which is usually a shell. Pane rows are
+still left out of notifications, as they always were.
+

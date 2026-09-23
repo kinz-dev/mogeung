@@ -33,7 +33,7 @@
 import type * as React from "react";
 import { Cpu, Gem, Terminal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { ClaudeGlyph, QwenGlyph } from "@/ui/AgentGlyphs";
+import { ClaudeGlyph, OpenCodeGlyph, QwenGlyph } from "@/ui/AgentGlyphs";
 import { sourceColor, sourceLabel, type SessionSource } from "@/wire/types";
 
 /**
@@ -48,6 +48,7 @@ const ICON: Record<string, Glyph> = {
   claude_code: ClaudeGlyph,
   codex: Terminal,
   qwen_code: QwenGlyph,
+  opencode: OpenCodeGlyph,
   gemini: Gem,
 };
 

@@ -22,6 +22,7 @@ pub mod machine;
 pub mod model;
 pub mod notes;
 pub mod notify;
+pub mod opencode;
 pub mod qwen;
 pub mod run;
 pub mod runconfig;

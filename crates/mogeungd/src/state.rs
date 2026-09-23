@@ -199,6 +199,8 @@ pub struct AppState {
     pub codex_home: PathBuf,
     /// Root of the Qwen Code state directory, likewise. `R-I15`.
     pub qwen_home: PathBuf,
+    /// opencode's data directory, holding `opencode.db`. `R-I25`.
+    pub opencode_home: PathBuf,
     pub attention: AttentionConfig,
     /// What we have and have not managed to read. See `health.rs`.
     health: Mutex<HealthTracker>,
@@ -220,6 +222,8 @@ pub struct AppState {
     codex_cache: Arc<std::sync::Mutex<crate::codex::ScanCache>>,
     /// Incremental Qwen transcript state, same arrangement and same reason.
     qwen_cache: Arc<std::sync::Mutex<crate::qwen::ScanCache>>,
+    /// opencode's rows, folded, and each session's last event sequence.
+    opencode_cache: Arc<std::sync::Mutex<crate::opencode::ScanCache>>,
     /// Cwds that turned out not to be git repos, with a countdown until the
     /// next probe. Probing forks `git rev-parse`; without this a session
     /// whose cwd is not a repo pays that fork every tick, forever.
@@ -292,6 +296,7 @@ type CodexIndexStamp = (
 pub struct AgentHomes {
     pub codex: PathBuf,
     pub qwen: PathBuf,
+    pub opencode: PathBuf,
 }
 
 impl AgentHomes {
@@ -321,6 +326,9 @@ impl AgentHomes {
         AgentHomes {
             codex: sibling_home(claude_home, "CODEX_HOME", ".codex", crate::codex::default_home),
             qwen: sibling_home(claude_home, "QWEN_HOME", ".qwen", crate::qwen::default_home),
+            // Not a dot-directory beside the others, so not `sibling_home`:
+            // `opencode::home_beside` gives the same guarantee for its layout.
+            opencode: crate::opencode::home_beside(claude_home),
         }
     }
 }
@@ -338,6 +346,15 @@ fn sibling_home(
         Some(parent) => parent.join(dir),
         None => fallback(),
     }
+}
+
+/// What an absorb pass saw that the diff cares about. `R-I25`.
+enum Moved {
+    Nothing,
+    /// Wrote a file it had not written before.
+    Wrote,
+    /// Was alive last pass and is not now.
+    Exited,
 }
 
 /// How many negative repo probes to skip before asking again — `git init`
@@ -444,6 +461,8 @@ pub fn provisional_session(
     let source = match program {
         "codex" => SessionSource::Codex,
         "qwen" | "qwen-code" => SessionSource::QwenCode,
+        // By stem: the npm package runs `opencode.exe`.
+        p if crate::opencode::is_opencode(p) => SessionSource::OpenCode,
         _ => SessionSource::ClaudeCode,
     };
     let mut s = blank_session(format!("pane:{}", pane.id), source, now, now);
@@ -459,6 +478,27 @@ pub fn provisional_session(
     }
     // The one thing it can say for itself, and the reason the row exists.
     s.name = Some(format!("{program} — nothing written yet"));
+    // **What else the pane can prove depends on the CLI.** ADR-0038 clause 4,
+    // amended 2026-09-23. opencode writes its session row the moment a prompt
+    // is sent, and the opencode pass then claims this process for it — so an
+    // opencode whose pane is still unclaimed has sent nothing: it is at its
+    // prompt, waiting for you. Left as a bare provisional row it ranked
+    // *running*, which the default scope hides, and a headless launch from the
+    // New session window appeared nowhere. Reported 2026-09-23. The Codex pass
+    // makes the same call for a thread nobody has spoken to (`R-J73`).
+    //
+    // Exhaustive, per ADR-0029: the next CLI has to answer this too.
+    match source {
+        SessionSource::OpenCode => {
+            s.live_status = Some(mogeung_core::LiveStatus::Idle);
+            s.status_since = Some(now);
+            s.name = Some(format!("{program} — waiting for your first prompt"));
+        }
+        // Each writes something of its own before a prompt — a registry
+        // record, a lock — which its own pass turns into a real session, so a
+        // provisional row for them is a moment, not a state.
+        SessionSource::ClaudeCode | SessionSource::Codex | SessionSource::QwenCode => {}
+    }
     s
 }
 
@@ -567,6 +607,7 @@ impl AppState {
         let AgentHomes {
             codex: codex_home,
             qwen: qwen_home,
+            opencode: opencode_home,
         } = homes;
         let loaded = store.load_sessions()?;
         let mut sessions = HashMap::new();
@@ -625,6 +666,7 @@ impl AppState {
             claude_home,
             codex_home,
             qwen_home,
+            opencode_home,
             attention: AttentionConfig::default(),
             health: Mutex::new(HealthTracker::new(MAX_TRANSCRIPT_BYTES)),
             notifier: Mutex::new(Notifier::default()),
@@ -634,6 +676,7 @@ impl AppState {
             scan_running: Mutex::new(()),
             codex_cache: Arc::new(std::sync::Mutex::new(crate::codex::ScanCache::default())),
             qwen_cache: Arc::new(std::sync::Mutex::new(crate::qwen::ScanCache::default())),
+            opencode_cache: Arc::new(std::sync::Mutex::new(crate::opencode::ScanCache::default())),
             non_repo_cwds: Mutex::new(HashMap::new()),
             change_probes: Mutex::new(HashMap::new()),
             quiet_sessions: Mutex::new(HashMap::new()),
@@ -1033,7 +1076,12 @@ impl AppState {
         let remote = self.federation.sessions();
         let (queue, labels) = {
             let sessions = self.sessions.read().await;
-            let refs: Vec<&Session> = sessions.values().collect();
+            let provisional = self.provisional.read().await;
+            // Pane rows are ranked with everything else. They were left out
+            // until 2026-09-23, so a pane row reached a window only in the
+            // snapshot it got on connecting, and fell out of its queue at the
+            // next broadcast — see `refresh_provisional`.
+            let refs: Vec<&Session> = sessions.values().chain(provisional.iter()).collect();
             let queue = self.rank_board(&refs, &remote);
             let mut labels: HashMap<String, String> =
                 sessions.values().map(|s| (s.id.clone(), s.label())).collect();
@@ -1041,7 +1089,12 @@ impl AppState {
             labels.extend(remote.iter().map(|s| (s.id.clone(), remote_label(s))));
             (queue, labels)
         };
-        self.notify_for(&queue, &labels).await;
+        // Notifications stay about conversations, as they always were: a pane
+        // row is a process nobody has spoken to yet, usually one you started a
+        // moment ago yourself.
+        let conversations: Vec<AttentionItem> =
+            queue.iter().filter(|i| !i.session_id.starts_with("pane:")).cloned().collect();
+        self.notify_for(&conversations, &labels).await;
         // Notifications diff on their own state above; the broadcast is gated
         // separately, so an unchanged queue costs the clients nothing. New
         // clients are unaffected — they get the queue with their snapshot.
@@ -1086,7 +1139,8 @@ impl AppState {
         let remote = self.federation.sessions();
         let queue = {
             let sessions = self.sessions.read().await;
-            let refs: Vec<&Session> = sessions.values().collect();
+            let provisional = self.provisional.read().await;
+            let refs: Vec<&Session> = sessions.values().chain(provisional.iter()).collect();
             self.rank_board(&refs, &remote)
         };
         self.last_queue.lock().await.clone_from(&queue);
@@ -1414,6 +1468,7 @@ impl AppState {
 
         self.scan_codex().await;
         self.scan_qwen().await;
+        self.scan_opencode().await;
         self.refresh_collisions().await;
         self.flush_quiet_sessions().await;
 
@@ -1448,35 +1503,99 @@ impl AppState {
     /// for one agent the first time somebody tidied their windows.
     async fn refresh_provisional(&self) {
         let panes = tmux_panes();
-        if panes.is_empty() {
-            self.provisional.write().await.clear();
-            return;
-        }
-        let parents = process_parents();
-        let table = process_commands();
-
-        let claimed: std::collections::HashSet<String> = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .values()
-                .filter(|s| s.alive)
-                .filter_map(|s| s.pid)
-                .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
-                .collect()
-        };
-
-        let now = Utc::now();
         let mut out = Vec::new();
-        for pane in &panes {
-            if claimed.contains(&pane.id) {
-                continue;
-            }
-            let Some(program) = agent_in_pane(pane, &table) else {
-                continue;
+        if !panes.is_empty() {
+            let parents = process_parents();
+            let table = process_commands();
+
+            let claimed: std::collections::HashSet<String> = {
+                let sessions = self.sessions.read().await;
+                sessions
+                    .values()
+                    .filter(|s| s.alive)
+                    .filter_map(|s| s.pid)
+                    .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
+                    .collect()
             };
-            out.push(provisional_session(pane, &program, now));
+
+            let now = Utc::now();
+            for pane in &panes {
+                if claimed.contains(&pane.id) {
+                    continue;
+                }
+                let Some((pid, program)) = agent_process_in_pane(pane, &table) else {
+                    continue;
+                };
+                let mut s = provisional_session(pane, &program, now);
+                // The agent's own pid, not the pane's: the pane usually holds a
+                // shell, and the real session that later claims this pane will
+                // carry the agent's pid. The window's succession — a dead
+                // session and a live one sharing a pid and a cwd — is what moves
+                // your selection across when it does.
+                s.pid = Some(pid);
+                // A row rebuilt every scan cannot remember when it was first
+                // seen, so a waiting one takes its clock from the agent process
+                // itself — or it would read *waiting 0s* on every tick.
+                if s.live_status.is_some() {
+                    if let Some(started) = crate::opencode::process_started(pid) {
+                        s.status_since = Some(started);
+                    }
+                }
+                out.push(s);
+            }
         }
-        *self.provisional.write().await = out;
+
+        // **Told to the windows that are already open.** Until 2026-09-23 this
+        // only replaced the list: a pane row reached a window in the snapshot it
+        // got on connecting, and nowhere else — so a window already open when
+        // an agent started in a pane never saw the row, and even one that did
+        // lost it from its queue at the next broadcast. Harmless for a CLI that
+        // writes a registry record within a second; fatal for an opencode that
+        // writes nothing until spoken to, which is how *"I still can't see it
+        // if I start a new headless opencode"* was reported.
+        //
+        // So: a row that is new or changed is announced; one that is unchanged
+        // is not — it keeps the times it was first seen, or every tick would
+        // be a change. And a row that has gone is announced **dead, then
+        // removed**. Dead first, because the usual reason a pane row goes is
+        // that its agent has spoken and a real session now claims the pane,
+        // published earlier in this same scan: a dead row and a live session
+        // sharing a pid and a cwd is the window's succession rule, which moves
+        // the selection and any held pane onto the real session instead of
+        // closing the terminal you just typed your first prompt into.
+        let (announce, gone) = {
+            let mut slot = self.provisional.write().await;
+            let before = std::mem::take(&mut *slot);
+            let mut announce = Vec::new();
+            for s in out.iter_mut() {
+                match before.iter().find(|b| b.id == s.id) {
+                    Some(prev) => {
+                        s.started_at = prev.started_at;
+                        s.last_event_at = prev.last_event_at;
+                        if prev.live_status == s.live_status {
+                            s.status_since = prev.status_since;
+                        }
+                        if prev != s {
+                            announce.push(s.clone());
+                        }
+                    }
+                    None => announce.push(s.clone()),
+                }
+            }
+            let gone: Vec<Session> = before.into_iter().filter(|b| !out.iter().any(|s| s.id == b.id)).collect();
+            *slot = out;
+            (announce, gone)
+        };
+        for s in announce {
+            self.broadcast(ServerMsg::SessionUpdated { session: Box::new(s) });
+        }
+        for mut s in gone {
+            s.alive = false;
+            s.live_status = None;
+            let id = s.id.clone();
+            self.broadcast(ServerMsg::SessionUpdated { session: Box::new(s) });
+            self.broadcast(ServerMsg::SessionRemoved { session_id: id });
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2586,6 +2705,212 @@ impl AppState {
         // reads as `Working`; `qwen::derive_status` documents what that costs.
 
         self.put_or_coast(&before, s).await;
+    }
+
+    /// Fold opencode's sessions into the queue. `R-I25`, feature 0048.
+    ///
+    /// The Codex pass's shape — a database, not tailed files — with Qwen's
+    /// stance on liveness: the OS's answer, never recency. opencode keeps no
+    /// registry, so the answer is *an `opencode` process working in this
+    /// session's directory*; `opencode::match_processes` says how that is
+    /// decided and where it cannot be.
+    ///
+    /// Everything that forks or reads happens on the blocking pool, and on
+    /// Linux the process walk is `/proc` reads with no fork at all — this runs
+    /// every tick on every machine that has ever run opencode.
+    async fn scan_opencode(&self) {
+        use crate::opencode::OpenCodeInstall;
+        use mogeung_core::session::SessionSource;
+
+        let Some(install) = OpenCodeInstall::discover(&self.opencode_home) else {
+            return;
+        };
+        let cache = self.opencode_cache.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut cache = cache.lock().expect("opencode scan cache poisoned");
+            let read = cache.refresh(&install, HISTORY_DAYS, Utc::now().timestamp_millis());
+            let procs = crate::opencode::scan_processes();
+            let held = crate::opencode::match_processes(&procs, &read.sessions);
+            (read, held)
+        })
+        .await;
+        let Ok((read, held)) = result else {
+            return;
+        };
+
+        // The canary, and the database's own trouble, in one slot.
+        self.health.lock().await.set_agent(
+            SessionSource::OpenCode.label(),
+            true,
+            read.sessions.len() as u32,
+            read.error.clone(),
+            read.unknown.clone(),
+            // opencode asks per tool, not per directory.
+            Vec::new(),
+        );
+
+        let (panes, parents) = if held.is_empty() {
+            (
+                std::sync::Arc::new(Vec::new()),
+                std::sync::Arc::new(HashMap::new()),
+            )
+        } else {
+            self.process_table(false).await
+        };
+
+        let now = Utc::now();
+        let mut seen: std::collections::HashSet<String> = Default::default();
+        let mut wrote: Vec<String> = Vec::new();
+        let mut exited: Vec<String> = Vec::new();
+        for oc in &read.sessions {
+            seen.insert(oc.id.clone());
+            let pid = held.get(&oc.id).copied();
+            match self.absorb_opencode(oc, pid, &panes, &parents, now).await {
+                Moved::Wrote => wrote.push(oc.id.clone()),
+                Moved::Exited => exited.push(oc.id.clone()),
+                Moved::Nothing => {}
+            }
+        }
+
+        // The diff, on the same two occasions the Claude pass takes it: a
+        // session that just wrote something (behind the fingerprint gate, so
+        // a look costs nothing when the worktree has not moved), and one that
+        // just exited — the moment it becomes reviewable.
+        for id in exited {
+            self.recompute_change_scan(&id).await;
+        }
+        let mut pass_fps: HashMap<String, Option<u64>> = HashMap::new();
+        for id in wrote {
+            self.maybe_recompute_change(&id, &mut pass_fps).await;
+        }
+
+        // A session that aged out of the window, or was archived, is not
+        // revisited by the loop above — and must not keep the `alive` it was
+        // last given. The lesson the Qwen pass learnt, applied from the start.
+        let stale: Vec<String> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.source == SessionSource::OpenCode && s.alive)
+                .map(|s| s.id.clone())
+                .filter(|id| !seen.contains(id))
+                .collect()
+        };
+        for id in stale {
+            let Some(mut s) = self.get(&id).await else { continue };
+            s.alive = false;
+            s.live_status = None;
+            s.tmux_target = None;
+            s.open_tools.clear();
+            s.status_since = Some(now);
+            self.put(s).await;
+        }
+    }
+
+    /// One opencode session, and whether its diff wants a look.
+    async fn absorb_opencode(
+        &self,
+        oc: &crate::opencode::OcSession,
+        pid: Option<u32>,
+        panes: &[Pane],
+        parents: &HashMap<u32, u32>,
+        now: chrono::DateTime<Utc>,
+    ) -> Moved {
+        use crate::opencode::OcStatus;
+        use mogeung_core::session::SessionSource;
+
+        let existing = self.get(&oc.id).await;
+        let mut s = existing.unwrap_or_else(|| blank_session(oc.id.clone(), SessionSource::OpenCode, oc.created, oc.updated));
+        let before = s.clone();
+        s.source = SessionSource::OpenCode;
+
+        s.alive = pid.is_some();
+        s.pid = pid.or(s.pid);
+        s.tmux_target = pid.and_then(|p| tmux_target_in(p, panes, parents));
+
+        // Status is read from the rows only while a process holds the session:
+        // a turn left open by a crash is not a turn in progress.
+        let live_status = s.alive.then(|| oc.status.live_status());
+        if s.live_status != live_status {
+            s.status_since = Some(now);
+        }
+        s.live_status = live_status;
+
+        // **A prompt opencode wrote down, surfaced as the open tool it is.**
+        // This is the evidence the Qwen pass does not have and so never
+        // invents; here it is a row — a tool `running` with no metadata past
+        // the grace — so attention ranks it APPROVE like a Claude prompt.
+        const APPROVAL: &str = "opencode-approval:";
+        match (&oc.status, s.alive) {
+            (OcStatus::Approval { part_id, tool, summary, since_ms }, true) => {
+                let id = format!("{APPROVAL}{part_id}");
+                if !s.open_tools.iter().any(|t| t.id == id) {
+                    s.open_tools.retain(|t| !t.id.starts_with(APPROVAL));
+                    s.open_tools.push(mogeung_core::session::OpenTool {
+                        id,
+                        name: tool.clone(),
+                        summary: summary.clone(),
+                        at: chrono::TimeZone::timestamp_millis_opt(&Utc, *since_ms).single().unwrap_or(now),
+                    });
+                }
+            }
+            _ => s.open_tools.retain(|t| !t.id.starts_with(APPROVAL)),
+        }
+
+        if !oc.directory.is_empty() {
+            s.cwd = oc.directory.clone();
+        }
+        s.title = oc.title.clone().or(s.title);
+        s.version = oc.version.clone().or(s.version);
+        s.last_prompt = oc.last_prompt.clone().or(s.last_prompt);
+        s.last_activity = oc.last_activity.clone().or(s.last_activity);
+        s.turns = oc.turns;
+        s.tool_calls = oc.tool_calls;
+        // The session row keeps running totals — adopt, don't add.
+        s.tokens_in = oc.tokens_in;
+        s.tokens_out = oc.tokens_out;
+        s.last_event_at = oc.updated;
+        s.transcript_path = oc.locator.clone();
+
+        // What it wrote, from opencode's own record of it. `touched_files` is
+        // what scopes a shared worktree's diff to this session, and
+        // `recent_touches` is what collision detection reads (`R-B3`).
+        let mut wrote = false;
+        for (path, at) in &oc.touched {
+            if !s.touched_files.contains(path) {
+                s.touched_files.push(path.clone());
+                s.recent_touches.push(Touch {
+                    path: path.clone(),
+                    at: chrono::TimeZone::timestamp_millis_opt(&Utc, *at).single().unwrap_or(now),
+                });
+                wrote = true;
+            }
+        }
+        if s.recent_touches.len() > MAX_RECENT_TOUCHES {
+            let excess = s.recent_touches.len() - MAX_RECENT_TOUCHES;
+            s.recent_touches.drain(..excess);
+        }
+        let exited = before.alive && !s.alive;
+
+        // Pin the diff base exactly like every other source: the git observer
+        // is A23's half that has never needed a change.
+        if s.repo_root.is_none() && !s.cwd.is_empty() {
+            if let Some((root, base)) = self.probe_repo(&s.cwd, s.started_at).await {
+                s.repo_root = Some(root);
+                if s.base_sha.is_none() {
+                    s.base_sha = base;
+                }
+            }
+        }
+
+        self.put_or_coast(&before, s).await;
+        if exited {
+            Moved::Exited
+        } else if wrote {
+            Moved::Wrote
+        } else {
+            Moved::Nothing
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -4385,6 +4710,7 @@ fn session_name(dir: &str, stamp: &str, source: SessionSource) -> String {
         SessionSource::ClaudeCode => "",
         SessionSource::Codex => "codex-",
         SessionSource::QwenCode => "qwen-",
+        SessionSource::OpenCode => "opencode-",
     };
     if place.is_empty() {
         format!("mogeung-{cli}{stamp}")
@@ -4512,7 +4838,40 @@ fn agent_command(source: SessionSource) -> Result<Vec<String>> {
             "--sandbox".to_string(),
             "workspace-write".to_string(),
         ]),
+        // `R-I25`. `--auto` is opencode's own *"auto-approve permissions that
+        // are not explicitly denied"* — the sibling of the other three recipes,
+        // and `scripts/opencodemo`'s; the two must move together. Unlike Qwen,
+        // opencode *does* write a blocked prompt to disk and mogeung reads it
+        // (feature 0048), so this is not buying back a blind spot — it is the
+        // approve-everything contract this window has always made. A `deny`
+        // in your opencode config still denies: `--auto` does not override it.
+        SessionSource::OpenCode => Ok(vec![opencode_binary(), "--auto".to_string()]),
     }
+}
+
+/// Where `opencode` actually is — the same walk as [`qwen_binary`]. The npm
+/// package links `~/.local/bin/opencode` into `node_modules`, and `bun` and
+/// the install script use their own directories; the link is the stable name.
+fn opencode_binary() -> String {
+    for dir in std::env::split_paths(crate::env::path()) {
+        let cand = dir.join("opencode");
+        if cand.is_file() {
+            return cand.to_string_lossy().into_owned();
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for cand in [
+        format!("{home}/.local/bin/opencode"),
+        format!("{home}/.opencode/bin/opencode"),
+        format!("{home}/.bun/bin/opencode"),
+        "/usr/local/bin/opencode".to_string(),
+        "/opt/homebrew/bin/opencode".to_string(),
+    ] {
+        if Path::new(&cand).is_file() {
+            return cand;
+        }
+    }
+    "opencode".to_string()
 }
 
 /// Where `codex` actually is, as an absolute path — the same problem
@@ -5316,15 +5675,21 @@ fn parse_process_commands(stdout: &str) -> Vec<(u32, u32, String)> {
 /// limit ADR-0025 records applies unchanged: a wrapper script that calls
 /// `claude` is not `claude`, and walks past.
 pub fn agent_in_pane(pane: &Pane, table: &[(u32, u32, String)]) -> Option<String> {
+    agent_process_in_pane(pane, table).map(|(_, program)| program)
+}
+
+/// [`agent_in_pane`], with the agent's pid — for a clock that must come from
+/// the process rather than from the scan that noticed it.
+pub fn agent_process_in_pane(pane: &Pane, table: &[(u32, u32, String)]) -> Option<(u32, String)> {
     let mut children: HashMap<u32, Vec<(u32, &str)>> = HashMap::new();
     for (pid, ppid, comm) in table {
         children.entry(*ppid).or_default().push((*pid, comm.as_str()));
     }
     // The pane's own process first: `yolomo` runs the agent with no shell
     // between, and that is the case worth getting right without a walk.
-    if let Some((_, _, comm)) = table.iter().find(|(pid, _, _)| *pid == pane.pid) {
+    if let Some((pid, _, comm)) = table.iter().find(|(pid, _, _)| *pid == pane.pid) {
         if mogeung_core::run::is_agent(comm) {
-            return Some(comm.clone());
+            return Some((*pid, comm.clone()));
         }
     }
     let mut stack = vec![pane.pid];
@@ -5336,7 +5701,7 @@ pub fn agent_in_pane(pane: &Pane, table: &[(u32, u32, String)]) -> Option<String
         }
         for (child, comm) in children.get(&pid).into_iter().flatten() {
             if mogeung_core::run::is_agent(comm) {
-                return Some((*comm).to_string());
+                return Some((*child, (*comm).to_string()));
             }
             stack.push(*child);
         }
@@ -5742,6 +6107,29 @@ mod terminal_tests {
         assert_eq!(of("codex"), SessionSource::Codex);
         assert_eq!(of("qwen"), SessionSource::QwenCode);
         assert_eq!(of("claude"), SessionSource::ClaudeCode);
+        // What the npm package actually runs, as `ps` names it.
+        assert_eq!(of("opencode"), SessionSource::OpenCode);
+        assert_eq!(of("opencode.exe"), SessionSource::OpenCode);
+    }
+
+    /// An opencode that has not been spoken to is at its prompt: it writes no
+    /// session until you send one. So its pane row is **waiting for you**, and
+    /// ranks where the default scope shows it — the headless launch that
+    /// appeared nowhere, reported 2026-09-23. The other CLIs' rows are
+    /// unchanged: each writes something of its own before a prompt.
+    #[test]
+    fn a_fresh_opencode_pane_is_waiting_for_you_and_the_others_are_unchanged() {
+        use mogeung_core::attention::{classify, AttentionConfig, AttentionReason};
+        let p = Pane { id: "%7".into(), pid: 1, target: "s:0.0".into() };
+        let now = Utc::now();
+        let oc = provisional_session(&p, "opencode", now);
+        assert_eq!(oc.live_status, Some(mogeung_core::LiveStatus::Idle));
+        assert!(oc.name.as_deref().is_some_and(|n| n.contains("waiting for your first prompt")));
+        assert_eq!(classify(&oc, now, &AttentionConfig::default()).reason, AttentionReason::AwaitingInput);
+
+        let claude = provisional_session(&p, "claude", now);
+        assert_eq!(claude.live_status, None);
+        assert_eq!(claude.name.as_deref(), Some("claude — nothing written yet"));
     }
 
 
@@ -5764,6 +6152,8 @@ mod terminal_tests {
     #[test]
     fn an_agent_under_a_shell_is_found() {
         assert_eq!(agent_in_pane(&pane("%1", 200), &table()).as_deref(), Some("claude"));
+        // And the pid it found, for a clock that must come from the process.
+        assert_eq!(agent_process_in_pane(&pane("%1", 200), &table()).map(|(_, p)| p).as_deref(), Some("claude"));
     }
 
     /// `yolomo` runs the agent as the pane command with no shell between.
@@ -5983,6 +6373,14 @@ mod terminal_tests {
         let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
         assert_eq!(name, "mogeung-qwen-api-0729-101500");
         assert_eq!(&cmd[cmd.len() - 3..], &qwen[..]);
+
+        // opencode: its own `--auto`, and no sibling's flag.
+        let opencode = agent_command(SessionSource::OpenCode).expect("opencode launches");
+        assert!(opencode[0].ends_with("opencode"), "{}", opencode[0]);
+        assert_eq!(&opencode[1..], &["--auto".to_string()]);
+        let cmd = in_terminal_command("/home/me/api", true, "0923-101500", SessionSource::OpenCode, &opencode);
+        let name = &cmd[cmd.iter().position(|a| a == "-s").unwrap() + 1];
+        assert_eq!(name, "mogeung-opencode-api-0923-101500");
 
         // Claude's name is unchanged — it is written into muscle memory and
         // into `tmux attach` lines, and this feature did not touch it.

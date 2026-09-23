@@ -199,9 +199,11 @@ around by anything that rewrites one:
 1. `start()` takes a **configuration id** and looks it up in what the
    repository produced. An id that is not there is refused, naming the clause.
 2. `is_agent()` is checked on the program about to be spawned, against
-   `run::AGENTS` — `claude`, `codex`, `gemini`, `qwen`, `qwen-code`, `aider`,
-   `cursor-agent`, `amp`. **Every CLI mogeung learns to watch joins this list
-   in the same change that teaches it** (`qwen` did, at `R-I15`): a source
+   `run::AGENTS` — `claude`, `codex`, `gemini`, `qwen`, `qwen-code`,
+   `opencode`, `aider`, `cursor-agent`, `amp`. **Every CLI mogeung learns to
+   watch joins this list in the same change that teaches it** (`qwen` did, at
+   `R-I15`; `opencode` at `R-I25` — whose npm package actually runs
+   `opencode.exe`, which the stem rule below catches): a source
    mogeung can observe is by definition one it might otherwise detect and
    start, which is the clause-2 breach. Matched on the file stem, so
    `/usr/local/bin/qwen` and `qwen.exe` are both caught and `my-qwen-helper` is

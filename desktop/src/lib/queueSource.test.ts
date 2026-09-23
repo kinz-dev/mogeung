@@ -29,6 +29,15 @@ describe("filtering the queue by agent CLI", () => {
     expect(matchesFilter(session("qwen_code"), undefined, "source:qwen_code")).toBe(true);
   });
 
+  /// opencode's wire value *is* its label, so both spellings are one word —
+  /// and "code" in it must not make it a Claude Code or Qwen Code session.
+  it("finds opencode by the one word it goes by", () => {
+    expect(matchesFilter(session("opencode"), undefined, "source:opencode")).toBe(true);
+    expect(matchesFilter(session("opencode"), undefined, "agent:opencode")).toBe(true);
+    expect(matchesFilter(session("claude_code"), undefined, "source:opencode")).toBe(false);
+    expect(matchesFilter(session("opencode"), undefined, "source:qwen")).toBe(false);
+  });
+
   it("excludes the other CLIs", () => {
     expect(matchesFilter(session("claude_code"), undefined, "source:qwen")).toBe(false);
     expect(matchesFilter(session("codex"), undefined, "source:qwen")).toBe(false);

@@ -73,6 +73,34 @@ describe("the view follows a session through /clear", () => {
     });
   });
 
+  /**
+   * A pane row handing over to its real session. `R-I25`, ADR-0038's
+   * amendment. A headless opencode is a pane row until you type your first
+   * prompt into the pane mogeung opened for it — and then the real session
+   * takes over. The daemon says so in this order: the real session, the row
+   * *dead* with the same pid and cwd, the row removed. The terminal you just
+   * typed into must stay put.
+   */
+  it("follows a pane row onto the real session its agent became", () => {
+    const { ingest, select, setScoped } = useStore.getState();
+    const row = session("pane:%178", { provisional: true, pid: 3784761, cwd: "/w/llmproxy", tmux_target: "mogeung-opencode-llmproxy:0.0" });
+    // The window is already open; the row arrives by broadcast, not snapshot.
+    ingest({ ev: "snapshot", sessions: [], queue: [] });
+    ingest({ ev: "session_updated", session: row });
+    select("pane:%178");
+    setScoped({ paneHold: { agent: "pane:%178" } });
+
+    const real = session("ses_f3083da57ffe", { pid: 3784761, cwd: "/w/llmproxy", tmux_target: "mogeung-opencode-llmproxy:0.0" });
+    ingest({ ev: "session_updated", session: real });
+    ingest({ ev: "session_updated", session: { ...row, alive: false } });
+    ingest({ ev: "session_removed", session_id: "pane:%178" });
+
+    const st = useStore.getState();
+    expect(st.selected).toBe("ses_f3083da57ffe");
+    expect(st.scoped().paneHold).toEqual({ agent: "ses_f3083da57ffe" });
+    expect(st.sessions["pane:%178"]).toBeUndefined();
+  });
+
   it("leaves you on a finished session you went back to read", () => {
     const { ingest, select } = useStore.getState();
     ingest({ ev: "snapshot", sessions: [session("c-old")], queue: [] });

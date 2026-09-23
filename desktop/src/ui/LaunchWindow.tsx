@@ -34,6 +34,10 @@
  * step because a click said yolo is not a choice this window makes for you.
  * What it starts is your usual Codex session minus the prompts.
  *
+ * **Four since `R-I25`.** opencode's line is its own `--auto` — *"auto-approve
+ * permissions that are not explicitly denied"* — so a `deny` in your opencode
+ * config still denies.
+ *
  * **Two lists since `R-J45`**, asked for 2026-08-24: *"I seldom need to open a
  * new claude session from a terminal"*. That is the sentence that changes this
  * window's job. It was built as an occasional shortcut, so a log of recent
@@ -87,7 +91,13 @@ const LAUNCHABLE: readonly { source: SessionSource; yolo: string }[] = [
   { source: "claude_code", yolo: "--dangerously-skip-permissions" },
   { source: "qwen_code", yolo: "--approval-mode yolo" },
   { source: "codex", yolo: "--ask-for-approval never --sandbox workspace-write" },
+  { source: "opencode", yolo: "--auto" },
 ];
+
+/** "a claude", "an opencode" — the one place a CLI's name follows an article. */
+function withArticle(name: string): string {
+  return `${/^[aeiou]/i.test(name) ? "an" : "a"} ${name}`;
+}
 
 export function LaunchWindow() {
   const open = useStore((s) => s.showLaunch);
@@ -343,7 +353,7 @@ export function LaunchWindow() {
             <Rocket size={11} />{" "}
             {headless && !untrusted
               ? `start a headless ${sourceLabel(chosen.source)}`
-              : `open a ${sourceLabel(chosen.source)} terminal`}
+              : `open ${withArticle(sourceLabel(chosen.source))} terminal`}
           </Button>
           <Dim className="text-2xs">
             it opens where you are watching — the daemon's machine, not necessarily this one

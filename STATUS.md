@@ -4,10 +4,10 @@
 
 | | |
 |---|---|
-| Branch | `daemon-federation` |
-| Tests | 717 passing |
-| Rust | 50648 lines |
-| Docs | 118 files, 40 ADRs |
+| Branch | `main` |
+| Tests | 750 passing |
+| Rust | 53315 lines |
+| Docs | 119 files, 40 ADRs |
 
 ## Assumptions
 
@@ -67,4 +67,5 @@ Untested: **19** · At risk: **5** · Supported: 19 · Refuted: 2
 | [More than one repository — the Git window picks](docs/features/0044-more-than-one-repository.md) | `active` | [A19, A26] |
 | [Run configurations — IntelliJ's Run tool window, its Edit dialog and its popup](docs/features/0045-run-configurations.md) | `draft` | [A13, A32, A33, A34, A42, A43] |
 | [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `draft` | [A44, A24] |
+| [opencode adapter](docs/features/0048-opencode-adapter.md) | `in-progress` | [A4, A23] |
 
