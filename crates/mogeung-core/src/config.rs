@@ -119,6 +119,19 @@ pub struct Config {
     /// Window: the global shortcut that raises it. An empty string disables
     /// it, which is the file's way of saying `--no-hotkey`.
     pub hotkey: Option<String>,
+    /// Window: watch the checkout it was installed from and offer an update
+    /// when `update_branch` moves. `R-J105`, feature 0049. Absent means yes,
+    /// in an installed build; a build run from `target/` never offers one.
+    /// `false` and nothing polls at all.
+    pub update_check: Option<bool>,
+    /// Window: the branch an update follows. Default `main`.
+    pub update_branch: Option<String>,
+    /// Window: seconds between looks at the branch. Default 60. A look is one
+    /// `git rev-parse`, milliseconds of work — nothing is built until you ask.
+    pub update_interval: Option<u64>,
+    /// Window: the checkout to update from. Default: the one `install.sh`
+    /// recorded in `~/.mogeung/install.json` when it last installed.
+    pub update_source: Option<PathBuf>,
 }
 
 impl Config {

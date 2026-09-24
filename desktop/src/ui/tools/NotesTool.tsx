@@ -28,6 +28,8 @@ import { useStore } from "@/store";
 import { Checkbox, Dim, Empty, IconButton, Input, Row } from "@/ui/primitives";
 import { stamp } from "@/lib/format";
 import { sessionLabel } from "@/wire/types";
+import { markUnsaved } from "@/lib/unsaved";
+import { noteTitle } from "@/lib/notes";
 
 /**
  * The line worth showing for a note: the one that matched, else the first.
@@ -188,6 +190,15 @@ export function NotesTool() {
   }, [notes, filter]);
 
   const open = openId ? notes.find((n) => n.id === openId) : null;
+
+  // A draft is this component's own until it is saved, so a restart would
+  // lose it — said, so the update's restart dialog can name it. `R-J105`.
+  const dirty = !!open && draft !== open.body;
+  const openTitle = open ? noteTitle(open.body) || "a note" : null;
+  useEffect(() => {
+    markUnsaved("notes", dirty ? `The note “${openTitle}”` : null);
+    return () => markUnsaved("notes", null);
+  }, [dirty, openTitle]);
   /** Documents, not marks — the denominator has to match what the list holds. */
   const docCount = useMemo(() => notes.filter((n) => n.seq === null || n.seq === undefined).length, [notes]);
 

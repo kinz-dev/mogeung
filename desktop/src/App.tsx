@@ -34,6 +34,7 @@ import { StatusBar } from "@/ui/StatusBar";
 import { QueuePanel } from "@/ui/QueuePanel";
 import { Rail } from "@/ui/Rail";
 import { NoticesWindow, Toasts } from "@/ui/Notices";
+import { UpdateAlert } from "@/ui/UpdateAlert";
 import { Palette } from "@/ui/Palette";
 import { HealthWindow } from "@/ui/HealthWindow";
 import { KeymapWindow } from "@/ui/KeymapWindow";
@@ -404,6 +405,8 @@ export default function App() {
         {/* Not in the keymap, on purpose. */}
         <Arcade />
         <NoticesWindow />
+        {/* The window's own update: offered when a commit lands. `R-J105`. */}
+        <UpdateAlert />
         <Toasts />
         <ResizeGrip />
       </div>

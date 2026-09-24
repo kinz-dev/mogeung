@@ -14,6 +14,8 @@ covers:
   - desktop/src-tauri/src/lib.rs
   - desktop/src-tauri/src/connections.rs
   - desktop/src-tauri/src/arcade.rs
+  - desktop/src-tauri/src/update.rs
+  - scripts/install.sh
   - desktop/src/lib/connections.ts
   - desktop/src-tauri/src/popout.rs
   - desktop/src/lib/popout.ts
@@ -488,6 +490,21 @@ a shell that writes files under `~/.mogeung` should be on record even when what
 it writes for is not: the name of the file is checked against a fixed list, so
 no caller can make either command write anywhere else, and a line must be a
 single line of JSON or it is refused. The daemon never reads them.
+
+**And it updates the window** (2026-09-24, `R-J105`,
+[ADR-0041](../decisions/0041-the-window-updates-itself-through-the-os.md)).
+Every build is stamped with its commit (`crates/mogeungd/build.rs`, read by
+both binaries through `mogeungd::version`), and `install.sh` records what it
+installed and from which checkout in `~/.mogeung/install.json`. The shell's
+`update.rs` reads that checkout's branch on the window's schedule; asked to,
+it checks the commit out in a worktree of its own, `~/.mogeung/update/tree`,
+runs `install.sh --build-only` there as you, then `--no-build --elevate
+pkexec`, whose one root step is `dpkg -i` through the system's polkit dialog —
+the shell never handles a password. The restart is not Tauri's: a detached
+waiter starts the installed binary only once this process has exited, because
+the window usually hosts the daemon on its port and a new window born before
+the old one died would find that port taken. Nothing here runs on the daemon
+side.
 
 Switching tears the old connection down before the new one is
 dialled, so a window that has moved on cannot be reconnected behind by the

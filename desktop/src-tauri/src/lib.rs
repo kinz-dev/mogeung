@@ -23,6 +23,7 @@ mod daemon;
 mod lan;
 mod arcade;
 mod popout;
+mod update;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -761,7 +762,13 @@ pub fn run() {
             connections::connections_status,
             lan::lan_peers,
             arcade::arcade_append,
-            arcade::arcade_read
+            arcade::arcade_read,
+            update::update_info,
+            update::update_check,
+            update::update_build,
+            update::update_install,
+            update::update_cancel,
+            update::update_restart
         ])
         .setup(|app| {
             // Built here rather than by the config, because `on_new_window` is

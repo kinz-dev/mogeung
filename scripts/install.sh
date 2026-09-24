@@ -6,6 +6,27 @@
 #   ./scripts/install.sh --no-build      install what is already built
 #   ./scripts/install.sh --prefix DIR    put the binaries somewhere else
 #   ./scripts/install.sh --uninstall     remove what a previous run installed
+#   ./scripts/install.sh --build-only    build everything, install nothing
+#   ./scripts/install.sh --elevate pkexec   ask for root in the desktop's own
+#                                           dialog rather than in a terminal
+#   ./scripts/install.sh --install-app   macOS: copy the app into /Applications
+#
+# **The last three exist for the window's own updates** (`R-J105`, feature
+# 0049), and each is useful by hand too. `--build-only` needs no root at all.
+# `--elevate pkexec` runs the one root step, `dpkg -i`, through polkit, so the
+# password is typed into the operating system's dialog — which names the
+# command it is for — and never into anything of mogeung's; the window has no
+# terminal to type into, and it renders text it did not write, so it is the
+# last place a password should pass through. On macOS nothing needs root, and
+# `--install-app` does the copy this script otherwise prints and leaves to you.
+#
+# A successful install records what it installed in `~/.mogeung/install.json`:
+# the commit, the checkout it came from, the time. That is how an installed
+# window knows where its source is without being told.
+#
+# Exit status: 0 done · 1 failed · 2 bad arguments · 3 the password dialog was
+# dismissed · 4 not authorised — so a caller can tell *you said no* from *it
+# broke*.
 #
 # Three things, in the order they matter:
 #
@@ -123,6 +144,11 @@ PREFIX="$HOME/.local/bin"
 BUILD=1
 DESKTOP=1
 UNINSTALL=0
+BUILD_ONLY=0
+INSTALL_APP=0
+# How the one root step is elevated: `sudo`, asked up front in a terminal, or
+# `pkexec`, the desktop's own dialog, asked at the moment it is needed.
+ELEVATE="sudo"
 # The one bundle this machine can actually use, and no more.
 #
 # On Linux, `deb` and not `all`: the AppImage is ~90 MB, takes the longest of
@@ -196,6 +222,17 @@ remove_stale_shortcut() {
 SUDO=""
 need_sudo() {
     [ "$(id -u)" -eq 0 ] && return 0
+    if [ "$ELEVATE" = "pkexec" ]; then
+        # An absolute path, because pkexec runs its program with a sanitised
+        # environment and says so when it cannot find one.
+        if command -v pkexec >/dev/null 2>&1; then
+            SUDO="$(command -v pkexec)"
+            return 0
+        fi
+        echo "installing the window needs root and pkexec is not here." >&2
+        echo "  run ./scripts/install.sh from a terminal instead." >&2
+        return 1
+    fi
     if command -v sudo >/dev/null 2>&1; then
         SUDO="sudo"
         return 0
@@ -261,6 +298,10 @@ Options:
   --bundles LIST     what the Tauri bundler makes (default: dmg on macOS,
                      deb on Linux; try all)
   --uninstall        remove everything a previous run installed
+  --build-only       build everything and install nothing (needs no root)
+  --elevate WHICH    sudo (default: asked once, up front, in the terminal) or
+                     pkexec (the desktop's own dialog, when it is needed)
+  --install-app      macOS: copy the built app into /Applications
   -h, --help         this
 EOF
 }
@@ -272,6 +313,15 @@ while [ $# -gt 0 ]; do
         --no-desktop) DESKTOP=0 ;;
         --bundles)    BUNDLES="${2:?--bundles needs a value}"; shift ;;
         --uninstall)  UNINSTALL=1 ;;
+        --build-only) BUILD_ONLY=1 ;;
+        --install-app) INSTALL_APP=1 ;;
+        --elevate)
+            ELEVATE="${2:?--elevate needs sudo or pkexec}"; shift
+            case "$ELEVATE" in
+                sudo|pkexec) ;;
+                *) echo "--elevate takes sudo or pkexec, not $ELEVATE" >&2; exit 2 ;;
+            esac
+            ;;
         -h|--help)    usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -302,13 +352,47 @@ fi
 # asked — and neither is macOS, where the only thing root was ever for is
 # `dpkg`. Asking there would be a password prompt collected for nothing, which
 # is worse than an unnecessary one: it teaches you to type it without reading.
-if [ "$DESKTOP" -eq 1 ] && [ "$UNINSTALL" -eq 0 ] && [ "$PLATFORM" = "linux" ]; then
+#
+# Nor with `--build-only`, which installs nothing, nor with `--elevate pkexec`,
+# whose dialog is asked at the moment of `dpkg` and needs no warm credential.
+if [ "$DESKTOP" -eq 1 ] && [ "$UNINSTALL" -eq 0 ] && [ "$PLATFORM" = "linux" ] &&
+   [ "$BUILD_ONLY" -eq 0 ] && [ "$ELEVATE" = "sudo" ]; then
     authenticate_early || exit 1
 fi
 
+# What this checkout is, written after a successful install. `--git-common-dir`
+# rather than `--show-toplevel`, so an install from a linked worktree — which
+# is how the window builds its updates — records the checkout the worktree
+# belongs to, the one whose branch an update follows.
+write_install_record() {
+    local window="$1"
+    local commit source branch dir tmp
+    commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+    source="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    case "$source" in
+        */.git) source="${source%/.git}" ;;
+        *) source="$ROOT" ;;
+    esac
+    branch="$(git -C "$source" symbolic-ref -q --short HEAD 2>/dev/null || true)"
+    dir="$HOME/.mogeung"
+    mkdir -p "$dir" || return 1
+    give_back "$dir"
+    tmp="$dir/install.json.tmp"
+    # Paths are the only strings here that could hold a quote or a backslash.
+    esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+    printf '{"commit":"%s","source":"%s","branch":"%s","at":"%s","platform":"%s","window":%s}\n' \
+        "$commit" "$(esc "$source")" "$(esc "$branch")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PLATFORM" "$window" \
+        >"$tmp" && mv "$tmp" "$dir/install.json" || return 1
+    give_back "$dir/install.json"
+    echo "▸ recorded ${commit:0:7} from $source in $dir/install.json"
+}
+
 # Step 1, and first on purpose: a dead entry sitting next to the real one is
-# the confusing state, so clear it before step 3 can create the real one.
-remove_stale_shortcut || exit 1
+# the confusing state, so clear it before step 3 can create the real one. Not
+# for `--build-only`, which touches nothing outside this checkout.
+if [ "$BUILD_ONLY" -eq 0 ]; then
+    remove_stale_shortcut || exit 1
+fi
 
 # ── the daemon and the launchers ─────────────────────────────────────────────
 
@@ -322,6 +406,7 @@ if [ ! -x "target/release/mogeungd" ]; then
     exit 1
 fi
 
+if [ "$BUILD_ONLY" -eq 0 ]; then
 mkdir -p "$PREFIX" || exit 1
 
 # `install` rather than `cp`: it replaces a running binary atomically enough
@@ -338,6 +423,7 @@ for name in $INSTALLABLES; do
     give_back "$PREFIX/$name"
     echo "▸ installed $PREFIX/$name"
 done
+fi
 
 # ── the window ───────────────────────────────────────────────────────────────
 
@@ -353,11 +439,35 @@ if [ "$DESKTOP" -eq 1 ]; then
         as_user "cd desktop && npm run tauri build -- --bundles '$BUNDLES'" || exit 1
     fi
 
+    if [ "$BUILD_ONLY" -eq 1 ]; then
+        echo "▸ built, and nothing installed (--build-only)."
+        exit 0
+    fi
+
     if [ "$PLATFORM" != "linux" ]; then
         # Newest first, for the same reason the .deb below is: a rebuild that
         # bumped `version` must not be reported as whichever name sorts last.
         APP="$(ls -td "$APP_DIR"/*.app 2>/dev/null | head -1)"
         DMG="$(ls -t "$DMG_DIR"/*.dmg 2>/dev/null | head -1)"
+        if [ "$INSTALL_APP" -eq 1 ]; then
+            if [ -z "$APP" ]; then
+                echo "no .app in $APP_DIR — build first (or drop --no-build)" >&2
+                exit 1
+            fi
+            # Copied beside the old one and swapped in, so a copy that fails
+            # halfway leaves the installed app as it was rather than half of
+            # each. The running app keeps the files it has open; the next
+            # launch is the new one.
+            dest="/Applications/$(basename "$APP")"
+            if ! cp -R "$APP" "$dest.new"; then
+                echo "could not copy into /Applications — is it writable by you?" >&2
+                exit 1
+            fi
+            rm -rf "$dest" && mv "$dest.new" "$dest" || exit 1
+            echo "▸ installed $dest"
+            write_install_record true || exit 1
+            exit 0
+        fi
         echo
         echo "▸ built, and stopping here: on macOS where the bundle goes is your call."
         [ -n "$DMG" ] && echo "  disk image: $DMG"
@@ -380,10 +490,23 @@ if [ "$DESKTOP" -eq 1 ]; then
 
     need_sudo || exit 1
     echo "▸ installing $DEB (needs root)…"
-    # No prompt here: `authenticate_early` asked before the builds and has been
-    # keeping the credential warm ever since, or we are already root because
-    # this was run under sudo. Either way the password moment is behind us.
-    if ! $SUDO dpkg -i "$DEB"; then
+    # No prompt here with sudo: `authenticate_early` asked before the builds
+    # and has been keeping the credential warm ever since, or we are already
+    # root because this was run under sudo. With pkexec this *is* the prompt —
+    # the desktop's dialog, naming `dpkg` — and the paths are absolute because
+    # pkexec does not run its program where we are standing.
+    if [ "$ELEVATE" = "pkexec" ] && [ -n "$SUDO" ]; then
+        $SUDO "$(command -v dpkg)" -i "$ROOT/$DEB"
+        status=$?
+        case "$status" in
+            0) ;;
+            126) echo "the password dialog was dismissed — nothing was installed." >&2; exit 3 ;;
+            127) echo "not authorised to install — nothing was installed." >&2; exit 4 ;;
+            *) echo "dpkg refused it (exit $status). If it named missing dependencies:" >&2
+               echo "  sudo apt-get -f install" >&2
+               exit 1 ;;
+        esac
+    elif ! $SUDO dpkg -i "$DEB"; then
         echo >&2
         echo "dpkg refused it. If it named missing dependencies, this fixes them:" >&2
         echo "  sudo apt-get -f install" >&2
@@ -391,11 +514,20 @@ if [ "$DESKTOP" -eq 1 ]; then
     fi
 
     # dpkg's own triggers usually do this; doing it again costs a moment and
-    # covers the desktops where they do not.
-    command -v update-desktop-database >/dev/null 2>&1 &&
-        $SUDO update-desktop-database /usr/share/applications 2>/dev/null
+    # covers the desktops where they do not. Not through pkexec, where it
+    # would be a second password dialog for something the triggers did.
+    if [ "$ELEVATE" = "sudo" ]; then
+        command -v update-desktop-database >/dev/null 2>&1 &&
+            $SUDO update-desktop-database /usr/share/applications 2>/dev/null
+    fi
+    write_install_record true || exit 1
 
     echo "▸ installed — 'mogeung' is in the launcher, and /usr/bin/mogeung-desktop"
+fi
+
+# Daemon and launchers only: still an install, and still worth recording.
+if [ "$DESKTOP" -eq 0 ] && [ "$BUILD_ONLY" -eq 0 ]; then
+    write_install_record false || exit 1
 fi
 
 # A successful install to a directory the shell will never look in is the most

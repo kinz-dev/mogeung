@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-09-23
+updated: 2026-09-24
 ---
 
 # Getting started
@@ -57,6 +57,18 @@ installs the window's `.deb` with `dpkg -i`, asking for `sudo` at that step and
 no other. `./scripts/install.sh --uninstall` takes it all back off. See
 [desktop/README.md](../../desktop/README.md) for the bundles themselves — the
 `.rpm` and the AppImage, and what each is for.
+
+**After that, it keeps itself up to date.** An installed window looks at the
+checkout it was installed from once a minute, and when a new commit lands on
+`main` and has been still for two minutes it offers the update: *Update*
+builds it in `~/.mogeung/update/tree` while you keep working, installs it —
+asking for your password in the system's own dialog, never in mogeung — and
+then asks *Restart now* or *Later*. Agents keep running through a restart. The
+status bar shows the commit you are running and how far behind `main` it is.
+To stop the looking, click *stop checking* in the offer, or put
+`update_check = false` in `~/.mogeung/config.toml`; `update_branch`,
+`update_interval` (seconds) and `update_source` (the checkout) are there too.
+See [ADR-0041](../decisions/0041-the-window-updates-itself-through-the-os.md).
 
 There is nothing to configure and no repos to register. If you have run `claude`,
 `codex`, `qwen` or `opencode` anywhere in the last 14 days, it appears.

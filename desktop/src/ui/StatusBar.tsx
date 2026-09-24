@@ -7,6 +7,7 @@ import { Folder } from "lucide-react";
 import { useStore, useSelectedSession } from "@/store";
 import { Dim } from "@/ui/primitives";
 import { NoticeButton } from "@/ui/Notices";
+import { UpdateMark } from "@/ui/UpdateAlert";
 import { compact, dirTail, fmtDur, secsSince } from "@/lib/format";
 import { repoName, sessionLabel } from "@/wire/types";
 
@@ -96,6 +97,7 @@ export function StatusBar() {
         <Dim>no session selected</Dim>
       )}
       <NoticeButton />
+      <UpdateMark />
       {health && (
         <Dim className={s ? "" : "ml-auto"} title={health.alerts.map((a) => a.kind).join("\n")}>
           {health.alerts.length > 0 ? (

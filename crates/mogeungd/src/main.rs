@@ -21,7 +21,7 @@ const DEFAULT_LISTEN: &str = "127.0.0.1:7717";
 const DEFAULT_POLL_MS: u64 = 1500;
 
 #[derive(Parser)]
-#[command(name = "mogeungd", version, about = "mogeung daemon — watches Claude Code sessions")]
+#[command(name = "mogeungd", version = mogeungd::version::DESCRIBE, about = "mogeung daemon — watches Claude Code sessions")]
 struct Args {
     /// Address to listen on. Default 127.0.0.1:7717, or `listen` in
     /// ~/.mogeung/config.toml.
