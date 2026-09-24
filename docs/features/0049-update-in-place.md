@@ -1,7 +1,7 @@
 ---
 title: Update in place
 status: active
-updated: 2026-09-24
+updated: 2026-09-25
 roadmap: R-J105
 depends_on: [A46, A47, A48]
 ---
@@ -61,15 +61,14 @@ commit it was built from — every one is `0.1.0`.
 - [x] **Update** builds that commit where the running window is not disturbed,
       with progress to watch and a way to cancel. A failed build says why and
       leaves the installed version as it was.
-- [ ] Installing asks for the password **once**, in the operating system's own
+- [x] Installing asks for the password **once**, in the operating system's own
       dialog, for the one step that needs root (`dpkg -i` on Linux) — mogeung
-      never sees the password. On macOS nothing is asked. *(Built; unticked
-      until A48's spike — the dialog needs a hand at the keyboard.)*
-- [ ] When the install is done: **Restart now** relaunches into the new build,
+      never sees the password. On macOS nothing is asked. *(Seen on Linux
+      2026-09-25; macOS unexercised.)*
+- [x] When the install is done: **Restart now** relaunches into the new build,
       every agent still running and its pane reattached; **Later** dismisses
       the dialog and leaves a quiet *restart to update* mark in the status bar
-      until you do. *(Built and tested to the shell's edge; unticked until
-      A46's spike on the installed window.)*
+      until you do. *(Restart seen 2026-09-25; Later pinned by a test.)*
 - [x] A daemon this window did not start is not restarted behind your back: it
       is named, with its pid, and restarting it is your click.
 - [x] Checking can be turned off, and nothing polls while it is.
@@ -296,6 +295,18 @@ checked from a real linked worktree.
 file, the branch ref and `packed-refs` — and only those that exist, since cargo
 re-runs a build script every time for a missing path. Checked: a second
 `cargo build -p mogeungd` reports it `Fresh`.
+
+**The first real update, 2026-09-25 — and the verdict: *"the flow working as
+expected"*.** Installed by hand at `17c9f18` with this code in it; the
+feature's own commit, `359592e`, was then the new commit on `main` it offered.
+From the logs: the worktree checked out at 00:32:47, the cold build — `npm
+install` and two release builds — finished at 00:37:38, just under five
+minutes; `pkexec dpkg -i` installed and `install.sh` recorded `359592e` at
+00:37:42; the new window was up at 00:37:46, four seconds later, which is the
+relaunch waiting for the old process and not a moment longer. All six tmux
+sessions predate it. A46 and A48 are `SUPPORTED` on that evidence. Two things
+it does not show: whether *Cancel* in the password dialog was tried (each
+attempt overwrites its log), and anything on macOS.
 
 **Not built**: keeping the previous `.deb` for a one-click rollback, and the
 optional test gate. Both are in the plan and neither is in the acceptance;

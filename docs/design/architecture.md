@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-24
+updated: 2026-09-25
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/lan.rs
@@ -500,7 +500,10 @@ installed and from which checkout in `~/.mogeung/install.json`. The shell's
 it checks the commit out in a worktree of its own, `~/.mogeung/update/tree`,
 runs `install.sh --build-only` there as you, then `--no-build --elevate
 pkexec`, whose one root step is `dpkg -i` through the system's polkit dialog —
-the shell never handles a password. The restart is not Tauri's: a detached
+the shell never handles a password. Each stage's output streams to the window
+as `update:log` and is kept in `~/.mogeung/update/build.log` and
+`install.log`, overwritten by the next attempt; `install.sh`'s exit status says
+how it ended (3 is a dismissed dialog, 4 not authorised). The restart is not Tauri's: a detached
 waiter starts the installed binary only once this process has exited, because
 the window usually hosts the daemon on its port and a new window born before
 the old one died would find that port taken. Nothing here runs on the daemon
