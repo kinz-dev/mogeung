@@ -489,7 +489,12 @@ line per session in `~/.mogeung/<name>.jsonl` for each name in the fixed list
 a shell that writes files under `~/.mogeung` should be on record even when what
 it writes for is not: the name of the file is checked against a fixed list, so
 no caller can make either command write anywhere else, and a line must be a
-single line of JSON or it is refused. The daemon never reads them.
+single line of JSON or it is refused. The daemon never reads them. Its games
+open in a window of their own — a second page, `arcade.html`, built beside
+`index.html` and opened through the same `window.open` switch `popout.rs`
+installs for dockview — and that page loads no store and dials no daemon: the
+main window tells it the theme and which session is waiting over a
+`BroadcastChannel`, and hears back when that line is clicked.
 
 **And it updates the window** (2026-09-24, `R-J105`,
 [ADR-0041](../decisions/0041-the-window-updates-itself-through-the-os.md)).

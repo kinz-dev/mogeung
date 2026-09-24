@@ -27,7 +27,21 @@ export default defineConfig({
     },
   },
   // Tauri expects a fixed dist dir and no source maps in release.
-  build: { outDir: "dist", target: "esnext", sourcemap: true },
+  //
+  // Two pages: the window, and the arcade's window of its own
+  // (`src/lib/arcadeWindow.ts`). `popout.html` is not one of them — it is
+  // static, in `public/`, because it carries no script.
+  build: {
+    outDir: "dist",
+    target: "esnext",
+    sourcemap: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        arcade: path.resolve(__dirname, "arcade.html"),
+      },
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

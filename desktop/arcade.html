@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  The arcade's own page, opened in a window of its own when π is typed in the
+  main window. See `src/lib/arcadeWindow.ts`.
+
+  `data-theme` starts from the `?theme=` the main window passes, set before the
+  first paint so a light theme does not flash dark; the main window keeps it
+  current after that.
+-->
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/mogeung.png" />
+    <title>mogeung · games</title>
+    <script>
+      (function () {
+        var t = new URLSearchParams(location.search).get("theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/arcade.tsx"></script>
+  </body>
+</html>

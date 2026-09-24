@@ -12,8 +12,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Arcade } from "@/ui/Arcade";
+import { ArcadeWindow } from "@/ui/ArcadeRoom";
 import { useStore } from "@/store";
 
 function press(keys: string, on: Element = document.body) {
@@ -32,6 +33,9 @@ function solve(): string {
 beforeEach(() => {
   localStorage.clear();
   useStore.setState({ queue: [], sessions: {} } as never);
+  // Escape at the picker closes the arcade's window, and jsdom's `close`
+  // would take the test's document with it.
+  vi.spyOn(window, "close").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -41,10 +45,9 @@ afterEach(() => {
 });
 
 describe("playing", () => {
-  /** Through the arcade, as it is really reached: π, then 1 for mental maths. */
+  /** Through the arcade's window, as it is really reached: its picker, then 1 for mental maths. */
   function open() {
-    render(<Arcade />);
-    press("314159");
+    render(<ArcadeWindow />);
     press("1");
   }
 
@@ -81,8 +84,8 @@ describe("playing", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(dialog()).toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // …and the picker closes the arcade's window.
+    expect(window.close).toHaveBeenCalled();
   });
 
   it("a timed run ends on its own clock and is judged", () => {
@@ -116,8 +119,8 @@ describe("playing", () => {
 
   it("takes the whole window, and a click anywhere keeps the keyboard in the answer box", () => {
     open();
-    // The whole application screen, not a box in the middle of it.
-    expect(dialog()).toHaveClass("fixed", "inset-0");
+    // The whole of its window, not a box in the middle of it.
+    expect(dialog()).toHaveClass("h-screen");
     fireEvent.click(screen.getByRole("button", { name: /^start/ }));
     const box = screen.getByLabelText("answer");
     box.blur();
@@ -188,16 +191,19 @@ describe("playing", () => {
     expect(screen.getByLabelText("final score")).toBeInTheDocument();
   });
 
-  it("still says when a session needs you, and a click goes to it", () => {
+  it("still says when a session needs you, and a click goes to it without ending the game", async () => {
+    vi.spyOn(window, "focus").mockImplementation(() => undefined);
     const select = vi.fn();
     useStore.setState({
       queue: [{ session_id: "s1", reason: "awaiting_input", score: 1, detail: "" }],
       sessions: { s1: { id: "s1", title: "fix the parser" } },
       select,
     } as never);
+    // The main window's half, which is what tells the arcade's window.
+    render(<Arcade />);
     open();
-    fireEvent.click(screen.getByRole("button", { name: /a session needs you — fix the parser/ }));
-    expect(select).toHaveBeenCalledWith("s1");
-    expect(dialog()).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: /a session needs you — fix the parser/ }));
+    await waitFor(() => expect(select).toHaveBeenCalledWith("s1"));
+    expect(dialog()).toBeInTheDocument();
   });
 });

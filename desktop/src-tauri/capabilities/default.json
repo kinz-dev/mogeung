@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What a window is allowed to ask the shell for. Deliberately small: this client's authority comes from the daemon over a socket, not from the OS. `popout-*` is R-B55's detached pane, which is an ordinary client and gets exactly what `main` gets \u2014 no more, and no less, or its terminal cannot open a pty and fails as a black pane.",
+  "description": "What a window is allowed to ask the shell for. Deliberately small: this client's authority comes from the daemon over a socket, not from the OS. `popout-*` is R-B55's detached pane, which is an ordinary client and gets exactly what `main` gets \u2014 no more, and no less, or its terminal cannot open a pty and fails as a black pane. The arcade's window is one of those too, and raising a window is so that a click in it can bring the main window forward, and a second \u03c0 the arcade's.",
   "windows": [
     "main",
     "popout-*"
@@ -13,6 +13,8 @@
     "global-shortcut:default",
     "notification:default",
     "core:window:allow-minimize",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
     "core:window:allow-toggle-maximize",
     "core:window:allow-is-maximized",
     "core:window:allow-close",
