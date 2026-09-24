@@ -9,7 +9,14 @@
 
 import { isTauri } from "@/lib/tauri";
 
-export type ArcadeGame = "mental-math" | "trading-game";
+export type ArcadeGame =
+  | "mental-math"
+  | "trading-game"
+  | "dice-game"
+  | "etf-arbitrage"
+  | "card-game"
+  | "fermi-estimation"
+  | "event-contracts";
 
 const localKey = (game: ArcadeGame) => `mogeung.arcade.${game}`;
 

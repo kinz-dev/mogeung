@@ -8,8 +8,8 @@
  *   table are all built from `ACTIONS`, so staying out of it is staying
  *   undocumented.
  * - **π opens a picker, not a game**, since the Trading Game joined it
- *   (2026-09-24) — and Escape walks back out: a game's first page to the
- *   picker, the picker to closed.
+ *   (2026-09-24; the other five the same day) — and Escape walks
+ *   back out: a game's first page to the picker, the picker to closed.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +43,9 @@ describe("the way in", () => {
     expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Mental maths/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Trading Game/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Dice market/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ETF arbitrage/ })).toBeInTheDocument();
+    for (const name of [/Card game/, /Fermi estimation/, /Event contracts/]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
     expect(screen.getByText("you found it")).toBeInTheDocument();
   });
 
@@ -75,7 +78,7 @@ describe("the way in", () => {
   });
 
   it("is in no list the window documents its keys from", () => {
-    const told = ACTIONS.filter((a) => /math|game|arcade|trading|secret|\bpi\b|π/i.test(`${a.id} ${a.label}`));
+    const told = ACTIONS.filter((a) => /math|game|arcade|trading|dice|etf|arbitrage|card|fermi|estimat|contract|secret|\bpi\b|π/i.test(`${a.id} ${a.label}`));
     expect(told).toEqual([]);
   });
 
@@ -94,7 +97,7 @@ describe("the way in", () => {
 });
 
 describe("the picker", () => {
-  it("1 opens mental maths and 2 the Trading Game; Escape comes back here, then closes", () => {
+  it("1–7 open the seven games; Escape comes back here, then closes", () => {
     render(<Arcade />);
     press("314159");
     press("1");
@@ -107,6 +110,30 @@ describe("the picker", () => {
     expect(screen.getByRole("button", { name: /start game/ })).toBeInTheDocument();
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
+
+    press("3");
+    expect(screen.getByRole("dialog", { name: "dice game" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Time to trade, seconds")).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
+
+    press("4");
+    expect(screen.getByRole("dialog", { name: "etf arbitrage" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Time per round, seconds")).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
+
+    for (const [key, name, lobby] of [
+      ["5", "card game", "Cards"],
+      ["6", "fermi estimation", "Questions"],
+      ["7", "event contracts", "Rounds"],
+    ]) {
+      press(key);
+      expect(screen.getByRole("dialog", { name })).toBeInTheDocument();
+      expect(screen.getByLabelText(lobby)).toBeInTheDocument();
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
+    }
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(room()).toBeNull();
   });
@@ -131,7 +158,7 @@ describe("the picker", () => {
     render(<Arcade />);
     press("314159");
     await waitFor(() => expect(screen.getByText(/1 session played · best \+\$112/)).toBeInTheDocument());
-    expect(screen.getByText("not played yet")).toBeInTheDocument();
+    expect(screen.getAllByText("not played yet")).toHaveLength(6);
   });
 
   it("still says when a session needs you, and a click goes to it", () => {

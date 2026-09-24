@@ -481,9 +481,9 @@ part of what the panel displays. A browser tab has no shell, so it falls back to
 
 **The shell writes one other kind of file there** (2026-09-24): a history of
 play for something in the window that is deliberately not documented, one JSON
-line per session in `~/.mogeung/mental-math.jsonl` and
-`~/.mogeung/trading-game.jsonl`, appended through `arcade_append` and read
-through `arcade_read` (`desktop/src-tauri/src/arcade.rs`). Recorded here because
+line per session in `~/.mogeung/<name>.jsonl` for each name in the fixed list
+`GAMES`, appended through `arcade_append` and read through `arcade_read`
+(`desktop/src-tauri/src/arcade.rs`). Recorded here because
 a shell that writes files under `~/.mogeung` should be on record even when what
 it writes for is not: the name of the file is checked against a fixed list, so
 no caller can make either command write anywhere else, and a line must be a

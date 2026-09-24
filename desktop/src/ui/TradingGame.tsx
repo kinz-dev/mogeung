@@ -50,7 +50,7 @@ import {
   type Table,
 } from "@/lib/tradingTable";
 import { appendSession, loadSessions, money, standing, toSession, type SessionRecord } from "@/lib/tradingStats";
-import { ArcadeHeader, BigButton, Choice, Key, Label, fs } from "@/ui/arcadeKit";
+import { ArcadeHeader, AutoFocus, BigButton, Choice, Countdown, Key, Label, NumberBox, Stepper, Tile, Toggle, fs } from "@/ui/arcadeKit";
 import { TrendChart } from "@/ui/MentalMathHistory";
 
 type Phase = "lobby" | "table" | "results";
@@ -210,52 +210,6 @@ export function TradingGame({ onExit, onClose, seed }: { onExit: () => void; onC
 
 // --- lobby ----------------------------------------------------------------------
 
-function Stepper({
-  label,
-  value,
-  range,
-  step = 1,
-  unit = "",
-  onChange,
-}: {
-  label: string;
-  value: number;
-  range: readonly [number, number];
-  step?: number;
-  unit?: string;
-  onChange: (v: number) => void;
-}) {
-  const set = (v: number) => onChange(Math.max(range[0], Math.min(range[1], v)));
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-[var(--border)] py-[0.5em]">
-      <span>{label}</span>
-      <span className="flex items-center gap-2">
-        <BigButton onClick={() => set(value - step)} disabled={value <= range[0]} title={`fewer — ${label}`}>
-          −
-        </BigButton>
-        <span className="w-[4.5em] text-center font-mono tabular-nums" aria-label={label}>
-          {value}
-          {unit}
-        </span>
-        <BigButton onClick={() => set(value + step)} disabled={value >= range[1]} title={`more — ${label}`}>
-          +
-        </BigButton>
-      </span>
-    </div>
-  );
-}
-
-function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-[var(--border)] py-[0.5em]">
-      <span>{label}</span>
-      <Choice on={on} onClick={() => onChange(!on)}>
-        {on ? "on" : "off"}
-      </Choice>
-    </div>
-  );
-}
-
 function Lobby({
   settings,
   onChange,
@@ -405,22 +359,9 @@ function HowToPlay() {
   );
 }
 
-function Tile({ n, label, tone }: { n: ReactNode; label: string; tone?: string }) {
-  return (
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-panel)] px-[0.9em] py-[0.5em]">
-      <div className="font-mono font-semibold tabular-nums" style={{ ...fs(16, 3.2, 30), color: tone ?? "var(--text-strong)" }}>
-        {n}
-      </div>
-      <div className="text-[var(--dim)]" style={fs(11, 1.6, 14)}>
-        {label}
-      </div>
-    </div>
-  );
-}
-
 // --- the table ----------------------------------------------------------------------
 
-function PlayingCard({ card, faceUp }: { card: Card; faceUp: boolean }) {
+export function PlayingCard({ card, faceUp }: { card: Card; faceUp: boolean }) {
   const red = isRed(card.suit);
   const style = { width: "clamp(56px, 11vmin, 120px)", height: "clamp(80px, 15.5vmin, 168px)" };
   if (!faceUp) {
@@ -448,66 +389,6 @@ function PlayingCard({ card, faceUp }: { card: Card; faceUp: boolean }) {
         </span>
       )}
     </div>
-  );
-}
-
-function Countdown({ deadline, total, now }: { deadline: number | null; total: number; now: number }) {
-  if (deadline === null) return null;
-  const left = Math.max(0, deadline - now);
-  const frac = Math.min(1, left / (total * 1000));
-  return (
-    <div className="flex items-center gap-3" title="time to act">
-      <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--bg-faint)]">
-        <div className="h-full rounded-full" style={{ width: `${frac * 100}%`, background: frac < 0.25 ? "var(--red)" : "var(--blue)" }} />
-      </div>
-      <span className="w-[3em] text-right font-mono tabular-nums" aria-label="seconds left">
-        {Math.ceil(left / 1000)}s
-      </span>
-    </div>
-  );
-}
-
-/** A number box that takes a minus sign and digits, and nothing else. */
-function NumberBox({
-  label,
-  value,
-  onChange,
-  onEnter,
-  onKey,
-  autoFocus,
-  width = "7em",
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  onEnter: () => void;
-  onKey?: (key: string) => boolean;
-  autoFocus?: boolean;
-  width?: string;
-}) {
-  return (
-    <input
-      aria-label={label}
-      autoFocus={autoFocus}
-      inputMode="numeric"
-      autoComplete="off"
-      spellCheck={false}
-      value={value}
-      onChange={(e) => {
-        const v = e.target.value.replace(/[−–]/g, "-").replace(/[^\d-]/g, "");
-        onChange(v.startsWith("-") ? `-${v.slice(1).replace(/-/g, "")}` : v.replace(/-/g, ""));
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          onEnter();
-        } else if (onKey && e.key.length === 1 && onKey(e.key.toLowerCase())) {
-          e.preventDefault();
-        }
-      }}
-      style={{ ...fs(20, 4.2, 40), width }}
-      className="rounded-lg border-2 border-[var(--border)] bg-[var(--bg-panel)] px-3 py-[0.1em] text-center font-mono text-[var(--text-strong)] tabular-nums outline-none focus:border-[var(--selection-stroke)]"
-    />
   );
 }
 
@@ -815,16 +696,6 @@ function TableView({
       </div>
     </div>
   );
-}
-
-/** Focuses the button it sits in, once. */
-function AutoFocus() {
-  const ref = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    const t = setTimeout(() => ref.current?.closest("button")?.focus(), 0);
-    return () => clearTimeout(t);
-  }, []);
-  return <span ref={ref} hidden />;
 }
 
 // --- results ------------------------------------------------------------------------

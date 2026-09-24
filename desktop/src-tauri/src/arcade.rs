@@ -1,7 +1,8 @@
 //! The easter egg's history files. See `desktop/src/lib/arcade.ts`.
 //!
 //! `~/.mogeung/<game>.jsonl` — one finished session per line, appended and
-//! never rewritten, one file per game: `mental-math.jsonl`, `trading-game.jsonl`.
+//! never rewritten, one file per game in `GAMES` — `mental-math.jsonl`,
+//! `trading-game.jsonl` and so on.
 //! Asked for 2026-09-23: *"record it to some local file, so that after a few
 //! games, we can build analytics"*. A file rather than the webview's
 //! `localStorage` because a record you mean to keep should survive a cleared
@@ -16,7 +17,15 @@ use std::path::{Path, PathBuf};
 
 /// The games that keep a history. A name is a file name, so it is never
 /// taken from the caller unchecked.
-pub const GAMES: &[&str] = &["mental-math", "trading-game"];
+pub const GAMES: &[&str] = &[
+    "mental-math",
+    "trading-game",
+    "dice-game",
+    "etf-arbitrage",
+    "card-game",
+    "fermi-estimation",
+    "event-contracts",
+];
 
 /// Same `HOME` idiom as every other path under `~/.mogeung`.
 pub fn path_for(game: &str) -> Result<PathBuf, String> {
@@ -102,8 +111,9 @@ mod tests {
 
     #[test]
     fn only_a_known_game_names_a_file() {
-        assert!(path_for("mental-math").unwrap().ends_with(".mogeung/mental-math.jsonl"));
-        assert!(path_for("trading-game").unwrap().ends_with(".mogeung/trading-game.jsonl"));
+        for game in GAMES {
+            assert!(path_for(game).unwrap().ends_with(format!(".mogeung/{game}.jsonl")));
+        }
         assert!(path_for("../../.bashrc").is_err());
         assert!(path_for("connections").is_err());
     }
