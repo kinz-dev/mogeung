@@ -1,6 +1,7 @@
 /**
- * The game, and the way in. [`lib/mentalMath.ts`](../lib/mentalMath.ts) says
- * why it is hidden and whose rules it plays by.
+ * The mental-math game. [`lib/mentalMath.ts`](../lib/mentalMath.ts) says whose
+ * rules it plays by; [`Arcade`](Arcade.tsx) is the way in and the room it plays
+ * in, since the Trading Game joined it on 2026-09-24.
  *
  * **It takes the whole window**, and its type is sized from the window rather
  * than from the app's compact scale. It started as a 580px dialog in the
@@ -14,10 +15,9 @@
  * cruellest thing a game could do.
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { BookOpen, Dumbbell, Flag, Infinity as Endless, Sigma, Sparkles, ThumbsUp, Trophy, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { BookOpen, Dumbbell, Flag, Infinity as Endless, LineChart, Sigma, Sparkles, ThumbsUp, Trophy } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { focusOwns } from "@/lib/keymap";
 import {
   DIFFICULTIES,
   DURATIONS,
@@ -25,8 +25,6 @@ import {
   OPS,
   QUESTION_CLOCKS,
   STANDARD,
-  SECRET,
-  SECRET_GAP_MS,
   SYMBOL,
   answer,
   bestKey,
@@ -40,94 +38,19 @@ import {
   questionSeconds,
   recordBest,
   save,
-  secretStep,
   startRun,
   summarize,
   tick,
   verdict,
-  type Difficulty,
-  type Kind,
   type QuestionClock,
   type Run,
   type Settings,
 } from "@/lib/mentalMath";
-import { useStore } from "@/store";
-import { needsHuman, sessionLabel, type SessionId } from "@/wire/types";
-import { IconButton } from "@/ui/primitives";
-import { interactive } from "@/ui/styles";
+import { ArcadeHeader, BigButton, COLOR, Choice, Key, Label, OP_NAME, clock, fs, secs } from "@/ui/arcadeKit";
+import { History } from "@/ui/MentalMathHistory";
+import { againstRecent, appendHistory, loadHistory, toRecord, type GameRecord } from "@/lib/mentalMathStats";
 
-export function MentalMath() {
-  const [open, setOpen] = useState(false);
-  useSecret(!open, () => setOpen(true));
-  return open ? <Game onClose={() => setOpen(false)} /> : null;
-}
-
-/**
- * Listens for π. Only where a bare key belongs to the window — the same rule
- * the window's own bare bindings obey — so the digits typed into a terminal,
- * a filter box or a scratch file are only ever digits.
- */
-function useSecret(armed: boolean, onFound: () => void) {
-  const found = useRef(onFound);
-  found.current = onFound;
-  useEffect(() => {
-    if (!armed) return;
-    let progress = "";
-    let at = 0;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      const digit = /^\d$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey;
-      if (!digit || focusOwns(e.key)) {
-        progress = "";
-        return;
-      }
-      const now = Date.now();
-      progress = secretStep(now - at > SECRET_GAP_MS ? "" : progress, e.key);
-      at = now;
-      if (progress === SECRET) {
-        progress = "";
-        e.preventDefault();
-        found.current();
-      }
-    };
-    // Capture, like the keymap: a pane that stops propagation must not be
-    // able to hide the sequence from this.
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [armed]);
-}
-
-/**
- * A font size that grows with the window: `vmin`, so a wide window and a tall
- * one agree, clamped so a small window stays legible and a huge one sane.
- */
-const fs = (min: number, vmin: number, max: number): CSSProperties => ({
-  fontSize: `clamp(${min}px, ${vmin}vmin, ${max}px)`,
-});
-
-type Phase = "setup" | "playing" | "results";
-
-const COLOR: Record<Difficulty, string> = {
-  easy: "var(--green)",
-  normal: "var(--blue)",
-  advanced: "var(--amber)",
-  expert: "var(--purple)",
-};
-
-const OP_NAME: Record<Kind, string> = {
-  add: "addition",
-  sub: "subtraction",
-  mul: "multiplication",
-  div: "division",
-  mixed: "two-step",
-};
-
-function clock(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-const secs = (ms: number | null) => (ms === null ? "—" : `${(ms / 1000).toFixed(1)}s`);
+type Phase = "setup" | "playing" | "results" | "history";
 
 function lengthLabel(s: Settings): string {
   return s.duration === null ? "endless" : `${s.duration / 60} min`;
@@ -157,7 +80,12 @@ function clockLine(s: Settings): string {
     : `solve as many as you can; a question left ${q}s skips itself, no penalty`;
 }
 
-function Game({ onClose }: { onClose: () => void }) {
+/**
+ * One game of mental maths, drawn inside the arcade's full-window shell: its
+ * own header and its own pages. Escape steps back a page — from a run to its
+ * results, from its first page to the arcade's picker.
+ */
+export function MentalMathGame({ onExit, onClose }: { onExit: () => void; onClose: () => void }) {
   const [saved] = useState(loadSaved);
   const [settings, setSettings] = useState(saved.settings);
   const [bests, setBests] = useState(saved.bests);
@@ -165,17 +93,29 @@ function Game({ onClose }: { onClose: () => void }) {
   const [run, setRun] = useState<Run | null>(null);
   const [record, setRecord] = useState<{ previous: number | null; isNew: boolean } | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const panelRef = useRef<HTMLDivElement>(null);
+  // Every game played, oldest first — read once on opening, then added to as
+  // games end, so the history screen never waits on a file.
+  const [records, setRecords] = useState<GameRecord[]>([]);
+  const [against, setAgainst] = useState<ReturnType<typeof againstRecent>>(null);
+  const [unsaved, setUnsaved] = useState(false);
+  const [back, setBack] = useState<Phase>("setup");
+
+  useEffect(() => {
+    let live = true;
+    void loadHistory().then((rs) => live && setRecords((mine) => [...rs, ...mine]));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const showHistory = () => {
+    setBack(phase === "results" ? "results" : "setup");
+    setPhase("history");
+  };
 
   // Kept from the first frame, so even a game closed at once is remembered
   // as found.
   useEffect(() => save({ settings, bests, found: true }), [settings, bests]);
-
-  useEffect(() => {
-    const returnTo = document.activeElement as HTMLElement | null;
-    if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
-    return () => returnTo?.focus?.();
-  }, []);
 
   const start = () => {
     setRecord(null);
@@ -187,7 +127,10 @@ function Game({ onClose }: { onClose: () => void }) {
   const escape = useRef(() => {});
   escape.current = () => {
     if (phase === "playing") setRun((r) => r && endRun(r, Date.now()));
-    else onClose();
+    else if (phase === "history") setPhase(back);
+    // Pages walk back one at a time: results to setup, setup to the arcade.
+    else if (phase === "results") setPhase("setup");
+    else onExit();
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -216,158 +159,84 @@ function Game({ onClose }: { onClose: () => void }) {
     const r = recordBest(bests, run);
     setBests(r.bests);
     setRecord({ previous: r.previous, isNew: r.isNew });
+    // Kept: every game that asked anything, stopped early or not — a stopped
+    // game is not a score, but its answers are still how fast you were.
+    const game = toRecord(run);
+    if (game) {
+      setAgainst(againstRecent([...records, game], game));
+      setRecords((rs) => [...rs, game]);
+      void appendHistory(game).then((ok) => setUnsaved(!ok));
+    } else {
+      setAgainst(null);
+    }
     setPhase("results");
-  }, [phase, run, bests]);
-
-  const goTo = (id: SessionId) => {
-    useStore.getState().select(id);
-    onClose();
-  };
+  }, [phase, run, bests, records]);
 
   return (
-    <div
-      ref={panelRef}
-      role="dialog"
-      aria-modal="true"
-      aria-label="mental math"
-      tabIndex={-1}
-      className="fixed inset-0 z-50 flex flex-col bg-[var(--bg)] text-[var(--text)] outline-none"
-    >
-      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-[var(--bg-panel)] px-5 py-2.5">
-        <Sigma size={20} className="text-[var(--purple)]" />
-        <span className="text-xl font-semibold text-[var(--text-strong)]">mental math</span>
-        {!saved.found && phase === "setup" && (
-          <span className="flex items-center gap-1.5 text-base text-[var(--purple)]">
-            <Sparkles size={16} /> you found it
-          </span>
-        )}
-        {phase === "playing" && run && <span className="text-base text-[var(--dim)]">{runLabel(run.settings)}</span>}
-        <div className="ml-auto">
-          <IconButton title={phase === "playing" ? "end the run  (Esc)" : "close  (Esc)"} onClick={() => escape.current()}>
-            <X size={18} />
-          </IconButton>
-        </div>
-      </div>
+    <>
+      <ArcadeHeader
+        icon={<Sigma size={20} className="text-[var(--purple)]" />}
+        title="mental math"
+        detail={phase === "playing" && run ? runLabel(run.settings) : null}
+        onBack={phase === "playing" ? null : onExit}
+        onClose={phase === "playing" ? () => escape.current() : onClose}
+        closeTitle={phase === "playing" ? "end the run  (Esc)" : "close  (Esc)"}
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex min-h-full w-full max-w-[1200px] flex-col px-[5vw] py-[4vh]">
           {phase === "setup" && (
-            <Setup settings={settings} onChange={setSettings} best={bests[bestKey(settings)] ?? null} onStart={start} />
+            <Setup
+              settings={settings}
+              onChange={setSettings}
+              best={bests[bestKey(settings)] ?? null}
+              onStart={start}
+              games={records.length}
+              onHistory={showHistory}
+            />
           )}
           {phase === "playing" && run && <Play run={run} now={now} onRun={setRun} />}
           {phase === "results" && run && (
-            <Results run={run} record={record} onAgain={start} onSettings={() => setPhase("setup")} onClose={onClose} />
+            <Results
+              run={run}
+              record={record}
+              against={against}
+              onAgain={start}
+              onSettings={() => setPhase("setup")}
+              onHistory={showHistory}
+              onClose={onClose}
+            />
+          )}
+          {phase === "history" && (
+            <History
+              records={records}
+              onBack={() => setPhase(back)}
+              initial={records.length ? records[records.length - 1].difficulty : settings.difficulty}
+              failed={unsaved}
+            />
           )}
         </div>
       </div>
-
-      <Waiting onGo={goTo} />
-    </div>
-  );
-}
-
-// --- pieces -------------------------------------------------------------------
-
-/** A key, at the size of the words around it. */
-function Key({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="rounded border border-[var(--border)] bg-[var(--bg-panel)] px-[0.4em] py-[0.05em] font-mono text-[0.85em] text-[var(--dim)]">
-      {children}
-    </kbd>
-  );
-}
-
-function BigButton({
-  children,
-  onClick,
-  disabled,
-  title,
-  solid,
-  className,
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  title?: string;
-  solid?: boolean;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      style={fs(15, 2.4, 22)}
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg px-[1.4em] py-[0.55em] font-semibold whitespace-nowrap",
-        interactive,
-        "disabled:cursor-default disabled:opacity-40",
-        // After `interactive`, so the fill survives its hover wash.
-        solid
-          ? "bg-[var(--blue)] text-[var(--on-accent)] hover:bg-[var(--blue)] hover:brightness-110 active:bg-[var(--blue)] active:brightness-95"
-          : "border border-[var(--border)] text-[var(--text)] hover:border-[var(--border-hover)]",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Label({ children }: { children: ReactNode }) {
-  return (
-    <div className="mb-2 font-semibold tracking-wider text-[var(--dim)] uppercase" style={fs(11, 1.6, 14)}>
-      {children}
-    </div>
+    </>
   );
 }
 
 // --- setup ------------------------------------------------------------------
-
-function Choice({
-  on,
-  onClick,
-  children,
-  title,
-  className,
-}: {
-  on: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  title?: string;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      title={title}
-      onClick={onClick}
-      className={cn(
-        "rounded-lg border-2 px-[1em] py-[0.6em] text-left",
-        interactive,
-        on
-          ? "border-[var(--selection-stroke)] bg-[var(--state-focus)] text-[var(--text-strong)]"
-          : "border-[var(--border)] text-[var(--dim)] hover:text-[var(--text)]",
-        className,
-      )}
-    >
-      {children}
-    </button>
-  );
-}
 
 function Setup({
   settings,
   onChange,
   best,
   onStart,
+  games,
+  onHistory,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
   best: number | null;
   onStart: () => void;
+  games: number;
+  onHistory: () => void;
 }) {
   const anyOp = OPS.some((o) => settings.ops[o]);
   const special = mixedHint(settings.difficulty);
@@ -466,7 +335,10 @@ function Setup({
         <span className="text-[var(--dim)]" style={small}>
           answers go in when right · <Key>Enter</Key> skips · <Key>Esc</Key> ends
         </span>
-        <BigButton solid className="ml-auto" onClick={onStart} disabled={!anyOp} title={anyOp ? undefined : "turn at least one operation on"}>
+        <BigButton className="ml-auto" onClick={onHistory} title="every game you have played, and how you are trending">
+          <LineChart size="1em" /> progress{games > 0 && <span className="text-[var(--dim)]"> · {games}</span>}
+        </BigButton>
+        <BigButton solid onClick={onStart} disabled={!anyOp} title={anyOp ? undefined : "turn at least one operation on"}>
           {/* Focused on open, so Enter starts. */}
           <AutoFocus />
           start <Key>↵</Key>
@@ -647,14 +519,19 @@ const TIER_ICON = [BookOpen, Dumbbell, ThumbsUp, Sparkles, Trophy] as const;
 function Results({
   run,
   record,
+  against,
   onAgain,
   onSettings,
+  onHistory,
   onClose,
 }: {
   run: Run;
   record: { previous: number | null; isNew: boolean } | null;
+  /** This game against your recent ones at the same setting, if any. */
+  against: ReturnType<typeof againstRecent>;
   onAgain: () => void;
   onSettings: () => void;
+  onHistory: () => void;
   onClose: () => void;
 }) {
   const sum = useMemo(() => summarize(run), [run]);
@@ -700,6 +577,17 @@ function Results({
             <div className={cn("mt-2 flex items-center gap-1.5", record?.isNew ? "text-[var(--green)]" : "text-[var(--dim)]")}>
               {record?.isNew && <Trophy size="1em" />}
               {bestLine}
+            </div>
+          )}
+          {against && !run.early && (
+            <div className="mt-1 text-[var(--dim)]" aria-label="against your recent games">
+              {sum.perMinute} per minute{" "}
+              <span className={sum.perMinute >= against.avgPerMinute ? "text-[var(--green)]" : "text-[var(--amber)]"}>
+                {sum.perMinute >= against.avgPerMinute ? "▲" : "▼"}{" "}
+                {Math.abs(Math.round((sum.perMinute - against.avgPerMinute) * 10) / 10)}
+              </span>{" "}
+              against your last {against.games === 1 ? "game" : `${against.games} games`} here ({against.avgPerMinute}) · best{" "}
+              {against.bestPerMinute}
             </div>
           )}
         </div>
@@ -752,6 +640,9 @@ function Results({
 
       <div className="flex flex-wrap items-center gap-3 border-t border-[var(--border)] pt-[3vh]">
         <BigButton onClick={onSettings}>settings</BigButton>
+        <BigButton onClick={onHistory}>
+          <LineChart size="1em" /> progress
+        </BigButton>
         <BigButton onClick={onClose}>close</BigButton>
         <BigButton solid className="ml-auto" onClick={onAgain} disabled={!ready}>
           {ready && <AutoFocus />}
@@ -772,36 +663,5 @@ function Tile({ n, label, color }: { n: number | string; label: string; color?: 
         {label}
       </div>
     </div>
-  );
-}
-
-// --- the one thing it keeps an eye on -----------------------------------------
-
-/**
- * The window is still for knowing which session needs you, game or no game.
- * A line, not an interruption: a click takes you to the session and puts the
- * game away.
- */
-function Waiting({ onGo }: { onGo: (id: SessionId) => void }) {
-  const queue = useStore((s) => s.queue);
-  const sessions = useStore((s) => s.sessions);
-  const waiting = useMemo(() => queue.filter((i) => needsHuman(i.reason)), [queue]);
-  if (waiting.length === 0) return null;
-  const first = waiting[0];
-  const s = sessions[first.session_id];
-  return (
-    <button
-      type="button"
-      onClick={() => onGo(first.session_id)}
-      className={cn(
-        "flex shrink-0 items-center gap-2 border-t border-[var(--border)] bg-[var(--bg-panel)] px-5 py-2.5 text-left text-base text-[var(--amber)]",
-        interactive,
-      )}
-      title="go to it — the game is put away"
-    >
-      <Flag size={16} />
-      {waiting.length === 1 ? "a session needs you" : `${waiting.length} sessions need you`}
-      {s && <span className="truncate text-[var(--dim)]">— {sessionLabel(s)}</span>}
-    </button>
   );
 }

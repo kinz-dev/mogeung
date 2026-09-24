@@ -265,6 +265,15 @@ export interface KindTally {
   ms: number;
 }
 
+/** One question, as it went. What a history is built from. */
+export interface Answered {
+  text: string;
+  kind: Kind;
+  /** From the question appearing to its answer, skip or timeout. */
+  ms: number;
+  how: "right" | "wrong" | "skipped" | "timeout";
+}
+
 /** The last question you did not get, shown under the next one. */
 export interface Missed {
   text: string;
@@ -290,6 +299,8 @@ export interface Run {
   bestStreak: number;
   byKind: Partial<Record<Kind, KindTally>>;
   missed: Missed | null;
+  /** Every question asked, in order. */
+  log: Answered[];
   endedAt: number | null;
   /** Stopped by hand before its clock ran out: played, not a score. */
   early: boolean;
@@ -310,6 +321,7 @@ export function startRun(settings: Settings, now: number, rand: Rand = Math.rand
     bestStreak: 0,
     byKind: {},
     missed: null,
+    log: [],
     endedAt: null,
     early: false,
   };
@@ -341,6 +353,7 @@ export function answer(run: Run, typed: string, now: number, rand: Rand = Math.r
     bestStreak: Math.max(run.bestStreak, streak),
     byKind: tally(run, true, now),
     missed: null,
+    log: [...run.log, { text: run.problem.text, kind: run.problem.kind, ms: now - run.shownAt, how: "right" }],
   };
 }
 
@@ -364,6 +377,7 @@ function miss(run: Run, why: Missed["why"], typed: string | null, now: number, r
     streak: 0,
     byKind: tally(run, false, now),
     missed: { text: run.problem.text, answer: run.problem.answer, typed, why },
+    log: [...run.log, { text: run.problem.text, kind: run.problem.kind, ms: now - run.shownAt, how: why }],
   };
 }
 

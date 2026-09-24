@@ -2,11 +2,8 @@
  * The hidden game, from the keyboard in. Each of these is a way it could be
  * wrong without anyone noticing, because nobody is told it is there:
  *
- * - **It is found by π and only by π**, and never out of digits typed into a
- *   text box — a terminal command with 314159 in it must stay a command.
- * - **It is in no list.** The shortcuts window, the palette and the rebind
- *   table are all built from `ACTIONS`, so staying out of it is staying
- *   undocumented.
+ * - (How it is found — π, and only π — is `Arcade.test.tsx`'s, since the
+ *   digits open the arcade's picker rather than this game.)
  * - **Escape ends a run rather than throwing it away**, and a second Escape
  *   closes.
  * - **Endless has no clock**, and a timed run ends on its own.
@@ -16,8 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { MentalMath } from "@/ui/MentalMath";
-import { ACTIONS } from "@/lib/keymap";
+import { Arcade } from "@/ui/Arcade";
 import { useStore } from "@/store";
 
 function press(keys: string, on: Element = document.body) {
@@ -44,70 +40,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("the way in", () => {
-  it("opens on the digits of π, typed where the window has the keyboard", () => {
-    render(<MentalMath />);
-    press("31415");
-    expect(dialog()).toBeNull();
-    press("9");
-    expect(dialog()).toBeInTheDocument();
-    expect(screen.getByText("you found it")).toBeInTheDocument();
-  });
-
-  it("does not open from digits typed into a text box", () => {
-    render(
-      <>
-        <input aria-label="filter" />
-        <MentalMath />
-      </>,
-    );
-    const box = screen.getByLabelText("filter");
-    box.focus();
-    press("314159", box);
-    expect(dialog()).toBeNull();
-  });
-
-  it("starts over on another key, or on a pause between digits", () => {
-    render(<MentalMath />);
-    press("314");
-    press("a");
-    press("159");
-    expect(dialog()).toBeNull();
-
-    let now = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    press("314");
-    now += 2000;
-    press("159");
-    expect(dialog()).toBeNull();
-  });
-
-  it("is in no list the window documents its keys from", () => {
-    const told = ACTIONS.filter((a) => /math|game|secret|\bpi\b|π/i.test(`${a.id} ${a.label}`));
-    expect(told).toEqual([]);
-  });
-
-  it("is only a little shy the second time", () => {
-    const first = render(<MentalMath />);
-    press("314159");
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(dialog()).toBeNull();
-    first.unmount();
-
-    render(<MentalMath />);
-    press("314159");
-    expect(dialog()).toBeInTheDocument();
-    expect(screen.queryByText("you found it")).toBeNull();
-  });
-});
-
 describe("playing", () => {
+  /** Through the arcade, as it is really reached: π, then 1 for mental maths. */
   function open() {
-    render(<MentalMath />);
+    render(<Arcade />);
     press("314159");
+    press("1");
   }
 
-  it("endless: answers go in as they are typed, Enter skips, Escape shows how it went, Escape again closes", () => {
+  it("endless: answers go in as they are typed, Enter skips, Escape shows how it went, and walks back page by page", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: /endless/ }));
     fireEvent.click(screen.getByRole("button", { name: /^start/ }));
@@ -134,8 +75,14 @@ describe("playing", () => {
     expect(screen.getByText("first longest streak at this setting")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "by operation" })).toBeInTheDocument();
 
+    // Results → setup → the arcade's picker → closed.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("button", { name: /^start/ })).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "games" })).toBeInTheDocument();
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(dialog()).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("a timed run ends on its own clock and is judged", () => {
@@ -207,6 +154,38 @@ describe("playing", () => {
     act(() => vi.advanceTimersByTime(60_000));
     expect(screen.getByLabelText("question")).toHaveTextContent(waiting ?? "");
     expect(screen.queryByText(/time's up/)).toBeNull();
+  });
+
+  /**
+   * The history, asked for 2026-09-23: every game is kept, the results say how
+   * this one compares, and a progress screen draws the trend.
+   */
+  it("keeps every game, compares the next with it, and draws the progress", async () => {
+    vi.useFakeTimers();
+    open();
+    const oneGame = (answers: number) => {
+      fireEvent.click(screen.getByRole("button", { name: /^start/ }));
+      for (let i = 0; i < answers; i++) fireEvent.change(screen.getByLabelText("answer"), { target: { value: solve() } });
+      act(() => vi.advanceTimersByTime(61_000));
+    };
+    fireEvent.click(screen.getByRole("button", { name: "1 min" }));
+    oneGame(2);
+    const kept = (localStorage.getItem("mogeung.arcade.mental-math") ?? "").trim().split("\n");
+    expect(kept).toHaveLength(1);
+    expect(JSON.parse(kept[0]).log.filter((a: { how: string }) => a.how === "right")).toHaveLength(2);
+
+    act(() => vi.advanceTimersByTime(600));
+    fireEvent.click(screen.getByRole("button", { name: /again/ }));
+    for (let i = 0; i < 3; i++) fireEvent.change(screen.getByLabelText("answer"), { target: { value: solve() } });
+    act(() => vi.advanceTimersByTime(61_000));
+    expect(screen.getByLabelText("against your recent games")).toHaveTextContent(/against your last game here/);
+
+    fireEvent.click(screen.getByRole("button", { name: /progress/ }));
+    expect(screen.getByText("time trained")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /answers per minute/ })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "speed by operation" })).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByLabelText("final score")).toBeInTheDocument();
   });
 
   it("still says when a session needs you, and a click goes to it", () => {

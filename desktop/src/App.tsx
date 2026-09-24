@@ -48,7 +48,7 @@ import { WallOverlay } from "@/ui/WallOverlay";
 import { FileDrop } from "@/ui/FileDrop";
 import { GitOpsPopup } from "@/ui/GitOpsPopup";
 import { BranchesPopup } from "@/ui/BranchesPopup";
-import { MentalMath } from "@/ui/MentalMath";
+import { Arcade } from "@/ui/Arcade";
 import { ResizeGrip } from "@/ui/WindowControls";
 import { useKeymap } from "@/lib/keymap";
 import { FilePane } from "@/panes/FilePane";
@@ -402,7 +402,7 @@ export default function App() {
         <GitOpsPopup />
         <BranchesPopup />
         {/* Not in the keymap, on purpose. */}
-        <MentalMath />
+        <Arcade />
         <NoticesWindow />
         <Toasts />
         <ResizeGrip />

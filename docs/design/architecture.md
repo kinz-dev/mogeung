@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-23
+updated: 2026-09-24
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/lan.rs
@@ -13,6 +13,7 @@ covers:
   - desktop/src/store/index.ts
   - desktop/src-tauri/src/lib.rs
   - desktop/src-tauri/src/connections.rs
+  - desktop/src-tauri/src/arcade.rs
   - desktop/src/lib/connections.ts
   - desktop/src-tauri/src/popout.rs
   - desktop/src/lib/popout.ts
@@ -477,6 +478,16 @@ which put a shared secret into the webview's unencrypted `localStorage`. The
 token is composed into the dialled URL at the moment of connecting and is never
 part of what the panel displays. A browser tab has no shell, so it falls back to
 `localStorage` and the panel says so.
+
+**The shell writes one other kind of file there** (2026-09-24): a history of
+play for something in the window that is deliberately not documented, one JSON
+line per session in `~/.mogeung/mental-math.jsonl` and
+`~/.mogeung/trading-game.jsonl`, appended through `arcade_append` and read
+through `arcade_read` (`desktop/src-tauri/src/arcade.rs`). Recorded here because
+a shell that writes files under `~/.mogeung` should be on record even when what
+it writes for is not: the name of the file is checked against a fixed list, so
+no caller can make either command write anywhere else, and a line must be a
+single line of JSON or it is refused. The daemon never reads them.
 
 Switching tears the old connection down before the new one is
 dialled, so a window that has moved on cannot be reconnected behind by the
