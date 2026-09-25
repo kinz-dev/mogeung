@@ -1469,6 +1469,9 @@ impl AppState {
         self.scan_codex().await;
         self.scan_qwen().await;
         self.scan_opencode().await;
+        // After every fold, for the sessions none of them touched: a branch
+        // switched in another terminal writes no transcript line. `R-J110`.
+        self.refresh_branches().await;
         self.refresh_collisions().await;
         self.flush_quiet_sessions().await;
 
@@ -1487,6 +1490,62 @@ impl AppState {
         self.publish_queue().await;
         self.publish_health().await;
         self.maybe_run_retention().await;
+    }
+
+    /// Re-read the branch of every live session from its repository. `R-J110`.
+    ///
+    /// Asked 2026-09-25: *"I have changed the git branch but it didn't refresh
+    /// immediately, and I have to run some command then it will get refresh"*.
+    /// The branch came only from Claude Code's transcript, which stamps
+    /// `gitBranch` on each line as it writes it — so a `git switch` showed when
+    /// the session next spoke, and not before.
+    ///
+    /// One `HEAD` read per repository per pass, not per session: siblings in
+    /// one worktree share it. Only what changed is written and broadcast, so an
+    /// idle machine sends nothing. Mirrored sessions are skipped — their paths
+    /// are another machine's, and the same path here is a different checkout.
+    async fn refresh_branches(&self) {
+        let roots: Vec<String> = {
+            let sessions = self.sessions.read().await;
+            let mut roots: Vec<String> = sessions
+                .values()
+                .filter(|s| s.alive && s.origin.is_none())
+                .filter_map(|s| s.repo_root.clone())
+                .collect();
+            roots.sort();
+            roots.dedup();
+            roots
+        };
+        if roots.is_empty() {
+            return;
+        }
+        let heads: HashMap<String, Option<String>> = roots
+            .into_iter()
+            .filter_map(|root| git::head(Path::new(&root)).map(|h| (root, h.branch())))
+            .collect();
+        let mut changed: Vec<Session> = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in sessions.values_mut() {
+                if !s.alive || s.origin.is_some() {
+                    continue;
+                }
+                let Some(branch) = s.repo_root.as_ref().and_then(|r| heads.get(r)) else {
+                    continue;
+                };
+                if s.git_branch != *branch {
+                    s.git_branch = branch.clone();
+                    changed.push(s.clone());
+                }
+            }
+        }
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.quiet_sessions.lock().await.remove(&s.id);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
     }
 
     /// Rebuild the provisional sessions from tmux. `R-J75`,
@@ -2099,7 +2158,11 @@ impl AppState {
     /// scan pass ends its folds with. `R-J54`. One method rather than three
     /// inlined copies, because the Codex and Qwen passes shipped without it
     /// and paid the fat per-tick `SessionUpdated` the split exists to remove.
-    async fn put_or_coast(&self, before: &Session, s: Session) {
+    async fn put_or_coast(&self, before: &Session, mut s: Session) {
+        // Every fold ends here, whichever CLI it read — so this is the one
+        // place a live session's branch is settled from its repository, and
+        // no fold can put a stale stamp on the wire first. `R-J110`.
+        settle_branch(&mut s);
         if significant_change(before, &s) {
             self.quiet_sessions.lock().await.remove(&s.id);
             self.put(s).await;
@@ -5324,6 +5387,18 @@ fn window_for(chain: &[u32], windows: &[(u32, String)]) -> Option<String> {
             .find(|(p, _)| p == pid)
             .map(|(_, id)| id.clone())
     })
+}
+
+/// A live session's branch is its repository's, read now; the transcript's
+/// stamp stands for a session that has ended, or one whose `HEAD` cannot be
+/// read. `R-J110`.
+fn settle_branch(s: &mut Session) {
+    if !s.alive || s.origin.is_some() {
+        return;
+    }
+    if let Some(head) = s.repo_root.as_deref().and_then(|r| git::head(Path::new(r))) {
+        s.git_branch = head.branch();
+    }
 }
 
 /// Did this fold change anything a client should hear about *now*? `R-J54`.

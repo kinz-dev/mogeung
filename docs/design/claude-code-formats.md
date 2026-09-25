@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-08-29
+updated: 2026-09-25
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -159,6 +159,12 @@ Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
 `agentId`, `promptId`, `requestId`, `toolUseResult`.
 
 - `gitBranch` is `"HEAD"` when detached — treated as absent.
+- `gitBranch` is stamped on each line **as it is written**, so it says nothing
+  about a branch switched since the session last spoke. For a **live** session
+  the daemon reads the branch from the repository's own `HEAD` on every scan
+  pass instead, and that wins over any stamp (`R-J110`); the stamp stands for
+  an ended session — the branch it ran on — and for one whose `HEAD` cannot be
+  read.
 - `isSidechain: true` marks subagent messages. They count toward tool totals but
   never become the session's headline activity.
 - `tool_result` blocks sometimes omit `is_error`; absence means "not an error".

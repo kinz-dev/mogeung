@@ -494,6 +494,60 @@ pub fn repo_root(path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(out.trim()))
 }
 
+/// What a worktree's `HEAD` names. See [`head`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Head {
+    Branch(String),
+    /// A bare commit — no branch. The transcript spells this `"HEAD"`, and
+    /// both read as none.
+    Detached,
+}
+
+impl Head {
+    pub fn branch(self) -> Option<String> {
+        match self {
+            Head::Branch(b) => Some(b),
+            Head::Detached => None,
+        }
+    }
+}
+
+/// The branch checked out in a worktree, read from its `HEAD`. `R-J110`.
+///
+/// `None` when there is no `HEAD` to read — not a repository, gone, or a shape
+/// this does not know — and the caller keeps whatever it had.
+///
+/// **A file read, not `git symbolic-ref`**, because it runs for every live
+/// session on every scan tick, and a fork per session per tick is the cost
+/// `R-J53` exists to keep off an idle machine. `.git` is a directory in a plain
+/// checkout and a `gitdir:` file in a linked worktree or a submodule; both are
+/// followed, a relative `gitdir` from the worktree. Never writes, and never
+/// panics on what it finds.
+pub fn head(worktree: &Path) -> Option<Head> {
+    let dot = worktree.join(".git");
+    let git_dir = if dot.is_dir() {
+        dot
+    } else {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let target = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
+        let target = Path::new(target);
+        if target.is_absolute() {
+            target.to_path_buf()
+        } else {
+            worktree.join(target)
+        }
+    };
+    let text = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let text = text.trim();
+    if let Some(r) = text.strip_prefix("ref:") {
+        let r = r.trim();
+        let name = r.strip_prefix("refs/heads/").unwrap_or(r);
+        return (!name.is_empty()).then(|| Head::Branch(name.to_string()));
+    }
+    // Detached: an object name, 40 hex digits (64 under SHA-256).
+    (text.len() >= 40 && text.bytes().all(|b| b.is_ascii_hexdigit())).then_some(Head::Detached)
+}
+
 pub fn head_sha(path: &Path) -> Result<String> {
     Ok(run_git(path, &["rev-parse", "HEAD"])?.trim().to_string())
 }
@@ -2079,6 +2133,59 @@ pub fn find_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A directory laid out the way git leaves one, without running git.
+    fn laid_out(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mogeung-head-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (path, body) in files {
+            let p = dir.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn head_names_the_branch_whole_including_its_slashes() {
+        let dir = laid_out("plain", &[(".git/HEAD", "ref: refs/heads/feature/ENG-441\n")]);
+        assert_eq!(head(&dir), Some(Head::Branch("feature/ENG-441".into())));
+    }
+
+    #[test]
+    fn a_detached_head_is_no_branch_rather_than_no_answer() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let dir = laid_out("detached", &[(".git/HEAD", &format!("{sha}\n"))]);
+        assert_eq!(head(&dir), Some(Head::Detached));
+        assert_eq!(head(&dir).and_then(Head::branch), None);
+    }
+
+    /// A linked worktree's `.git` is a file naming its real git dir —
+    /// absolute from `git worktree add`, relative for a submodule.
+    #[test]
+    fn a_gitdir_file_is_followed_absolute_or_relative() {
+        let real = laid_out("wt-real", &[("HEAD", "ref: refs/heads/linked\n")]);
+        let wt = laid_out("wt", &[(".git", &format!("gitdir: {}\n", real.display()))]);
+        assert_eq!(head(&wt), Some(Head::Branch("linked".into())));
+
+        let sub = laid_out(
+            "sub",
+            &[("modules/x/HEAD", "ref: refs/heads/pinned\n"), ("work/.git", "gitdir: ../modules/x\n")],
+        );
+        assert_eq!(head(&sub.join("work")), Some(Head::Branch("pinned".into())));
+    }
+
+    /// Nothing to read leaves the caller's answer alone; it never guesses.
+    #[test]
+    fn no_head_or_an_unknown_shape_is_no_answer() {
+        assert_eq!(head(Path::new("/nonexistent/mogeung/nowhere")), None);
+        let empty = laid_out("empty", &[(".git/HEAD", "")]);
+        assert_eq!(head(&empty), None);
+        let junk = laid_out("junk", &[(".git/HEAD", "not a ref at all\n")]);
+        assert_eq!(head(&junk), None);
+        let dangling = laid_out("dangling", &[(".git", "gitdir: /nonexistent/mogeung/gitdir\n")]);
+        assert_eq!(head(&dangling), None);
+    }
 
     const SAMPLE: &str = "\
 diff --git a/src/auth.rs b/src/auth.rs

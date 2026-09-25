@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 750 passing |
-| Rust | 53315 lines |
-| Docs | 119 files, 40 ADRs |
+| Tests | 759 passing |
+| Rust | 53750 lines |
+| Docs | 121 files, 41 ADRs |
 
 ## Assumptions
 
-Untested: **19** · At risk: **5** · Supported: 19 · Refuted: 2
+Untested: **20** · At risk: **5** · Supported: 21 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -68,4 +68,5 @@ Untested: **19** · At risk: **5** · Supported: 19 · Refuted: 2
 | [Run configurations — IntelliJ's Run tool window, its Edit dialog and its popup](docs/features/0045-run-configurations.md) | `draft` | [A13, A32, A33, A34, A42, A43] |
 | [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `draft` | [A44, A24] |
 | [opencode adapter](docs/features/0048-opencode-adapter.md) | `in-progress` | [A4, A23] |
+| [Update in place](docs/features/0049-update-in-place.md) | `active` | [A46, A47, A48] |
 
