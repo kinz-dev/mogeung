@@ -7,7 +7,7 @@
  * with nothing left to show says so rather than reading as empty.
  */
 
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PaneScope } from "@/lib/paneScope";
 import { PaneActions, usePaneTitle } from "@/ui/PaneChrome";
@@ -36,6 +36,28 @@ function scopedState(patch: { paneHold?: Record<string, string>; labels?: Record
   useStore.setState({
     prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), ...patch } } },
   });
+}
+
+/**
+ * The least of a dockview group `PaneActions` reads: where it is, word when
+ * that changes, and the window it is in.
+ */
+function fakeGroup(type: "grid" | "popout" = "grid") {
+  const listeners = new Set<(e: { location: { type: string } }) => void>();
+  const win = new EventTarget();
+  const api = {
+    location: { type } as { type: string },
+    onDidLocationChange: (cb: (e: { location: { type: string } }) => void) => {
+      listeners.add(cb);
+      return { dispose: () => listeners.delete(cb) };
+    },
+    getWindow: () => win,
+  };
+  const move = (to: "grid" | "popout") => {
+    api.location = { type: to };
+    listeners.forEach((l) => l({ location: api.location }));
+  };
+  return { group: { api }, move, win };
 }
 
 function Title({ id }: { id: string }) {
@@ -147,7 +169,7 @@ describe("the branch on the pane header", () => {
         activePanel={{ id: "agent" } as never}
         containerApi={{ getPanel: () => undefined } as never}
         api={{} as never}
-        group={{} as never}
+        group={fakeGroup().group as never}
         panels={[]}
         isGroupActive
       />,
@@ -185,7 +207,7 @@ describe("the branch on the pane header", () => {
         activePanel={{ id: "agent" } as never}
         containerApi={{ getPanel: () => undefined } as never}
         api={{} as never}
-        group={{} as never}
+        group={fakeGroup().group as never}
         panels={[]}
         isGroupActive
       />,
@@ -211,7 +233,7 @@ describe("showing a session's folder", () => {
         activePanel={{ id: paneId } as never}
         containerApi={{ getPanel: () => undefined } as never}
         api={{} as never}
-        group={{} as never}
+        group={fakeGroup().group as never}
         panels={[]}
         isGroupActive
       />,
@@ -329,7 +351,7 @@ describe("closing an Agent pane from its header", () => {
         activePanel={{ id: paneId } as never}
         containerApi={{ getPanel: () => undefined } as never}
         api={{} as never}
-        group={{} as never}
+        group={fakeGroup().group as never}
         panels={[]}
         isGroupActive
       />,
@@ -349,5 +371,66 @@ describe("closing an Agent pane from its header", () => {
   it("offers nothing on a pane that is not an agent", () => {
     actions("changes");
     expect(screen.queryByLabelText(/close this Agent pane/i)).toBeNull();
+  });
+});
+
+/**
+ * The way back from a window of its own. `R-J108`, asked 2026-09-25: *"there
+ * is no easy way to pop back in"*. A popped-out group's header has the
+ * dockview header `PaneActions` draws, so the way home goes where the way out
+ * was. What it does — dockview's own return, and the window closing — is
+ * pinned against a real dockview in `popout.test.ts`.
+ */
+describe("popping back in from the pane header", () => {
+  const actions = (g: ReturnType<typeof fakeGroup>, paneId = "agent") =>
+    render(
+      <PaneActions
+        activePanel={{ id: paneId } as never}
+        containerApi={{ getPanel: () => undefined } as never}
+        api={{} as never}
+        group={g.group as never}
+        panels={[]}
+        isGroupActive
+      />,
+    );
+  const OUT = "move this pane into a window of its own";
+  const IN = "put this back into the main window";
+
+  it("in the main window it offers the way out, and only that", () => {
+    actions(fakeGroup("grid"));
+    expect(screen.getByTitle(OUT)).toBeInTheDocument();
+    expect(screen.queryByTitle(IN)).toBeNull();
+  });
+
+  it("in a window of its own it offers the way back, which asks dockview to take it home", () => {
+    const g = fakeGroup("popout");
+    const unload = vi.fn();
+    g.win.addEventListener("beforeunload", unload);
+    actions(g);
+    expect(screen.queryByTitle(OUT)).toBeNull();
+    fireEvent.click(screen.getByTitle(IN));
+    expect(unload).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The way out is on Agent panes only, but a popout can be showing anything
+   * that was dragged in beside it — and it still needs its way home.
+   */
+  it("offers the way back whatever pane the window is showing, and nothing extra outside one", () => {
+    actions(fakeGroup("popout"), "notes");
+    expect(screen.getByTitle(IN)).toBeInTheDocument();
+    cleanup();
+    actions(fakeGroup("grid"), "notes");
+    expect(screen.queryByTitle(IN)).toBeNull();
+    expect(screen.queryByTitle(OUT)).toBeNull();
+  });
+
+  it("follows the group as it goes out and comes back", () => {
+    const g = fakeGroup("grid");
+    actions(g);
+    act(() => g.move("popout"));
+    expect(screen.getByTitle(IN)).toBeInTheDocument();
+    act(() => g.move("grid"));
+    expect(screen.getByTitle(OUT)).toBeInTheDocument();
   });
 });

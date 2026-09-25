@@ -1,7 +1,7 @@
 ---
 title: A pane pops out into a window of its own, and that window is an ordinary client
 status: active
-updated: 2026-09-08
+updated: 2026-09-25
 decided: 2026-09-08
 ---
 
@@ -181,3 +181,42 @@ stays where it is and the window says so — so the failure is legible rather th
 silent, but it has not been seen. `R-J38` still applies, and a browser tab
 proves less than usual here: a tab has a real `window.open` and will succeed
 whatever the shell does.
+
+## Amendment — 2026-09-25
+
+**The Decision's promise that "closing the popout puts a pane back" was false in
+the shell, and is true again.** Nothing is reversed; this records how the
+mechanism the 2026-09-08 amendment left *"still unverified in the shipped app"*
+actually behaves there, and what `R-J108` does about it.
+
+Reported the same day: *"After popout, there is no easy way to pop back in. I
+have to drag and drop the pane and then manually close the empty pop-up
+window."* dockview puts a popout group back when the popout document raises
+`beforeunload`, and closes the window with `window.close()`. Neither holds in
+a Tauri window:
+
+- **The OS close button never raises `beforeunload`.** wry destroys the webview
+  and the page's unload does not run, so dockview is never told and the group
+  is not returned.
+- **Script's `window.close()` does not close the OS window.** On WebKitGTK wry
+  answers it by destroying the webview alone, which leaves the window standing
+  and empty — the window in the report. On WKWebView it does nothing.
+
+**What changes.** The popout's header offers the way home where the way out was,
+and it raises `beforeunload` itself, so dockview's own return runs rather than
+a move of our making. `popout.rs` holds the first close of a `popout-*` window
+and emits `popout:close`, and the client sends that window's group home first;
+a second press passes through, so a client that never answers cannot trap a
+window. And the client closes a popout's window through the shell whenever its
+group goes, however it went — the button, the close button, or its last tab
+dragged back by hand.
+
+**What it replaces.** Nothing in the Decision or the 2026-09-08 amendment.
+Closing a popout returns its panes, which is what the Decision said and what
+dockview does in a browser tab; the shell now agrees with both. The
+`popout:closed` event the 2026-09-08 amendment retired stays retired —
+`popout:close` travels the other way, shell to client, and carries no pane.
+
+**Still not seen in the shipped app**: the close routing and the window's
+destruction are shell behaviour, which a browser tab cannot show. The client's
+half is pinned against a real dockview.

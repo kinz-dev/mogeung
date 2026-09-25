@@ -15,11 +15,11 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquarePlus, X } from "lucide-react";
+import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquareArrowDownLeft, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
-import { popOutPane } from "@/lib/popout";
+import { popInGroup, popOutPane } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
 import { tagLabel } from "@/lib/tags";
@@ -294,6 +294,14 @@ function usePaneSession(paneId: string | null) {
  */
 export function PaneActions(props: IDockviewHeaderActionsProps) {
   const paneId = props.activePanel?.id ?? null;
+  // Where this group is — in the grid, or in a window of its own — which
+  // decides whether the header offers to pop it out or to bring it back.
+  const [location, setLocation] = React.useState(props.group.api.location.type);
+  React.useEffect(() => {
+    setLocation(props.group.api.location.type);
+    const sub = props.group.api.onDidLocationChange((e) => setLocation(e.location.type));
+    return () => sub.dispose();
+  }, [props.group]);
   const kind = paneId ? paneKind(paneId) : null;
 
   const { held, selected, session } = usePaneSession(paneId);
@@ -316,7 +324,26 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
     if (kind === "agent" && session && !away && !probe) send({ cmd: "probe_intellij", session_id: session.id });
   }, [kind, session, away, probe, send]);
 
-  if (kind !== "agent" || !paneId) return null;
+  /*
+    **And back again** (`R-J108`), asked 2026-09-25: *"there is no easy way to
+    pop back in"*. In a popout the place the way out was holds the way home,
+    which puts the group back where it came from and closes the window —
+    dragging the pane back and closing the empty window by hand is what it
+    replaces. The window's own close button now does the same.
+
+    **On every pane in a popout, not only an Agent pane.** The way out is on
+    the Agent pane's header, but a notes or diff tab can be dragged in beside
+    it and be the one showing — and a header with no way home is the fault
+    this row exists to fix.
+  */
+  const popIn = (
+    <IconButton title="put this back into the main window" onClick={() => popInGroup(props.group)}>
+      <SquareArrowDownLeft className="h-3.5 w-3.5" />
+    </IconButton>
+  );
+  if (kind !== "agent" || !paneId) {
+    return location === "popout" ? <div className="flex h-full items-center gap-1 pr-1">{popIn}</div> : null;
+  }
 
   return (
     <div className="flex h-full items-center gap-1 pr-1">
@@ -435,12 +462,16 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         The whole **group**, not this panel alone — that is dockview's unit and
         it is the right one: tabs already sitting together travel together.
       */}
-      <IconButton
-        title="move this pane into a window of its own"
-        onClick={() => void popOutPane(props.containerApi, paneId)}
-      >
-        <PictureInPicture2 className="h-3.5 w-3.5" />
-      </IconButton>
+      {location === "popout" ? (
+        popIn
+      ) : (
+        <IconButton
+          title="move this pane into a window of its own"
+          onClick={() => void popOutPane(props.containerApi, paneId)}
+        >
+          <PictureInPicture2 className="h-3.5 w-3.5" />
+        </IconButton>
+      )}
       {/*
         **No ceiling since `R-J35`**, asked for 2026-08-20: *"just open the
         panel and let the user move around himself to fit his own screen"*. The

@@ -545,6 +545,19 @@ and every theme change re-applies it; without that a popout renders in the wrong
 palette rather than unstyled. And a refusal — a shell that did not opt in — is a
 first-class outcome: the pane stays where it is and the window says so.
 
+**Closing one returns its panes** (`R-J108`, ADR-0037's 2026-09-25
+amendment), which in the shell needs help from both sides. dockview returns a
+popout group on the popout document's `beforeunload`, and a Tauri window's
+close button never raises it; dockview then calls `window.close()`, which on
+WebKitGTK destroys the webview and leaves the OS window standing, empty. So
+`popout.rs` holds the first close of a `popout-*` window and emits
+`popout:close`, and the client raises `beforeunload` on that group's window
+itself — the same thing the header's *put this back into the main window* does
+— so dockview's own return runs. `watchPopouts` closes a popout's window
+through `popout_close` whenever its group goes, however it went; each window
+knows its label from an initialization script. A second close passes through,
+so a client that never answers cannot trap a window.
+
 The **cost** is coupling. One dockview, one store, one socket, so a popout
 cannot outlive the main window. The earlier design, where each window was its
 own client, could have survived that and could never have let a pane be dragged

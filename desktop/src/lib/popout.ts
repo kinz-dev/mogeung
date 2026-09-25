@@ -10,12 +10,14 @@
  * of this row opened a second client instead, and separate React trees can
  * never do that.
  *
- * What this file is left holding is the two things dockview does not do:
- * carrying the **theme** across, and saying something useful when a popout
- * cannot be opened at all.
+ * What this file is left holding is what dockview does not do: carrying the
+ * **theme** across, saying something useful when a popout cannot be opened at
+ * all, and — since `R-J108` — **closing the window** once its group has gone
+ * home, and a button's way of sending it there.
  */
 
-import type { DockviewApi } from "dockview";
+import type { DockviewApi, DockviewGroupPanel } from "dockview";
+import { isTauri } from "@/lib/tauri";
 import { useStore } from "@/store";
 
 /**
@@ -92,4 +94,115 @@ export async function popOutPane(api: DockviewApi | null, paneId: string): Promi
     useStore.getState().pushError("this window could not open another — the pane stays where it is");
     return false;
   }
+}
+
+// --- popping back in (`R-J108`) ------------------------------------------------
+
+/**
+ * The shell's label for a window it opened, which `popout.rs` puts on the page
+ * as `__MOGEUNG_WINDOW_LABEL__` — or `null` in a browser tab, where there is
+ * no shell and no label, or for a window that has already gone.
+ */
+export function labelOf(w: Window | null | undefined): string | null {
+  try {
+    const label = (w as unknown as { __MOGEUNG_WINDOW_LABEL__?: unknown } | null)?.__MOGEUNG_WINDOW_LABEL__;
+    return typeof label === "string" ? label : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ask the shell to close a popout window for good. See `popout_close`. */
+export async function closeShellWindow(label: string): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("popout_close", { label });
+  } catch {
+    // A window already gone is the outcome that was wanted.
+  }
+}
+
+/**
+ * Put a popped-out group back into the main window. Asked 2026-09-25: *"there
+ * is no easy way to pop back in"*.
+ *
+ * **dockview's own way home, not a move of our making.** dockview remembers
+ * where a group came from and, when its popout window closes, puts it back
+ * there — un-hiding the space it left, or adding it to the grid if that space
+ * has gone. That code runs from the popout document's `beforeunload`, and in
+ * the shell that event never comes (see `popout.rs`), so it is raised here.
+ * Moving the panels ourselves would have to re-derive all of that, and a
+ * group sent into the hidden space it left would arrive invisible.
+ *
+ * dockview then closes the window with `window.close()`, which the shell does
+ * not honour — `watchPopouts` closes it once the group has gone.
+ */
+export function popInGroup(group: Pick<DockviewGroupPanel, "api">): boolean {
+  if (group.api.location.type !== "popout") return false;
+  try {
+    group.api.getWindow().dispatchEvent(new Event("beforeunload"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Close the shell window of every popout group dockview has finished with —
+ * however it finished: popped back in, its last pane dragged out, or its
+ * window closed. dockview calls `window.close()` in each case and the shell's
+ * webview does not honour it, so without this the window stays, empty.
+ *
+ * Watches the groups rather than hooking `addPopoutGroup`'s callbacks, because
+ * dockview also reopens popouts from a saved layout, and those never passed
+ * through `popOutPane`.
+ */
+export function watchPopouts(api: Pick<DockviewApi, "groups" | "onDidLayoutChange" | "onDidRemoveGroup" | "onDidAddGroup">): () => void {
+  let known = new Map<string, string>();
+  const sync = () => {
+    const now = new Map<string, string>();
+    for (const g of api.groups) {
+      if (g.api.location.type !== "popout") continue;
+      let label: string | null = null;
+      try {
+        label = labelOf(g.api.getWindow());
+      } catch {
+        label = null;
+      }
+      // A window still loading has no label yet; it is read on the next pass.
+      const was = known.get(g.id);
+      if (label ?? was) now.set(g.id, (label ?? was)!);
+    }
+    for (const [id, label] of known) if (!now.has(id)) void closeShellWindow(label);
+    known = now;
+  };
+  const subs = [api.onDidLayoutChange(sync), api.onDidRemoveGroup(sync), api.onDidAddGroup(sync)];
+  sync();
+  return () => subs.forEach((d) => d.dispose());
+}
+
+/**
+ * What to do when the shell says a popout window's close button was pressed
+ * (`popout:close`): send its group home, which then closes the window — or,
+ * for a window that holds no group (the arcade's, or one already emptied),
+ * close it straight away.
+ */
+export function onPopoutCloseRequest(api: Pick<DockviewApi, "groups">, label: string): void {
+  const group = api.groups.find((g) => {
+    if (g.api.location.type !== "popout") return false;
+    try {
+      return labelOf(g.api.getWindow()) === label;
+    } catch {
+      return false;
+    }
+  });
+  if (!group || !popInGroup(group)) void closeShellWindow(label);
+}
+
+/** Listen for the shell's `popout:close`. Answers an unsubscriber. */
+export async function listenForPopoutCloses(api: Pick<DockviewApi, "groups">): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("popout:close", (e) => onPopoutCloseRequest(api, e.payload));
 }

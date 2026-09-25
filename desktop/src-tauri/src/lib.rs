@@ -768,7 +768,8 @@ pub fn run() {
             update::update_build,
             update::update_install,
             update::update_cancel,
-            update::update_restart
+            update::update_restart,
+            popout::popout_close
         ])
         .setup(|app| {
             // Built here rather than by the config, because `on_new_window` is

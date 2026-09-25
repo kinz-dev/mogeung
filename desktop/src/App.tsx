@@ -60,7 +60,7 @@ import { TerminalPanel } from "@/ui/TerminalPanel";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
 import { closePanesFor, dropOrphanHolds, filePanes, setDock, diffPanes } from "@/lib/panes";
-import { retheme } from "@/lib/popout";
+import { listenForPopoutCloses, retheme, watchPopouts } from "@/lib/popout";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
@@ -268,6 +268,10 @@ export default function App() {
   const onReady = (event: DockviewReadyEvent) => {
     dockRef.current = event.api;
     setDock(event.api);
+    // A popout the dock is done with has its window closed, and a popout's own
+    // close button sends its group home first (`R-J108`, `popout.rs`).
+    watchPopouts(event.api);
+    void listenForPopoutCloses(event.api);
 
     // When a session ends, its Agent pane goes with it — anchored or not.
     // Registered here rather than imported by the store, so the dependency
