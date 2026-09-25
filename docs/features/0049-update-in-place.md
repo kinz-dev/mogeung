@@ -315,3 +315,17 @@ ADR-0041's *Revisit if* says what would make them necessary.
 **A Notes draft is the one thing a restart could lose**, so `NotesTool`
 reports an unsaved draft to a small register (`lib/unsaved.ts`) and the
 restart dialog names it. Everything else in the window saves as it goes.
+
+**Checking by hand, 2026-09-25** (`R-J111`). Asked the morning after: *"how
+frequent is the autodetect changes? … why it didn't popup yet? Can we add a
+button for "check for update"?"* The answer to the first two was the design
+working as written — a look once a minute, and an offer only once `main` has
+been still for two minutes — asked about ninety seconds after a burst of three
+commits. What it lacked was a way to not wait. A ↻ beside the build in the
+status bar now looks at once: a newer commit is offered straight away, settled
+or not, and a *Not now* for it is taken back, since asking is not being
+interrupted; an up-to-date build says so in a notice rather than doing
+nothing; a failed look says why. It works with checking turned off and does
+not turn it back on, and a build run from a checkout has no button, having
+nothing to check.
+

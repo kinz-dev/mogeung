@@ -15,12 +15,12 @@
  */
 
 import { useEffect, useRef } from "react";
-import { ArrowUpCircle, RotateCw } from "lucide-react";
+import { ArrowUpCircle, RefreshCw, RotateCw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { unsavedWork } from "@/lib/unsaved";
 import { short } from "@/lib/update";
 import { useStore } from "@/store";
-import { standing, useUpdate } from "@/store/update";
+import { standing, useUpdate, type Asked } from "@/store/update";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim } from "@/ui/primitives";
 import { interactive } from "@/ui/styles";
@@ -217,6 +217,7 @@ export function UpdateMark() {
   const enabled = useUpdate((s) => s.enabled);
   const show = useUpdate((s) => s.show);
   const setEnabled = useUpdate((s) => s.setEnabled);
+  const checking = useUpdate((s) => s.checking);
   if (!info) return null;
 
   const where = standing({ info, check });
@@ -246,21 +247,50 @@ export function UpdateMark() {
     );
   }
   return (
-    <button
-      type="button"
-      aria-label="this build"
-      title={tip}
-      onClick={() => (info.installed && !enabled ? setEnabled(true) : behind ? show() : undefined)}
-      className={cn(
-        "flex items-center gap-1 rounded-sm font-mono",
-        interactive,
-        behind && info.installed ? "text-[var(--blue)] hover:underline" : "text-[var(--dim)]",
+    <span className="flex items-center gap-0.5">
+      <button
+        type="button"
+        aria-label="this build"
+        title={tip}
+        onClick={() => (info.installed && !enabled ? setEnabled(true) : behind ? show() : undefined)}
+        className={cn(
+          "flex items-center gap-1 rounded-sm font-mono",
+          interactive,
+          behind && info.installed ? "text-[var(--blue)] hover:underline" : "text-[var(--dim)]",
+        )}
+      >
+        {behind && info.installed && <ArrowUpCircle className="h-3 w-3" />}
+        {info.installed ? "" : "dev "}
+        {short(info.commit)}
+        {behind && info.installed && check?.behind ? ` · ${check.behind} behind` : ""}
+      </button>
+      {/*
+        **Check now** (`R-J111`), asked 2026-09-25: *"Can we add a button for
+        'check for update'?"* — after an update that had not appeared, because
+        the minute's look waits for the branch to be still for two minutes.
+        This one does not wait: you asked. It works with the looking stopped
+        too, and does not start it again.
+      */}
+      {info.installed && (
+        <button
+          type="button"
+          aria-label="check for updates"
+          title={`check ${info.branch} for a newer commit now`}
+          disabled={checking}
+          onClick={() => void useUpdate.getState().checkNow().then(say)}
+          className={cn("rounded-sm p-0.5 text-[var(--dim)] hover:text-[var(--text)]", interactive)}
+        >
+          <RefreshCw className={cn("h-3 w-3", checking && "animate-spin")} />
+        </button>
       )}
-    >
-      {behind && info.installed && <ArrowUpCircle className="h-3 w-3" />}
-      {info.installed ? "" : "dev "}
-      {short(info.commit)}
-      {behind && info.installed && check?.behind ? ` · ${check.behind} behind` : ""}
-    </button>
+    </span>
   );
+}
+
+/** A check's answer, when it is not the dialog opening on its own. */
+function say(asked: Asked) {
+  const { pushNotice, pushError } = useStore.getState();
+  const branch = useUpdate.getState().info?.branch ?? "main";
+  if (asked.kind === "current") pushNotice(`up to date — this build is ${branch}'s newest commit, ${short(asked.head)}`);
+  if (asked.kind === "error") pushError(`could not check for updates: ${asked.message}`);
 }

@@ -251,3 +251,78 @@ describe("before a restart", () => {
     expect(screen.getByText(/daemon on this machine \(pid 4321\) was started separately/)).toBeInTheDocument();
   });
 });
+
+/**
+ * Checking by hand. `R-J111`, asked 2026-09-25: *"how frequent is the
+ * autodetect changes? … why it didn't popup yet? Can we add a button for
+ * "check for update"?"* — asked inside the two minutes the minute's look
+ * waits for a branch to be still. The button does not wait.
+ */
+describe("check for updates, by hand", () => {
+  const notices = () => useStore.getState().notices.map((n) => n.text);
+  const check = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "check for updates" }));
+    await flush();
+  };
+
+  beforeEach(() => {
+    useStore.setState({ notices: [] } as never);
+  });
+
+  it("offers a commit still settling the moment you ask", async () => {
+    shell.check = ahead(Date.now() / 1000 - 5);
+    await mount();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await check();
+    expect(screen.getByRole("dialog", { name: "Update available" })).toBeInTheDocument();
+    expect(called("update_build")).toHaveLength(0);
+  });
+
+  it("asking again takes back a Not now", async () => {
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await check();
+    expect(screen.getByRole("dialog", { name: "Update available" })).toBeInTheDocument();
+  });
+
+  it("says up to date out loud, and opens nothing", async () => {
+    shell.check = { head: RUNNING, head_time: 0, behind: 0, commits: [], error: null };
+    await mount();
+    await check();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(notices()).toEqual(["up to date — this build is main's newest commit, 1111111"]);
+  });
+
+  it("says why when it cannot look", async () => {
+    shell.check = { head: null, head_time: null, behind: null, commits: [], error: "fatal: not a git repository" };
+    await mount();
+    await check();
+    expect(notices()).toEqual(["could not check for updates: fatal: not a git repository"]);
+  });
+
+  it("works with the looking stopped, and does not start it again", async () => {
+    localStorage.setItem("mogeung.update.check", "0");
+    resetUpdateForTests();
+    useUpdate.setState({ enabled: false });
+    shell.check = { head: RUNNING, head_time: 0, behind: 0, commits: [], error: null };
+    vi.useFakeTimers();
+    try {
+      await mount();
+      expect(called("update_check")).toHaveLength(0);
+      await check();
+      expect(called("update_check")).toHaveLength(1);
+      await act(async () => vi.advanceTimersByTime(5 * 60_000));
+      expect(called("update_check")).toHaveLength(1);
+      expect(useUpdate.getState().enabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a build run from a checkout has nothing to check", async () => {
+    shell.info = installed({ installed: false });
+    await mount();
+    expect(screen.queryByRole("button", { name: "check for updates" })).toBeNull();
+  });
+});

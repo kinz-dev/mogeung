@@ -31,6 +31,17 @@ import { isTauri } from "@/lib/tauri";
 
 export type Phase = "idle" | "available" | "building" | "installing" | "installed" | "failed";
 
+/**
+ * What a check you asked for found. `R-J111`. The status bar turns it into
+ * words: an offer opens the dialog on its own, the rest are a notice.
+ */
+export type Asked =
+  | { kind: "offered" }
+  | { kind: "current"; head: string }
+  | { kind: "busy" }
+  | { kind: "unavailable" }
+  | { kind: "error"; message: string };
+
 /** This window's own off switch, beside `update_check` in the config file. */
 const ENABLED_KEY = "mogeung.update.check";
 /** Enough of a build's output to see why it failed, and no more. */
@@ -50,8 +61,16 @@ export interface UpdateState {
   dismissed: string | null;
   open: boolean;
   enabled: boolean;
+  /** A check you asked for is on its way. */
+  checking: boolean;
   start: () => Promise<void>;
   poll: (now?: number) => Promise<void>;
+  /**
+   * Look now, because you asked. `R-J111`. Unlike the minute's poll it does
+   * not wait for the branch to settle and it withdraws a *Not now* — the wait
+   * is for interrupting you, and the asking is not an interruption.
+   */
+  checkNow: (now?: number) => Promise<Asked>;
   show: () => void;
   notNow: () => void;
   update: () => Promise<void>;
@@ -99,6 +118,26 @@ function onDone(d: Done) {
     .catch(() => undefined);
 }
 
+/**
+ * Ask the shell where the branch is, and remember when its head was first
+ * seen. Never throws: a failed look is a check whose `error` says why, which is
+ * what the status bar's tooltip reads.
+ */
+async function look(now: number): Promise<UpdateCheck> {
+  let check: UpdateCheck;
+  try {
+    check = await updateCheck();
+  } catch (e) {
+    check = { head: null, head_time: null, commits: [], behind: null, error: String(e) };
+    useUpdate.setState({ check });
+    return check;
+  }
+  const { seen } = useUpdate.getState();
+  const nextSeen = check.head && check.head !== seen?.head ? { head: check.head, at: now } : seen;
+  useUpdate.setState({ check, seen: nextSeen });
+  return check;
+}
+
 export const useUpdate = create<UpdateState>((set, get) => ({
   info: null,
   check: null,
@@ -110,6 +149,7 @@ export const useUpdate = create<UpdateState>((set, get) => ({
   dismissed: null,
   open: false,
   enabled: readEnabled(),
+  checking: false,
 
   start: async () => {
     if (started || !isTauri()) return;
@@ -127,18 +167,28 @@ export const useUpdate = create<UpdateState>((set, get) => ({
   },
 
   poll: async (now = Date.now()) => {
-    let check: UpdateCheck;
-    try {
-      check = await updateCheck();
-    } catch (e) {
-      set({ check: { head: null, head_time: null, commits: [], behind: null, error: String(e) } });
-      return;
-    }
+    const check = await look(now);
     const { seen, info, phase, dismissed } = get();
-    const nextSeen = check.head && check.head !== seen?.head ? { head: check.head, at: now } : seen;
-    set({ check, seen: nextSeen });
     if (!info || phase !== "idle" || !check.head || check.head === dismissed) return;
-    if (settled(info.commit, check, nextSeen?.at ?? now, now)) set({ phase: "available", target: check.head, open: true });
+    if (settled(info.commit, check, seen?.at ?? now, now)) set({ phase: "available", target: check.head, open: true });
+  },
+
+  checkNow: async (now = Date.now()) => {
+    const { info, phase, checking } = get();
+    if (!info || !info.installed) return { kind: "unavailable" };
+    // Already offered, building, installed or failed: what you want to see
+    // is that, not a second answer to a question already being acted on.
+    if (phase !== "idle") {
+      set({ open: true });
+      return { kind: "busy" };
+    }
+    if (checking) return { kind: "busy" };
+    set({ checking: true });
+    const check = await look(now).finally(() => set({ checking: false }));
+    if (check.error || !check.head) return { kind: "error", message: check.error ?? `no branch ${info.branch} in the checkout` };
+    if (check.head === info.commit) return { kind: "current", head: check.head };
+    set({ phase: "available", target: check.head, open: true, dismissed: null });
+    return { kind: "offered" };
   },
 
   show: () => {
@@ -219,5 +269,6 @@ export function resetUpdateForTests() {
     dismissed: null,
     open: false,
     enabled: true,
+    checking: false,
   });
 }
