@@ -1,7 +1,7 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-09-16
+updated: 2026-09-25
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
@@ -227,3 +227,6 @@ are described by [wire-protocol.md](wire-protocol.md), not here — `R-D27`
 an anchor. This document covers `parse_unified`, `anchor_of`,
 `normalize_for_anchor` and the `reviewed` set they are fed; a change to those
 is a change to checkpointing, and a change elsewhere in the file is not.
+`R-J110` (2026-09-25) is one such: `head` reads a worktree's `HEAD` file for a
+live session's branch, takes no part in a diff or its base, and is described in
+[claude-code-formats.md](claude-code-formats.md).

@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-23
+updated: 2026-09-25
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -13,7 +13,12 @@ covers:
 > deliberately does not describe — that belongs to
 > [run-and-debug.md](run-and-debug.md). Noted here because both docs cover the
 > same file, so a staleness warning on one can be raised by a change that has
-> nothing to do with it.
+> nothing to do with it. So can `R-J110`'s (2026-09-25): a live session's
+> branch read from its repository's `HEAD` each pass (`refresh_branches`, and
+> `settle_branch` in `put_or_coast`), which is a session field rather than a
+> signal between sessions, and is described in
+> [claude-code-formats.md](claude-code-formats.md) beside the transcript's
+> `gitBranch` stamp it overrides.
 >
 > What *does* belong here, and is easy to mistake for the same coincidence, is
 > anything in `state.rs` that reaches out to the machine on the daemon's behalf
