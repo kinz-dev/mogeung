@@ -175,7 +175,9 @@ function Strip() {
           {needing}
         </span>
       )}
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pt-1">
+      {/* The full width, so a chip's status dot, which sits over its corner,
+          is inside the scrolling box rather than clipped at its edge. */}
+      <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto pt-1">
         {rows.map(({ item, session }) => {
           const name = scoped.labels[session.id] ?? repoName(session);
           // Your colour wins over the hashed one here. The hash exists so a
@@ -190,10 +192,11 @@ function Strip() {
             >
               <button
                 type="button"
+                aria-label={`${scoped.labels[session.id] ?? sessionLabel(session)} — ${reasonLabel(item.reason)}`}
                 onClick={() => revealSession(session.id)}
                 className={cn(
                 "outline-none focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)]",
-                  "grid h-5 w-5 shrink-0 place-items-center rounded-sm text-2xs font-bold",
+                  "relative grid h-5 w-5 shrink-0 place-items-center rounded-sm text-2xs font-bold",
                   selected === session.id && "ring-1 ring-[var(--selection-stroke)]",
                 )}
                 style={{
@@ -203,6 +206,24 @@ function Strip() {
                 }}
               >
                 {chipChar(name)}
+                {/*
+                  **The status, as a dot** (`R-J113`), asked 2026-09-25: *"when
+                  I collapse it … there is no way for me to tell the status
+                  (like WAITING, RUNNING) … may be with little RED circle or
+                  little GREEN/AMBER circle"*. The chip's own colour is the
+                  session — your tag, or its name's hash — so the status needs
+                  a mark of its own, and it wears the expanded row's badge
+                  colour (`reasonColor`) so the two views mean one thing: red
+                  waiting or failed, orange approve, amber stalled or limited,
+                  blue review, green running, grey idle. Ringed in the strip's
+                  background so it reads apart from a chip of the same colour.
+                */}
+                <span
+                  aria-hidden
+                  data-status={item.reason}
+                  className="absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full"
+                  style={{ background: reasonColor(item.reason), boxShadow: "0 0 0 1.5px var(--queue-bg)" }}
+                />
               </button>
             </Tooltip>
           );
