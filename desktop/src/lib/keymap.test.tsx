@@ -778,3 +778,90 @@ describe("the keyboard", () => {
     term.remove();
   });
 });
+
+/**
+ * `Ctrl+T` from anywhere. `R-J109`, asked 2026-09-25: *"I want the Ctrl+T to
+ * sync the git hotkey a global hotkey, and not only when the Git pane are in
+ * focus"*.
+ *
+ * In the main window the chord already fired from every pane — what it lacked
+ * was a word anywhere but the Git pane, which is the balloon's job. What did
+ * **not** work was a popped-out pane: its window is another realm, and the
+ * listener dropped every key typed there. Both are pinned here, the second
+ * with an iframe standing in for the popout — a window with a
+ * `KeyboardEvent` of its own, which is the whole of what made it fail.
+ */
+describe("Ctrl+T, from anywhere", () => {
+  const fetches = () => useStore.getState().git.s1?.console.filter((r) => r.cmd === "git_fetch").length ?? 0;
+
+  beforeEach(() => {
+    useStore.setState({
+      prefs: defaultPrefs(),
+      sessions: { s1: labelled("s1") },
+      selected: "s1",
+      git: {},
+      syncs: [],
+    } as never);
+  });
+
+  it("syncs from inside a terminal, keeps the chord off the pty, and puts the balloon up", async () => {
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const term = document.createElement("div");
+    term.className = "xterm";
+    const hidden = document.createElement("textarea");
+    term.appendChild(hidden);
+    document.body.appendChild(term);
+    hidden.focus();
+
+    const e = new KeyboardEvent("keydown", { key: "t", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => void hidden.dispatchEvent(e));
+    expect(fetches()).toBe(1);
+    // What the terminal reads as "the window's, not mine" (`Terminal.tsx`).
+    expect(e.defaultPrevented).toBe(true);
+    expect(screen.getByRole("status", { name: "git sync" })).toHaveTextContent("Syncing repo…");
+    term.remove();
+  });
+
+  it("reaches a popped-out window, where a terminal still keeps its bare keys", async () => {
+    const { setPopoutWindows } = await import("@/lib/popout");
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const other = frame.contentWindow!;
+    act(() => setPopoutWindows([other]));
+    try {
+      // Built by the other window's own constructor: the realm is the point.
+      const Other = (other as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent;
+      const pressThere = (key: string, mods: KeyboardEventInit = {}) =>
+        act(() => void other.dispatchEvent(new Other("keydown", { key, bubbles: true, cancelable: true, ...mods })));
+
+      pressThere("t", { ctrlKey: true });
+      expect(fetches()).toBe(1);
+
+      // A terminal in the popout owns a bare key, as one here does…
+      const term = other.document.createElement("div");
+      term.className = "xterm";
+      const hidden = other.document.createElement("textarea");
+      term.appendChild(hidden);
+      other.document.body.appendChild(term);
+      hidden.focus();
+      pressThere("[");
+      expect(useStore.getState().prefs.queueCollapsed).toBe(false);
+
+      // …and with nothing there owning it, the key is the window's.
+      hidden.blur();
+      pressThere("[");
+      expect(useStore.getState().prefs.queueCollapsed).toBe(true);
+
+      // Closed: it stops listening there.
+      act(() => setPopoutWindows([]));
+      pressThere("t", { ctrlKey: true });
+      expect(fetches()).toBe(1);
+    } finally {
+      act(() => setPopoutWindows([]));
+      frame.remove();
+    }
+  });
+});

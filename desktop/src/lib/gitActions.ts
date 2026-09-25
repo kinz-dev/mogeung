@@ -20,6 +20,7 @@ import { writeClipboard } from "@/lib/clipboard";
 import { hostUrl } from "@/lib/gitTree";
 import type { LogQuery } from "@/lib/gitFilter";
 import { machineOf } from "@/lib/queue";
+import { beginRun, repoName, runningFor } from "@/lib/gitSync";
 
 /** A page. One past it is fetched daemon-side so `done` costs no second call. */
 export const LOG_PAGE = 100;
@@ -41,6 +42,45 @@ const RECENTS = 6;
  */
 export function repoOf(id: SessionId): string | null {
   return (useStore.getState().git[id] ?? emptyGit()).repo;
+}
+
+/**
+ * Sync a session's repository — `git fetch --all --prune`, the one outbound
+ * call there is ([ADR-0014](../../../docs/decisions/0014-fetch-is-not-publishing.md))
+ * — and put up the balloon that says how it went. `R-J109`.
+ *
+ * **The one door for every way of asking**: `Ctrl+T` from anywhere, the Git
+ * operations popup, the Git pane's button. They used to be three sends, and
+ * only the button marked the pane as fetching — so the key worked everywhere
+ * and showed it nowhere but in that pane.
+ *
+ * A second press while one is on its way sends nothing: two fetches of one
+ * repository race for git's ref locks, and the second loses. It brings a
+ * dismissed balloon back instead, which is what a second press is asking.
+ * Answers whether a fetch was sent.
+ */
+export function syncRepo(session: SessionId | null): boolean {
+  const st = useStore.getState();
+  if (!session) {
+    st.pushError("pick a session first — a fetch needs to know which repo");
+    return false;
+  }
+  const now = Date.now();
+  const running = runningFor(st.syncs, session, now);
+  if (running) {
+    if (running.dismissed) {
+      useStore.setState((s) => ({ syncs: s.syncs.map((r) => (r.id === running.id ? { ...r, dismissed: false } : r)) }));
+    }
+    return false;
+  }
+  const repo = repoOf(session);
+  const sess = st.sessions[session];
+  st.patchGit(session, { fetching: true });
+  useStore.setState((s) => ({
+    syncs: beginRun(s.syncs, { session, name: repoName(repo ?? sess?.repo_root ?? sess?.cwd), at: now }),
+  }));
+  st.send({ cmd: "git_fetch", session_id: session, repo });
+  return true;
 }
 
 /**

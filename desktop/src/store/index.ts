@@ -78,6 +78,7 @@ import { loadConnections } from "@/lib/connections";
 import { composeDial, LOCAL_URL, rememberable } from "@/lib/dial";
 import { applyAppZoom } from "@/lib/zoom";
 import { answerFor, attachError, attachResult, gitSessionOf, pushCmd, type ConsoleEntry } from "@/lib/gitConsole";
+import { failRun, finishRun, type SyncRun } from "@/lib/gitSync";
 import { draftAsk, type FlaggedHunk } from "@/lib/prompt";
 import { commandAsk, explainAsk, parseCommand, refineAsk } from "@/lib/command";
 import {
@@ -418,6 +419,19 @@ export interface GitState {
   console: ConsoleEntry[];
 }
 
+/**
+ * The git command most recently sent and not yet answered, across every
+ * session — where an error with no address is taken to belong. `R-D29`.
+ */
+function latestWaiting(git: Record<SessionId, GitState>): { id: SessionId; seq: number; cmd: string } | null {
+  let latest: { id: SessionId; seq: number; cmd: string } | null = null;
+  for (const [id, st] of Object.entries(git)) {
+    const w = st.console.filter((r) => r.result === null && r.error === null).pop();
+    if (w && (!latest || w.seq > latest.seq)) latest = { id, seq: w.seq, cmd: w.cmd };
+  }
+  return latest;
+}
+
 /** How many revision diffs the window keeps for its panes. */
 const REV_DIFFS = 8;
 
@@ -608,6 +622,13 @@ export interface Notice {
   /** Epoch ms — a toast shows while it is young, the log keeps it after. */
   at: number;
   seen: boolean;
+  /**
+   * Logged, not toasted: something else on screen is already saying it. A
+   * failed sync's balloon names the repository and keeps git's words
+   * (`R-J109`), and the same words in a toast beside it would be one message
+   * twice.
+   */
+  quiet?: boolean;
 }
 
 let noticeSeq = 0;
@@ -767,6 +788,11 @@ export interface AppState {
    */
   notices: Notice[];
   noticesOpen: boolean;
+  /**
+   * Syncs this window started, newest last, for the balloon that says how
+   * each went. `R-J109`, `lib/gitSync.ts`.
+   */
+  syncs: SyncRun[];
   paletteOpen: boolean;
   paletteMode: "actions" | "files" | "scratch";
   /**
@@ -985,7 +1011,7 @@ export interface AppState {
   zoomPane: (pane: string, factor: number) => void;
   pushError: (msg: string) => void;
   /** Something happened and it was fine. See `Notice.kind`. */
-  pushNotice: (msg: string, kind?: Notice["kind"]) => void;
+  pushNotice: (msg: string, kind?: Notice["kind"], opts?: { quiet?: boolean }) => void;
   markNoticesSeen: () => void;
   clearNotices: () => void;
   explorerOf: (id: SessionId) => ExplorerState;
@@ -1165,6 +1191,7 @@ export const useStore = create<AppState>((set, get) => ({
   highlightSeq: null,
   notices: [],
   noticesOpen: false,
+  syncs: [],
   paletteOpen: false,
   paletteMode: "actions",
   gitPopup: null,
@@ -1523,12 +1550,15 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   pushError: (text) => get().pushNotice(text, "error"),
-  pushNotice: (text, kind = "info") =>
+  pushNotice: (text, kind = "info", opts) =>
     set((s) => ({
       // Capped, because a daemon that fails in a loop must not grow the log
       // without bound — and the fiftieth copy of one message tells you nothing
       // the first did not.
-      notices: [...s.notices, { id: ++noticeSeq, text, kind, at: Date.now(), seen: false }].slice(-50),
+      notices: [
+        ...s.notices,
+        { id: ++noticeSeq, text, kind, at: Date.now(), seen: false, ...(opts?.quiet ? { quiet: true } : {}) },
+      ].slice(-50),
     })),
   markNoticesSeen: () =>
     set((s) => ({ notices: s.notices.map((n) => (n.seen ? n : { ...n, seen: true })) })),
@@ -2291,6 +2321,8 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "git_fetched":
         get().patchGit(msg.session_id, { fetching: false, fetched: msg.updates });
+        // The balloon, if this window started it. `R-J109`.
+        set((s) => ({ syncs: finishRun(s.syncs, msg, Date.now()) }));
         break;
       case "git_annotation":
         set((s) => ({
@@ -2449,22 +2481,34 @@ export const useStore = create<AppState>((set, get) => ({
         get().pushNotice(`sent to ${msg.target}`);
         break;
 
-      case "error":
-        get().pushError(msg.message);
+      case "error": {
         // The wire's error carries no address, so it lands on the latest git
         // command still waiting, in whichever session sent it most recently —
         // a heuristic, and the Console row says so. `R-D29`.
+        const latest = latestWaiting(get().git);
+        // **A fetch's failure ends its sync** (`R-J109`), by the same
+        // heuristic: the pane's button comes back — it used to stay disabled
+        // until a reload — and the balloon says *failed* with git's words, so
+        // the toast would only repeat it. A fetch answers in seconds and
+        // almost everything else in milliseconds, so the fetch is nearly
+        // always the one row still waiting; when the guess is wrong, the
+        // fetch's own answer arrives after and puts the balloon right.
+        const fetchFailed = latest?.cmd === "git_fetch";
+        const syncing = fetchFailed && get().syncs.some((r) => r.session === latest.id && r.phase === "running");
+        get().pushNotice(msg.message, "error", { quiet: syncing });
+        if (!latest) break;
         set((s) => {
-          let latest: { id: string; seq: number } | null = null;
-          for (const [id, st] of Object.entries(s.git)) {
-            const w = st.console.filter((r) => r.result === null && r.error === null).pop();
-            if (w && (!latest || w.seq > latest.seq)) latest = { id, seq: w.seq };
-          }
-          if (!latest) return {};
           const st = s.git[latest.id];
-          return { git: { ...s.git, [latest.id]: { ...st, console: attachError(st.console, msg.message) } } };
+          return {
+            git: {
+              ...s.git,
+              [latest.id]: { ...st, console: attachError(st.console, msg.message), ...(fetchFailed ? { fetching: false } : {}) },
+            },
+            ...(syncing ? { syncs: failRun(s.syncs, latest.id, msg.message, Date.now()) } : {}),
+          };
         });
         break;
+      }
 
       default:
         // A message this build has never heard of. Ignored on purpose —

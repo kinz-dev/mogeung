@@ -28,7 +28,7 @@
 
 import { useStore, type GitTab } from "@/store";
 import type { SessionId } from "@/wire/types";
-import { repoOf, askLog, copyText, discard, selectPath, stage } from "@/lib/gitActions";
+import { askLog, copyText, discard, selectPath, stage, syncRepo } from "@/lib/gitActions";
 import { openFile } from "@/lib/explorer";
 import { parseFilePaneId } from "@/lib/panes";
 
@@ -262,7 +262,7 @@ export const GIT_OPS: readonly GitOp[] = [
     unavailable: needsRepo,
     run: (ctx) => {
       if (!ctx.session) return;
-      useStore.getState().send({ cmd: "git_fetch", session_id: ctx.session, repo: repoOf(ctx.session) });
+      syncRepo(ctx.session);
       openGit("log");
     },
   },

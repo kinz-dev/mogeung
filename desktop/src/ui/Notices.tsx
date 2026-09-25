@@ -9,6 +9,9 @@
  *
  * So: it announces itself, it goes away on its own, and the count in the status
  * bar is there if you want to look. Nothing waits for you.
+ *
+ * The same corner carries a sync's balloon (`R-J109`, `SyncBalloon.tsx`),
+ * which is there from the press rather than only when something went wrong.
  */
 
 import { useEffect, useState } from "react";
@@ -18,6 +21,7 @@ import { cn } from "@/lib/cn";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, Empty } from "@/ui/primitives";
 import { stamp } from "@/lib/format";
+import { SyncBalloons } from "@/ui/SyncBalloon";
 
 /** How long a toast stays. Long enough to read a sentence twice. */
 const TOAST_MS = 15_000;
@@ -39,9 +43,9 @@ export function Toasts() {
 
   const now = Date.now();
   // Newest at the bottom, nearest the status bar it came from, and capped so a
-  // burst cannot cover the window it is reporting about.
-  const live = notices.filter((n) => now - n.at < TOAST_MS).slice(-3);
-  if (live.length === 0) return null;
+  // burst cannot cover the window it is reporting about. A quiet notice is in
+  // the log only: something else on screen is already saying it.
+  const live = notices.filter((n) => !n.quiet && now - n.at < TOAST_MS).slice(-3);
 
   return (
     <div className="pointer-events-none absolute right-3 bottom-9 z-40 flex w-80 flex-col gap-1">
@@ -73,6 +77,8 @@ export function Toasts() {
           </button>
         </div>
       ))}
+      {/* A sync's balloon, in the same stack so neither covers the other. `R-J109`. */}
+      <SyncBalloons />
     </div>
   );
 }

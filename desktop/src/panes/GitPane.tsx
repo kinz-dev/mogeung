@@ -31,7 +31,7 @@ import { useStore, useSelectedSession, type GitTab } from "@/store";
 import { Dim, Empty, IconButton, Segmented } from "@/ui/primitives";
 import { sectionLabel } from "@/ui/styles";
 import { repoName } from "@/wire/types";
-import { askLog, pickRepo, repoOf } from "@/lib/gitActions";
+import { askLog, pickRepo, repoOf, syncRepo } from "@/lib/gitActions";
 import { stamp } from "@/lib/format";
 import { BranchTree } from "./git/BranchTree";
 import { LogToolbar, type Only } from "./git/LogToolbar";
@@ -257,10 +257,7 @@ export function GitPane() {
           <IconButton
             title={fetching ? "fetching…" : "update remote-tracking refs — the only outbound call there is (Ctrl+T)"}
             disabled={fetching}
-            onClick={() => {
-              patchGit(sid, { fetching: true });
-              send({ cmd: "git_fetch", session_id: sid, repo: repoOf(sid) });
-            }}
+            onClick={() => void syncRepo(sid)}
           >
             <CloudDownload size={13} />
           </IconButton>

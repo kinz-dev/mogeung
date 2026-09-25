@@ -162,11 +162,14 @@ export function watchPopouts(api: Pick<DockviewApi, "groups" | "onDidLayoutChang
   let known = new Map<string, string>();
   const sync = () => {
     const now = new Map<string, string>();
+    const windows: Window[] = [];
     for (const g of api.groups) {
       if (g.api.location.type !== "popout") continue;
       let label: string | null = null;
       try {
-        label = labelOf(g.api.getWindow());
+        const w = g.api.getWindow();
+        if (w && !windows.includes(w)) windows.push(w);
+        label = labelOf(w);
       } catch {
         label = null;
       }
@@ -176,6 +179,7 @@ export function watchPopouts(api: Pick<DockviewApi, "groups" | "onDidLayoutChang
     }
     for (const [id, label] of known) if (!now.has(id)) void closeShellWindow(label);
     known = now;
+    setPopoutWindows(windows);
   };
   const subs = [api.onDidLayoutChange(sync), api.onDidRemoveGroup(sync), api.onDidAddGroup(sync)];
   sync();
@@ -205,4 +209,28 @@ export async function listenForPopoutCloses(api: Pick<DockviewApi, "groups">): P
   if (!isTauri()) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("popout:close", (e) => onPopoutCloseRequest(api, e.payload));
+}
+
+// --- the windows the keymap listens on (`R-J109`) ------------------------------
+
+/**
+ * Every popout window open now, for whatever has to listen to them as well as
+ * to this one — the keymap, which otherwise hears nothing typed in a popout.
+ * Kept by `watchPopouts`, so a popout reopened from a saved layout counts too.
+ */
+let popoutWindows: readonly Window[] = [];
+const windowWatchers = new Set<(windows: readonly Window[]) => void>();
+
+/** Replace the list, telling the watchers if it changed. Exported for tests. */
+export function setPopoutWindows(next: readonly Window[]): void {
+  if (next.length === popoutWindows.length && next.every((w) => popoutWindows.includes(w))) return;
+  popoutWindows = [...next];
+  for (const watch of windowWatchers) watch(popoutWindows);
+}
+
+/** Hear the list now and whenever it changes. Answers an unsubscriber. */
+export function onPopoutWindows(watch: (windows: readonly Window[]) => void): () => void {
+  windowWatchers.add(watch);
+  watch(popoutWindows);
+  return () => windowWatchers.delete(watch);
 }

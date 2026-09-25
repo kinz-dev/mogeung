@@ -12,7 +12,7 @@
  */
 
 import { useEffect, type RefObject } from "react";
-import { tinykeys } from "tinykeys";
+import { matchKeyBindingPress, parseKeybinding, type KeyBindingPress } from "tinykeys";
 import type { DockviewApi } from "dockview";
 import { currentPlatform, type Platform } from "@/lib/platform";
 import { togglePaneHold, useStore } from "@/store";
@@ -27,7 +27,8 @@ import { fullPath } from "@/ui/PaneChrome";
 import { writeClipboard } from "@/lib/clipboard";
 import { nudgeAppZoom } from "@/lib/zoom";
 import { groupQueue, visibleQueue } from "@/lib/queue";
-import { repoOf } from "@/lib/gitActions";
+import { syncRepo } from "@/lib/gitActions";
+import { onPopoutWindows } from "@/lib/popout";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 import type { Direction } from "@/lib/spatial";
 
@@ -727,14 +728,10 @@ export const ACTIONS: Action[] = [
     label: "Update remote-tracking refs (git fetch)",
     group: "Git",
     keys: ["$mod+t"],
-    run: () => {
-      const { selected, send, pushError } = useStore.getState();
-      if (!selected) {
-        pushError("pick a session first — a fetch needs to know which repo");
-        return;
-      }
-      send({ cmd: "git_fetch", session_id: selected, repo: repoOf(selected) });
-    },
+    // From anywhere, and it says how it went wherever you are: a balloon in
+    // the corner rather than only the Git pane's strip, which is what made it
+    // look like the key worked in that pane alone. `R-J109`.
+    run: () => void syncRepo(useStore.getState().selected),
   },
   {
     id: "git.ops",
@@ -1170,8 +1167,11 @@ const VIEWER_KEYS = new Set([
  * - **A real text box owns everything bare.** Typing `c` into the queue filter
  *   must not throw you into another pane.
  */
-export function focusOwns(key: string): boolean {
-  const el = document.activeElement as HTMLElement | null;
+export function focusOwns(key: string, doc: Document = document): boolean {
+  // `doc` is the document the key was typed in: a popped-out pane has one of
+  // its own, and asking the main window's would find `<body>` there and hand a
+  // popped-out terminal's every letter to the window instead. `R-J109`.
+  const el = doc.activeElement as HTMLElement | null;
   if (!el) return false;
   if (el.closest(".xterm")) return true;
   // A surface that has named this key wins it. `R-L8`.
@@ -1184,6 +1184,44 @@ export function focusOwns(key: string): boolean {
   if (el.closest(".monaco-editor")) return VIEWER_KEYS.has(key);
   const tag = el.tagName.toLowerCase();
   return tag === "input" || tag === "textarea" || el.isContentEditable;
+}
+
+/**
+ * Listen for the keymap's chords on one window. `R-J109`.
+ *
+ * tinykeys' own matching, through the two functions it exports for exactly
+ * this, without its listener — which drops any event that is not `instanceof
+ * KeyboardEvent`, and means *this* window's `KeyboardEvent`. A popped-out
+ * pane's window is another realm with a constructor of its own, so every key
+ * typed there failed that test and was dropped without a word: no chord
+ * reached a popout at all, `Ctrl+T` included. No binding here is a sequence
+ * (the one thing that listener adds), so matching a press is all of it.
+ *
+ * **Capture**, not bubble. Monaco and xterm both stop propagation on keys they
+ * handle, so a listener on the way *up* never sees them — which is a window
+ * whose shortcuts die the moment you click into a pane. Listening on the way
+ * down means `focusOwns` is the only thing deciding who gets a key, rather
+ * than whichever component called `stopPropagation` first.
+ */
+export function bindKeys(target: Window, map: Record<string, (e: KeyboardEvent) => void>): () => void {
+  const presses: [KeyBindingPress, (e: KeyboardEvent) => void][] = [];
+  for (const [binding, run] of Object.entries(map)) {
+    const [press] = parseKeybinding(binding);
+    if (press) presses.push([press, run]);
+  }
+  const listener = (e: Event) => {
+    const k = e as KeyboardEvent;
+    if (typeof k.key !== "string") return;
+    for (const [press, run] of presses) if (matchKeyBindingPress(k, press)) run(k);
+  };
+  target.addEventListener("keydown", listener, true);
+  return () => {
+    try {
+      target.removeEventListener("keydown", listener, true);
+    } catch {
+      // A window already gone takes its listeners with it.
+    }
+  };
 }
 
 export function useKeymap(dock: RefObject<DockviewApi | null>): void {
@@ -1200,17 +1238,34 @@ export function useKeymap(dock: RefObject<DockviewApi | null>): void {
           // Chords always fire — Ctrl+K has to open the palette from inside a
           // filter box, or the palette is unreachable exactly when you want it.
           const bare = !/\+/.test(key);
-          if (bare && focusOwns(key)) return;
+          if (bare && focusOwns(key, typedIn(e))) return;
           e.preventDefault();
           action.run(dock.current);
         };
       }
     }
-    // **Capture**, not bubble. Monaco and xterm both stop propagation on keys
-    // they handle, so a listener on the way *up* never sees them — which is a
-    // window whose shortcuts die the moment you click into a pane. Listening on
-    // the way down means `focusOwns` above is the only thing deciding who gets
-    // a key, rather than whichever component called `stopPropagation` first.
-    return tinykeys(window, map, { capture: true });
+    // This window, and every popout: a pane moved into a window of its own
+    // (`R-B55`) is still this window's dockview, and its keys are still this
+    // window's keys. `R-J109`.
+    const bound = new Map<Window, () => void>([[window, bindKeys(window, map)]]);
+    const stopWatching = onPopoutWindows((popouts) => {
+      for (const [w, unbind] of bound) {
+        if (w !== window && !popouts.includes(w)) {
+          unbind();
+          bound.delete(w);
+        }
+      }
+      for (const w of popouts) if (!bound.has(w)) bound.set(w, bindKeys(w, map));
+    });
+    return () => {
+      stopWatching();
+      for (const unbind of bound.values()) unbind();
+    };
   }, [dock, overrides]);
+}
+
+/** The document a key was typed in — the listener's window's, which for a popout is not this one. */
+function typedIn(e: KeyboardEvent): Document {
+  const w = e.currentTarget as Window | null;
+  return w?.document ?? (e.target as Node | null)?.ownerDocument ?? document;
 }

@@ -558,6 +558,14 @@ through `popout_close` whenever its group goes, however it went; each window
 knows its label from an initialization script. A second close passes through,
 so a client that never answers cannot trap a window.
 
+**The keymap listens in every popout too** (`R-J109`), since a popout's keys
+are still this window's. Not through `tinykeys`' own listener, which drops any
+event that is not `instanceof` *this* window's `KeyboardEvent` — a popout is
+another realm with a constructor of its own, so every key typed there was
+dropped without a word. `bindKeys` uses tinykeys' exported matcher without that
+check, on the main window and on each popout `watchPopouts` reports, and
+`focusOwns` asks the document the key was typed in rather than this one.
+
 The **cost** is coupling. One dockview, one store, one socket, so a popout
 cannot outlive the main window. The earlier design, where each window was its
 own client, could have survived that and could never have let a pane be dragged
