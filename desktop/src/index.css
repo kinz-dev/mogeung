@@ -468,6 +468,38 @@ textarea {
   box-shadow: inset 0 2px 0 var(--blue);
 }
 
+/* A session's colour tag on every tab that speaks for it (`R-J106`) — the same
+   two values the queue row wears, the tint across the tab and the bar down its
+   leading edge. The tab says which tag with `data-tag` (see `PaneTab`), and the
+   whole `.dv-tab` is painted from it rather than the element inside, which
+   dockview pads.
+
+   **Through dockview's own variables, not over them.** dockview paints a tab
+   with rules six classes deep that read these four; setting them on the tab
+   itself lets those rules do the painting, so active and inactive, visible and
+   hidden keep their difference — a hidden tagged tab is the lighter tint —
+   instead of one colour winning a specificity fight with all four. */
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag]) {
+  --dv-activegroup-visiblepanel-tab-background-color: var(--tab-tag-bg);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--tab-tag-bg);
+  --dv-activegroup-hiddenpanel-tab-background-color: color-mix(in srgb, var(--tab-tag-bg) 55%, var(--bg));
+  --dv-inactivegroup-hiddenpanel-tab-background-color: color-mix(in srgb, var(--tab-tag-bg) 55%, var(--bg));
+  box-shadow: inset 3px 0 0 var(--tab-tag);
+}
+.dockview-theme-mogeung .dv-tab.dv-active-tab:has(.dv-default-tab[data-tag]) {
+  box-shadow:
+    inset 0 2px 0 var(--blue),
+    inset 3px 0 0 var(--tab-tag);
+}
+/* One line per tag in `lib/tags.ts` — a test holds the two lists together. */
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="red"]) { --tab-tag: var(--red); --tab-tag-bg: var(--tag-red-bg); }
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="orange"]) { --tab-tag: var(--urgent); --tab-tag-bg: var(--tag-orange-bg); }
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="amber"]) { --tab-tag: var(--amber); --tab-tag-bg: var(--tag-amber-bg); }
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="green"]) { --tab-tag: var(--green); --tab-tag-bg: var(--tag-green-bg); }
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="blue"]) { --tab-tag: var(--blue); --tab-tag-bg: var(--tag-blue-bg); }
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="purple"]) { --tab-tag: var(--purple); --tab-tag-bg: var(--tag-purple-bg); }
+.dockview-theme-mogeung .dv-tab:has(.dv-default-tab[data-tag="grey"]) { --tab-tag: var(--dim); --tab-tag-bg: var(--tag-grey-bg); }
+
 /* Which pane the keyboard is aimed at.
    With one pane in the centre this was a question nobody had to ask. With two
    live terminals side by side it is the first question, and xterm gives no

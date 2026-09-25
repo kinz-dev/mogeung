@@ -22,6 +22,7 @@ import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "
 import { popOutPane } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
 import { sessionLabel } from "@/wire/types";
+import { tagLabel } from "@/lib/tags";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { IntellijGlyph } from "@/ui/IdeGlyphs";
 import { hostLabel, reachForSession } from "@/lib/tmux";
@@ -47,6 +48,12 @@ export interface PaneTitle {
   text: string;
   held: boolean;
   hint: string;
+  /**
+   * The session this tab speaks for — the one an Agent pane shows, or the one
+   * a file was opened from — or `null` for a pane that belongs to none. What
+   * the tab's colour tag is read from (`R-J106`).
+   */
+  session: string | null;
 }
 
 export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
@@ -70,6 +77,7 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
     return {
       text: file.name,
       held: false,
+      session: file.session,
       // **The whole path, since `R-J24`.** It used to be the repo-relative one,
       // which is the half you already have: the tab says the basename and the
       // strip under it says the rest of the relative path. What neither said is
@@ -82,17 +90,19 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
     return {
       text: scratch,
       held: false,
+      session: null,
       hint: `${scratchPath(scratch)} — a scratch file, saved as you type (R-L5)`,
     };
   }
-  if (kind !== "agent") return { text: fallback, held: false, hint: fallback };
+  if (kind !== "agent") return { text: fallback, held: false, hint: fallback, session: null };
 
   const attached = "the agent, attached through tmux — closing this pane detaches, it never kills";
-  if (!id) return { text: "Agent", held: false, hint: attached };
+  if (!id) return { text: "Agent", held: false, hint: attached, session: null };
   if (!session) {
     return {
       text: held ? `${id.slice(0, 8)} — ended` : "Agent",
       held: !!held,
+      session: held ? id : null,
       hint: held ? `held on ${id}, which has ended — drop the anchor to follow the queue again` : attached,
     };
   }
@@ -100,6 +110,7 @@ export function usePaneTitle(paneId: string, fallback: string): PaneTitle {
   return {
     text: name,
     held: !!held,
+    session: id,
     hint: held ? `held on ${name} — it will not follow the queue` : `${name} — ${attached}`,
   };
 }
@@ -145,12 +156,28 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
     return () => sub.dispose();
   }, [props.api]);
 
-  const { text, held, hint } = usePaneTitle(props.api.id, fallback);
+  const title = usePaneTitle(props.api.id, fallback);
+  const { text, held } = title;
   const file = fileOf(props.api.id);
   const scratch = parseScratchPaneId(props.api.id);
   // A diff pane (`R-D30`) is a document you are finished with too: it names
   // a revision, closes like a file, and is stripped on restore with them.
   const diff = parseDiffPaneId(props.api.id);
+  // **The session's colour, on its tab.** `R-J106`, asked 2026-09-25: *"color
+  // the tab header to the same color selected in the Attention list … so that
+  // user can easily tell what is the session"*. The tag you put on a session
+  // in the queue now marks every tab that speaks for it — the Agent pane
+  // showing it, and the files and diffs it opened — so two agents side by
+  // side are told apart by colour before their names are read. The tab only
+  // says which tag; `index.css` paints the whole tab from it, because
+  // dockview pads the tab around this element and a tint here would leave a
+  // frame of the old colour.
+  const tabSession = diff ? diff.session : title.session;
+  const tag = useStore((s) => {
+    const id = tabSession ? s.scoped().tags[tabSession] : undefined;
+    return tagLabel(id) ? (id as string) : null;
+  });
+  const hint = tag ? `${title.hint} · tagged ${tagLabel(tag)}` : title.hint;
   const root = useStore((s) => {
     if (!file) return null;
     const owner = s.sessions[file.session];
@@ -158,7 +185,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
   });
 
   const tab = (
-    <div className="dv-default-tab" title={hint}>
+    <div className="dv-default-tab" title={hint} data-tag={tag ?? undefined}>
       {held && <Anchor className="mr-1 h-3 w-3 shrink-0 text-[var(--blue)]" aria-label="held" />}
       <span className="dv-default-tab-content">{text}</span>
       {/*
