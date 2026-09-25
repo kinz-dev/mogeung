@@ -443,3 +443,127 @@ describe("opening the chat panel", () => {
     expect(useStore.getState().focusRail).toBe("files");
   });
 });
+
+/**
+ * Reading an answer while it is still arriving. `R-J112`, asked 2026-09-25:
+ * *"when I scroll back and want to read the message when it is still
+ * generating, it always auto scroll to the bottom, it prevent me from
+ * reading"*.
+ *
+ * jsdom lays nothing out, so the thread is given a height and a `scrollTop`
+ * that behaves as a browser's does: clamped to the content, and announcing a
+ * change with a `scroll` event — which is what the panel reads to tell a
+ * reader's scroll from its own.
+ */
+describe("reading while it answers", () => {
+  const VIEW = 200;
+  let content = 1000;
+  const question = { id: "q", role: "user" as const, content: "explain the retry loop" };
+  const answer = (text: string, pending = true) => ({ id: "a", role: "assistant" as const, content: text, pending });
+
+  function thread() {
+    const el = screen.getByLabelText("conversation");
+    let top = 0;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => content });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => VIEW });
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        const next = Math.max(0, Math.min(v, content - VIEW));
+        if (next === top) return;
+        top = next;
+        el.dispatchEvent(new Event("scroll"));
+      },
+    });
+    return el;
+  }
+  /** More of the answer: the thread grows, and the store says so. */
+  const more = (el: HTMLElement, text: string, by = 100) => {
+    content += by;
+    act(() => useStore.setState({ chat: [question, answer(text)] }));
+    return el.scrollTop;
+  };
+  const end = () => content - VIEW;
+  const jump = () => screen.queryByRole("button", { name: /jump to the latest/ });
+
+  beforeEach(() => {
+    content = 1000;
+    sent.length = 0;
+    useStore.setState({
+      chat: [question, answer("First,")],
+      health: health({}),
+      conversationId: null,
+      showChatHistory: false,
+      send: (m) => void sent.push(m),
+    });
+    render(<ChatTool />);
+  });
+
+  it("follows the answer while you are at the end", () => {
+    const el = thread();
+    el.scrollTop = end();
+    expect(more(el, "First, the loop")).toBe(end());
+    expect(more(el, "First, the loop retries")).toBe(end());
+    expect(jump()).toBeNull();
+  });
+
+  it("scrolling up to read stops it following, and says the answer is still coming", () => {
+    const el = thread();
+    el.scrollTop = end();
+    el.scrollTop = 300;
+    expect(more(el, "First, the loop")).toBe(300);
+    expect(more(el, "First, the loop retries")).toBe(300);
+    expect(jump()).toHaveTextContent("still answering — jump to the latest");
+  });
+
+  /** A trackpad scrolls a few pixels at a time; each one has to count. */
+  it("a small move up lets go too", () => {
+    const el = thread();
+    el.scrollTop = end();
+    el.scrollTop = end() - 8;
+    const held = el.scrollTop;
+    expect(more(el, "First, the loop")).toBe(held);
+  });
+
+  it("jump to the latest picks it up again", () => {
+    const el = thread();
+    el.scrollTop = end();
+    el.scrollTop = 300;
+    more(el, "First, the loop");
+    fireEvent.click(jump()!);
+    expect(el.scrollTop).toBe(end());
+    expect(jump()).toBeNull();
+    expect(more(el, "First, the loop retries")).toBe(end());
+  });
+
+  it("asking the next question follows its answer, wherever you had scrolled to", () => {
+    const el = thread();
+    el.scrollTop = end();
+    el.scrollTop = 300;
+    act(() => useStore.setState({ chat: [question, answer("done.", false)] }));
+    const box = screen.getByLabelText("ask the model");
+    fireEvent.change(box, { target: { value: "and the backoff?" } });
+    content += 80;
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(sent.some((m) => m.cmd === "model_chat")).toBe(true);
+    expect(el.scrollTop).toBe(end());
+    expect(jump()).toBeNull();
+  });
+
+  /**
+   * Text that shrinks as it re-lays out pulls the view up to the new end —
+   * a scroll up that nobody made, and must not read as letting go.
+   */
+  it("text shrinking at the end is not you scrolling away", () => {
+    const el = thread();
+    el.scrollTop = end();
+    const was = el.scrollTop;
+    content -= 100;
+    // What the browser does to a view past the new end: clamps it, and says so.
+    el.scrollTop = was;
+    expect(el.scrollTop).toBe(end());
+    expect(more(el, "First, the loop")).toBe(end());
+    expect(jump()).toBeNull();
+  });
+});

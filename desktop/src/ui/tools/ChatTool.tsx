@@ -33,10 +33,10 @@
  * than merely to find it again.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ExternalLink, History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
+import { ArrowDown, ExternalLink, History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import type { ChatMessage } from "@/store";
 import { Dim, Empty, IconButton } from "@/ui/primitives";
@@ -63,6 +63,30 @@ export function threadAsMarkdown(chat: ChatMessage[], when: Date): string {
     lines.push(m.role === "user" ? "**You**" : `**${m.model ?? "the model"}**`, "", m.content, "");
   }
   return lines.join("\n");
+}
+
+/**
+ * How near the end still counts as *at* the end: a line's worth, for a view
+ * that is not quite at the bottom because of rounding at a fractional zoom.
+ */
+const FOLLOW_SLACK_PX = 24;
+
+/**
+ * Should the thread keep following new text, given a scroll that just
+ * happened? `R-J112`.
+ *
+ * **At the very end, yes — whichever way it moved.** Text that shrinks as it
+ * re-lays out (a fence closing, a table settling) makes the browser pull the
+ * view up to the new end, and that must not read as letting go.
+ *
+ * **Near the end, only if it moved down.** A move up lets go at once, however
+ * small: a slow trackpad scroll arrives a few pixels at a time, and with each
+ * streamed chunk snapping the view back while it stayed inside the slack, the
+ * reader could never get away.
+ */
+export function stillFollowing(m: { scrollTop: number; scrollHeight: number; clientHeight: number }, lastTop: number): boolean {
+  const gap = m.scrollHeight - m.scrollTop - m.clientHeight;
+  return gap <= 1 || (gap <= FOLLOW_SLACK_PX && m.scrollTop >= lastTop);
 }
 
 /** One row. Split out so the pending and error shapes are visible at a glance. */
@@ -195,8 +219,39 @@ export function ChatTool() {
   const health = useStore((s) => s.health);
   const focusRail = useStore((s) => s.focusRail);
   const [draft, setDraft] = useState("");
-  const bottom = useRef<HTMLDivElement>(null);
+  const thread = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  /**
+   * Whether the thread follows new text to its end. `R-J112`, asked
+   * 2026-09-25: *"when I scroll back and want to read the message when it is
+   * still generating, it always auto scroll to the bottom, it prevent me from
+   * reading"*.
+   *
+   * It used to scroll to the end on every change to the thread, and a
+   * streamed answer changes it several times a second. Now it follows only
+   * while you are at the end: scroll up and it lets you read, and *jump to the
+   * latest* — or asking the next question — picks it up again. A ref, not
+   * state: it is read when text arrives and never drawn; `away` is the drawn
+   * half.
+   */
+  const following = useRef(true);
+  const lastTop = useRef(0);
+  const [away, setAway] = useState(false);
+
+  const follow = () => {
+    following.current = true;
+    setAway(false);
+    const el = thread.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+
+  const onScroll = () => {
+    const el = thread.current;
+    if (!el) return;
+    following.current = stillFollowing(el, lastTop.current);
+    lastTop.current = el.scrollTop;
+    setAway(!following.current);
+  };
 
   const model = health?.model ?? null;
   const proxy = health?.proxy ?? null;
@@ -249,10 +304,19 @@ export function ChatTool() {
     useStore.setState({ focusRail: null });
   }, [focusRail]);
 
-  useEffect(() => {
-    // Not while the list is up: scrolling a thread you are not looking at
-    // steals the list's own scroll position on every keystroke elsewhere.
-    if (!showHistory) bottom.current?.scrollIntoView({ block: "end" });
+  // Before paint, so following text never shows a frame of the old position.
+  // The thread itself is scrolled rather than a marker scrolled into view,
+  // which would move every scrolling ancestor too — the rail included.
+  useLayoutEffect(() => {
+    // The list replaces the thread, and a thread shown again starts at its
+    // end, following — where the conversation is, whichever one it now is.
+    if (showHistory) {
+      following.current = true;
+      setAway(false);
+      return;
+    }
+    const el = thread.current;
+    if (el && following.current) el.scrollTop = el.scrollHeight;
   }, [chat, showHistory]);
 
   // Re-asked every time the list is opened rather than kept in step: it moves
@@ -279,6 +343,10 @@ export function ChatTool() {
 
   const submit = () => {
     if (!draft.trim() || !usable) return;
+    // You asked: the answer is what you want to see, wherever you had
+    // scrolled to.
+    following.current = true;
+    setAway(false);
     askModel(draft);
     setDraft("");
   };
@@ -338,24 +406,43 @@ export function ChatTool() {
           <HistoryList />
         </div>
       ) : (
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-2 py-2">
-          {chat.length === 0 && (
-            <Empty
-              hint={
-                usable
-                  ? `${model?.model ?? "the endpoint's default"} at ${
-                      proxy?.url ? "mogeung's own proxy" : model?.host
-                    }`
-                  : undefined
-              }
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={thread}
+            onScroll={onScroll}
+            aria-label="conversation"
+            className="h-full space-y-3 overflow-y-auto px-2 py-2"
+          >
+            {chat.length === 0 && (
+              <Empty
+                hint={
+                  usable
+                    ? `${model?.model ?? "the endpoint's default"} at ${
+                        proxy?.url ? "mogeung's own proxy" : model?.host
+                      }`
+                    : undefined
+                }
+              >
+                {usable ? "ask anything" : "no model"}
+              </Empty>
+            )}
+            {chat.map((m) => (
+              <Turn key={m.id} m={m} now={now} />
+            ))}
+          </div>
+          {away && chat.length > 0 && (
+            <button
+              type="button"
+              onClick={follow}
+              className={cn(
+                "absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-0.5 text-2xs text-[var(--text)] shadow-[var(--elev-2)]",
+                interactive,
+              )}
             >
-              {usable ? "ask anything" : "no model"}
-            </Empty>
+              <ArrowDown size={11} />
+              {streaming ? "still answering — jump to the latest" : "jump to the latest"}
+            </button>
           )}
-          {chat.map((m) => (
-            <Turn key={m.id} m={m} now={now} />
-          ))}
-          <div ref={bottom} />
         </div>
       )}
 
