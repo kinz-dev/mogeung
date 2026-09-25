@@ -489,21 +489,38 @@ export const ACTIONS: Action[] = [
   rail("chat", "Ask Mogeung", ["Alt+a"]),
 
   {
+    // The id is older than the toggle and kept, so a rebinding saved against
+    // it still applies.
     id: "queue.focus",
-    label: "Focus the Attention list",
+    label: "Show or hide the Attention list",
     group: "Navigation",
     keys: ["Alt+1"],
+    /**
+     * **One key both ways, like `Alt+2` and the rest.** Asked 2026-09-25:
+     * *"unlike other Alt + 2, 3, 4, 5, 6 mapping, all others are toggle, but
+     * the Alt+1 is not"*. It used to only ever open and focus, so the list
+     * could be reached from the keyboard but not put away — the one numbered
+     * chord whose second press did nothing.
+     *
+     * Open, it collapses the list to its strip, which hands the keyboard back
+     * rather than aiming it at a list that is no longer there. Collapsed, it
+     * expands the list **and focuses it**, as before — the arrows need
+     * somewhere to drive, which is why this chord exists at all.
+     */
     run: () => {
       const { prefs, setPrefs, queue, sessions, selected, select } = useStore.getState();
-      // Focusing something that is collapsed to a strip is not focusing it.
-      if (prefs.queueCollapsed) setPrefs({ queueCollapsed: false });
+      if (!prefs.queueCollapsed) {
+        setPrefs({ queueCollapsed: true });
+        return;
+      }
+      setPrefs({ queueCollapsed: false });
       // Nothing selected yet? Take the top of the queue, so the first arrow
       // press moves *from* somewhere rather than jumping to the top.
       if (!selected) {
         const first = queue.find((q) => sessions[q.session_id]);
         if (first) select(first.session_id);
       }
-      // After the render that expanding may have caused.
+      // After the render that expanding caused.
       requestAnimationFrame(() => document.getElementById(QUEUE_LIST_ID)?.focus());
     },
   },

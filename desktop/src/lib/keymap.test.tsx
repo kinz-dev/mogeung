@@ -231,18 +231,28 @@ describe("the keyboard", () => {
   });
 
   /**
-   * `Alt+1` focuses the Attention list so the arrows have somewhere to drive.
-   *
-   * Focusing something collapsed to a strip is not focusing it, so it expands
-   * first — and with nothing selected it takes the top of the queue, so the
-   * first arrow press moves *from* somewhere rather than jumping.
+   * `Alt+1` is one key both ways, like `Alt+2` and the rest (asked
+   * 2026-09-25). From a strip it expands the Attention list and focuses it, so
+   * the arrows have somewhere to drive; pressed again it collapses the list.
+   * Before, a second press did nothing — the one numbered chord that could
+   * open its panel and not put it away.
    */
-  it("focuses the Attention list, expanding it if it was a strip", async () => {
+  it("toggles the Attention list: expands and focuses it from a strip, collapses it when open", async () => {
     const { default: App } = await import("@/App");
+    const { QUEUE_LIST_ID } = await import("@/lib/keymap");
     render(<App />);
     act(() => {
       useStore.getState().setPrefs({ queueCollapsed: true });
     });
+    press("1", { altKey: true });
+    expect(useStore.getState().prefs.queueCollapsed).toBe(false);
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+    expect(document.activeElement?.id).toBe(QUEUE_LIST_ID);
+
+    press("1", { altKey: true });
+    expect(useStore.getState().prefs.queueCollapsed).toBe(true);
     press("1", { altKey: true });
     expect(useStore.getState().prefs.queueCollapsed).toBe(false);
   });
