@@ -71,7 +71,18 @@ describe("shellArgs", () => {
   it("sets mouse mode after the session it may be creating", () => {
     const args = shellArgs("mog-0", "/repo");
     expect(args.indexOf("mouse")).toBeGreaterThan(args.indexOf("new-session"));
-    expect(args.slice(-6)).toEqual([";", "set-option", "-t", "mog-0", "mouse", "on"]);
+    expect(args.slice(-12, -6)).toEqual([";", "set-option", "-t", "mog-0", "mouse", "on"]);
+  });
+
+  /**
+   * No status bar on our own shells — `R-B57`. On **this** session, never `-g`:
+   * a global option would take the bar off every tmux session you have,
+   * including the ones the Agent pane attaches to.
+   */
+  it("turns the status bar off for its own session only", () => {
+    const args = shellArgs("mog-0", "/repo");
+    expect(args.slice(-6)).toEqual([";", "set-option", "-t", "mog-0", "status", "off"]);
+    expect(args).not.toContain("-g");
   });
 });
 

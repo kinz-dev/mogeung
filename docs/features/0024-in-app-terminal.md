@@ -2,7 +2,7 @@
 title: In-app terminal
 status: shipped
 updated: 2026-09-28
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56]
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57]
 depends_on: []
 ---
 
@@ -26,6 +26,8 @@ depends_on: []
 > and the terminal offers the same on right-click. The same day the splits
 > lost their tab bars — one shell per split, tmux's shape — and `exit` closes
 > the split it ran in.
+> Its own shells have no tmux status bar either (`R-B57`) — set on each
+> `mog-N` session, never globally.
 
 ## Spec
 

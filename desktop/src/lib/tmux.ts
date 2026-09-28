@@ -131,11 +131,23 @@ function mouseOn(target: string): string[] {
  * behaviour every terminal has.
  */
 export function shellArgs(name: string, cwd: string): string[] {
-  // The option goes **after** here, not before: `-A` may be creating the
+  // The options go **after** here, not before: `-A` may be creating the
   // session in this very invocation, and setting an option on a session that
   // does not exist yet fails. Verified that a command chained after an
   // attaching `new-session` still runs.
-  return ["new-session", "-A", "-s", name, "-c", cwd, ";", "set-option", "-t", name, "mouse", "on"];
+  //
+  // `status off` since `R-B57`, asked 2026-09-28: *"can we remove the tmux
+  // green bar?"*. The panel already says what tmux's bar did — which shell,
+  // on which machine — and a split has no room to spare. Per **session**, like
+  // `mouse`: your own sessions and `~/.tmux.conf` keep their bar, and so does
+  // an Agent pane, which attaches to a session that is yours rather than
+  // ours. The one place it shows: `tmux attach -t mog-0` from another terminal
+  // lands in the same session, bar-less.
+  return [
+    "new-session", "-A", "-s", name, "-c", cwd,
+    ";", "set-option", "-t", name, "mouse", "on",
+    ";", "set-option", "-t", name, "status", "off",
+  ];
 }
 
 /**
