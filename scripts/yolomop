@@ -168,6 +168,19 @@ tmux new-session -d -s "$name" -c "$dir" \
 # not a crash but the absence of the protection the comment above describes.
 tmux set-option -w -t "=${name}:" window-size latest >/dev/null
 
+# No status bar. `R-B58`, asked 2026-09-28 once the panel's own shells had
+# lost theirs (`R-B57`): mogeung's Agent pane already says which session this
+# is, and the bar was a row of it spent on nothing. Set here, where the
+# session is made, rather than when mogeung attaches — so it reaches only
+# sessions a launcher created, never a tmux of your own that happens to run
+# an agent. `status` is a *session* option, so every client loses it, a
+# terminal attached with `tmux attach -t <name>` too; `tmux set -t <name>
+# status on` brings it back for one session.
+# **The bare name**, not `=name`: `set-option -t` answers "no such session"
+# to the exact-match prefix, and the bare form is exact anyway — verified on
+# tmux 3.6 that `mogeung-foo` leaves `mogeung-foo-2` alone.
+tmux set-option -t "$name" status off >/dev/null
+
 if [ "$detach" -eq 1 ]; then
   # The name on stdout so scripts can capture it; the human note on stderr.
   echo "$name"
