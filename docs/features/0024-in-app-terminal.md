@@ -22,6 +22,8 @@ depends_on: []
 > a tmux split is one pty and one tab here, and could not be arranged with the
 > rest of the window. The panel is still chrome; see
 > [ADR-0017](../decisions/0017-the-rail-is-chrome.md)'s amendment.
+> `Alt+Shift+\` and `Alt+Shift+-` split the shell in front right and down,
+> and a shell's tab and its terminal both offer the same on right-click.
 
 ## Spec
 

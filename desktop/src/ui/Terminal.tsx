@@ -15,7 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import { isTauri, onPtyClosed, onPtyData, ptyClose, ptyOpen, ptyResize, ptyWrite } from "@/lib/tauri";
 import { clipboardIntent, decodeOsc52, readClipboard, writeClipboard } from "@/lib/clipboard";
 import { usePaneVisible } from "@/lib/paneScope";
-import { ContextMenu, MenuItem, MenuLabel } from "@/ui/Menu";
+import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 
 import { useStore } from "@/store";
 
@@ -91,6 +91,9 @@ export interface TerminalProps {
   cwd?: string | null;
   /** Shown instead of the terminal when `command` is null. */
   refusal?: React.ReactNode;
+  /** More items for the right-click menu, under Copy and Paste — a shell's
+   *  splits (`R-B56`). The Agent pane passes none. */
+  menu?: React.ReactNode;
 }
 
 /**
@@ -117,7 +120,7 @@ function terminalFontStack(): string {
   return declared || TERMINAL_FONT;
 }
 
-export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
+export function TerminalView({ id, command, cwd, refusal, menu }: TerminalProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   /** The geometry the pty was last told about, so a no-op resize stays a no-op. */
   const lastSize = useRef<{ cols: number; rows: number } | null>(null);
@@ -564,6 +567,12 @@ export function TerminalView({ id, command, cwd, refusal }: TerminalProps) {
           // turns mouse reporting on, so a plain drag belongs to *it* and never
           // reaches xterm's selection. Shift is what takes the mouse back.
           <MenuLabel>hold Shift while dragging — the session owns a plain drag</MenuLabel>
+        )}
+        {menu && (
+          <>
+            <MenuSeparator />
+            {menu}
+          </>
         )}
       </ContextMenu>
       {exited && (

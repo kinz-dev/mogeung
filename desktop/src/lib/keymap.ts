@@ -30,6 +30,7 @@ import { groupQueue, visibleQueue } from "@/lib/queue";
 import { syncRepo } from "@/lib/gitActions";
 import { onPopoutWindows } from "@/lib/popout";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
+import { splitShell } from "@/lib/shellDock";
 import type { Direction } from "@/lib/spatial";
 
 /** The id the Attention list carries, so `Alt+1` has something to focus. */
@@ -625,6 +626,26 @@ export const ACTIONS: Action[] = [
       useStore.setState({ showTerminal: true, showCommandBox: true });
     },
   },
+  // `R-B56`, asked 2026-09-28 by chord: *Alt+Shift+"-"* down and
+  // *Alt+Shift+"|"* right — the line each one draws between the two shells.
+  // Spelled by physical key, which is the only spelling of an Option chord
+  // that fires on macOS, and which a layout cannot move. Chords, so they fire
+  // from inside a focused shell; the split is of the shell in front, or of
+  // the last one before the panel was hidden.
+  {
+    id: "terminal.split_right",
+    label: "Split the shell in front — a new one to its right, in the same folder",
+    group: "Panes",
+    keys: ["Alt+Shift+Backslash"],
+    run: () => splitShell("right"),
+  },
+  {
+    id: "terminal.split_down",
+    label: "Split the shell in front — a new one below it, in the same folder",
+    group: "Panes",
+    keys: ["Alt+Shift+Minus"],
+    run: () => splitShell("below"),
+  },
   {
     id: "terminal.focus_app",
     label: "Raise the terminal application this session runs in",
@@ -1042,7 +1063,7 @@ const MAC_MODS: Record<string, string> = {
 const MODS: Record<string, string> = { $mod: "Ctrl", Control: "Ctrl", Meta: "Meta" };
 
 /** Physical-key spellings, back to the key you are looking at. */
-const KEY_LABELS: Record<string, string> = { Equal: "=", Minus: "−", Backquote: "`" };
+const KEY_LABELS: Record<string, string> = { Equal: "=", Minus: "−", Backquote: "`", Backslash: "\\" };
 
 /**
  * A chord as it should be **read**, which is not always how it is matched.

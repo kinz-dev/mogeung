@@ -20,8 +20,13 @@
  */
 
 import type { DockviewApi } from "dockview";
+import { useStore } from "@/store";
+import { shellSessionName } from "@/lib/tmux";
 
 export type Shell = [string, string] | [string, string, string];
+
+/** Which way a split opens, in dockview's own words. */
+export type SplitDirection = "right" | "below";
 
 const PREFIX = "shell:";
 
@@ -50,6 +55,7 @@ export function syncShells(api: DockviewApi, shells: readonly Shell[], title: (s
   for (const panel of [...api.panels]) {
     if (!want.has(panel.id)) api.removePanel(panel);
   }
+  const opened: string[] = [];
   for (const shell of shells) {
     const id = shellPaneId(shell[0]);
     const existing = api.getPanel(id);
@@ -59,8 +65,23 @@ export function syncShells(api: DockviewApi, shells: readonly Shell[], title: (s
       if (existing.title !== title(shell)) existing.api.setTitle(title(shell));
       continue;
     }
-    api.addPanel({ id, component: "shell", title: title(shell) });
+    // Where it was asked for, if it was: beside the shell it split from. A
+    // shell nobody placed — one the layout has not heard of — joins the
+    // active group as a tab, which is also where `+` puts one.
+    const where = placed.get(shell[0]);
+    placed.delete(shell[0]);
+    const from = where?.from ? api.getPanel(shellPaneId(where.from)) : undefined;
+    api.addPanel({
+      id,
+      component: "shell",
+      title: title(shell),
+      ...(from && where?.direction ? { position: { referencePanel: from, direction: where.direction } } : {}),
+    });
+    if (where) opened.push(id);
   }
+  // Only a shell somebody just opened comes forward — never one a restore
+  // filled in behind your back.
+  for (const id of opened) api.getPanel(id)?.api.setActive();
 }
 
 /**
@@ -78,4 +99,97 @@ export function restoreShellLayout(api: DockviewApi, saved: string | null): void
   } catch {
     api.clear();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Opening and splitting, from anywhere — the `+`, a tab's menu, the terminal's
+// menu and the keymap all come through here, so a split means one thing.
+
+/** The live tree, while the panel is up. Set by the panel, as `setDock` is. */
+let dock: DockviewApi | null = null;
+/**
+ * A split asked for while the panel was down. Which shell is in front is the
+ * restored layout's to say, so the split waits for the tree rather than
+ * guessing — see `takeDeferredSplit`.
+ */
+let deferred: SplitDirection | null = null;
+/** Shells asked for but not yet in the tree, and where they should land. */
+const placed = new Map<string, { from?: string; direction?: SplitDirection }>();
+
+export function setShellDock(api: DockviewApi | null): void {
+  dock = api;
+}
+
+/** The split waiting for the tree, once. The panel asks after each restore. */
+export function takeDeferredSplit(): SplitDirection | null {
+  const d = deferred;
+  deferred = null;
+  return d;
+}
+
+/** The first `mog-N` nobody has — shared with every client, on purpose. */
+export function nextShellName(shells: readonly Shell[]): string {
+  const used = new Set(shells.map(([name]) => name));
+  let n = 0;
+  while (used.has(shellSessionName(n))) n += 1;
+  return shellSessionName(n);
+}
+
+/**
+ * A shell for the selected session, as `+` has always opened one.
+ *
+ * Rooted in the session's worktree when there is one, else home. `-c` is read
+ * only on creation, so an existing shell keeps wherever you left it — the
+ * behaviour every terminal has. A session on another machine (`R-I22`) has its
+ * worktree *there*, so the shell goes there too — or, with no way to reach it,
+ * opens here at home rather than `cd`-ing into a path this filesystem does not
+ * have.
+ */
+export function shellForSelection(shells: readonly Shell[]): Shell {
+  const { sessions, selected, machineId } = useStore.getState();
+  const session = selected ? sessions[selected] : undefined;
+  const root = session?.repo_root ?? session?.cwd ?? "";
+  const o = session?.origin;
+  const away = o && o.machine_id !== machineId;
+  const name = nextShellName(shells);
+  return !away ? [name, root] : o.ssh_target ? [name, root, o.ssh_target] : [name, ""];
+}
+
+/**
+ * Add a shell to the list, and — when the tree next syncs — put it `where`
+ * and give it the keyboard. Works with the panel hidden: it comes up, and the
+ * placement waits for the tree.
+ */
+export function openShell(entry: Shell, where: { from?: string; direction?: SplitDirection } = {}): void {
+  placed.set(entry[0], where);
+  const { scoped, setScoped } = useStore.getState();
+  setScoped({ shells: [...scoped().shells, entry] });
+  useStore.setState({ showTerminal: true, focusTerminal: { id: shellPaneId(entry[0]), nonce: Date.now() } });
+}
+
+/**
+ * A new shell beside `from` — the one in front by default — in the same
+ * folder, on the same machine. With nothing to split, a plain new shell.
+ *
+ * With the panel down there is no "in front" to read, so a default split
+ * brings the panel up and runs once the tree is restored.
+ */
+export function splitShell(direction: SplitDirection, from?: string | null): void {
+  if (from === undefined) {
+    if (!dock) {
+      deferred = direction;
+      useStore.setState({ showTerminal: true });
+      return;
+    }
+    from = dock.activePanel ? shellOfPane(dock.activePanel.id) : null;
+  }
+  const shells = useStore.getState().scoped().shells;
+  const source = from ? shells.find(([n]) => n === from) : undefined;
+  if (!source) {
+    openShell(shellForSelection(shells));
+    return;
+  }
+  const name = nextShellName(shells);
+  const entry: Shell = source[2] ? [name, source[1], source[2]] : [name, source[1]];
+  openShell(entry, { from: source[0], direction });
 }

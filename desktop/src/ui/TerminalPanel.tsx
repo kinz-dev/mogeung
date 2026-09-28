@@ -32,22 +32,28 @@ import {
   type IDockviewPanelProps,
 } from "dockview";
 import { Plus, X, ChevronDown } from "lucide-react";
-import { useStore, useSelectedSession } from "@/store";
+import { useStore } from "@/store";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
+import { ContextMenu, MenuItem, MenuSeparator } from "@/ui/Menu";
 import { TerminalView } from "@/ui/Terminal";
 import { CommandBox } from "@/ui/CommandBox";
 import { cursorToPlaceholder } from "@/lib/command";
 import { ptyWrite } from "@/lib/tauri";
-import { hostLabel, reachFor, shellArgs, shellSessionName, spawnAs, type Reach } from "@/lib/tmux";
+import { hostLabel, reachFor, shellArgs, spawnAs, type Reach } from "@/lib/tmux";
 import { base } from "@/lib/format";
 import { useChord } from "@/lib/keymap";
 import { PaneScope } from "@/lib/paneScope";
 import {
+  openShell,
   restoreShellLayout,
+  setShellDock,
+  shellForSelection,
   shellLayoutKey,
   shellOfPane,
   shellPaneId,
+  splitShell,
   syncShells,
+  takeDeferredSplit,
   type Shell,
 } from "@/lib/shellDock";
 
@@ -75,6 +81,31 @@ function useReach(shell: Shell | null): Reach | null {
 function closeShell(name: string) {
   const { scoped, setScoped } = useStore.getState();
   setScoped({ shells: scoped().shells.filter(([n]) => n !== name) });
+}
+
+/**
+ * Split and close, for one shell. The same items on its tab and inside the
+ * terminal, because a right-click is aimed at whichever of the two the mouse
+ * is over, and one of them answering while the other offers only Copy reads
+ * as a menu that forgot something. `R-B56`.
+ */
+function ShellMenuItems({ name }: { name: string }) {
+  const right = useChord("terminal.split_right");
+  const down = useChord("terminal.split_down");
+  return (
+    <>
+      <MenuItem onSelect={() => splitShell("right", name)}>
+        Split right {right && <span className="text-[var(--dim)]">{right}</span>}
+      </MenuItem>
+      <MenuItem onSelect={() => splitShell("below", name)}>
+        Split down {down && <span className="text-[var(--dim)]">{down}</span>}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onSelect={() => closeShell(name)}>
+        Close <span className="text-[var(--dim)]">— the tmux session keeps running</span>
+      </MenuItem>
+    </>
+  );
 }
 
 /** One shell, as a tile. */
@@ -105,7 +136,11 @@ function ShellPane(props: IDockviewPanelProps) {
   return (
     <PaneScope id={props.api.id} visible={visible}>
       <div className="h-full bg-[var(--bg-panel)]">
-        <TerminalView id={shellPaneId(shell[0])} command={spawnAs(reach, shellArgs(shell[0], shell[1]))} />
+        <TerminalView
+          id={shellPaneId(shell[0])}
+          command={spawnAs(reach, shellArgs(shell[0], shell[1]))}
+          menu={<ShellMenuItems name={shell[0]} />}
+        />
       </div>
     </PaneScope>
   );
@@ -119,7 +154,7 @@ function ShellTab(props: IDockviewPanelHeaderProps) {
   if (!name) return null;
   const where = reach ? hostLabel(reach) : null;
   const root = shell?.[1] ?? "";
-  return (
+  const tab = (
     <div
       className="dv-default-tab group"
       title={
@@ -145,6 +180,11 @@ function ShellTab(props: IDockviewPanelHeaderProps) {
       </button>
     </div>
   );
+  return (
+    <ContextMenu trigger={tab}>
+      <ShellMenuItems name={name} />
+    </ContextMenu>
+  );
 }
 
 function ShellsEmpty() {
@@ -167,17 +207,12 @@ export function TerminalPanel() {
 
 function OpenTerminalPanel() {
   const scoped = useStore((s) => s.scoped());
-  const setScoped = useStore((s) => s.setScoped);
-  const machineId = useStore((s) => s.machineId);
   const layoutKey = useStore((s) => shellLayoutKey(s.daemon?.machine_id));
-  const session = useSelectedSession();
   const [height, setHeight] = useState(260);
   const [api, setApi] = useState<DockviewApi | null>(null);
   const [active, setActive] = useState<string | null>(null);
   /** The machine whose layout the tree holds — restored once per machine. */
   const restoredFor = useRef<string | null>(null);
-  /** A shell just added, to bring forward once its panel exists. */
-  const reveal = useRef<string | null>(null);
   const keyRef = useRef(layoutKey);
   keyRef.current = layoutKey;
 
@@ -198,11 +233,11 @@ function OpenTerminalPanel() {
       restoreShellLayout(api, saved);
     }
     syncShells(api, shells, shellTitle);
-    if (reveal.current) {
-      api.getPanel(shellPaneId(reveal.current))?.api.setActive();
-      reveal.current = null;
-    }
-    setActive(api.activePanel ? shellOfPane(api.activePanel.id) : null);
+    const front = api.activePanel ? shellOfPane(api.activePanel.id) : null;
+    setActive(front);
+    // A chord pressed while the panel was down: now there is a front to split.
+    const split = takeDeferredSplit();
+    if (split) splitShell(split, front);
   }, [api, layoutKey, shells]);
 
   // Saved on change, never mid-drag — the window's own layout's rule — and
@@ -223,7 +258,11 @@ function OpenTerminalPanel() {
       pending = window.setTimeout(save, 400);
     });
     const onActive = api.onDidActivePanelChange((p) => setActive(p ? shellOfPane(p.id) : null));
+    // The keymap's splits reach the tree through here, as the centre's
+    // actions reach theirs through `setDock`.
+    setShellDock(api);
     return () => {
+      setShellDock(null);
       onLayout.dispose();
       onActive.dispose();
       if (pending !== null) {
@@ -253,27 +292,9 @@ function OpenTerminalPanel() {
     window.addEventListener("mouseup", up);
   };
 
-  const addShell = () => {
-    // Rooted in the selected session's worktree when there is one, else home.
-    // `-c` is read only on creation, so an existing shell keeps wherever you
-    // left it — the behaviour every terminal has.
-    const root = session?.repo_root ?? session?.cwd ?? "";
-    // A session on another machine (`R-I22`) has its worktree *there*, so the
-    // shell goes there too — or, with no way to reach it, opens here at home
-    // rather than `cd`-ing into a path this filesystem does not have.
-    const o = session?.origin;
-    const away = o && o.machine_id !== machineId;
-    // Names are reused across clients on purpose: the egui window's `mog-0` and
-    // this one's are two views of one tmux session, not two shells.
-    const used = new Set(shells.map(([name]) => name));
-    let n = 0;
-    while (used.has(shellSessionName(n))) n += 1;
-    const name = shellSessionName(n);
-    const entry: Shell = !away ? [name, root] : o.ssh_target ? [name, root, o.ssh_target] : [name, ""];
-    // It joins the group you are in, as a tab — drag it to an edge to split.
-    reveal.current = name;
-    setScoped({ shells: [...shells, entry] });
-  };
+  // A tab in the group you are in; drag it to an edge, or split, to put it
+  // beside. See `shellForSelection` for where it is rooted.
+  const addShell = () => openShell(shellForSelection(shells));
 
   return (
     <div className="flex shrink-0 flex-col border-t border-[var(--border)]" style={{ height }}>

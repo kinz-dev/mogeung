@@ -19,7 +19,8 @@ import { DockviewComponent, type DockviewApi } from "dockview";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
 import { TerminalPanel } from "@/ui/TerminalPanel";
-import { restoreShellLayout, shellLayoutKey, syncShells, type Shell } from "@/lib/shellDock";
+import { restoreShellLayout, shellLayoutKey, splitShell, syncShells, type Shell } from "@/lib/shellDock";
+import { ACTIONS, bindKeys, defaultKeys, formatChord } from "@/lib/keymap";
 
 const MACHINE = "m1";
 
@@ -127,5 +128,111 @@ describe("syncShells", () => {
     restoreShellLayout(api, "{}");
     expect(calls).toEqual(["clear", "clear"]);
     expect(() => syncShells({ ...api, getPanel: () => undefined, addPanel: () => {} } as never, [], String)).not.toThrow();
+  });
+});
+
+/**
+ * Split right and split down. `R-B56`, asked 2026-09-28 with the chords named:
+ * *Alt+Shift+"-"* and *Alt+Shift+"|"*, plus a right-click menu and no button.
+ */
+describe("splitting a shell", () => {
+  /** Tabs per group, left to right / top to bottom, with each group's box. */
+  const groups = (container: HTMLElement) =>
+    [...container.querySelectorAll(".dv-groupview")].map((g) =>
+      [...g.querySelectorAll(".dv-tab")].map((t) => t.textContent),
+    );
+
+  it("puts a new shell beside the one in front, in the same folder and on the same machine", () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta", "devbox"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    // Recorded as it is sent: the new terminal takes the signal and clears it
+    // on mount, so reading the store afterwards finds nothing.
+    const asked: string[] = [];
+    const off = useStore.subscribe((st) => st.focusTerminal && asked.push(st.focusTerminal.id));
+    // mog-1 is in front: it was added last.
+    act(() => splitShell("right"));
+    off();
+    expect(useStore.getState().scoped().shells).toEqual([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta", "devbox"],
+      ["mog-2", "/w/beta", "devbox"],
+    ]);
+    expect(groups(container)).toEqual([["alpha", "beta"], ["beta"]]);
+    // And the keyboard goes with it — a split you then have to click into is
+    // half a split.
+    expect(asked).toContain("shell:mog-2");
+  });
+
+  it("goes the way it was asked", () => {
+    withShells([["mog-0", "/w/alpha"]]);
+    const { container } = render(<TerminalPanel />);
+    act(() => splitShell("below"));
+    const [top, bottom] = [...container.querySelectorAll(".dv-groupview")];
+    expect(groups(container)).toEqual([["alpha"], ["alpha"]]);
+    // Stacked, not side by side: the two groups sit in a vertical branch.
+    const branch = top.closest(".dv-split-view-container");
+    expect(branch?.classList.contains("dv-vertical")).toBe(true);
+    expect(bottom.closest(".dv-split-view-container")).toBe(branch);
+  });
+
+  it("is on a tab's right-click, for that tab's shell rather than the one in front", async () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    fireEvent.contextMenu(screen.getByText("alpha"));
+    fireEvent.click(await screen.findByText(/^Split right/));
+    expect(useStore.getState().scoped().shells.at(-1)).toEqual(["mog-2", "/w/alpha"]);
+    expect(groups(container)).toEqual([["alpha", "beta"], ["alpha"]]);
+  });
+
+  it("with the panel down, brings it up and splits the shell the layout has in front", () => {
+    localStorage.setItem(shellLayoutKey(MACHINE), splitLayout());
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    useStore.setState({ showTerminal: false });
+    const { container } = render(<TerminalPanel />);
+    act(() => splitShell("below"));
+    expect(useStore.getState().showTerminal).toBe(true);
+    // mog-1 is the restored layout's active panel — the last one it added.
+    expect(useStore.getState().scoped().shells.at(-1)).toEqual(["mog-2", "/w/beta"]);
+    expect(groups(container)).toEqual([["alpha"], ["beta"], ["beta"]]);
+  });
+
+  it("with no shell at all, opens one", () => {
+    withShells([]);
+    useStore.setState({ showTerminal: false });
+    render(<TerminalPanel />);
+    act(() => splitShell("right"));
+    expect(useStore.getState().scoped().shells.map(([n]) => n)).toEqual(["mog-0"]);
+  });
+});
+
+describe("the split chords", () => {
+  const press = (key: string, code: string) =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, code, altKey: true, shiftKey: true, bubbles: true }));
+
+  /** Through tinykeys' own matcher, with the key a US layout reports under Shift. */
+  it.each([
+    ["terminal.split_down", "_", "Minus"],
+    ["terminal.split_right", "|", "Backslash"],
+  ])("%s fires on Alt+Shift+%s", (id, key, code) => {
+    const action = ACTIONS.find((a) => a.id === id)!;
+    let fired = 0;
+    const off = bindKeys(window, { [defaultKeys(action, "other")[0]]: () => fired++ });
+    press(key, code);
+    off();
+    expect(fired).toBe(1);
+  });
+
+  it("reads as the keys you press", () => {
+    expect(formatChord("Alt+Shift+Minus", "other")).toBe("Alt+Shift+−");
+    expect(formatChord("Alt+Shift+Backslash", "other")).toBe("Alt+Shift+\\");
   });
 });
