@@ -2,25 +2,36 @@
  * The shells are tiles. `R-B56`.
  *
  * Asked 2026-09-28: *"I can organize the terminal windows freely in the bottom
- * panel like what I can do in the top claude code session panel"*. The strip
- * this replaced showed one shell and a row of names, so the four about
- * arrangement fail against it — checked, by running them there: there was no
- * tree to restore a split into, and no tab that closing could go through.
+ * panel like what I can do in the top claude code session panel"*, then the
+ * same day: splits by chord and by right-click, *no* tab bar — *"it is not
+ * useful in the terminal tab"* — and `exit` closing the split it ran in.
  *
  * Driven through the real dockview rather than a fake api, because what is
- * being pinned is that its layout, its tabs and `scoped.shells` agree — and a
- * fake would agree with anything.
+ * being pinned is that its layout and `scoped.shells` agree — and a fake would
+ * agree with anything. `TerminalView` is stood in for: in jsdom it has no pty
+ * and renders a notice, and what these need from it is which shell a split
+ * holds and the `onExit` the panel hands it.
  */
 
 import { act } from "react";
-import { beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import { DockviewComponent, type DockviewApi } from "dockview";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
-import { TerminalPanel } from "@/ui/TerminalPanel";
 import { restoreShellLayout, shellLayoutKey, splitShell, syncShells, type Shell } from "@/lib/shellDock";
 import { ACTIONS, bindKeys, defaultKeys, formatChord } from "@/lib/keymap";
+
+/** Each mounted shell's `onExit`, by pty id — the pty closing, simulated. */
+const exits = new Map<string, (ranMs: number) => void>();
+vi.mock("@/ui/Terminal", () => ({
+  TerminalView: ({ id, onExit }: { id: string; onExit?: (ranMs: number) => void }) => {
+    if (onExit) exits.set(id, onExit);
+    return <div data-shell={id.replace("shell:", "")} />;
+  },
+}));
+
+const { TerminalPanel } = await import("@/ui/TerminalPanel");
 
 const MACHINE = "m1";
 
@@ -35,82 +46,181 @@ function withShells(shells: Shell[]) {
 }
 
 /**
- * Two shells split left and right, plus one the preferences no longer name —
- * a shell closed on another client. Built by dockview and serialised rather
- * than written by hand: a hand-written layout would pin dockview's schema, not
- * this panel's behaviour.
+ * A layout as dockview itself saves one — never written by hand, which would
+ * pin dockview's schema rather than this panel's behaviour. Each inner list
+ * is one group, left to right.
  */
-function splitLayout(): string {
+function savedLayout(groups: string[][]): string {
   const host = document.createElement("div");
   const dv = new DockviewComponent(host, {
     createComponent: () => ({ element: document.createElement("div"), init: () => {} }) as never,
   });
-  dv.addPanel({ id: "shell:mog-0", component: "shell", title: "a" });
-  dv.addPanel({ id: "shell:mog-1", component: "shell", title: "b", position: { direction: "right" } });
-  dv.addPanel({ id: "shell:mog-9", component: "shell", title: "gone", position: { referencePanel: "shell:mog-1" } });
+  let prev: string | null = null;
+  for (const group of groups) {
+    group.forEach((name, i) => {
+      const id = `shell:${name}`;
+      dv.addPanel({
+        id,
+        component: "shell",
+        title: name,
+        ...(i > 0 ? { position: { referencePanel: `shell:${group[0]}` } } : prev ? { position: { referencePanel: prev, direction: "right" as const } } : {}),
+      });
+    });
+    prev = `shell:${group[0]}`;
+  }
   const json = JSON.stringify(dv.toJSON());
   dv.dispose();
   return json;
 }
 
+/** The shells each split shows, in DOM order. */
+const splits = (container: HTMLElement) =>
+  [...container.querySelectorAll(".dv-groupview")].map((g) =>
+    [...g.querySelectorAll("[data-shell]")].map((el) => el.getAttribute("data-shell")),
+  );
+
 beforeEach(() => {
   cleanup();
   localStorage.clear();
+  exits.clear();
 });
 
 describe("the terminal panel as a dock", () => {
-  it("shows every shell as a tab, not only the one in front", () => {
+  it("gives every shell a split of its own", () => {
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
     ]);
     const { container } = render(<TerminalPanel />);
-    const tabs = [...container.querySelectorAll(".dv-tab")].map((t) => t.textContent);
-    expect(tabs).toEqual(["alpha", "beta"]);
+    expect(splits(container)).toEqual([["mog-0"], ["mog-1"]]);
+  });
+
+  /** The ask: the header was room spent on nothing. */
+  it("draws no tab bar on any split", () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    const bars = [...container.querySelectorAll<HTMLElement>(".dv-tabs-and-actions-container")];
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) expect(bar.style.display).toBe("none");
   });
 
   it("restores a split, and drops a shell the preferences no longer name", () => {
-    localStorage.setItem(shellLayoutKey(MACHINE), splitLayout());
+    localStorage.setItem(shellLayoutKey(MACHINE), savedLayout([["mog-0"], ["mog-1"], ["mog-9"]]));
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
     ]);
     const { container } = render(<TerminalPanel />);
-    // Two groups: the split survived the round trip.
-    expect(container.querySelectorAll(".dv-groupview")).toHaveLength(2);
-    // The stale one is gone from the tree, not merely hidden.
-    expect(screen.queryByText("gone")).not.toBeInTheDocument();
+    expect(splits(container)).toEqual([["mog-0"], ["mog-1"]]);
   });
 
-  it("closing a tab removes the shell from the list, which is what detaches it", () => {
+  /**
+   * The shape, not only the count. A restore that fails falls back to an empty
+   * tree and `syncShells` then lays every shell out in one row — which the
+   * row-only test above cannot tell from success. Found in a browser the day
+   * the tab component was removed: dockview refused to deserialize without
+   * one, and every arrangement came back flat.
+   */
+  it("restores a stacked split as stacked", () => {
+    localStorage.setItem(shellLayoutKey(MACHINE), savedLayout([["mog-0"], ["mog-1"]]));
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
     ]);
-    render(<TerminalPanel />);
-    act(() => {
-      fireEvent.click(screen.getByLabelText("close mog-0"));
-    });
-    expect(useStore.getState().scoped().shells).toEqual([["mog-1", "/w/beta"]]);
-    expect(screen.queryByText("alpha")).not.toBeInTheDocument();
+    // Stack mog-1's split below mog-0 and save that, through the real panel.
+    const first = render(<TerminalPanel />);
+    act(() => splitShell("below", "mog-0"));
+    const saved = () => localStorage.getItem(shellLayoutKey(MACHINE)) ?? "";
+    first.unmount();
+    expect(saved()).toContain("mog-2");
+    const { container } = render(<TerminalPanel />);
+    const stacked = container.querySelector(".dv-split-view-container.dv-vertical");
+    expect(stacked?.querySelectorAll("[data-shell]")).toHaveLength(2);
+    expect([...stacked!.querySelectorAll("[data-shell]")].map((e) => e.getAttribute("data-shell"))).toEqual([
+      "mog-0",
+      "mog-2",
+    ]);
   });
 
-  it("a new shell arrives as a tab, and is the one in front", () => {
+  /**
+   * A layout saved by the build before this one — shells with tabs — names
+   * `props.defaultTabComponent` on every panel. Without a default tab
+   * component dockview refuses it whole, and the arrangement comes back flat.
+   */
+  it("restores a layout saved while shells still had tabs", () => {
+    const old = JSON.parse(savedLayout([["mog-0"], ["mog-1"]]));
+    for (const p of Object.values(old.panels) as { tabComponent?: string }[]) p.tabComponent = "props.defaultTabComponent";
+    // Stack the second split under the first, the shape that shows a fallback.
+    old.grid.root = { type: "branch", size: old.grid.root.size, data: [{ type: "branch", data: old.grid.root.data }] };
+    localStorage.setItem(shellLayoutKey(MACHINE), JSON.stringify(old));
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    const stacked = container.querySelector(".dv-split-view-container.dv-vertical");
+    expect(stacked?.querySelectorAll("[data-shell]")).toHaveLength(2);
+  });
+
+  /**
+   * With no tab bar, a second shell in a split is one nobody can reach — so a
+   * layout saved while splits still held tabs is spread out on the way in.
+   */
+  it("spreads a split that was saved holding two shells", () => {
+    localStorage.setItem(shellLayoutKey(MACHINE), savedLayout([["mog-0", "mog-1"]]));
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    expect(splits(container)).toHaveLength(2);
+    expect(splits(container).flat().sort()).toEqual(["mog-0", "mog-1"]);
+  });
+
+  it("a new shell opens beside the one in front, and is the one in front", () => {
     withShells([["mog-0", "/w/alpha"]]);
-    render(<TerminalPanel />);
+    const { container } = render(<TerminalPanel />);
     act(() => {
-      fireEvent.click(screen.getByTitle(/a new shell/));
+      screen.getByTitle(/a new shell/).click();
     });
     expect(useStore.getState().scoped().shells.map(([n]) => n)).toEqual(["mog-0", "mog-1"]);
-    const tabs = document.querySelectorAll(".dv-tab");
-    expect(tabs).toHaveLength(2);
-    expect(tabs[1].classList.contains("dv-active-tab")).toBe(true);
+    expect(splits(container)).toEqual([["mog-0"], ["mog-1"]]);
+    expect(container.querySelectorAll(".dv-groupview")[1].classList.contains("dv-active-group")).toBe(true);
   });
 
   it("says so when there are none", () => {
     withShells([]);
     render(<TerminalPanel />);
     expect(screen.getByText("no shells open")).toBeInTheDocument();
+  });
+});
+
+/**
+ * `exit` closes the split. Reported 2026-09-28: *"When I exit a terminal, the
+ * empty tab didn't close itself and I have to use the mouse to close it."*
+ */
+describe("when a shell ends", () => {
+  it("closes its split and takes it off the list", () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    act(() => exits.get("shell:mog-0")!(60_000));
+    expect(useStore.getState().scoped().shells).toEqual([["mog-1", "/w/beta"]]);
+    expect(splits(container)).toEqual([["mog-1"]]);
+  });
+
+  /** A shell that dies as it opens failed to start; its notice is the only word on why. */
+  it("keeps a shell that died as it opened", () => {
+    withShells([["mog-0", "/w/alpha"]]);
+    const { container } = render(<TerminalPanel />);
+    act(() => exits.get("shell:mog-0")!(300));
+    expect(useStore.getState().scoped().shells).toEqual([["mog-0", "/w/alpha"]]);
+    expect(splits(container)).toEqual([["mog-0"]]);
   });
 });
 
@@ -127,7 +237,9 @@ describe("syncShells", () => {
     restoreShellLayout(api, "{not json");
     restoreShellLayout(api, "{}");
     expect(calls).toEqual(["clear", "clear"]);
-    expect(() => syncShells({ ...api, getPanel: () => undefined, addPanel: () => {} } as never, [], String)).not.toThrow();
+    expect(() =>
+      syncShells({ ...api, groups: [], getPanel: () => undefined, addPanel: () => {} } as never, [], String),
+    ).not.toThrow();
   });
 });
 
@@ -136,12 +248,6 @@ describe("syncShells", () => {
  * *Alt+Shift+"-"* and *Alt+Shift+"|"*, plus a right-click menu and no button.
  */
 describe("splitting a shell", () => {
-  /** Tabs per group, left to right / top to bottom, with each group's box. */
-  const groups = (container: HTMLElement) =>
-    [...container.querySelectorAll(".dv-groupview")].map((g) =>
-      [...g.querySelectorAll(".dv-tab")].map((t) => t.textContent),
-    );
-
   it("puts a new shell beside the one in front, in the same folder and on the same machine", () => {
     withShells([
       ["mog-0", "/w/alpha"],
@@ -149,7 +255,7 @@ describe("splitting a shell", () => {
     ]);
     const { container } = render(<TerminalPanel />);
     // Recorded as it is sent: the new terminal takes the signal and clears it
-    // on mount, so reading the store afterwards finds nothing.
+    // on mount, so reading the store afterwards may find nothing.
     const asked: string[] = [];
     const off = useStore.subscribe((st) => st.focusTerminal && asked.push(st.focusTerminal.id));
     // mog-1 is in front: it was added last.
@@ -160,7 +266,7 @@ describe("splitting a shell", () => {
       ["mog-1", "/w/beta", "devbox"],
       ["mog-2", "/w/beta", "devbox"],
     ]);
-    expect(groups(container)).toEqual([["alpha", "beta"], ["beta"]]);
+    expect(splits(container)).toEqual([["mog-0"], ["mog-1"], ["mog-2"]]);
     // And the keyboard goes with it — a split you then have to click into is
     // half a split.
     expect(asked).toContain("shell:mog-2");
@@ -171,27 +277,27 @@ describe("splitting a shell", () => {
     const { container } = render(<TerminalPanel />);
     act(() => splitShell("below"));
     const [top, bottom] = [...container.querySelectorAll(".dv-groupview")];
-    expect(groups(container)).toEqual([["alpha"], ["alpha"]]);
+    expect(splits(container)).toEqual([["mog-0"], ["mog-1"]]);
     // Stacked, not side by side: the two groups sit in a vertical branch.
     const branch = top.closest(".dv-split-view-container");
     expect(branch?.classList.contains("dv-vertical")).toBe(true);
     expect(bottom.closest(".dv-split-view-container")).toBe(branch);
   });
 
-  it("is on a tab's right-click, for that tab's shell rather than the one in front", async () => {
+  /** What the right-click menu does: the shell under the mouse, not the one in front. */
+  it("splits a named shell rather than the one in front", () => {
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
     ]);
     const { container } = render(<TerminalPanel />);
-    fireEvent.contextMenu(screen.getByText("alpha"));
-    fireEvent.click(await screen.findByText(/^Split right/));
+    act(() => splitShell("right", "mog-0"));
     expect(useStore.getState().scoped().shells.at(-1)).toEqual(["mog-2", "/w/alpha"]);
-    expect(groups(container)).toEqual([["alpha", "beta"], ["alpha"]]);
+    expect(splits(container)).toEqual([["mog-0"], ["mog-2"], ["mog-1"]]);
   });
 
   it("with the panel down, brings it up and splits the shell the layout has in front", () => {
-    localStorage.setItem(shellLayoutKey(MACHINE), splitLayout());
+    localStorage.setItem(shellLayoutKey(MACHINE), savedLayout([["mog-0"], ["mog-1"]]));
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
@@ -202,7 +308,7 @@ describe("splitting a shell", () => {
     expect(useStore.getState().showTerminal).toBe(true);
     // mog-1 is the restored layout's active panel — the last one it added.
     expect(useStore.getState().scoped().shells.at(-1)).toEqual(["mog-2", "/w/beta"]);
-    expect(groups(container)).toEqual([["alpha"], ["beta"], ["beta"]]);
+    expect(splits(container)).toEqual([["mog-0"], ["mog-1"], ["mog-2"]]);
   });
 
   it("with no shell at all, opens one", () => {

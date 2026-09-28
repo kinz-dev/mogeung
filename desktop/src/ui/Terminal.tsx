@@ -94,6 +94,13 @@ export interface TerminalProps {
   /** More items for the right-click menu, under Copy and Paste — a shell's
    *  splits (`R-B56`). The Agent pane passes none. */
   menu?: React.ReactNode;
+  /**
+   * The process ended by itself — `exit`, a killed tmux session, a dropped
+   * ssh — with how long it had been open. Never called for a teardown this
+   * view asked for (a hide, an unmount). The Agent pane passes none and keeps
+   * the banner; a shell closes its split (`R-B56`).
+   */
+  onExit?: (ranMs: number) => void;
 }
 
 /**
@@ -120,7 +127,7 @@ function terminalFontStack(): string {
   return declared || TERMINAL_FONT;
 }
 
-export function TerminalView({ id, command, cwd, refusal, menu }: TerminalProps) {
+export function TerminalView({ id, command, cwd, refusal, menu, onExit }: TerminalProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   /** The geometry the pty was last told about, so a no-op resize stays a no-op. */
   const lastSize = useRef<{ cols: number; rows: number } | null>(null);
@@ -133,6 +140,10 @@ export function TerminalView({ id, command, cwd, refusal, menu }: TerminalProps)
   const pushError = useStore((s) => s.pushError);
   const focusSignal = useStore((s) => s.focusTerminal);
   const [exited, setExited] = useState(false);
+  // Read through a ref: a new closure each render must not re-run the effect
+  // that owns the pty, which would detach and reattach on every keystroke.
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
   /** xterm's selection, read when the menu opens — it lives in xterm, not the DOM. */
   const [selection, setSelection] = useState("");
   // Read from the document rather than from the factor, because what matters
@@ -288,6 +299,8 @@ export function TerminalView({ id, command, cwd, refusal, menu }: TerminalProps)
     let unlistenData: (() => void) | null = null;
     let unlistenClosed: (() => void) | null = null;
     let disposed = false;
+    /** When the pty came up — `0` until it has, so a process that dies on the way reads as instant. */
+    let openedAt = 0;
 
     // **The font is a web font now, and web fonts arrive late.** `R-J89` bundles
     // MesloLGS NF because WebKit cannot see `~/Library/Fonts`; that makes the
@@ -343,7 +356,9 @@ export function TerminalView({ id, command, cwd, refusal, menu }: TerminalProps)
         unlistenData = un;
 
         const unClosed = await onPtyClosed((who) => {
-          if (who === id) setExited(true);
+          if (who !== id) return;
+          setExited(true);
+          onExitRef.current?.(openedAt ? Date.now() - openedAt : 0);
         });
         if (disposed) {
           unClosed();
@@ -359,6 +374,7 @@ export function TerminalView({ id, command, cwd, refusal, menu }: TerminalProps)
         // the wrong column and appear to jump.
         safeFit();
         await ptyOpen(id, command, cwd ?? null, term.cols, term.rows);
+        openedAt = Date.now();
         lastSize.current = { cols: term.cols, rows: term.rows };
         // Opened after the teardown: close it, or the pty and its reader thread
         // outlive the pane that asked for them.

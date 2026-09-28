@@ -23,7 +23,9 @@ depends_on: []
 > rest of the window. The panel is still chrome; see
 > [ADR-0017](../decisions/0017-the-rail-is-chrome.md)'s amendment.
 > `Alt+Shift+\` and `Alt+Shift+-` split the shell in front right and down,
-> and a shell's tab and its terminal both offer the same on right-click.
+> and the terminal offers the same on right-click. The same day the splits
+> lost their tab bars — one shell per split, tmux's shape — and `exit` closes
+> the split it ran in.
 
 ## Spec
 

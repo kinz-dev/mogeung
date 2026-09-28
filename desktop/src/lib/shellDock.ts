@@ -16,7 +16,7 @@
  *   own layout in `localStorage`, per machine too, and it is allowed to be
  *   wrong: `syncShells` runs after every restore and every change, so a layout
  *   naming a shell that has gone loses it, and a shell the layout has never
- *   heard of arrives as a tab in the active group.
+ *   heard of arrives as a split beside the one in front.
  */
 
 import type { DockviewApi } from "dockview";
@@ -46,14 +46,25 @@ export function shellLayoutKey(machineId: string | null | undefined): string {
 }
 
 /**
- * Make the tree hold exactly `shells`, keeping the arrangement of the ones it
- * already has. Closes before it adds, so a restored layout's stale panels are
- * gone before a new one looks for an active group to join.
+ * Make the tree hold exactly `shells`, one to a split, keeping the arrangement
+ * of the ones it already has. Closes before it adds, so a restored layout's
+ * stale panels are gone before a new one looks for a split to sit beside.
+ *
+ * **One shell per split, and no tab bar**, since the same day as the tree
+ * itself: *"the tab header is consuming a lot of space, it is not useful in
+ * the terminal tab"*. A split is a terminal and nothing else — tmux's shape,
+ * and Terminator's. Which makes a second shell in one group a shell nobody
+ * can reach, so there never is one: a new shell opens beside, and a layout
+ * saved while splits held tabs is spread out into splits on restore.
  */
 export function syncShells(api: DockviewApi, shells: readonly Shell[], title: (s: Shell) => string): void {
   const want = new Set(shells.map(([name]) => shellPaneId(name)));
   for (const panel of [...api.panels]) {
     if (!want.has(panel.id)) api.removePanel(panel);
+  }
+  // Spread first, so a new shell lands beside a layout that is already flat.
+  for (const group of [...api.groups]) {
+    for (const panel of group.panels.slice(1)) panel.api.moveTo({ group, position: "right" });
   }
   const opened: string[] = [];
   for (const shell of shells) {
@@ -61,24 +72,27 @@ export function syncShells(api: DockviewApi, shells: readonly Shell[], title: (s
     const existing = api.getPanel(id);
     if (existing) {
       // A title is data, not arrangement — a layout saved before a shell's
-      // root was known must not keep the old name on its tab.
+      // root was known must not keep the old name.
       if (existing.title !== title(shell)) existing.api.setTitle(title(shell));
       continue;
     }
-    // Where it was asked for, if it was: beside the shell it split from. A
-    // shell nobody placed — one the layout has not heard of — joins the
-    // active group as a tab, which is also where `+` puts one.
+    // Beside the shell it split from, if it was asked for that way; else to
+    // the right of the one in front, which is where `+` and a shell the
+    // layout has never heard of both go.
     const where = placed.get(shell[0]);
     placed.delete(shell[0]);
-    const from = where?.from ? api.getPanel(shellPaneId(where.from)) : undefined;
+    const from = where?.from ? api.getPanel(shellPaneId(where.from))?.group : undefined;
+    const beside = from ?? api.activeGroup ?? api.groups.at(-1);
     api.addPanel({
       id,
       component: "shell",
       title: title(shell),
-      ...(from && where?.direction ? { position: { referencePanel: from, direction: where.direction } } : {}),
+      ...(beside ? { position: { referenceGroup: beside, direction: where?.direction ?? "right" } } : {}),
     });
     if (where) opened.push(id);
   }
+  // Every split, however it came to be — a restore, a move, an add.
+  for (const group of api.groups) group.model.header.hidden = true;
   // Only a shell somebody just opened comes forward — never one a restore
   // filled in behind your back.
   for (const id of opened) api.getPanel(id)?.api.setActive();

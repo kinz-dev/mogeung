@@ -6,7 +6,7 @@
  * selection, vanished when the selection moved, and could not exist at all
  * before a session did, which is exactly when you want a shell to start one.
  *
- * Each tab is `tmux new-session -A`, so it is the **same** shell across
+ * Each shell is `tmux new-session -A`, so it is the **same** shell across
  * restarts: a build still running from an hour ago is still there, and closing
  * the window detaches instead of killing. A `claude` started in one of these is
  * a session mogeung observes like any other rather than one it owns —
@@ -15,10 +15,11 @@
  * **The shells are tiles since `R-B56`**, asked 2026-09-28: *"I want to change
  * it to dockable panel like those we have in the AI session at the top"*. One
  * shell at a time behind a tab strip meant a build and its log could not be
- * watched together; now the panel holds its own dockview, so shells tab, split
- * and rearrange by drag exactly as the Agent panes do — and only among
- * themselves, because a second dockview refuses a drop from the first. See
- * [`shellDock.ts`](../lib/shellDock.ts) for which store owns what.
+ * watched together; now the panel holds its own dockview, and every shell is
+ * a split of it — tmux's shape, with no tab bar, asked for the same day. It
+ * is a second dockview rather than the centre's, so nothing crosses between
+ * the two. See [`shellDock.ts`](../lib/shellDock.ts) for which store owns
+ * what, and for why a split never holds two shells.
  */
 
 
@@ -28,13 +29,12 @@ import {
   DockviewReact,
   type DockviewApi,
   type DockviewReadyEvent,
-  type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from "dockview";
-import { Plus, X, ChevronDown } from "lucide-react";
+import { Plus, ChevronDown } from "lucide-react";
 import { useStore } from "@/store";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
-import { ContextMenu, MenuItem, MenuSeparator } from "@/ui/Menu";
+import { MenuItem, MenuSeparator } from "@/ui/Menu";
 import { TerminalView } from "@/ui/Terminal";
 import { CommandBox } from "@/ui/CommandBox";
 import { cursorToPlaceholder } from "@/lib/command";
@@ -58,6 +58,8 @@ import {
 } from "@/lib/shellDock";
 
 const MIN_HEIGHT = 120;
+/** Shorter than this, an exit is a failure to start rather than an `exit`. */
+const QUICK_EXIT_MS = 2000;
 
 const shellTitle = (s: Shell) => (s[1] ? base(s[1]) : s[0]);
 
@@ -75,8 +77,8 @@ function useReach(shell: Shell | null): Reach | null {
 }
 
 /**
- * Removes the *tab*, not the session. tmux keeps it; adding a tab with the
- * same name attaches straight back.
+ * Removes the *split*, not the session. tmux keeps it; opening a shell with
+ * the same name attaches straight back.
  */
 function closeShell(name: string) {
   const { scoped, setScoped } = useStore.getState();
@@ -84,10 +86,9 @@ function closeShell(name: string) {
 }
 
 /**
- * Split and close, for one shell. The same items on its tab and inside the
- * terminal, because a right-click is aimed at whichever of the two the mouse
- * is over, and one of them answering while the other offers only Copy reads
- * as a menu that forgot something. `R-B56`.
+ * Split and close, for one shell, in the terminal's own right-click menu under
+ * Copy and Paste. `R-B56`. The split is of *this* shell, the one under the
+ * mouse, which need not be the one in front.
  */
 function ShellMenuItems({ name }: { name: string }) {
   const right = useChord("terminal.split_right");
@@ -110,9 +111,8 @@ function ShellMenuItems({ name }: { name: string }) {
 
 /** One shell, as a tile. */
 function ShellPane(props: IDockviewPanelProps) {
-  // A background tab holds no pty, the same rule as a background Agent tab
-  // (`R-J58`) — and the same cost the strip had, which mounted only the shell
-  // in front.
+  // A hidden shell holds no pty, the same rule as a background Agent tab
+  // (`R-J58`).
   const [visible, setVisible] = useState(props.api.isVisible);
   useEffect(() => {
     const d = props.api.onDidVisibilityChange((e) => setVisible(e.isVisible));
@@ -140,51 +140,28 @@ function ShellPane(props: IDockviewPanelProps) {
           id={shellPaneId(shell[0])}
           command={spawnAs(reach, shellArgs(shell[0], shell[1]))}
           menu={<ShellMenuItems name={shell[0]} />}
+          // `exit` closes the split — reported the same day: *"the empty tab
+          // didn't close itself and I have to use the mouse"*. Except a shell
+          // that dies as it opens: that is a failure (no tmux, ssh refused),
+          // and closing it would hide the one line that says so.
+          onExit={(ran) => {
+            if (ran >= QUICK_EXIT_MS) closeShell(shell[0]);
+          }}
         />
       </div>
     </PaneScope>
   );
 }
 
-/** A shell's tab: its folder, and a close that detaches rather than kills. */
-function ShellTab(props: IDockviewPanelHeaderProps) {
-  const name = shellOfPane(props.api.id);
-  const shell = useShell(name);
-  const reach = useReach(shell);
-  if (!name) return null;
-  const where = reach ? hostLabel(reach) : null;
-  const root = shell?.[1] ?? "";
-  const tab = (
-    <div
-      className="dv-default-tab group"
-      title={
-        where
-          ? `${name} — a tmux session on ${where}. It survives mogeung closing, and \`tmux attach -t ${name}\` reaches it from any terminal there.`
-          : `${name} — a tmux session in ${root}. It survives mogeung closing, and \`tmux attach -t ${name}\` reaches it from any terminal.`
-      }
-    >
-      <span className="dv-default-tab-content">{shell ? shellTitle(shell) : name}</span>
-      <button
-        type="button"
-        aria-label={`close ${name}`}
-        title="close the tab — the tmux session keeps running"
-        // Not a drag: dockview starts one on pointerdown anywhere in the tab.
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          closeShell(name);
-        }}
-        className="ml-1 shrink-0 opacity-0 outline-none transition-opacity duration-[var(--dur-fast)] group-hover:opacity-60 hover:!opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]"
-      >
-        <X className="h-3 w-3" />
-      </button>
-    </div>
-  );
-  return (
-    <ContextMenu trigger={tab}>
-      <ShellMenuItems name={name} />
-    </ContextMenu>
-  );
+/**
+ * A tab that draws nothing, for a tab bar that is never shown. Not removable:
+ * a layout saved while shells had tabs names `props.defaultTabComponent` on
+ * every panel, and without one dockview refuses the whole layout — which
+ * `restoreShellLayout` then degrades to one flat row. Found in a browser the
+ * day the tab bar went.
+ */
+function NoTab() {
+  return null;
 }
 
 function ShellsEmpty() {
@@ -265,10 +242,10 @@ function OpenTerminalPanel() {
       setShellDock(null);
       onLayout.dispose();
       onActive.dispose();
-      if (pending !== null) {
-        window.clearTimeout(pending);
-        save();
-      }
+      // Always, not only with a save pending: whatever the tree holds now is
+      // what the next show should restore.
+      if (pending !== null) window.clearTimeout(pending);
+      save();
     };
   }, [api]);
 
@@ -292,8 +269,8 @@ function OpenTerminalPanel() {
     window.addEventListener("mouseup", up);
   };
 
-  // A tab in the group you are in; drag it to an edge, or split, to put it
-  // beside. See `shellForSelection` for where it is rooted.
+  // A split to the right of the shell in front. See `shellForSelection` for
+  // where it is rooted — the selected session's worktree, not the shell's.
   const addShell = () => openShell(shellForSelection(shells));
 
   return (
@@ -363,7 +340,7 @@ function OpenTerminalPanel() {
       <div className="min-h-0 flex-1 bg-[var(--bg-panel)]">
         <DockviewReact
           components={components}
-          defaultTabComponent={ShellTab}
+          defaultTabComponent={NoTab}
           watermarkComponent={ShellsEmpty}
           // A shell has no business floating over the panel or leaving the
           // window: the centre's popouts exist for sessions (`R-B55`), and a
