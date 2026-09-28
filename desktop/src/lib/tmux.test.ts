@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachArgs, reachFor, reachForSession, shellArgs, shellQuote, spawnAs } from "./tmux";
+import { attachArgs, isOwnSession, reachFor, reachForSession, shellArgs, shellQuote, spawnAs } from "./tmux";
 
 describe("attachArgs", () => {
   /**
@@ -45,6 +45,33 @@ describe("attachArgs", () => {
     // And the bare name, because `set-option -t` rejects the `=` prefix
     // outright — it is exact anyway.
     expect(attachArgs("mog-0")[2]).toBe("mog-0");
+  });
+});
+
+/**
+ * The status bar comes off the sessions mogeung named, and only those.
+ * `R-B59` — a session from the *New session* window still wore it after the
+ * launchers stopped drawing it, because the daemon makes those itself.
+ */
+describe("attaching to an agent's session", () => {
+  it("turns the bar off on a session mogeung named, before it attaches", () => {
+    const args = attachArgs("mogeung-api-0928-101500:0.0");
+    const status = args.indexOf("status");
+    expect(args.slice(status - 3, status + 3)).toEqual(["set-option", "-t", "mogeung-api-0928-101500:0.0", "status", "off", ";"]);
+    expect(status).toBeLessThan(args.indexOf("attach-session"));
+    expect(args).not.toContain("-g");
+  });
+
+  /** Your own tmux keeps its bar — window list and all — whatever runs in it. */
+  it("leaves a session of yours alone", () => {
+    expect(attachArgs("work:2.1")).not.toContain("status");
+    expect(attachArgs("my-mogeung-notes:0.0")).not.toContain("status");
+  });
+
+  it("reads the session from the target, not the pane", () => {
+    expect(isOwnSession("mogeung-codex-api-0928-101500:1.2")).toBe(true);
+    expect(isOwnSession("mogeung-app")).toBe(true);
+    expect(isOwnSession("dev:0.0")).toBe(false);
   });
 });
 

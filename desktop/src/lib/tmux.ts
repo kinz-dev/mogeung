@@ -82,7 +82,41 @@ export function shellQuote(s: string): string {
  * failure available.
  */
 export function attachArgs(target: string): string[] {
-  return [...mouseOn(target), "attach-session", "-t", `=${target}`];
+  return [...mouseOn(target), ...(isOwnSession(target) ? statusOff(target) : []), "attach-session", "-t", `=${target}`];
+}
+
+/**
+ * A session mogeung named: `mogeung-…`, which is what every launcher and
+ * the daemon's own *New session* call theirs. `R-B59`.
+ *
+ * The target is `session:window.pane`, and tmux turns a `:` in a session name
+ * into `_`, so the session is everything before the last colon.
+ */
+export function isOwnSession(target: string): boolean {
+  const colon = target.lastIndexOf(":");
+  return (colon >= 0 ? target.slice(0, colon) : target).startsWith("mogeung-");
+}
+
+/**
+ * No status bar, on the agent's session — only when mogeung named it. `R-B59`.
+ *
+ * Reported 2026-09-28, the day `R-B58` took the bar off the launchers'
+ * sessions: a session from the *New session* window still had it. The daemon
+ * starts those two ways, and neither passes through a launcher. Set here, at
+ * attach, because this is the one door every Agent pane goes through: it
+ * reaches both launch paths, a session started before the launchers changed,
+ * and a launcher copy installed before they did — without a second list of
+ * places to keep in step.
+ *
+ * **Only `mogeung-` sessions.** An Agent pane can attach to *any* tmux
+ * session with an agent in it, and one of yours — your everyday workspace,
+ * say — would lose its bar, window list and all, because an agent happened to
+ * run there. `mouse on` is set on everything, and that trade is smaller: it
+ * changes how a drag selects, not what you can see. Same spelling as
+ * [`mouseOn`]: per session, never `-g`, and the bare target, not `=`.
+ */
+function statusOff(target: string): string[] {
+  return ["set-option", "-t", target, "status", "off", ";"];
 }
 
 /**
