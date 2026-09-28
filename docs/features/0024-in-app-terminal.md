@@ -1,8 +1,8 @@
 ---
 title: In-app terminal
 status: shipped
-updated: 2026-07-30
-roadmap: [R-B31, R-B32, R-B33, R-B34]
+updated: 2026-09-28
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56]
 depends_on: []
 ---
 
@@ -14,6 +14,14 @@ depends_on: []
 > and it draws in a font you choose (`R-B32`). The dogfooding verdict on the
 > pane version is below under [What the pane got wrong](#what-the-pane-got-wrong);
 > it is kept because it is the reason for the shape this has now.
+>
+> **Revised again on 2026-09-28 (`R-B56`).** The tab strip became a dockview of
+> its own, so shells tab, split and rearrange by drag like the Agent panes —
+> reversing the *splits inside the panel* line under
+> [Explicitly out of scope](#explicitly-out-of-scope). tmux was right there, but
+> a tmux split is one pty and one tab here, and could not be arranged with the
+> rest of the window. The panel is still chrome; see
+> [ADR-0017](../decisions/0017-the-rail-is-chrome.md)'s amendment.
 
 ## Spec
 
@@ -75,7 +83,8 @@ depends on, and degrades without it rather than requiring it.
 
 - **Anything writing into the pty.** No "run this command" button, no
   paste-and-send, no scheduled check. See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md).
-- **Splits inside the panel.** Tabs, and tmux is right there.
+- ~~**Splits inside the panel.** Tabs, and tmux is right there.~~ Reversed by
+  `R-B56` on 2026-09-28 — see the note at the top.
 - **A font for the rest of the window.** This is a terminal setting. The diff,
   the transcript and the Editor keep the bundled monospace, which is the one
   known to carry mogeung's own icon glyphs.

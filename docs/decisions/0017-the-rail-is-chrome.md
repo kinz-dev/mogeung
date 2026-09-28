@@ -1,7 +1,7 @@
 ---
 title: The rail is chrome; the tile tree is content
 status: active
-updated: 2026-08-03
+updated: 2026-09-28
 decided: 2026-08-03
 ---
 
@@ -96,6 +96,27 @@ The right rail is chrome. Concretely:
   and it changes the panel's shape rather than extending it.
 - The Editor tab proves to need a tree of its own after all — the shared-state
   alternative above is the fallback, and it is a smaller reversal than it looks.
+
+## Amendment — 2026-09-28
+
+**The terminal panel holds a tile tree of its own.** `R-B56`, asked
+2026-09-28: the shells across the bottom should arrange like the Agent panes.
+They do now — tabbed, split and moved by drag — in a **second** dockview inside
+the panel, not in the centre's.
+
+What this changes: the Decision's *tiles cannot be dragged into it* was written
+about the rail and has always been read as covering the terminal too. It still
+does, and more precisely than before. The panel is chrome — it stays across
+the bottom, reachable whichever pane is forward, outside the centre's tree —
+and what it contains is now arrangeable **among itself only**. A shell cannot
+be dropped into the centre and an Agent pane cannot be dropped into the panel:
+dockview refuses a drop whose source is another instance, so the boundary is
+the library's rather than a check of ours that could drift.
+
+What it does not change: *a thing lives in exactly one of the two*. A shell is
+never a tile in the centre, and nothing here opens that door. If a shell beside
+an Agent pane in the centre is asked for, that is a new decision about whether
+the terminal is still chrome, not an extension of this one.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
