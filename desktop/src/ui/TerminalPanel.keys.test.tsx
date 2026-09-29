@@ -15,9 +15,10 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, renderHook } from "@testing-library/react";
+import { DockviewComponent } from "dockview";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
-import { type Shell } from "@/lib/shellDock";
+import { shellLayoutKey, type Shell } from "@/lib/shellDock";
 import { ACTIONS, bindKeys, defaultKeys, useKeymap } from "@/lib/keymap";
 
 vi.mock("@/ui/Terminal", () => ({
@@ -175,5 +176,94 @@ describe("Alt+Shift+N", () => {
     ]);
     expect(useStore.getState().showTerminal).toBe(true);
     expect(useStore.getState().focusTerminal?.id).toBe("shell:mog-1");
+  });
+});
+
+/**
+ * `R-B66`, asked 2026-09-29: *"not obvious when there is a tabbed terminal …
+ * Let's use Alt + PgUp / PgDw to switch to other tabbed panel"*. The grip
+ * (`R-B64`) hides the tabs until hovered, so the keyboard gets a way through
+ * them that does not need to see them.
+ */
+describe("switching tabs with Alt+PageUp / Alt+PageDown", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** One split holding `names` as tabs, saved the way dockview saves one. */
+  function tabbed(names: string[]) {
+    const host = document.createElement("div");
+    const dv = new DockviewComponent(host, {
+      createComponent: () => ({ element: document.createElement("div"), init: () => {} }) as never,
+    });
+    for (const name of names) {
+      dv.addPanel({
+        id: `shell:${name}`,
+        component: "shell",
+        title: name,
+        ...(name !== names[0] ? { position: { referencePanel: `shell:${names[0]}` } } : {}),
+      });
+    }
+    // The first tab in front, so a step either way has somewhere to go.
+    dv.getGroupPanel(`shell:${names[0]}`)!.api.setActive();
+    localStorage.setItem(shellLayoutKey(MACHINE), JSON.stringify(dv.toJSON()));
+    dv.dispose();
+  }
+
+  function mount(names: string[]) {
+    tabbed(names);
+    withShells(names.map((n) => [n, `/w/${n}`] as Shell));
+    useStore.setState({ showTerminal: true });
+    renderHook(() => useKeymap({ current: null }));
+    const out = render(<TerminalPanel />);
+    act(() => document.querySelector<HTMLElement>("[data-shell]")!.focus());
+    return out;
+  }
+
+  const front = () => document.querySelector("[data-shell-tiles] .dv-tab.dv-active-tab")?.textContent;
+  const press = (key: string, from: Element | null = document.activeElement) => {
+    const e = new KeyboardEvent("keydown", { key, code: key, altKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      from!.dispatchEvent(e);
+    });
+    return e;
+  };
+
+  it("steps to the next tab and the one before, with the keyboard", () => {
+    mount(["mog-0", "mog-1", "mog-2"]);
+    expect(front()).toBe("mog-0");
+    expect(press("PageDown").defaultPrevented).toBe(true);
+    expect(front()).toBe("mog-1");
+    expect(document.activeElement?.getAttribute("data-shell")).toBe("mog-1");
+    press("PageUp");
+    expect(front()).toBe("mog-0");
+  });
+
+  /** A tab strip is a list, not a floorplan — unlike Alt+arrow, it wraps. */
+  it("wraps at either end", () => {
+    mount(["mog-0", "mog-1", "mog-2"]);
+    press("PageUp");
+    expect(front()).toBe("mog-2");
+    press("PageDown");
+    expect(front()).toBe("mog-0");
+  });
+
+  it("swallows the press in a split with one shell, and stays", () => {
+    mount(["mog-0"]);
+    expect(press("PageDown").defaultPrevented).toBe(true);
+    expect(front()).toBe("mog-0");
+  });
+
+  it("leaves the press alone anywhere but a shell", () => {
+    mount(["mog-0", "mog-1"]);
+    const box = document.createElement("input");
+    document.body.appendChild(box);
+    expect(press("PageDown", box).defaultPrevented).toBe(false);
+    expect(front()).toBe("mog-0");
+    box.remove();
   });
 });

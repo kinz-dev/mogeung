@@ -30,7 +30,7 @@ import { groupQueue, visibleQueue } from "@/lib/queue";
 import { syncRepo } from "@/lib/gitActions";
 import { onPopoutWindows } from "@/lib/popout";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
-import { moveShellFocus, newShell, splitShell, toggleTerminal, typedInShell } from "@/lib/shellDock";
+import { cycleShellTab, moveShellFocus, newShell, splitShell, toggleTerminal, typedInShell } from "@/lib/shellDock";
 import type { Direction } from "@/lib/spatial";
 
 /** Between the shells in the terminal panel (`R-B60`); `PANE_MOVE_CHORDS` are the centre's. */
@@ -691,6 +691,25 @@ export const ACTIONS: Action[] = [
     when: typedInShell,
     run: () => moveShellFocus(dir),
   })),
+  // Through a split's tabs, which the grip keeps out of sight (`R-B66`).
+  // Inside a shell only, for `Alt+arrow`'s reasons; `Alt+PgUp` reaches a shell
+  // program as `ESC [5;3~`, which little asks for.
+  {
+    id: "terminal.tab_prev",
+    label: "The tab before, in this shell's split — from inside a shell",
+    group: "Panes",
+    keys: ["Alt+PageUp"],
+    when: typedInShell,
+    run: () => cycleShellTab(-1),
+  },
+  {
+    id: "terminal.tab_next",
+    label: "The next tab, in this shell's split — from inside a shell",
+    group: "Panes",
+    keys: ["Alt+PageDown"],
+    when: typedInShell,
+    run: () => cycleShellTab(1),
+  },
   {
     id: "terminal.focus_app",
     label: "Raise the terminal application this session runs in",

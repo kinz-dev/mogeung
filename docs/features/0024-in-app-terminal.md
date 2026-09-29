@@ -2,7 +2,7 @@
 title: In-app terminal
 status: shipped
 updated: 2026-09-29
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64]
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64, R-B66]
 depends_on: []
 ---
 
@@ -42,6 +42,8 @@ depends_on: []
 > could not be dragged, nor tabbed. Each shell now has a 4px strip along its top
 > that opens into the tab bar on hover, so shells drag, split and tab again
 > without the bar taking a row.
+> `Alt+PgUp` and `Alt+PgDn` step through a split's tabs from inside a shell,
+> since the grip keeps them out of sight (`R-B66`).
 
 ## Spec
 
@@ -81,10 +83,13 @@ depends on, and degrades without it rather than requiring it.
 - [x] When the last shell ends or is closed, the panel goes with it (`R-B62`)
 - [x] `Alt+Shift+N` opens a new shell as `+` does, with the panel down or up
       (`R-B63`)
-- [ ] Hovering a shell's top edge opens its tab bar, and a shell can be dragged
+- [x] Hovering a shell's top edge opens its tab bar, and a shell can be dragged
       by its tab to split or tab with another; closed, the strip covers no part
-      of the terminal (`R-B64` — dragging and tabbing seen in a browser, the
-      hover not yet)
+      of the terminal (`R-B64` — tried in the app 2026-09-29: *"it looks ok,
+      although not obvious when there is a tabbed terminal"*, hence `R-B66`)
+- [x] From inside a shell, `Alt+PgUp` / `Alt+PgDn` bring the split's tab
+      before or after to the front and put the keyboard in it, wrapping at
+      either end (`R-B66`)
 - [x] Moving the selection does not disturb, replace or close a shell
 - [x] Closing mogeung and reopening it returns the *same* shells: the scrollback
       is there, and a command left running is still running

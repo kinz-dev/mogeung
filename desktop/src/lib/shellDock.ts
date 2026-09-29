@@ -22,7 +22,7 @@
 import type { DockviewApi } from "dockview";
 import { useStore } from "@/store";
 import { shellSessionName } from "@/lib/tmux";
-import { moveFocusIn } from "@/lib/panes";
+import { landIn, moveFocusIn } from "@/lib/panes";
 import type { Direction } from "@/lib/spatial";
 
 export type Shell = [string, string] | [string, string, string];
@@ -257,4 +257,25 @@ export function typedInShell(e: KeyboardEvent): boolean {
  */
 export function moveShellFocus(dir: Direction): void {
   moveFocusIn(dock, dir);
+}
+
+/**
+ * The next tab in the shell's own split, or the one before. `R-B66`, asked
+ * 2026-09-29: *"not obvious when there is a tabbed terminal … Let's use Alt +
+ * PgUp / PgDw to switch to other tabbed panel"* — the grip (`R-B64`) keeps
+ * the tabs out of sight until hovered, so the keyboard steps through them
+ * without needing to see them.
+ *
+ * **It wraps**, where `moveShellFocus` stops at a wall. A tab strip is a list
+ * rather than a floorplan, and wrapping is what a list does — every editor's
+ * `Ctrl+PgDn` included.
+ */
+export function cycleShellTab(step: 1 | -1): void {
+  const group = dock?.activeGroup;
+  const panels = group?.panels ?? [];
+  if (!group || panels.length < 2) return;
+  const at = group.activePanel ? panels.indexOf(group.activePanel) : 0;
+  const next = panels[(at + step + panels.length) % panels.length];
+  next.api.setActive();
+  landIn(group);
 }

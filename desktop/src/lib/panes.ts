@@ -1,4 +1,4 @@
-import type { DockviewApi } from "dockview";
+import type { DockviewApi, DockviewGroupPanel } from "dockview";
 import { useStore } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { pickNeighbour, type Box, type Direction } from "@/lib/spatial";
@@ -515,10 +515,20 @@ export function moveFocusIn(api: DockviewApi | null, dir: Direction): void {
   if (!next) return;
 
   next.api.setActive();
-  // After activation, and after the render it may cause: a group that was not
-  // showing cannot be focused into.
+  landIn(next);
+}
+
+/**
+ * Give the keyboard to whatever a group now shows. `movePane`'s landing, and
+ * the shell panel's tab switch (`R-B66`) lands the same way.
+ *
+ * After activation, and after the render it may cause: a group that was not
+ * showing cannot be focused into, and a shell tab that was behind holds no
+ * terminal until it is revealed (`R-J58`).
+ */
+export function landIn(group: DockviewGroupPanel): void {
   requestAnimationFrame(() => {
-    const el = next.element;
+    const el = group.element;
     // xterm types through a hidden textarea; that is the thing that takes focus.
     const term = el.querySelector<HTMLElement>(".xterm-helper-textarea");
     const host = el.querySelector<HTMLElement>("[data-focus-host]");
