@@ -7,8 +7,9 @@
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
-import { useStore } from "@/store";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { capNotices, useStore, type Notice } from "@/store";
+import { NoticeButton, NoticesWindow, Toasts } from "@/ui/Notices";
 
 class FakeSocket {
   static OPEN = 1;
@@ -96,5 +97,65 @@ describe("a warning", () => {
     const notices = useStore.getState().notices;
     expect(notices).toHaveLength(50);
     expect(notices[notices.length - 1].text).toBe("boom 119");
+  });
+});
+
+/**
+ * Only what went wrong is a warning. `R-J114`.
+ *
+ * Reported 2026-09-25: *check for updates* said up to date, and the status
+ * bar's warning count went red with it listed in the Warnings window. Every
+ * `info` notice did the same — *copied*, *bookmark set*, *sent to* — in a
+ * window whose empty state reads *nothing has gone wrong*.
+ */
+describe("what counts as a warning", () => {
+  function mount() {
+    render(
+      <>
+        <Toasts />
+        <NoticeButton />
+        <NoticesWindow />
+      </>,
+    );
+  }
+
+  beforeEach(() => {
+    cleanup();
+    useStore.setState({ syncs: [] } as never);
+  });
+
+  it("an info notice is a toast, and is neither counted nor logged as a warning", () => {
+    mount();
+    act(() => useStore.getState().pushNotice("up to date — this build is main's newest commit, 4e9ad7e"));
+    expect(screen.getByText(/up to date/)).toBeInTheDocument();
+    // No count in the status bar at all: nothing has gone wrong.
+    expect(screen.queryByTitle(/^\d+ (unread of \d+|in the log)$/)).toBeNull();
+    // And its toast does not promise a log it is not in.
+    expect(screen.getByTitle("dismiss")).toBeInTheDocument();
+  });
+
+  it("an error is a toast, a red count, and a line in the Warnings window", () => {
+    mount();
+    act(() => {
+      useStore.getState().pushNotice("copied", "info");
+      useStore.getState().pushError("could not check for updates: fatal: not a git repository");
+    });
+    const count = screen.getByTitle("1 unread of 1");
+    expect(count).toHaveTextContent("1");
+    fireEvent.click(count);
+    const log = screen.getByRole("dialog", { name: "Warnings" });
+    expect(log).toHaveTextContent("1 recorded");
+    expect(log).toHaveTextContent("not a git repository");
+    expect(log).not.toHaveTextContent("copied");
+  });
+
+  it("a burst of successes cannot push a failure out of the log", () => {
+    const n = (id: number, kind: Notice["kind"]): Notice => ({ id, text: `${kind} ${id}`, kind, at: id, seen: false });
+    const all = [n(1, "error"), ...Array.from({ length: 200 }, (_, i) => n(i + 2, "info"))];
+    const kept = capNotices(all);
+    expect(kept[0]).toMatchObject({ id: 1, kind: "error" });
+    expect(kept.filter((x) => x.kind === "info")).toHaveLength(10);
+    // Newest kept, in order.
+    expect(kept.at(-1)?.id).toBe(201);
   });
 });

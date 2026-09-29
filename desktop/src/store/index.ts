@@ -604,6 +604,22 @@ const emptySearch = (): SearchPanelState => ({
   previewAsked: null,
 });
 
+/** How many of each kind are kept: the log's fifty warnings, and a toast's few. */
+const KEEP_WARNINGS = 50;
+const KEEP_INFO = 10;
+
+/** The newest `KEEP_WARNINGS` errors and `KEEP_INFO` infos, in their order. */
+export function capNotices(all: readonly Notice[]): Notice[] {
+  let errors = 0;
+  let infos = 0;
+  const kept: Notice[] = [];
+  for (let i = all.length - 1; i >= 0; i--) {
+    const n = all[i];
+    if (n.kind === "error" ? errors++ < KEEP_WARNINGS : infos++ < KEEP_INFO) kept.push(n);
+  }
+  return kept.reverse();
+}
+
 /** One thing that went wrong, and whether you have looked at it. */
 export interface Notice {
   id: number;
@@ -617,6 +633,10 @@ export interface Notice {
    * explaining which process announces — went without rather than lie about
    * severity, which is how a window ends up with no way to answer "did that
    * do anything?".
+   *
+   * **`info` is a toast only** since `R-J114`: never counted in the status
+   * bar's warnings, never listed in the Warnings window. It was, and every
+   * success read as a warning there.
    */
   kind: "error" | "info";
   /** Epoch ms — a toast shows while it is young, the log keeps it after. */
@@ -1554,11 +1574,14 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({
       // Capped, because a daemon that fails in a loop must not grow the log
       // without bound — and the fiftieth copy of one message tells you nothing
-      // the first did not.
-      notices: [
+      // the first did not. **Per kind** since `R-J114`: an info notice is a
+      // toast and never logged, so it keeps only the few a toast can show —
+      // and a burst of *copied* can no longer push a real failure out of the
+      // log.
+      notices: capNotices([
         ...s.notices,
         { id: ++noticeSeq, text, kind, at: Date.now(), seen: false, ...(opts?.quiet ? { quiet: true } : {}) },
-      ].slice(-50),
+      ]),
     })),
   markNoticesSeen: () =>
     set((s) => ({ notices: s.notices.map((n) => (n.seen ? n : { ...n, seen: true })) })),

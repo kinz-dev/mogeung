@@ -12,6 +12,13 @@
  *
  * The same corner carries a sync's balloon (`R-J109`, `SyncBalloon.tsx`),
  * which is there from the press rather than only when something went wrong.
+ *
+ * **The log and its count are warnings only** (`R-J114`). An `info` notice —
+ * *copied*, *bookmark set*, *up to date* — is a toast and nothing more. It was
+ * logged too, so every success lit the status bar's warning count and stood
+ * in a window titled *Warnings* whose empty state says *nothing has gone
+ * wrong*; reported 2026-09-25 when *check for updates* said up to date and
+ * the count went red.
  */
 
 import { useEffect, useState } from "react";
@@ -69,7 +76,7 @@ export function Toasts() {
           <span className="min-w-0 flex-1 text-xs text-[var(--text)]">{n.text}</span>
           <button
             type="button"
-            title="dismiss — it stays in the log"
+            title={n.kind === "error" ? "dismiss — it stays in the log" : "dismiss"}
             onClick={() => useStore.setState({ notices: notices.filter((x) => x.id !== n.id) })}
             className="shrink-0 text-[var(--dim)] outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:text-[var(--text)] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:-outline-offset-2"
           >
@@ -83,9 +90,12 @@ export function Toasts() {
   );
 }
 
+/** Only what went wrong is a warning. See the file's header. */
+const isWarning = (n: { kind: "error" | "info" }) => n.kind === "error";
+
 /** The count in the status bar. Absent when there is nothing to report. */
 export function NoticeButton() {
-  const notices = useStore((s) => s.notices);
+  const notices = useStore((s) => s.notices).filter(isWarning);
   const unseen = notices.filter((n) => !n.seen).length;
   if (notices.length === 0) return null;
 
@@ -108,7 +118,8 @@ export function NoticeButton() {
 
 export function NoticesWindow() {
   const open = useStore((s) => s.noticesOpen);
-  const notices = useStore((s) => s.notices);
+  const all = useStore((s) => s.notices);
+  const notices = all.filter(isWarning);
   const clear = useStore((s) => s.clearNotices);
   if (!open) return null;
 
