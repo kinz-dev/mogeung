@@ -2,7 +2,7 @@
 title: In-app terminal
 status: shipped
 updated: 2026-09-29
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63]
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64]
 depends_on: []
 ---
 
@@ -37,6 +37,11 @@ depends_on: []
 > **And the panel follows its shells (2026-09-29).** The last shell to close
 > puts the panel away (`R-B62`), and `Alt+Shift+N` opens a new shell as `+`
 > does (`R-B63`).
+>
+> **The tab bar is back as a grip (2026-09-29, `R-B64`).** Without it a shell
+> could not be dragged, nor tabbed. Each shell now has a 4px strip along its top
+> that opens into the tab bar on hover, so shells drag, split and tab again
+> without the bar taking a row.
 
 ## Spec
 
@@ -76,6 +81,10 @@ depends on, and degrades without it rather than requiring it.
 - [x] When the last shell ends or is closed, the panel goes with it (`R-B62`)
 - [x] `Alt+Shift+N` opens a new shell as `+` does, with the panel down or up
       (`R-B63`)
+- [ ] Hovering a shell's top edge opens its tab bar, and a shell can be dragged
+      by its tab to split or tab with another; closed, the strip covers no part
+      of the terminal (`R-B64` — dragging and tabbing seen in a browser, the
+      hover not yet)
 - [x] Moving the selection does not disturb, replace or close a shell
 - [x] Closing mogeung and reopening it returns the *same* shells: the scrollback
       is there, and a command left running is still running

@@ -95,8 +95,13 @@ describe("the terminal panel as a dock", () => {
     expect(splits(container)).toEqual([["mog-0"], ["mog-1"]]);
   });
 
-  /** The ask: the header was room spent on nothing. */
-  it("draws no tab bar on any split", () => {
+  /**
+   * `R-B64`: the header is back, drawn as a grab strip that opens on hover —
+   * the no-tab-bar split (`R-B56`) had nothing to drag it by. The strip is CSS
+   * and is seen in a browser; what is pinned here is that there is a tab to
+   * grab, named for its shell.
+   */
+  it("gives every split a tab to drag it by", () => {
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
@@ -104,7 +109,24 @@ describe("the terminal panel as a dock", () => {
     const { container } = render(<TerminalPanel />);
     const bars = [...container.querySelectorAll<HTMLElement>(".dv-tabs-and-actions-container")];
     expect(bars).toHaveLength(2);
-    for (const bar of bars) expect(bar.style.display).toBe("none");
+    for (const bar of bars) expect(bar.style.display).not.toBe("none");
+    expect([...container.querySelectorAll(".dv-tab")].map((t) => t.textContent)).toEqual(["alpha", "beta"]);
+  });
+
+  /** Detaches, as the right-click Close does — never leaves a shell listed but gone from the tree. */
+  it("closing a tab takes its shell off the list", () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    const close = container.querySelectorAll<HTMLElement>(".dv-default-tab-action")[0];
+    act(() => {
+      close.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      close.click();
+    });
+    expect(useStore.getState().scoped().shells).toEqual([["mog-1", "/w/beta"]]);
+    expect(splits(container)).toEqual([["mog-1"]]);
   });
 
   it("restores a split, and drops a shell the preferences no longer name", () => {
@@ -165,19 +187,16 @@ describe("the terminal panel as a dock", () => {
     expect(stacked?.querySelectorAll("[data-shell]")).toHaveLength(2);
   });
 
-  /**
-   * With no tab bar, a second shell in a split is one nobody can reach — so a
-   * layout saved while splits still held tabs is spread out on the way in.
-   */
-  it("spreads a split that was saved holding two shells", () => {
+  /** With a tab to click, a second shell in a split is reachable again — so it stays a tab. `R-B64`. */
+  it("keeps two shells saved in one split as tabs", () => {
     localStorage.setItem(shellLayoutKey(MACHINE), savedLayout([["mog-0", "mog-1"]]));
     withShells([
       ["mog-0", "/w/alpha"],
       ["mog-1", "/w/beta"],
     ]);
     const { container } = render(<TerminalPanel />);
-    expect(splits(container)).toHaveLength(2);
-    expect(splits(container).flat().sort()).toEqual(["mog-0", "mog-1"]);
+    expect(container.querySelectorAll(".dv-groupview")).toHaveLength(1);
+    expect(container.querySelectorAll(".dv-tab")).toHaveLength(2);
   });
 
   it("a new shell opens beside the one in front, and is the one in front", () => {

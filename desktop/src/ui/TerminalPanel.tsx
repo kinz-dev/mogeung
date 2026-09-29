@@ -16,18 +16,21 @@
  * it to dockable panel like those we have in the AI session at the top"*. One
  * shell at a time behind a tab strip meant a build and its log could not be
  * watched together; now the panel holds its own dockview, and every shell is
- * a split of it — tmux's shape, with no tab bar, asked for the same day. It
- * is a second dockview rather than the centre's, so nothing crosses between
- * the two. See [`shellDock.ts`](../lib/shellDock.ts) for which store owns
- * what, and for why a split never holds two shells.
+ * a split of it. The tab bar went the same day, asked for, and came back the
+ * next as a grab strip that opens on hover (`R-B64`) — without it a shell
+ * could not be dragged anywhere. It is a second dockview rather than the
+ * centre's, so nothing crosses between the two. See
+ * [`shellDock.ts`](../lib/shellDock.ts) for which store owns what.
  */
 
 
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  DockviewDefaultTab,
   DockviewReact,
   type DockviewApi,
+  type IDockviewPanelHeaderProps,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
 } from "dockview";
@@ -162,14 +165,16 @@ function ShellPane(props: IDockviewPanelProps) {
 }
 
 /**
- * A tab that draws nothing, for a tab bar that is never shown. Not removable:
- * a layout saved while shells had tabs names `props.defaultTabComponent` on
- * every panel, and without one dockview refuses the whole layout — which
- * `restoreShellLayout` then degrades to one flat row. Found in a browser the
- * day the tab bar went.
+ * A shell's tab, in the strip that opens on hover (`R-B64`). Its `×` detaches
+ * through `closeShell`, as the right-click *Close* does: dockview's own close
+ * would drop the panel and leave the shell listed, to come back at the next
+ * sync. Registered as the *default* tab component, which every layout saved
+ * since `R-B56` names — without one dockview refuses the whole layout, and
+ * `restoreShellLayout` degrades it to one flat row.
  */
-function NoTab() {
-  return null;
+function ShellTab(props: IDockviewPanelHeaderProps) {
+  const name = shellOfPane(props.api.id);
+  return <DockviewDefaultTab {...props} closeActionOverride={() => name && closeShell(name)} />;
 }
 
 function ShellsEmpty() {
@@ -352,7 +357,7 @@ function OpenTerminalPanel() {
       <div className="min-h-0 flex-1 bg-[var(--bg-panel)]" {...{ [SHELL_TILES_ATTR]: "" }}>
         <DockviewReact
           components={components}
-          defaultTabComponent={NoTab}
+          defaultTabComponent={ShellTab}
           watermarkComponent={ShellsEmpty}
           // A shell has no business floating over the panel or leaving the
           // window: the centre's popouts exist for sessions (`R-B55`), and a

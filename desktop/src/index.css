@@ -510,6 +510,50 @@ textarea {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 40%, transparent);
 }
 
+/* The shells' tab bar, as a grip. `R-B64`.
+   `R-B56` hid it — *"the tab header is consuming a lot of space"* — and with it
+   went the only thing a split could be dragged by. So it is back as a 4px
+   strip along the top of each shell that opens into the full bar on hover and
+   folds away again after. It opens *over* the terminal's first row rather
+   than pushing it down: a push would resize the pty on every pass of the
+   mouse, and a shell reflowing under you is worse than a row covered for a
+   moment. The 4px are the strip's own, so closed it covers nothing.
+   The delays are what stop a mouse crossing the top edge on its way somewhere
+   else from flashing the bar open. */
+[data-shell-tiles] .dv-groupview {
+  position: relative;
+}
+[data-shell-tiles] .dv-groupview > .dv-content-container {
+  margin-top: 4px;
+}
+[data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 3;
+  height: 4px;
+  overflow: hidden;
+  background-color: var(--border);
+  cursor: grab;
+  transition: height var(--dur-fast) ease 250ms, background-color var(--dur-fast) ease 250ms;
+}
+[data-shell-tiles] .dv-groupview.dv-active-group > .dv-tabs-and-actions-container {
+  background-color: color-mix(in srgb, var(--blue) 45%, transparent);
+}
+[data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container > * {
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease 250ms;
+}
+[data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container:hover {
+  height: var(--dv-tabs-and-actions-container-height);
+  background-color: var(--dv-tabs-and-actions-container-background-color);
+  box-shadow: 0 1px 0 var(--border);
+  transition-delay: 120ms;
+}
+[data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container:hover > * {
+  opacity: 1;
+  transition-delay: 120ms;
+}
+
 /* ------------------------------------------------------------------ */
 /* xterm                                                               */
 /* ------------------------------------------------------------------ */

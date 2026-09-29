@@ -48,25 +48,21 @@ export function shellLayoutKey(machineId: string | null | undefined): string {
 }
 
 /**
- * Make the tree hold exactly `shells`, one to a split, keeping the arrangement
- * of the ones it already has. Closes before it adds, so a restored layout's
- * stale panels are gone before a new one looks for a split to sit beside.
+ * Make the tree hold exactly `shells`, keeping the arrangement of the ones it
+ * already has. Closes before it adds, so a restored layout's stale panels are
+ * gone before a new one looks for a split to sit beside.
  *
- * **One shell per split, and no tab bar**, since the same day as the tree
- * itself: *"the tab header is consuming a lot of space, it is not useful in
- * the terminal tab"*. A split is a terminal and nothing else — tmux's shape,
- * and Terminator's. Which makes a second shell in one group a shell nobody
- * can reach, so there never is one: a new shell opens beside, and a layout
- * saved while splits held tabs is spread out into splits on restore.
+ * **Splits and tabs both, again, since `R-B64`.** `R-B56` took the tab bar
+ * away — *"the tab header is consuming a lot of space"* — and a shell could
+ * then be neither dragged nor reached behind another, so every split held one
+ * and a saved tab was spread out on restore. The bar is back as a strip that
+ * opens on hover (`index.css`), and with a tab to click, a shell behind
+ * another is reachable, so a tab stays a tab.
  */
 export function syncShells(api: DockviewApi, shells: readonly Shell[], title: (s: Shell) => string): void {
   const want = new Set(shells.map(([name]) => shellPaneId(name)));
   for (const panel of [...api.panels]) {
     if (!want.has(panel.id)) api.removePanel(panel);
-  }
-  // Spread first, so a new shell lands beside a layout that is already flat.
-  for (const group of [...api.groups]) {
-    for (const panel of group.panels.slice(1)) panel.api.moveTo({ group, position: "right" });
   }
   const opened: string[] = [];
   for (const shell of shells) {
@@ -93,8 +89,6 @@ export function syncShells(api: DockviewApi, shells: readonly Shell[], title: (s
     });
     if (where) opened.push(id);
   }
-  // Every split, however it came to be — a restore, a move, an add.
-  for (const group of api.groups) group.model.header.hidden = true;
   // Only a shell somebody just opened comes forward — never one a restore
   // filled in behind your back.
   for (const id of opened) api.getPanel(id)?.api.setActive();
