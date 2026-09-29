@@ -492,7 +492,16 @@ export function dropOrphanHolds(api: DockviewApi | null): void {
  * move is another keystroke rather than a mouse.
  */
 export function movePane(dir: Direction): void {
-  const api = dock;
+  moveFocusIn(dock, dir);
+}
+
+/**
+ * `movePane`'s landing, for any dockview. The terminal panel's shells are a
+ * second tree (`R-B56`) and move by the same rule on a chord of their own
+ * (`R-B60`) — one geometry and one landing, rather than a copy that could
+ * disagree about which shell is to the left.
+ */
+export function moveFocusIn(api: DockviewApi | null, dir: Direction): void {
   const active = api?.activeGroup;
   if (!api || !active) return;
 

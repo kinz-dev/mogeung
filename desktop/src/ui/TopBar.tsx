@@ -16,6 +16,7 @@ import { useChord } from "@/lib/keymap";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
 import { showPane } from "@/lib/panes";
+import { toggleTerminal } from "@/lib/shellDock";
 import { WindowControls } from "@/ui/WindowControls";
 import { ConnectionSwitcher } from "@/ui/ConnectionSwitcher";
 import { bellState, ensurePermission } from "@/lib/notify";
@@ -157,7 +158,7 @@ export function TopBar() {
         <IconButton
           title={`your own shells, across the bottom${terminalChord ? `  (${terminalChord})` : ""}`}
           active={showTerminal}
-          onClick={() => useStore.setState({ showTerminal: !showTerminal })}
+          onClick={toggleTerminal}
         >
           <SquareTerminal size={13} />
         </IconButton>

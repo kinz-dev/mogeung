@@ -30,8 +30,16 @@ import { groupQueue, visibleQueue } from "@/lib/queue";
 import { syncRepo } from "@/lib/gitActions";
 import { onPopoutWindows } from "@/lib/popout";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
-import { splitShell } from "@/lib/shellDock";
+import { moveShellFocus, splitShell, toggleTerminal, typedInShell } from "@/lib/shellDock";
 import type { Direction } from "@/lib/spatial";
+
+/** Between the shells in the terminal panel (`R-B60`); `PANE_MOVE_CHORDS` are the centre's. */
+const SHELL_MOVE_CHORDS: Record<Direction, string> = {
+  left: "Alt+ArrowLeft",
+  right: "Alt+ArrowRight",
+  up: "Alt+ArrowUp",
+  down: "Alt+ArrowDown",
+};
 
 /** The id the Attention list carries, so `Alt+1` has something to focus. */
 export const QUEUE_LIST_ID = "queue-list";
@@ -47,6 +55,13 @@ export interface Action {
    */
   keys: string[];
   run: (dock: DockviewApi | null) => void;
+  /**
+   * Whether this press is the window's at all. Absent, a chord always is. A
+   * chord that answers `false` is neither run nor prevented, so the key goes
+   * on to whatever has focus — for a chord that means something only in one
+   * place, and is somebody else's keystroke everywhere else (`R-B60`).
+   */
+  when?: (e: KeyboardEvent) => boolean;
 }
 
 /**
@@ -603,7 +618,8 @@ export const ACTIONS: Action[] = [
     // IntelliJ's, Ctrl+` is VS Code's. A shell is the one pane that arrives
     // with an existing reflex attached, so it does not get a bare letter.
     keys: ["Control+`", "Alt+F12"],
-    run: () => useStore.setState({ showTerminal: !useStore.getState().showTerminal }),
+    // With no shell at all, showing the panel opens one (`R-B61`).
+    run: () => toggleTerminal(),
   },
   {
     id: "terminal.command_box",
@@ -646,6 +662,23 @@ export const ACTIONS: Action[] = [
     keys: ["Alt+Shift+Minus"],
     run: () => splitShell("below"),
   },
+  // Between the shells, by arrow. `R-B60`, asked 2026-09-28: *"Terminal
+  // windows navigation by keyboard. (use Alt + arrows) to switch the focus"*.
+  //
+  // **Only from inside a shell.** `Alt+←` and `Alt+→` are word jumps in a Mac
+  // text box and in plenty of TUIs, and the centre's panes already move on
+  // `Alt+Shift+arrow` (`R-B52`) — so everywhere else the key goes on to
+  // whatever has focus, untouched. Inside a shell it is swallowed even with
+  // no shell that way, so the same press never types an escape sequence one
+  // time and moves the next.
+  ...(["left", "right", "up", "down"] as Direction[]).map((dir) => ({
+    id: `terminal.focus.${dir}`,
+    label: `Focus the shell to the ${dir} — from inside a shell`,
+    group: "Panes",
+    keys: [SHELL_MOVE_CHORDS[dir]],
+    when: typedInShell,
+    run: () => moveShellFocus(dir),
+  })),
   {
     id: "terminal.focus_app",
     label: "Raise the terminal application this session runs in",
@@ -1260,6 +1293,7 @@ export function useKeymap(dock: RefObject<DockviewApi | null>): void {
           // filter box, or the palette is unreachable exactly when you want it.
           const bare = !/\+/.test(key);
           if (bare && focusOwns(key, typedIn(e))) return;
+          if (action.when && !action.when(e)) return;
           e.preventDefault();
           action.run(dock.current);
         };

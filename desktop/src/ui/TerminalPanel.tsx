@@ -47,6 +47,7 @@ import {
   openShell,
   restoreShellLayout,
   setShellDock,
+  SHELL_TILES_ATTR,
   shellForSelection,
   shellLayoutKey,
   shellOfPane,
@@ -337,7 +338,9 @@ function OpenTerminalPanel() {
         }}
       />
 
-      <div className="min-h-0 flex-1 bg-[var(--bg-panel)]">
+      {/* The tiles and not the whole panel: the command box above is a text
+          box, where `Alt+←` should still jump a word (`R-B60`). */}
+      <div className="min-h-0 flex-1 bg-[var(--bg-panel)]" {...{ [SHELL_TILES_ATTR]: "" }}>
         <DockviewReact
           components={components}
           defaultTabComponent={NoTab}

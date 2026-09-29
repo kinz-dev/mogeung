@@ -22,6 +22,8 @@
 import type { DockviewApi } from "dockview";
 import { useStore } from "@/store";
 import { shellSessionName } from "@/lib/tmux";
+import { moveFocusIn } from "@/lib/panes";
+import type { Direction } from "@/lib/spatial";
 
 export type Shell = [string, string] | [string, string, string];
 
@@ -206,4 +208,49 @@ export function splitShell(direction: SplitDirection, from?: string | null): voi
   const name = nextShellName(shells);
   const entry: Shell = source[2] ? [name, source[1], source[2]] : [name, source[1]];
   openShell(entry, { from: source[0], direction });
+}
+
+// ---------------------------------------------------------------------------
+// Getting to the panel, and around it, from the keyboard.
+
+/**
+ * Show or hide the panel — and, showing it with no shell at all, open one.
+ * `R-B61`, asked 2026-09-28: *"if there is no terminal, please create a new
+ * one using the current selected claude session's folder … If there are
+ * already opened terminal, No need to auto create a new one."*
+ *
+ * The egui panel did this and the port to TypeScript lost it, so `Alt+F12`
+ * arrived at *no shells open* and a `+` that needed the mouse. The shell is
+ * `+`'s own — the selected session's worktree, else home — and it takes the
+ * keyboard, so the chord that shows the panel is the chord that lets you type
+ * in it. Home needs no path of its own: an empty root is tmux's `-c ""`, which
+ * is the client's directory, and the pty starts the client in `$HOME`.
+ */
+export function toggleTerminal(): void {
+  const { showTerminal, scoped } = useStore.getState();
+  if (showTerminal) {
+    useStore.setState({ showTerminal: false });
+    return;
+  }
+  const shells = scoped().shells;
+  if (shells.length === 0) openShell(shellForSelection(shells));
+  else useStore.setState({ showTerminal: true });
+}
+
+/** Marks the tiles, so a chord can tell a key typed in a shell from one typed elsewhere. */
+export const SHELL_TILES_ATTR = "data-shell-tiles";
+
+/** Was this key typed in one of the panel's shells? */
+export function typedInShell(e: KeyboardEvent): boolean {
+  const el = e.target as Element | null;
+  return typeof el?.closest === "function" && el.closest(`[${SHELL_TILES_ATTR}]`) !== null;
+}
+
+/**
+ * The shell that way, and the keyboard with it. `R-B60`. The centre's own
+ * move (`R-B52`) over the panel's tree; nothing that way is a wall, as it is
+ * there.
+ */
+export function moveShellFocus(dir: Direction): void {
+  moveFocusIn(dock, dir);
 }

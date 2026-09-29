@@ -2,7 +2,7 @@
 title: In-app terminal
 status: shipped
 updated: 2026-09-28
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57]
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61]
 depends_on: []
 ---
 
@@ -28,6 +28,11 @@ depends_on: []
 > the split it ran in.
 > Its own shells have no tmux status bar either (`R-B57`) — set on each
 > `mog-N` session, never globally.
+>
+> **And the keyboard reaches them (2026-09-28).** `Alt+←↑↓→` moves between
+> shells from inside one — and only there, so a text box keeps its word jumps
+> (`R-B60`). Showing the panel with no shell opens one, as it did before the
+> port to TypeScript quietly stopped (`R-B61`).
 
 ## Spec
 
@@ -60,6 +65,10 @@ depends on, and degrades without it rather than requiring it.
       it, with no click needed, and the same key puts it away again
 - [x] The first shell starts in the selected session's worktree, and in `$HOME`
       when nothing is selected
+- [x] Showing the panel with no shell opens that first shell by itself; with a
+      shell already there, it opens nothing new (`R-B61`)
+- [x] From inside a shell, `Alt+←↑↓→` puts the keyboard in the shell that way;
+      anywhere else the chord is left to whatever has focus (`R-B60`)
 - [x] Moving the selection does not disturb, replace or close a shell
 - [x] Closing mogeung and reopening it returns the *same* shells: the scrollback
       is there, and a command left running is still running
