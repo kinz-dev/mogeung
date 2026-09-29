@@ -30,7 +30,7 @@ import { groupQueue, visibleQueue } from "@/lib/queue";
 import { syncRepo } from "@/lib/gitActions";
 import { onPopoutWindows } from "@/lib/popout";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
-import { moveShellFocus, splitShell, toggleTerminal, typedInShell } from "@/lib/shellDock";
+import { moveShellFocus, newShell, splitShell, toggleTerminal, typedInShell } from "@/lib/shellDock";
 import type { Direction } from "@/lib/spatial";
 
 /** Between the shells in the terminal panel (`R-B60`); `PANE_MOVE_CHORDS` are the centre's. */
@@ -642,6 +642,18 @@ export const ACTIONS: Action[] = [
       useStore.setState({ showTerminal: true, showCommandBox: true });
     },
   },
+  {
+    id: "terminal.new",
+    label: "A new shell, in the selected session's worktree — as the panel's + opens one",
+    group: "Panes",
+    // `R-B63`, asked 2026-09-29 by chord. `N` for new, and free in this
+    // window: `Alt+N` is the Notes rail, the letter without Shift. A shell
+    // does bind it, and loses nothing — bash maps `M-N` to `M-n` and zsh binds
+    // both to `history-search-forward`, so `Alt+N` still reaches that. It
+    // brings the panel up when it is down.
+    keys: ["Alt+Shift+n"],
+    run: () => newShell(),
+  },
   // `R-B56`, asked 2026-09-28 by chord: *Alt+Shift+"-"* down and
   // *Alt+Shift+"|"* right — the line each one draws between the two shells.
   // Spelled by physical key, which is the only spelling of an Option chord
@@ -947,6 +959,8 @@ export const MAC_KEYS: Record<string, string[]> = {
   // Spelled by physical key, because `⌥⇧M` composes a character on macOS and
   // `leave no Option chord spelled by character` is the test that says so.
   "terminal.command_box": ["Alt+Shift+KeyM"],
+  // `⌥⇧N` composes `˜` — the same rule, one letter over. `R-B63`.
+  "terminal.new": ["Alt+Shift+KeyN"],
   theme: ["Meta+Shift+t"],
 
   // Letters where `⌘` is spoken for. The mnemonic survives; only the modifier

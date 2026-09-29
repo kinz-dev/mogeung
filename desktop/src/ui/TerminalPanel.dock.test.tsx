@@ -214,6 +214,26 @@ describe("when a shell ends", () => {
     expect(splits(container)).toEqual([["mog-1"]]);
   });
 
+  it("leaves the panel up while another shell is still running", () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    render(<TerminalPanel />);
+    act(() => exits.get("shell:mog-0")!(60_000));
+    expect(useStore.getState().showTerminal).toBe(true);
+  });
+
+  /** `R-B62`: an empty panel is a row of *no shells open* nobody asked to keep. */
+  it("puts the panel away when the last one ends", () => {
+    withShells([["mog-0", "/w/alpha"]]);
+    const { container } = render(<TerminalPanel />);
+    act(() => exits.get("shell:mog-0")!(60_000));
+    expect(useStore.getState().scoped().shells).toEqual([]);
+    expect(useStore.getState().showTerminal).toBe(false);
+    expect(container.querySelector(".dv-groupview")).toBeNull();
+  });
+
   /** A shell that dies as it opens failed to start; its notice is the only word on why. */
   it("keeps a shell that died as it opened", () => {
     withShells([["mog-0", "/w/alpha"]]);

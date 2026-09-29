@@ -184,6 +184,16 @@ export function openShell(entry: Shell, where: { from?: string; direction?: Spli
 }
 
 /**
+ * What `+` opens, and `Alt+Shift+N` (`R-B63`): a split to the right of the
+ * shell in front, rooted where `shellForSelection` says — the selected
+ * session's worktree, not the front shell's folder, which is what a split is
+ * for.
+ */
+export function newShell(): void {
+  openShell(shellForSelection(useStore.getState().scoped().shells));
+}
+
+/**
  * A new shell beside `from` — the one in front by default — in the same
  * folder, on the same machine. With nothing to split, a plain new shell.
  *

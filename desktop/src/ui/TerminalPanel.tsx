@@ -44,11 +44,10 @@ import { base } from "@/lib/format";
 import { useChord } from "@/lib/keymap";
 import { PaneScope } from "@/lib/paneScope";
 import {
-  openShell,
+  newShell,
   restoreShellLayout,
   setShellDock,
   SHELL_TILES_ATTR,
-  shellForSelection,
   shellLayoutKey,
   shellOfPane,
   shellPaneId,
@@ -80,10 +79,18 @@ function useReach(shell: Shell | null): Reach | null {
 /**
  * Removes the *split*, not the session. tmux keeps it; opening a shell with
  * the same name attaches straight back.
+ *
+ * The last one takes the panel with it. `R-B62`, asked 2026-09-29: *"when the
+ * last opened terminal are exited, and no more terminal windows are running,
+ * the Terminal panel should be toggle off"*. An empty panel is a row of *no
+ * shells open* held up for nothing, and showing it again opens a fresh shell
+ * (`R-B61`) — so putting it away loses nothing.
  */
 function closeShell(name: string) {
   const { scoped, setScoped } = useStore.getState();
-  setScoped({ shells: scoped().shells.filter(([n]) => n !== name) });
+  const shells = scoped().shells.filter(([n]) => n !== name);
+  setScoped({ shells });
+  if (shells.length === 0) useStore.setState({ showTerminal: false });
 }
 
 /**
@@ -195,6 +202,7 @@ function OpenTerminalPanel() {
   keyRef.current = layoutKey;
 
   const askChord = useChord("terminal.command_box");
+  const newChord = useChord("terminal.new");
   const shells = scoped.shells;
 
   // The tree follows the list — after a restore, and on every change to it.
@@ -270,9 +278,7 @@ function OpenTerminalPanel() {
     window.addEventListener("mouseup", up);
   };
 
-  // A split to the right of the shell in front. See `shellForSelection` for
-  // where it is rooted — the selected session's worktree, not the shell's.
-  const addShell = () => openShell(shellForSelection(shells));
+  const addShell = newShell;
 
   return (
     <div className="flex shrink-0 flex-col border-t border-[var(--border)]" style={{ height }}>
@@ -280,7 +286,10 @@ function OpenTerminalPanel() {
 
       <div className="flex h-7 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1">
         <Dim className="px-1 text-2xs uppercase tracking-wide">Terminal</Dim>
-        <IconButton title="a new shell, rooted in the selected session's worktree" onClick={addShell}>
+        <IconButton
+          title={`a new shell, rooted in the selected session's worktree${newChord ? `  (${newChord})` : ""}`}
+          onClick={addShell}
+        >
           <Plus size={13} />
         </IconButton>
         {host && (

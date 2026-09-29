@@ -18,7 +18,7 @@ import { cleanup, render, renderHook } from "@testing-library/react";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
 import { type Shell } from "@/lib/shellDock";
-import { ACTIONS, useKeymap } from "@/lib/keymap";
+import { ACTIONS, bindKeys, defaultKeys, useKeymap } from "@/lib/keymap";
 
 vi.mock("@/ui/Terminal", () => ({
   // Focusable, as xterm's hidden textarea is — that is what a press comes from.
@@ -150,5 +150,30 @@ describe("moving between shells with Alt+arrow", () => {
     expect(e.defaultPrevented).toBe(false);
     expect(activeShell()).toBe("mog-1");
     box.remove();
+  });
+});
+
+/** `R-B63`: a new shell by chord, as `+` opens one. */
+describe("Alt+Shift+N", () => {
+  const action = () => ACTIONS.find((a) => a.id === "terminal.new")!;
+
+  it.each(["other", "mac"] as const)("fires on the %s spelling", (platform) => {
+    let fired = 0;
+    const off = bindKeys(window, { [defaultKeys(action(), platform)[0]]: () => fired++ });
+    // `code` is what a Mac's spelling matches: `⌥⇧N` composes a character.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "N", code: "KeyN", altKey: true, shiftKey: true, bubbles: true }));
+    off();
+    expect(fired).toBe(1);
+  });
+
+  it("opens a shell in the selected session's worktree beside those already open, panel down or not", () => {
+    withShells([["mog-0", "/w/beta"]], { id: "s1", repo_root: "/w/alpha" });
+    act(() => action().run(null));
+    expect(shells()).toEqual([
+      ["mog-0", "/w/beta"],
+      ["mog-1", "/w/alpha"],
+    ]);
+    expect(useStore.getState().showTerminal).toBe(true);
+    expect(useStore.getState().focusTerminal?.id).toBe("shell:mog-1");
   });
 });

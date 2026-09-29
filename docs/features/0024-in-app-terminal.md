@@ -1,8 +1,8 @@
 ---
 title: In-app terminal
 status: shipped
-updated: 2026-09-28
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61]
+updated: 2026-09-29
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63]
 depends_on: []
 ---
 
@@ -33,6 +33,10 @@ depends_on: []
 > shells from inside one — and only there, so a text box keeps its word jumps
 > (`R-B60`). Showing the panel with no shell opens one, as it did before the
 > port to TypeScript quietly stopped (`R-B61`).
+>
+> **And the panel follows its shells (2026-09-29).** The last shell to close
+> puts the panel away (`R-B62`), and `Alt+Shift+N` opens a new shell as `+`
+> does (`R-B63`).
 
 ## Spec
 
@@ -69,6 +73,9 @@ depends on, and degrades without it rather than requiring it.
       shell already there, it opens nothing new (`R-B61`)
 - [x] From inside a shell, `Alt+←↑↓→` puts the keyboard in the shell that way;
       anywhere else the chord is left to whatever has focus (`R-B60`)
+- [x] When the last shell ends or is closed, the panel goes with it (`R-B62`)
+- [x] `Alt+Shift+N` opens a new shell as `+` does, with the panel down or up
+      (`R-B63`)
 - [x] Moving the selection does not disturb, replace or close a shell
 - [x] Closing mogeung and reopening it returns the *same* shells: the scrollback
       is there, and a command left running is still running
