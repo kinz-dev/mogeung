@@ -2,7 +2,7 @@
 title: In-app terminal
 status: shipped
 updated: 2026-09-29
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64, R-B66]
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64, R-B66, R-B67]
 depends_on: []
 ---
 
@@ -44,6 +44,9 @@ depends_on: []
 > without the bar taking a row.
 > `Alt+PgUp` and `Alt+PgDn` step through a split's tabs from inside a shell,
 > since the grip keeps them out of sight (`R-B66`).
+> A split holding tabs draws them in its folded strip as segments, the one in
+> front in blue, so a tabbed split can be told from a plain one at a glance
+> (`R-B67`).
 
 ## Spec
 
@@ -90,6 +93,10 @@ depends on, and degrades without it rather than requiring it.
 - [x] From inside a shell, `Alt+PgUp` / `Alt+PgDn` bring the split's tab
       before or after to the front and put the keyboard in it, wrapping at
       either end (`R-B66`)
+- [ ] A split with more than one tab shows one segment per tab in its folded
+      strip, the front one in blue, and moves the blue as soon as the tab
+      changes; a single shell keeps the plain line (`R-B67` — seen in a
+      browser, not yet in the app)
 - [x] Moving the selection does not disturb, replace or close a shell
 - [x] Closing mogeung and reopening it returns the *same* shells: the scrollback
       is there, and a command left running is still running

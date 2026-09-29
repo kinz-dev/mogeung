@@ -554,6 +554,42 @@ textarea {
   transition-delay: 120ms;
 }
 
+/* A split holding tabs says so while folded. `R-B67`, asked 2026-09-29: *"not
+   obvious when there is a tabbed terminal"*, then *"option 1 with different
+   color for the selected tab"*. The folded strip draws the tabs themselves
+   as segments: the one in front solid blue (softer when its split is not the
+   one in front), the rest grey, a gap between each. Each keeps its tab's own
+   width, so a segment sits exactly where its tab opens on hover and nothing
+   moves when the bar unfolds. One shell in a split keeps the plain line.
+   **An overlay, `::before`, rather than the tab's own colour** — dockview
+   takes `::after` for its focus ring. The overlay fades on hover with the
+   bar's own delays, while its colour changes at once: a colour on the tab
+   would have taken those delays too, and `Alt+PgDn` (`R-B66`) moving the blue
+   a quarter-second late reads as the key not having worked. */
+[data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container:has(.dv-tab + .dv-tab) > * {
+  opacity: 1;
+}
+[data-shell-tiles] .dv-tabs-and-actions-container:has(.dv-tab + .dv-tab) .dv-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-color: var(--border-hover);
+  border-right: 2px solid var(--bg-panel);
+  transition: opacity var(--dur-fast) ease 250ms;
+}
+[data-shell-tiles] .dv-groupview.dv-active-group > .dv-tabs-and-actions-container .dv-tab.dv-active-tab::before {
+  background-color: var(--blue);
+}
+[data-shell-tiles] .dv-groupview.dv-inactive-group > .dv-tabs-and-actions-container .dv-tab.dv-active-tab::before {
+  background-color: color-mix(in srgb, var(--blue) 60%, var(--bg-panel));
+}
+[data-shell-tiles] .dv-tabs-and-actions-container:has(.dv-tab + .dv-tab):hover .dv-tab::before {
+  opacity: 0;
+  transition-delay: 120ms;
+}
+
 /* ------------------------------------------------------------------ */
 /* xterm                                                               */
 /* ------------------------------------------------------------------ */
