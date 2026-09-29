@@ -51,6 +51,7 @@ import {
   restoreShellLayout,
   setShellDock,
   SHELL_TILES_ATTR,
+  shellHue,
   shellLayoutKey,
   shellOfPane,
   shellPaneId,
@@ -174,7 +175,15 @@ function ShellPane(props: IDockviewPanelProps) {
  */
 function ShellTab(props: IDockviewPanelHeaderProps) {
   const name = shellOfPane(props.api.id);
-  return <DockviewDefaultTab {...props} closeActionOverride={() => name && closeShell(name)} />;
+  // Which colour this shell wears (`R-B68`); `index.css` paints it, on the
+  // tab and on its split's outline while it is in front.
+  return (
+    <DockviewDefaultTab
+      {...props}
+      data-shell-hue={name ? shellHue(name) : undefined}
+      closeActionOverride={() => name && closeShell(name)}
+    />
+  );
 }
 
 function ShellsEmpty() {

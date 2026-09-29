@@ -2,7 +2,7 @@
 title: In-app terminal
 status: shipped
 updated: 2026-09-29
-roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64, R-B66, R-B67]
+roadmap: [R-B31, R-B32, R-B33, R-B34, R-B56, R-B57, R-B60, R-B61, R-B62, R-B63, R-B64, R-B66, R-B67, R-B68]
 depends_on: []
 ---
 
@@ -47,6 +47,8 @@ depends_on: []
 > A split holding tabs draws them in its folded strip as segments, the one in
 > front in blue, so a tabbed split can be told from a plain one at a glance
 > (`R-B67`).
+> Each shell has a colour of its own, and a split's outline takes the colour
+> of its front tab, so switching tabs changes the outline too (`R-B68`).
 
 ## Spec
 
@@ -97,6 +99,9 @@ depends on, and degrades without it rather than requiring it.
       strip, the front one in blue, and moves the blue as soon as the tab
       changes; a single shell keeps the plain line (`R-B67` — seen in a
       browser, not yet in the app)
+- [ ] Each shell shows its own colour in the grip, and its split's outline
+      changes to the front tab's colour as the tab changes (`R-B68` — seen in
+      a browser, not yet in the app)
 - [x] Moving the selection does not disturb, replace or close a shell
 - [x] Closing mogeung and reopening it returns the *same* shells: the scrollback
       is there, and a command left running is still running

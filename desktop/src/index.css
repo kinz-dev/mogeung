@@ -536,8 +536,11 @@ textarea {
   cursor: grab;
   transition: height var(--dur-fast) ease 250ms, background-color var(--dur-fast) ease 250ms;
 }
+[data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container {
+  background-color: color-mix(in srgb, var(--shell-ring) 30%, var(--bg-panel));
+}
 [data-shell-tiles] .dv-groupview.dv-active-group > .dv-tabs-and-actions-container {
-  background-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  background-color: var(--shell-ring);
 }
 [data-shell-tiles] .dv-groupview > .dv-tabs-and-actions-container > * {
   opacity: 0;
@@ -575,19 +578,50 @@ textarea {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background-color: var(--border-hover);
+  background-color: color-mix(in srgb, var(--shell-hue) 30%, var(--bg-panel));
   border-right: 2px solid var(--bg-panel);
   transition: opacity var(--dur-fast) ease 250ms;
 }
 [data-shell-tiles] .dv-groupview.dv-active-group > .dv-tabs-and-actions-container .dv-tab.dv-active-tab::before {
-  background-color: var(--blue);
+  background-color: var(--shell-hue);
 }
 [data-shell-tiles] .dv-groupview.dv-inactive-group > .dv-tabs-and-actions-container .dv-tab.dv-active-tab::before {
-  background-color: color-mix(in srgb, var(--blue) 60%, var(--bg-panel));
+  background-color: color-mix(in srgb, var(--shell-hue) 65%, var(--bg-panel));
 }
 [data-shell-tiles] .dv-tabs-and-actions-container:has(.dv-tab + .dv-tab):hover .dv-tab::before {
   opacity: 0;
   transition-delay: 120ms;
+}
+
+/* Each shell's colour, and its split's outline in the colour of the tab in
+   front. `R-B68`, asked 2026-09-29: *"I want it auto change the outline color
+   as well as the tab color, so that I know which tab I am in"*. One blue for
+   every front tab said that *a* tab was in front, never which. The tab says
+   which colour with `data-shell-hue` (`shellHue`, from the shell's name, so
+   closing one never repaints the rest); a test holds this list to
+   `SHELL_HUES`. The split reads its front tab's colour through `:has`, so
+   switching tabs — `Alt+PgUp`/`Alt+PgDn`, a click — recolours the outline,
+   the strip and the expanded bar's top rule together. */
+[data-shell-tiles] .dv-groupview {
+  --shell-ring: var(--blue);
+}
+[data-shell-tiles] .dv-tab:has(.dv-default-tab[data-shell-hue="blue"]) { --shell-hue: var(--blue); }
+[data-shell-tiles] .dv-tab:has(.dv-default-tab[data-shell-hue="green"]) { --shell-hue: var(--green); }
+[data-shell-tiles] .dv-tab:has(.dv-default-tab[data-shell-hue="amber"]) { --shell-hue: var(--amber); }
+[data-shell-tiles] .dv-tab:has(.dv-default-tab[data-shell-hue="purple"]) { --shell-hue: var(--purple); }
+[data-shell-tiles] .dv-tab:has(.dv-default-tab[data-shell-hue="orange"]) { --shell-hue: var(--urgent); }
+[data-shell-tiles] .dv-tab:has(.dv-default-tab[data-shell-hue="red"]) { --shell-hue: var(--red); }
+[data-shell-tiles] .dv-groupview:has(> .dv-tabs-and-actions-container .dv-active-tab .dv-default-tab[data-shell-hue="blue"]) { --shell-ring: var(--blue); }
+[data-shell-tiles] .dv-groupview:has(> .dv-tabs-and-actions-container .dv-active-tab .dv-default-tab[data-shell-hue="green"]) { --shell-ring: var(--green); }
+[data-shell-tiles] .dv-groupview:has(> .dv-tabs-and-actions-container .dv-active-tab .dv-default-tab[data-shell-hue="amber"]) { --shell-ring: var(--amber); }
+[data-shell-tiles] .dv-groupview:has(> .dv-tabs-and-actions-container .dv-active-tab .dv-default-tab[data-shell-hue="purple"]) { --shell-ring: var(--purple); }
+[data-shell-tiles] .dv-groupview:has(> .dv-tabs-and-actions-container .dv-active-tab .dv-default-tab[data-shell-hue="orange"]) { --shell-ring: var(--urgent); }
+[data-shell-tiles] .dv-groupview:has(> .dv-tabs-and-actions-container .dv-active-tab .dv-default-tab[data-shell-hue="red"]) { --shell-ring: var(--red); }
+[data-shell-tiles] .dv-groupview.dv-active-group {
+  box-shadow: inset 0 0 0 1px var(--shell-ring);
+}
+[data-shell-tiles] .dv-tab.dv-active-tab {
+  box-shadow: inset 0 2px 0 var(--shell-hue, var(--blue));
 }
 
 /* ------------------------------------------------------------------ */

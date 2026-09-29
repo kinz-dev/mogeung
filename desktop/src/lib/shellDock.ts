@@ -279,3 +279,24 @@ export function cycleShellTab(step: 1 | -1): void {
   next.api.setActive();
   landIn(group);
 }
+
+/**
+ * The colours a shell can wear, and `index.css` has a rule for each. `R-B68`,
+ * asked 2026-09-29: *"I want it auto change the outline color as well as the
+ * tab color, so that I know which tab I am in"*. One blue for every front tab
+ * said that *a* tab was in front, never which; a colour per shell, worn by its
+ * segment in the grip and by its split's outline while it is in front, does.
+ */
+export const SHELL_HUES = ["blue", "green", "amber", "purple", "orange", "red"] as const;
+export type ShellHue = (typeof SHELL_HUES)[number];
+
+/**
+ * A shell's colour, from its **name** and never its place — closing or moving
+ * one must not repaint the others. `mog-N` takes the Nth, so the first six
+ * differ; any other name is hashed.
+ */
+export function shellHue(name: string): ShellHue {
+  const n = /(\d+)$/.exec(name);
+  const i = n ? Number(n[1]) : [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 0);
+  return SHELL_HUES[i % SHELL_HUES.length];
+}

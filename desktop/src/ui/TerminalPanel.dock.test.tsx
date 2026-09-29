@@ -19,7 +19,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { DockviewComponent, type DockviewApi } from "dockview";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
-import { restoreShellLayout, shellLayoutKey, splitShell, syncShells, type Shell } from "@/lib/shellDock";
+import { readFileSync } from "node:fs";
+import { SHELL_HUES, restoreShellLayout, shellHue, shellLayoutKey, splitShell, syncShells, type Shell } from "@/lib/shellDock";
 import { ACTIONS, bindKeys, defaultKeys, formatChord } from "@/lib/keymap";
 
 /** Each mounted shell's `onExit`, by pty id — the pty closing, simulated. */
@@ -214,6 +215,41 @@ describe("the terminal panel as a dock", () => {
     withShells([]);
     render(<TerminalPanel />);
     expect(screen.getByText("no shells open")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Each shell wears a colour of its own, and its split's outline wears the
+ * colour of the tab in front. `R-B68`, asked 2026-09-29: *"I want it auto
+ * change the outline color as well as the tab color, so that I know which tab
+ * I am in"* — one blue for every front tab said *a* tab was in front, not
+ * which. The tab says which colour; `index.css` paints it, as with the tags.
+ */
+describe("a shell's colour", () => {
+  it("is carried on each shell's tab, and differs between shells", () => {
+    withShells([
+      ["mog-0", "/w/alpha"],
+      ["mog-1", "/w/beta"],
+    ]);
+    const { container } = render(<TerminalPanel />);
+    const hues = [...container.querySelectorAll(".dv-default-tab")].map((t) => t.getAttribute("data-shell-hue"));
+    expect(hues).toEqual([shellHue("mog-0"), shellHue("mog-1")]);
+    expect(hues[0]).not.toBe(hues[1]);
+  });
+
+  /** From the name, never the position: closing a shell must not repaint the rest. */
+  it("belongs to the shell, not to where it sits", () => {
+    expect(shellHue("mog-7")).toBe(SHELL_HUES[7 % SHELL_HUES.length]);
+    expect(new Set(SHELL_HUES.map((_, i) => shellHue(`mog-${i}`))).size).toBe(SHELL_HUES.length);
+    expect(SHELL_HUES).toContain(shellHue("build"));
+  });
+
+  it("has a rule for each colour: the tab's own, and the outline it gives its split", () => {
+    const css = readFileSync("src/index.css", "utf8");
+    for (const hue of SHELL_HUES) {
+      expect(css).toContain(`.dv-default-tab[data-shell-hue="${hue}"]`);
+      expect(css).toContain(`.dv-active-tab .dv-default-tab[data-shell-hue="${hue}"]`);
+    }
   });
 });
 
