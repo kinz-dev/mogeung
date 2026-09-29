@@ -129,16 +129,31 @@ export function filePaneId(session: string, path: string, rev: string | null): s
   return `${FILE_PREFIX}${session}:${rev ?? ""}:${path}`;
 }
 
+/**
+ * Where the session ends at the front of a pane id's `rest`, or `-1`.
+ *
+ * A followed session's id is `@<machine>:<id>` (`R-I21`) — **one** session
+ * with a colon in it, so the session runs to the *second* colon. Splitting at
+ * the first read session `@<machine>` and revision `<id>`, and a file opened
+ * from a remote session showed nothing (`R-I26`). The daemon's
+ * `split_mirrored` reads the same shape: neither half holds a colon.
+ */
+function sessionEnd(rest: string): number {
+  const first = rest.indexOf(":");
+  if (first < 0 || !rest.startsWith("@")) return first;
+  return rest.indexOf(":", first + 1);
+}
+
 /** The three fields back out of an id, or `null` if it is not a file pane. */
 export function parseFilePaneId(id: string): { session: string; path: string; rev: string | null } | null {
   if (!id.startsWith(FILE_PREFIX)) return null;
   const rest = id.slice(FILE_PREFIX.length);
-  const a = rest.indexOf(":");
+  const a = sessionEnd(rest);
   if (a < 0) return null;
   const b = rest.indexOf(":", a + 1);
   if (b < 0) return null;
-  // The path is whatever is left, colons and all — split from the left exactly
-  // twice, because a session id and a sha cannot contain one and a path can.
+  // The path is whatever is left, colons and all — the session is found by
+  // `sessionEnd`, a sha cannot hold a colon, and a path can.
   return { session: rest.slice(0, a), rev: rest.slice(a + 1, b) || null, path: rest.slice(b + 1) };
 }
 
@@ -193,12 +208,12 @@ export function diffPaneId(session: string, rev: string, path: string): string {
 export function parseDiffPaneId(id: string): { session: string; rev: string; path: string } | null {
   if (!id.startsWith(DIFF_PREFIX)) return null;
   const rest = id.slice(DIFF_PREFIX.length);
-  const a = rest.indexOf(":");
+  const a = sessionEnd(rest);
   if (a < 0) return null;
   const b = rest.indexOf(":", a + 1);
   if (b < 0) return null;
-  // Split from the left exactly twice: a session id and a rev cannot hold a
-  // colon, and a path can.
+  // The session by `sessionEnd` — a followed one holds a colon (`R-I26`) — and
+  // then the rev, which cannot; the path keeps any colons it has.
   return { session: rest.slice(0, a), rev: rest.slice(a + 1, b), path: rest.slice(b + 1) };
 }
 

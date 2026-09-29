@@ -1,8 +1,8 @@
 ---
 title: Daemon federation — every machine's sessions in this window, as if they were local
 status: shipped
-updated: 2026-09-23
-roadmap: [R-I18, R-I21, R-I22, R-I23, R-I24]
+updated: 2026-09-29
+roadmap: [R-I18, R-I21, R-I22, R-I23, R-I24, R-I26]
 depends_on: [A45, A24]
 branch: daemon-federation
 ---
@@ -190,3 +190,12 @@ for a week of use were waived rather than met.
 machine; the Agent pane attaching over ssh to a peer's `ssh_target` from the
 desktop build (the browser has no pty); three peers and Wi-Fi power save for
 a week.
+
+**2026-09-29 — a followed session's files would not open (`R-I26`).** Go to
+file listed them and opening one showed nothing. The relay was sound — checked
+against the running daemon, a `fetch_file` for a Mac mini session came back
+with its content — but the window names a file pane `file:<session>:<rev>:<path>`
+and read it back by splitting at the first two colons, assuming a session id
+has none. A mirrored id, `@<machine>:<id>`, has one. Any other id that embeds a
+session and is split at colons would have the same fault; the file and diff
+panes were the only two.
