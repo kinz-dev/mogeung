@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, FolderOpen, GitBranch, PictureInPicture2, SquareArrowDownLeft, SquarePlus, X } from "lucide-react";
+import { Anchor, FolderOpen, GitBranch, Info, PictureInPicture2, SquareArrowDownLeft, SquarePlus, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
@@ -25,7 +25,7 @@ import { sessionLabel } from "@/wire/types";
 import { tagLabel } from "@/lib/tags";
 import { Chip, Dim, IconButton } from "@/ui/primitives";
 import { IntellijGlyph } from "@/ui/IdeGlyphs";
-import { hostLabel, reachForSession } from "@/lib/tmux";
+import { hostLabel, reachForSession, tmuxSessionOf } from "@/lib/tmux";
 import { closeFile, revealInFiles } from "@/lib/explorer";
 import { closeAllTabs, closeOtherTabs, closeTab } from "@/lib/closeTabs";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
@@ -347,10 +347,21 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
 
   return (
     <div className="flex h-full items-center gap-1 pr-1">
+      {/*
+        Behind an `i` since 2026-09-29: *"Can we hide this "tmux target" string
+        and show it with a small "i" info icon"*. It was the widest thing in
+        the header and the least often wanted, so it is a hover away now, with
+        the line that uses it.
+      */}
       {session?.tmux_target && (
-        <Dim className="hidden font-mono text-2xs sm:block" title="the tmux target this pane is attached to">
-          {session.tmux_target}
-        </Dim>
+        <span
+          role="img"
+          aria-label="tmux target"
+          title={`attached to tmux ${session.tmux_target}\ntmux attach -t ${tmuxSessionOf(session.tmux_target)} reaches it from any terminal`}
+          className="flex h-5 w-5 cursor-help items-center justify-center text-[var(--dim)] hover:text-[var(--text)]"
+        >
+          <Info className="h-3 w-3" />
+        </span>
       )}
       {host && (
         <Chip color="var(--amber)" title="tmux runs on that machine, reached over ssh">

@@ -93,8 +93,13 @@ export function attachArgs(target: string): string[] {
  * into `_`, so the session is everything before the last colon.
  */
 export function isOwnSession(target: string): boolean {
+  return tmuxSessionOf(target).startsWith("mogeung-");
+}
+
+/** The session a `session:window.pane` target names — what `tmux attach -t` takes. */
+export function tmuxSessionOf(target: string): string {
   const colon = target.lastIndexOf(":");
-  return (colon >= 0 ? target.slice(0, colon) : target).startsWith("mogeung-");
+  return colon >= 0 ? target.slice(0, colon) : target;
 }
 
 /**

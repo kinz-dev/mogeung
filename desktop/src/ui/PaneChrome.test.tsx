@@ -192,6 +192,26 @@ describe("the branch on the pane header", () => {
     expect(screen.queryByTitle(/on branch/)).toBeNull();
   });
 
+  /**
+   * The tmux target is behind an `i`, asked 2026-09-29: *"Can we hide this
+   * "tmux target" string and show it with a small "i" info icon"*. A
+   * `mogeung-mogeung-0928-213142:0` was the widest thing in the header and
+   * the least often wanted. Still one hover away, with the line that uses it.
+   */
+  it("keeps the tmux target behind an info icon", () => {
+    const target = "mogeung-mogeung-0928-213142:0";
+    actions({ tmux_target: target });
+    expect(screen.queryByText(target)).toBeNull();
+    const icon = screen.getByLabelText(/tmux target/);
+    expect(icon.getAttribute("title")).toContain(target);
+    expect(icon.getAttribute("title")).toContain("tmux attach -t mogeung-mogeung-0928-213142");
+  });
+
+  it("has no info icon for a session with no tmux target", () => {
+    actions({ tmux_target: null });
+    expect(screen.queryByLabelText(/tmux target/)).toBeNull();
+  });
+
   /** A held pane names *its* branch, not the selected session's. */
   it("follows the pane's own session when the pane is held", () => {
     useStore.setState({
