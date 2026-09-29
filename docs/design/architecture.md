@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-25
+updated: 2026-09-29
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/lan.rs
@@ -760,6 +760,13 @@ remote is decided by identity rather than by the address dialled (`R-I5`).
 `desktop/src-tauri` is deliberately **its own cargo workspace**. As a member it
 would put Tauri's Linux system dependencies in the path of
 `cargo test --workspace`, and that command is a gate for the daemon.
+
+**A notice is a warning or a toast, never both** (`R-J114`, 2026-09-29). The
+store's `notices` carry both kinds, and only an `error` is a warning: counted in
+the status bar, listed in the Warnings window, kept in the log. An `info` —
+*copied*, *up to date* — shows as a toast and is not counted or listed.
+`capNotices` keeps fifty of the one and ten of the other, so a burst of toasts
+cannot push a real failure out of the log.
 
 ### Chrome and panes
 
