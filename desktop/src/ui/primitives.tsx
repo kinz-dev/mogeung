@@ -138,11 +138,15 @@ export function Button({
   variant = "ghost",
   size = "md",
   type = "button",
+  autoFocus,
 }: {
   children: React.ReactNode;
   /** Handed on for the same reason `IconButton` does — a button inside a
    *  clickable row needs to be able to stop it. */
   onClick?: (e: React.MouseEvent) => void;
+  /** Take focus on mount — a dialog's answer, so Enter gives it. `Dialog`
+   *  leaves focus where a child put it. */
+  autoFocus?: boolean;
   title?: string;
   disabled?: boolean;
   active?: boolean;
@@ -157,6 +161,7 @@ export function Button({
       title={title}
       disabled={disabled}
       onClick={onClick}
+      autoFocus={autoFocus}
       aria-pressed={active}
       className={cn(
         "inline-flex shrink-0 items-center justify-center gap-1 rounded-sm whitespace-nowrap",

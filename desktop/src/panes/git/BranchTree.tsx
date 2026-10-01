@@ -242,8 +242,10 @@ export function BranchTree({ id, repoRoot }: { id: string; repoRoot: string }) {
               ))}
             </ul>
             <div className="flex items-center gap-2">
+              {/* Focused on open, as the Branches popup's warning is. */}
               <Button
                 variant="solid"
+                autoFocus
                 onClick={() => {
                   switchTo(id, checkout.ref);
                   setCheckout(null);

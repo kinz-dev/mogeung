@@ -5,7 +5,16 @@
  * whatever opened it on close. All four are what separates a dialog from a div
  * that happens to be on top — and all four were missing from the only overlay
  * this app had.
+ *
+ * And Tab stays inside, cycling. Without that, the third Tab from a two-button
+ * confirmation walked out of it into whatever was behind — the Branches popup's
+ * search box, for the checkout warning — while the dialog still sat on top
+ * claiming to be modal. Asked 2026-10-01.
  */
+
+/** What Tab can land on. Disabled controls are skipped. */
+const TABBABLE =
+  'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
@@ -35,7 +44,12 @@ export function Dialog({
   resizable?: { width: number; height: number; onResized: (size: { width: number; height: number }) => void };
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const returnTo = useRef<HTMLElement | null>(null);
+  // Read at first render, not in the mount effect: a child with `autoFocus`
+  // takes focus during commit, before any effect runs, and an effect would
+  // record that child — which is gone by close, dropping focus on the body.
+  const returnTo = useRef<HTMLElement | null>(
+    typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null),
+  );
 
   // Held in a ref so the effects below can depend on **nothing**.
   //
@@ -66,13 +80,20 @@ export function Dialog({
 
   // Mount and unmount only.
   useEffect(() => {
-    returnTo.current = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
     // Only if nothing inside has claimed focus already — an autofocused input
     // is the common case and must win.
-    if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
+    if (!panel?.contains(document.activeElement)) panel?.focus();
     return () => {
       // Back where you were. A dialog that drops focus on the body leaves the
       // keyboard nowhere, which in a keyboard-first tool is a dead end.
+      //
+      // **Only once the panel has really left the page.** StrictMode runs
+      // this cleanup and the effect again on a mount that is not ending; a
+      // restore then handed focus back to the opener, the re-run found it
+      // outside and took it for the panel, and an autofocused button lost it
+      // before anyone saw it. A real unmount has detached the node by now.
+      if (panel?.isConnected) return;
       returnTo.current?.focus?.();
     };
   }, []);
@@ -82,6 +103,8 @@ export function Dialog({
       if (e.key === "Escape") {
         e.stopPropagation();
         closeRef.current();
+      } else if (e.key === "Tab") {
+        trapTab(e, panelRef.current);
       }
     };
     // Capture, so the window's own Escape binding does not act first.
@@ -130,4 +153,29 @@ export function Dialog({
       </div>
     </div>
   );
+}
+
+/**
+ * Keep Tab inside `panel`, wrapping at either end.
+ *
+ * Only the topmost modal acts: a dialog opened over another installs its own
+ * listener, and two traps each pulling focus home would fight over every key.
+ */
+function trapTab(e: KeyboardEvent, panel: HTMLElement | null) {
+  if (!panel) return;
+  const modals = document.querySelectorAll('[aria-modal="true"]');
+  if (modals[modals.length - 1] !== panel) return;
+  // Hidden by attribute rather than by layout: layout is a question jsdom
+  // cannot answer, and a filter on it kept only the focused button.
+  const all = [...panel.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => !el.closest("[hidden], [inert]"));
+  if (all.length === 0) {
+    e.preventDefault();
+    return;
+  }
+  const at = all.indexOf(document.activeElement as HTMLElement);
+  const next = e.shiftKey
+    ? at <= 0 ? all[all.length - 1] : all[at - 1]
+    : at === -1 || at === all.length - 1 ? all[0] : all[at + 1];
+  e.preventDefault();
+  next.focus();
 }

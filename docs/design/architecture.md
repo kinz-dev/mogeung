@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-09-29
+updated: 2026-10-01
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/lan.rs
@@ -261,13 +261,15 @@ isolation action.
 
 ## The scan loop
 
-Once, before the first scan: the repair pass
-(`AppState::repair_reingested_history`, gated on `store::SCHEMA_VERSION`). It
-runs first so the pass that follows folds onto a clean record rather than on top
-of a duplicated one — see
-[data-model.md](data-model.md#repair). A failure is logged and start-up
-continues: a database that cannot be repaired is still a database worth
-watching from.
+Once, before the first scan, the one-off passes `PRAGMA user_version` gates:
+the repair (`AppState::repair_reingested_history`, version 1) and then the
+artifact backfill (`AppState::backfill_artifacts`, version 2, `R-J115`). They
+run first so the pass that follows folds onto a clean, complete record rather
+than on top of a duplicated or partial one — see
+[data-model.md](data-model.md#repair). Each checks its own version number, so a
+database already at 1 is not repaired again when the constant moves. A failure
+is logged and start-up continues: a database that cannot be repaired is still a
+database worth watching from.
 
 Then every `--poll-ms` (default 1500):
 
@@ -944,7 +946,10 @@ a button on. Opening it is the desktop shell's first launch that is not a pty,
 and it is deliberately the narrowest one that does the job: `open_local_url`
 accepts `http://` on a **parsed** loopback host and refuses everything else,
 rather than adding the general opener plugin and giving the webview *open
-anything*.
+anything*. The second, `open_artifact_url` (`R-J115`), is as narrow: exactly
+`https://claude.ai/artifact/` and 22 base58 characters, the one shape the
+daemon builds for a session's published pages. Both hand the checked URL to the
+desktop's own opener through one function.
 
 **Where it forwards is reported, never gated.** A proxy on `127.0.0.1` passes
 ADR-0031 clause 3 without asking. mogeung refuses to extend the gate — routing

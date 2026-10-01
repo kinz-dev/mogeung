@@ -10,6 +10,7 @@
  * be a way around a guard the pane has.
  */
 
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BranchesPopup } from "@/ui/BranchesPopup";
@@ -71,7 +72,13 @@ function open(opts: { live?: boolean; repo?: boolean; repos?: string[] } = {}) {
     notices: [],
     send: ((m: ClientMsg) => sent.push(m)) as never,
   } as never);
-  return render(<BranchesPopup />);
+  // Under StrictMode, as `main.tsx` renders the window: its doubled effects
+  // are what took focus off the warning's autofocused button.
+  return render(
+    <StrictMode>
+      <BranchesPopup />
+    </StrictMode>,
+  );
 }
 
 const box = () => screen.getByPlaceholderText(/Search for branches/);
@@ -132,6 +139,39 @@ describe("the branches popup", () => {
     expect(sent).toEqual([
       { cmd: "git_switch", session_id: "s1", repo: null, name: "claude/linear-contract", detach: false },
     ]);
+  });
+
+  /**
+   * Answerable from the keyboard — asked 2026-10-01. The confirm button has
+   * focus as the warning opens, so Enter takes it; Tab goes to Cancel and
+   * comes back round rather than leaving for the popup underneath.
+   */
+  it("opens the warning with its confirm focused, and keeps Tab inside it", () => {
+    open({ live: true });
+    type("contract");
+    fireEvent.click(screen.getByText("linear-contract"));
+    const confirm = screen.getByText(/Check out claude\/linear-contract/).closest("button")!;
+    expect(document.activeElement).toBe(confirm);
+
+    const cancel = screen.getByText("Cancel").closest("button")!;
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+    // Past the last stop it wraps to the first — the dialog's own ✕ — and
+    // never to the popup's search box behind it.
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(screen.getByRole("dialog", { name: /while sessions are running/ }).contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(confirm);
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancel);
+
+    // Escape answers no, and the keyboard is back in the popup's search box —
+    // not on the body, where the confirm's own focus would have left it.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: /while sessions are running/ })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByPlaceholderText(/Search for branches/));
+    expect(sent).toEqual([]);
   });
 
   /** The one daemon gap either screen had, and the only detach in the window. */

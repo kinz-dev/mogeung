@@ -514,8 +514,12 @@ export function BranchesPopup() {
               ))}
             </ul>
             <div className="flex items-center gap-2">
+              {/* Focused on open, so Enter confirms and Tab reaches Cancel —
+                  asked 2026-10-01. The warning above is the deliberate act;
+                  reaching for the mouse to answer it was not. */}
               <Button
                 variant="outline"
+                autoFocus
                 className="border-[var(--amber)] text-[var(--amber)]"
                 onClick={() => {
                   if (id) switchTo(id, checkout.ref, checkout.detach);
