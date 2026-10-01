@@ -448,6 +448,13 @@ pub enum ClientMsg {
         #[serde(default)]
         about: Option<AskAbout>,
     },
+    /// Stop the chat answer `id` where it is. `R-J118`.
+    ///
+    /// The daemon ends the request to the model — which stops it generating —
+    /// and answers with the usual [`ServerMsg::ModelReply`], `stopped` set and
+    /// carrying what had arrived. Nothing comes back for an id that is not in
+    /// flight: it already finished, and its reply is on the way or arrived.
+    ModelStop { id: String },
 
     /// Ask a model which changed file to read first. `R-O3`.
     ///
@@ -1519,6 +1526,10 @@ pub enum ServerMsg {
         /// render *the agent said it did this* as *this is why it was done*.
         #[serde(default)]
         narration: bool,
+        /// Ended by `model_stop` rather than by the model. `text` is what had
+        /// arrived by then, and may be empty. `R-J118`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stopped: bool,
     },
     /// A model's reading order for one session's diff. `R-O3`.
     ///

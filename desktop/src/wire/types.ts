@@ -1293,6 +1293,9 @@ export type ClientMsg =
       /** What the question is about, when it is about something. `R-O4`. */
       about?: AskAbout;
     }
+  /** Stop the chat answer `id` where it is; its `model_reply` comes back
+   *  with `stopped` and the words so far. `R-J118`. */
+  | { cmd: "model_stop"; id: string }
   /** Ask a model which changed file to read first. `R-O3`. */
   | { cmd: "reading_guide"; session_id: SessionId }
   | { cmd: "chat_list" }
@@ -1506,6 +1509,9 @@ export type ServerMsg =
       /** Every citation is the assistant narrating itself. The **daemon**
        *  decides this, so no client can render it as a rationale. */
       narration?: boolean;
+      /** Ended by `model_stop`, not by the model: `text` is what had arrived,
+       *  and may be empty. Absent means it finished. `R-J118`. */
+      stopped?: boolean;
     }
   /**
    * The config file, in answer to both `config_get` and `config_save` — after

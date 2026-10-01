@@ -584,3 +584,81 @@ describe("reading while it answers", () => {
     expect(jump()).toBeNull();
   });
 });
+
+/**
+ * Stop, asked 2026-10-01 — `R-J118`. The daemon side (hanging up on the model,
+ * keeping what arrived) is `model.rs`'s test; what is asserted here is the
+ * window's half: a button that exists only while something is out, asks for
+ * every answer still out, and a stopped answer that says so and is handled
+ * right as context for the next question.
+ */
+describe("stopping an answer", () => {
+  const ask = (text: string) => act(() => useStore.getState().askModel(text));
+  const lastChat = () =>
+    [...sent].reverse().find((m) => m.cmd === "model_chat") as
+      | Extract<ClientMsg, { cmd: "model_chat" }>
+      | undefined;
+  const reply = (id: string, text: string, stopped: boolean) =>
+    act(() =>
+      useStore.getState().ingest({ ev: "model_reply", id, text, error: null, model: "m", elapsed_ms: 900, stopped }),
+    );
+
+  beforeEach(() => {
+    sent.length = 0;
+    useStore.setState({
+      chat: [],
+      health: health({}),
+      conversationId: null,
+      showChatHistory: false,
+      send: (m) => void sent.push(m),
+    });
+  });
+
+  it("offers stop only while an answer is out, and stops every one", () => {
+    render(<ChatTool />);
+    expect(screen.queryByTitle(/stop the answer/)).toBeNull();
+    ask("first");
+    const first = lastChat()!.id;
+    ask("second");
+    const second = lastChat()!.id;
+    fireEvent.click(screen.getByTitle(/stop the answer/));
+    expect(sent.filter((m) => m.cmd === "model_stop")).toEqual([
+      { cmd: "model_stop", id: first },
+      { cmd: "model_stop", id: second },
+    ]);
+    reply(first, "half an ans", true);
+    reply(second, "", true);
+    expect(screen.queryByTitle(/stop the answer/)).toBeNull();
+  });
+
+  it("marks a stopped answer, and says so when nothing had arrived", () => {
+    render(<ChatTool />);
+    ask("first");
+    const first = lastChat()!.id;
+    ask("second");
+    const second = lastChat()!.id;
+    reply(first, "half an ans", true);
+    reply(second, "", true);
+    expect(screen.getByText("half an ans")).toBeInTheDocument();
+    expect(screen.getByText(/· stopped/)).toBeInTheDocument();
+    expect(screen.getByText("stopped before any answer arrived")).toBeInTheDocument();
+  });
+
+  /**
+   * What you read is what the next question follows on from; a question that
+   * got no answer at all goes, both halves, as a failed one does.
+   */
+  it("keeps a part answer as context and drops an empty one with its question", () => {
+    render(<ChatTool />);
+    ask("first");
+    reply(lastChat()!.id, "half an ans", true);
+    ask("second");
+    reply(lastChat()!.id, "", true);
+    ask("third");
+    expect(lastChat()!.messages).toEqual([
+      { role: "user", content: "first" },
+      { role: "assistant", content: "half an ans" },
+      { role: "user", content: "third" },
+    ]);
+  });
+});

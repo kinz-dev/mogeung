@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-09-23
+updated: 2026-10-01
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -459,7 +459,16 @@ since it was written.
 | Direction | Message | Notes |
 |---|---|---|
 | → | `model_chat { id, messages }` | The whole conversation, every time |
-| ← | `model_reply { id, text, error, model, elapsed_ms }` | Asking socket only |
+| → | `model_stop { id }` | Stop that answer where it is (`R-J118`) |
+| ← | `model_reply { id, text, error, model, elapsed_ms, stopped? }` | Asking socket only |
+
+**`model_stop` gets no reply of its own.** The ask it names answers as it
+always does, with `stopped: true` and the words that had arrived — so a stop
+and a finish race to one `model_reply` rather than two, and a stop for an id
+already answered has nothing to say. The daemon kills the `curl` carrying the
+request, which closes the connection and is what makes the model server stop
+generating. Here, never forwarded: like the chat itself it is about this
+machine's model.
 
 **`model_chat` is the only command that carries free-form text.** Everything
 else names a thing the daemon already has — a session, a config id, a path, a

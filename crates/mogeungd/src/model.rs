@@ -16,8 +16,10 @@
 //! request path, started by something a person did.
 
 use mogeung_core::model::{self as policy, ChatTurn, ModelHealth, ModelSettings};
+use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 /// How long a single ask may take before curl gives up. Generous, because a
 /// local model on a cold cache is slow in a way a web request is not — and the
@@ -29,6 +31,10 @@ const CONNECT_TIMEOUT_SECS: u64 = 5;
 #[derive(Debug, Default)]
 pub struct Model {
     inner: Mutex<Inner>,
+    /// The chat answers in flight, by the client's id, each with the bell that
+    /// stops it. `R-J118`. Registered for the life of one answer and removed
+    /// when it ends, however it ends.
+    stops: Mutex<HashMap<String, Arc<Notify>>>,
 }
 
 #[derive(Debug, Default)]
@@ -54,6 +60,7 @@ impl Model {
                 chat_allowed: true,
                 ..Inner::default()
             }),
+            stops: Mutex::new(HashMap::new()),
         }
     }
 
@@ -116,8 +123,11 @@ impl Model {
     /// `from_this_machine` is whether the client that asked is on this
     /// machine — ADR-0030 clause 4 as amended 2026-09-23 refuses the chat to
     /// any other client, whatever the daemon is bound to (`R-J103`).
+    ///
+    /// `id` is the client's, and [`Model::stop`] with it ends the answer early.
     pub async fn chat_streaming<F>(
         &self,
+        id: &str,
         messages: &[ChatTurn],
         from_this_machine: bool,
         mut on_delta: F,
@@ -125,7 +135,26 @@ impl Model {
     where
         F: FnMut(String) + Send,
     {
-        self.ask(messages, from_this_machine, &mut on_delta).await
+        let bell = Arc::new(Notify::new());
+        self.stops.lock().expect("stops lock").insert(id.to_string(), bell.clone());
+        let answer = self.ask(messages, from_this_machine, &mut on_delta, Some(&bell)).await;
+        self.stops.lock().expect("stops lock").remove(id);
+        answer
+    }
+
+    /// Stop the chat answer `id`, keeping what has arrived. `R-J118`.
+    ///
+    /// `false` when no such answer is in flight — it finished, or never began.
+    /// A stop that lands between two reads is not lost: `notify_one` leaves a
+    /// permit for the next wait.
+    pub fn stop(&self, id: &str) -> bool {
+        match self.stops.lock().expect("stops lock").get(id) {
+            Some(bell) => {
+                bell.notify_one();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Ask, and answer. `Err` is a sentence for a human — every failure here is
@@ -134,12 +163,12 @@ impl Model {
     /// Judged by the bind alone: for the daemon's own asks and the binaries.
     /// A client's request goes through [`Model::chat_as`].
     pub async fn chat(&self, messages: &[ChatTurn]) -> Result<Answer, String> {
-        self.ask(messages, false, &mut |_| {}).await
+        self.ask(messages, false, &mut |_| {}, None).await
     }
 
     /// Ask on behalf of a client, which may be on this machine. `R-J103`.
     pub async fn chat_as(&self, messages: &[ChatTurn], from_this_machine: bool) -> Result<Answer, String> {
-        self.ask(messages, from_this_machine, &mut |_| {}).await
+        self.ask(messages, from_this_machine, &mut |_| {}, None).await
     }
 
     async fn ask(
@@ -147,6 +176,7 @@ impl Model {
         messages: &[ChatTurn],
         from_this_machine: bool,
         on_delta: &mut (dyn FnMut(String) + Send),
+        stop: Option<&Notify>,
     ) -> Result<Answer, String> {
         // Clause 4 keeps a daemon reachable from the LAN from becoming a
         // general-purpose LLM proxy *for the LAN*. The window on this machine
@@ -170,14 +200,14 @@ impl Model {
         let url = policy::chat_url(&base);
         let body = chat_body(settings.model.as_deref(), messages);
         let started = std::time::Instant::now();
-        let outcome = post_streaming(&url, &body, on_delta).await;
+        let outcome = post_streaming(&url, &body, on_delta, stop).await;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let mut g = self.inner.lock().expect("model lock");
         match outcome {
-            Ok((text, model)) => {
+            Ok(Streamed { text, model, stopped }) => {
                 g.last_error = None;
                 g.last_ok_ms = Some(elapsed_ms);
-                Ok(Answer { text, model, elapsed_ms })
+                Ok(Answer { text, model, elapsed_ms, stopped })
             }
             Err(e) => {
                 g.last_error = Some(e.clone());
@@ -195,6 +225,17 @@ pub struct Answer {
     /// free to route `default` wherever it likes, and the panel says so.
     pub model: String,
     pub elapsed_ms: u64,
+    /// Ended by [`Model::stop`] rather than by the model: `text` is what had
+    /// arrived, and may be empty. `R-J118`.
+    pub stopped: bool,
+}
+
+/// What a streamed POST came to.
+#[derive(Debug, PartialEq)]
+struct Streamed {
+    text: String,
+    model: String,
+    stopped: bool,
 }
 
 /// The request body, as JSON text. Pure, so the shape is a test rather than a
@@ -236,7 +277,8 @@ async fn post_streaming(
     url: &str,
     body: &str,
     on_delta: &mut (dyn FnMut(String) + Send),
-) -> Result<(String, String), String> {
+    stop: Option<&Notify>,
+) -> Result<Streamed, String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     let mut child = tokio::process::Command::new("curl")
@@ -279,7 +321,21 @@ async fn post_streaming(
     // the single-response parser below.
     let mut whole = String::new();
 
-    while let Ok(Some(line)) = lines.next_line().await {
+    let mut stopped = false;
+    loop {
+        let next = match stop {
+            // Raced against the stop, so one that rings while the model is
+            // thinking — nothing arriving for half a minute — still lands now.
+            Some(bell) => tokio::select! {
+                line = lines.next_line() => line,
+                _ = bell.notified() => {
+                    stopped = true;
+                    break;
+                }
+            },
+            None => lines.next_line().await,
+        };
+        let Ok(Some(line)) = next else { break };
         whole.push_str(&line);
         whole.push('\n');
         if let Some(delta) = state.push_line(&line) {
@@ -297,6 +353,19 @@ async fn post_streaming(
         on_delta(batch);
     }
 
+    // Killing curl closes the connection, which is what tells the server to
+    // stop generating: an answer abandoned here and left running would go on
+    // spending the GPU on words nobody will read.
+    if stopped {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        return Ok(Streamed {
+            text: state.text.trim().to_string(),
+            model: if state.model.is_empty() { "unknown model".into() } else { state.model },
+            stopped: true,
+        });
+    }
+
     let status = child.wait().await;
 
     // **Any frame at all** means this was a stream, so `finish` decides what it
@@ -309,7 +378,7 @@ async fn post_streaming(
     // through a long reply leaves something worth reading, and throwing it
     // away to report a failure the user can already see is the wrong trade.
     if state.frames > 0 {
-        return state.finish();
+        return state.finish().map(|(text, model)| Streamed { text, model, stopped: false });
     }
 
     // Nothing streamed. Either the server answered whole despite the request,
@@ -331,7 +400,7 @@ async fn post_streaming(
             format!("could not reach the model: {complaint}")
         }),
         // The degrade path: one whole JSON object, read the old way.
-        Ok(_) => parse_reply(&whole),
+        Ok(_) => parse_reply(&whole).map(|(text, model)| Streamed { text, model, stopped: false }),
     }
 }
 
@@ -929,4 +998,77 @@ mod tests {
         assert_eq!(body["stream"], serde_json::json!(true));
     }
 
+
+    /// `R-J118`. A model that is still writing is stopped where it is: the
+    /// words so far come back marked `stopped`, at once rather than when the
+    /// model would have finished, and the connection to the model is closed —
+    /// which is what makes the server stop generating, and the half of this a
+    /// panel could not show.
+    #[tokio::test]
+    async fn a_stop_keeps_what_arrived_and_hangs_up_on_the_model() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (hung_up_tx, hung_up) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let frame = |t: &str| {
+                format!("data: {{\"model\":\"m\",\"choices\":[{{\"delta\":{{\"content\":\"{t}\"}}}}]}}\n\n")
+            };
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+            sock.write_all(format!("{head}{}", frame("Hello")).as_bytes()).await.unwrap();
+            // Then a word every 50 ms for a minute — a model that is nowhere
+            // near done — until the write fails because nobody is listening.
+            for _ in 0..1200 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                if sock.write_all(frame(" more").as_bytes()).await.is_err() {
+                    let _ = hung_up_tx.send(());
+                    return;
+                }
+            }
+        });
+
+        let m = std::sync::Arc::new(Model::new());
+        m.configure(ModelSettings {
+            url: Some(format!("http://127.0.0.1:{port}/v1")),
+            model: Some("m".into()),
+            consent: mogeung_core::model::RemoteConsent::None,
+            embed_model: None,
+        });
+        let (first_tx, first) = tokio::sync::oneshot::channel::<()>();
+        let mut first_tx = Some(first_tx);
+        let asking = {
+            let m = m.clone();
+            tokio::spawn(async move {
+                m.chat_streaming("ask-1", &turns(), true, move |_| {
+                    if let Some(tx) = first_tx.take() {
+                        let _ = tx.send(());
+                    }
+                })
+                .await
+            })
+        };
+        first.await.expect("the model's first words");
+        assert!(m.stop("ask-1"), "the answer is in flight, so there is something to stop");
+
+        let started = std::time::Instant::now();
+        let a = tokio::time::timeout(std::time::Duration::from_secs(5), asking)
+            .await
+            .expect("a stopped answer returns now, not when the model is done")
+            .unwrap()
+            .expect("a stop is an answer, not a failure");
+        assert!(a.stopped);
+        assert!(a.text.starts_with("Hello"), "{:?}", a.text);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        tokio::time::timeout(std::time::Duration::from_secs(5), hung_up)
+            .await
+            .expect("the model was left talking to nobody")
+            .unwrap();
+
+        // And it is gone: a second stop finds nothing in flight.
+        assert!(!m.stop("ask-1"));
+        assert!(m.health().unwrap().last_error.is_none(), "a stop is not the endpoint failing");
+    }
 }

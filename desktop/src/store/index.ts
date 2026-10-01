@@ -122,6 +122,8 @@ export interface ChatMessage {
   /** What actually answered, which may not be what was asked for. */
   model?: string;
   elapsed_ms?: number;
+  /** You stopped it: `content` is what had arrived, and may be empty. `R-J118`. */
+  stopped?: boolean;
 }
 
 /**
@@ -1294,13 +1296,18 @@ export const useStore = create<AppState>((set, get) => ({
     // conversation; and the question it failed to answer has to go with it,
     // or the model receives a question nobody ever answered and may take the
     // new one for a clarification of the old.
+    //
+    // An answer stopped before a word arrived goes the same way (`R-J118`):
+    // it is a question with no answer. One stopped part-way stays — that is
+    // what you read, and what the next question follows on from.
+    const unanswered = (m: ChatMessage) => !!m.error || (!!m.stopped && !m.content);
     const failed = new Set(
       get()
-        .chat.filter((m) => m.error)
+        .chat.filter(unanswered)
         .map((m) => `${m.id}:you`),
     );
     const history = get()
-      .chat.filter((m) => !m.pending && !m.error && !failed.has(m.id))
+      .chat.filter((m) => !m.pending && !unanswered(m) && !failed.has(m.id))
       .map((m) => ({ role: m.role, content: m.content }));
     const messages = [...history, { role: "user", content }];
     set((s) => ({
@@ -2043,6 +2050,7 @@ export const useStore = create<AppState>((set, get) => ({
                   error: msg.error ?? undefined,
                   model: msg.model || undefined,
                   elapsed_ms: msg.elapsed_ms,
+                  stopped: msg.stopped || undefined,
                 }
               : m,
           ),

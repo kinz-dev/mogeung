@@ -297,6 +297,7 @@ async fn ask_about(
         cites: Vec::new(),
         basis: None,
         narration: false,
+        stopped: false,
     };
 
     let question = messages
@@ -380,6 +381,7 @@ async fn ask_about(
             cites: Vec::new(),
             basis: Some(AnswerBasis::Code),
             narration: false,
+            stopped: false,
         };
     }
 
@@ -407,6 +409,7 @@ async fn ask_about(
         cites,
         basis: Some(if parsed.no_reason { AnswerBasis::Unanswered } else { AnswerBasis::Turns }),
         narration,
+        stopped: false,
     }
 }
 
@@ -1651,6 +1654,7 @@ async fn handle(
                         cites: Vec::new(),
                         basis: None,
                         narration: false,
+                        stopped: false,
                     },
                 );
                 return;
@@ -1687,7 +1691,7 @@ async fn handle(
                 let chunk_id = id.clone();
                 let msg = match state
                     .model
-                    .chat_streaming(&messages, from_this_machine, |delta| {
+                    .chat_streaming(&id, &messages, from_this_machine, |delta| {
                         send_reply(
                             &chunk_reply,
                             ServerMsg::ModelChunk { id: chunk_id.clone(), delta },
@@ -1700,7 +1704,11 @@ async fn handle(
                         // the file has not said no — and only on an answer, so
                         // a refusal or a dead endpoint leaves no half-thread
                         // behind that would be re-sent as context next time.
-                        if let Some(cid) = conversation.as_deref() {
+                        //
+                        // A stopped answer is kept with what it had, which is
+                        // what you read and what the next question follows
+                        // on from; one stopped before a word arrived is not.
+                        if let Some(cid) = conversation.as_deref().filter(|_| !a.text.is_empty()) {
                             keep_conversation(&state, cid, &messages, &a.text, from_this_machine);
                         }
                         ServerMsg::ModelReply {
@@ -1714,6 +1722,7 @@ async fn handle(
                             cites: Vec::new(),
                             basis: None,
                             narration: false,
+                            stopped: a.stopped,
                         }
                     }
                     // A refusal and a failure arrive by the same door. The
@@ -1728,6 +1737,7 @@ async fn handle(
                         cites: Vec::new(),
                         basis: None,
                         narration: false,
+                        stopped: false,
                     },
                 };
                 send_reply(&reply, msg);
@@ -1738,6 +1748,12 @@ async fn handle(
                     health: Box::new(state.health().await),
                 });
             });
+        }
+        // `R-J118`. The reply comes from the ask itself, which ends with what it
+        // had; an id not in flight has already answered, so there is nothing
+        // to say here either way.
+        ClientMsg::ModelStop { id } => {
+            state.model.stop(&id);
         }
         ClientMsg::Subscribe => {
             // Direct, not broadcast: this used to make every *other* window

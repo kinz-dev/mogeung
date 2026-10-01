@@ -36,10 +36,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, ExternalLink, History, MessageSquarePlus, NotebookPen, Trash2, X } from "lucide-react";
+import { ArrowDown, ExternalLink, History, MessageSquarePlus, NotebookPen, Square, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import type { ChatMessage } from "@/store";
-import { Dim, Empty, IconButton } from "@/ui/primitives";
+import { Button, Dim, Empty, IconButton } from "@/ui/primitives";
 import { interactive } from "@/ui/styles";
 import { cn } from "@/lib/cn";
 import { stamp } from "@/lib/format";
@@ -118,6 +118,11 @@ function Turn({ m, now }: { m: ChatMessage; now: number }) {
       </div>
     );
   }
+  // Stopped before a word arrived: said, rather than an empty answer that
+  // reads as the model having nothing to say. `R-J118`.
+  if (m.stopped && !m.content) {
+    return <Dim className="text-sm italic">stopped before any answer arrived</Dim>;
+  }
   return (
     <div className="text-sm">
       {/* Rendered, not raw: an answer is mostly prose with the occasional
@@ -133,6 +138,9 @@ function Turn({ m, now }: { m: ChatMessage; now: number }) {
         <Dim className="mt-1 block text-2xs">
           {m.model}
           {m.elapsed_ms !== undefined ? ` · ${(m.elapsed_ms / 1000).toFixed(1)}s` : ""}
+          {/* Cut off by you, not finished — the difference between an answer
+              and the first half of one. `R-J118`. */}
+          {m.stopped && <span className="text-[var(--amber)]"> · stopped</span>}
         </Dim>
       )}
     </div>
@@ -509,6 +517,25 @@ export function ChatTool() {
         <div className="flex items-center gap-1">
           {waiting && (
             <Dim className="text-2xs">{streaming ? "answering…" : "waiting…"}</Dim>
+          )}
+          {/*
+            Stop, asked 2026-10-01 (`R-J118`). Every answer still out, because
+            a second question can be asked while the first is answering and
+            "stop" means stop talking. The daemon hangs up on the model, which
+            stops it generating, and the reply comes back with what had arrived.
+          */}
+          {waiting && (
+            <Button
+              size="sm"
+              variant="outline"
+              title="stop the answer here — what has arrived is kept"
+              onClick={() => {
+                for (const m of chat) if (m.pending) send({ cmd: "model_stop", id: m.id });
+              }}
+            >
+              <Square size={10} className="fill-current" />
+              stop
+            </Button>
           )}
           <div className="ml-auto flex items-center gap-1">
             <IconButton

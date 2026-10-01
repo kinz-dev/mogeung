@@ -105,7 +105,7 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         | ScratchRmdir { .. } => Hop::Here,
         // The chat is this machine's model; an *ask about* a remote session
         // is refused in words by the daemon rather than forwarded.
-        ModelChat { .. } | ChatList {} | ChatLoad { .. } | ChatDelete { .. } => Hop::Here,
+        ModelChat { .. } | ModelStop { .. } | ChatList {} | ChatLoad { .. } | ChatDelete { .. } => Hop::Here,
         // The remote daemon's model, reading the remote daemon's diff — and
         // the remote daemon's clause 4 deciding, since a relay is not local.
         ReadingGuide { .. } => Hop::Read,
