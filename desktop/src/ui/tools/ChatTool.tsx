@@ -221,6 +221,15 @@ export function ChatTool() {
   const [draft, setDraft] = useState("");
   const thread = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once a typed-in newline has rendered. A controlled
+  // textarea given a new value puts the caret at the end, which is wrong for a
+  // line broken in the middle of a paragraph.
+  const caret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (caret.current === null || !box.current) return;
+    box.current.selectionStart = box.current.selectionEnd = caret.current;
+    caret.current = null;
+  }, [draft]);
   /**
    * Whether the thread follows new text to its end. `R-J112`, asked
    * 2026-09-25: *"when I scroll back and want to read the message when it is
@@ -474,16 +483,27 @@ export function ChatTool() {
             // Enter sends and Shift+Enter breaks the line — the way every chat
             // box works, and the reason this is not an `ACTIONS` entry: it must
             // fire here and nowhere else.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit();
+            //
+            // **Alt+Enter breaks the line too**, asked 2026-10-01. It used to
+            // send, being "Enter without Shift". The browser inserts nothing
+            // for it, so the newline is put in by hand, over the selection as
+            // Shift+Enter's would be.
+            if (e.key !== "Enter" || e.shiftKey) return;
+            e.preventDefault();
+            if (e.altKey) {
+              const t = e.currentTarget;
+              const at = t.selectionStart;
+              caret.current = at + 1;
+              setDraft(t.value.slice(0, at) + "\n" + t.value.slice(t.selectionEnd));
+              return;
             }
+            submit();
           }}
           disabled={!usable}
           spellCheck={false}
           rows={3}
           aria-label="ask the model"
-          placeholder={usable ? "ask anything  (Enter to send)" : "unavailable"}
+          placeholder={usable ? "ask anything  (Enter to send, Shift+Enter or Alt+Enter for a new line)" : "unavailable"}
           className="w-full resize-none rounded-sm bg-[var(--bg)] px-2 py-1 text-sm outline-none disabled:opacity-50"
         />
         <div className="flex items-center gap-1">

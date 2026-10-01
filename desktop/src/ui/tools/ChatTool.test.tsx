@@ -78,6 +78,23 @@ describe("the chat panel", () => {
     expect(sent.some((m) => m.cmd === "model_chat")).toBe(false);
   });
 
+  /**
+   * Alt+Enter is the same newline — asked 2026-10-01. It used to send, being
+   * "Enter without Shift", and the browser inserts nothing for it, so the
+   * newline has to land where the caret is, not at the end.
+   */
+  it("breaks the line at the caret on Alt+Enter rather than sending", () => {
+    useStore.setState({ health: health({}) });
+    render(<ChatTool />);
+    const box = screen.getByLabelText("ask the model") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "first second" } });
+    box.setSelectionRange(5, 6); // the space between the words
+    fireEvent.keyDown(box, { key: "Enter", altKey: true });
+    expect(sent.some((m) => m.cmd === "model_chat")).toBe(false);
+    expect(box.value).toBe("first\nsecond");
+    expect(box.selectionStart).toBe(6);
+  });
+
   it("renders the daemon's refusal verbatim rather than a blank panel", () => {
     useStore.setState({
       health: health({ allowed: false, refusal: "refusing to send anything to spark-7ecc" }),
