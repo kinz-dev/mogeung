@@ -18,7 +18,9 @@ use std::sync::Mutex;
 /// 1: transcripts were re-read from byte 0 on every restart, so events and
 ///    counters carry one extra copy per restart. See
 ///    `AppState::repair_reingested_history`.
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2: sessions read before `R-J115` carry no artifacts, because their monitor
+///    lines are behind the saved offset. See `AppState::backfill_artifacts`.
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub struct Store {
     conn: Mutex<Connection>,

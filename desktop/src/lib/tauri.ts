@@ -198,6 +198,21 @@ export async function openLocalUrl(url: string): Promise<void> {
   await core.invoke("open_local_url", { url });
 }
 
+/**
+ * Open a claude.ai artifact in the system browser. `R-J115`.
+ *
+ * The shell opens `https://claude.ai/artifact/<short id>` and refuses anything
+ * else — see `open_artifact_url` in `lib.rs`. In a browser tab, `window.open`.
+ */
+export async function openArtifact(url: string): Promise<void> {
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { core } = await api();
+  await core.invoke("open_artifact_url", { url });
+}
+
 export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
   const { core } = await api();
   await core.invoke("pty_resize", { id, cols, rows });

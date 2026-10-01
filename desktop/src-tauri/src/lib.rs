@@ -588,7 +588,37 @@ async fn machine_id() -> Option<String> {
 #[tauri::command]
 async fn open_local_url(url: String) -> Result<(), String> {
     is_loopback_http(&url)?;
+    open_in_browser(&url)
+}
 
+/// Open a claude.ai artifact page in the system browser. `R-J115`.
+///
+/// The second thing this shell launches, kept as narrow as the first: the URL
+/// must be **exactly** `https://claude.ai/artifact/` and a base58 short id, which
+/// is the shape the daemon builds and nothing else. A general opener would hand
+/// the webview *"open anything"*, and a session's transcript is text an agent
+/// wrote — an artifact title is the user's, but a URL check that relied on that
+/// would be one refactor from trusting the agent.
+#[tauri::command]
+async fn open_artifact_url(url: String) -> Result<(), String> {
+    is_artifact_url(&url)?;
+    open_in_browser(&url)
+}
+
+fn is_artifact_url(url: &str) -> Result<(), String> {
+    const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let id = url
+        .strip_prefix("https://claude.ai/artifact/")
+        .ok_or("only https://claude.ai/artifact/… is opened here")?;
+    if id.len() == 22 && id.chars().all(|c| BASE58.contains(c)) {
+        Ok(())
+    } else {
+        Err(format!("{url} is not an artifact link — refusing to open it"))
+    }
+}
+
+/// Hand a URL to the desktop's own opener. Every caller checks it first.
+fn open_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let program = "open";
     #[cfg(target_os = "windows")]
@@ -597,7 +627,7 @@ async fn open_local_url(url: String) -> Result<(), String> {
     let program = "xdg-open";
 
     std::process::Command::new(program)
-        .arg(&url)
+        .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -632,7 +662,27 @@ fn is_loopback_http(url: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod open_url_tests {
-    use super::is_loopback_http;
+    use super::{is_artifact_url, is_loopback_http};
+
+    /// `R-J115`. The one shape the daemon builds, and the near misses a prefix
+    /// check would let through.
+    #[test]
+    fn only_a_claude_artifact_page() {
+        assert!(is_artifact_url("https://claude.ai/artifact/VzCr55rMjnsNhymTNAA12P").is_ok());
+        for bad in [
+            "https://claude.ai/artifact/VzCr55rMjnsNhymTNAA12P/../../evil",
+            "https://claude.ai/artifact/VzCr55rMjnsNhymTNAA12P?x=1",
+            "https://claude.ai/artifact/VzCr55rMjnsNhymTNAA12",   // 21
+            "https://claude.ai/artifact/0zCr55rMjnsNhymTNAA12P",  // 0 is not base58
+            "https://claude.ai.evil.com/artifact/VzCr55rMjnsNhymTNAA12P",
+            "http://claude.ai/artifact/VzCr55rMjnsNhymTNAA12P",
+            "https://claude.ai/artifact/",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(is_artifact_url(bad).is_err(), "{bad} must be refused");
+        }
+    }
 
     /// This is the narrowest opener that does the job, and the test is what
     /// keeps it narrow. `R-O10`. Every refusal here is a URL that reads as
@@ -756,6 +806,7 @@ pub fn run() {
             export_text,
             machine_id,
             open_local_url,
+            open_artifact_url,
             daemon_acquire,
             connections::connections_load,
             connections::connections_save,

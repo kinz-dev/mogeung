@@ -30,6 +30,7 @@ import { closeFile, revealInFiles } from "@/lib/explorer";
 import { closeAllTabs, closeOtherTabs, closeTab } from "@/lib/closeTabs";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { copyPath } from "@/lib/clipboard";
+import { ArtifactLinks } from "@/ui/ArtifactLinks";
 
 /**
  * What a pane's tab should read, whether it is held, and what to say on hover.
@@ -368,6 +369,12 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
           {host}
         </Chip>
       )}
+      {/*
+        What this session published on claude.ai, newest first. `R-J115`.
+        First in the row because it is the one thing here you click to go and
+        read rather than to act on the pane; nothing at all when there is none.
+      */}
+      <ArtifactLinks artifacts={session?.artifacts} />
       {/*
         The branch this session is working on. Asked for 2026-08-07.
 

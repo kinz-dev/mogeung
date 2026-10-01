@@ -312,6 +312,7 @@ mod tests {
             claims: Vec::new(),
             source: Default::default(),
             announced_dirs: vec![],
+            artifacts: vec![],
         }
     }
 

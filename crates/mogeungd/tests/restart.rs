@@ -177,8 +177,9 @@ async fn the_repair_rebuilds_a_database_that_was_re_ingested() {
     state.scan().await;
     assert_eq!(tally(&state).await, clean, "the repair did not restore it");
 
-    // And it does not run a second time.
-    assert_eq!(state.store.schema_version(), mogeungd::store::SCHEMA_VERSION);
+    // And it does not run a second time. `1` is the repair's own mark; later
+    // versions belong to later one-off passes (`backfill_artifacts`, `R-J115`).
+    assert_eq!(state.store.schema_version(), 1);
     state.repair_reingested_history().await.unwrap();
     assert_eq!(tally(&state).await, clean);
 

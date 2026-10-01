@@ -110,6 +110,13 @@ export interface SignalRun {
   coverage?: FileCoverage[];
 }
 
+/** A page a session published on claude.ai. `R-J115`. */
+export interface Artifact {
+  id: string;
+  title: string;
+  url: string;
+}
+
 export interface Session {
   id: SessionId;
   title: string | null;
@@ -137,6 +144,12 @@ export interface Session {
    */
   api_ms?: number;
   tool_ms?: number;
+  /**
+   * Pages this session published on claude.ai, newest first. `R-J115`.
+   * Absent when there are none. `url` is built by the daemon; open it with
+   * `openArtifact`, which the shell holds to that one shape.
+   */
+  artifacts?: Artifact[];
   tokens_in: number;
   tokens_out: number;
   last_activity: string | null;

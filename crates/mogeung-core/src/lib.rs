@@ -29,6 +29,6 @@ pub use change::{Change, FileChange, Hunk, RiskFlag, RiskLevel};
 pub use health::{Alert, Health, LineClass};
 pub use review::{BlastRadius, ReviewDebt};
 pub use run::{Corroboration, Origin, Run, RunConfig, RunLine, RunState};
-pub use session::{LiveStatus, Session, SessionId, SessionOrigin};
+pub use session::{Artifact, LiveStatus, Session, SessionId, SessionOrigin};
 pub use transcript::{EventKind, TranscriptEvent};
 pub use wire::{ClientMsg, ServerMsg};

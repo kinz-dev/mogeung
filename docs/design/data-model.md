@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-09-23
+updated: 2026-10-01
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -205,6 +205,15 @@ The pass ends with `VACUUM` when it dropped anything. Deleting rows frees pages
 inside the file and returns nothing to the disk, so a database bloated by this
 bug would otherwise stay bloated after being fixed.
 
+**Version 2 is a backfill, not a repair** (`R-J115`). Sessions read before
+`artifacts` existed have their `artifact-comment-monitor` lines behind the saved
+offset, so no scan will see them again. `backfill_artifacts` reads each Claude
+Code transcript once, folds **only** those lines, and moves no counter — the
+re-ingestion version 1 exists to undo is exactly what folding anything else
+would be. The repair checks for version 1 itself rather than for
+`SCHEMA_VERSION`, so a database already repaired is not repaired again when the
+constant moves.
+
 **`semantic_index` is the opposite kind of table, and is treated as one.** It
 is a **cache**: every row is recomputable from the corpus, so it is dropped and
 rewritten wholesale on a rebuild rather than migrated — a half-rebuilt index
@@ -304,6 +313,15 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
   is the other flag this struct gained since the section above, and is the same
   shape: defaulted, and never persisted, because the row it marks is rebuilt
   every scan.
+
+## Session fields added 2026-10-01
+
+- `artifacts` — pages this session published on claude.ai, newest first, each
+  an `Artifact { id, title, url }` (`R-J115`). `id` is the UUID the CLI writes;
+  `url` is worked out by the daemon (`session::artifact_url`), because the link
+  claude.ai hands out is a 22-character base58 form of the same 128 bits and a
+  client should not have to know that. Defaulted and skipped when empty. A page
+  that leaves the CLI's watch list stays here — it has not left claude.ai.
 
 The store also grew a `signals` table (per-repo signal command and its
 last run, `R-E2`) — a real table rather than a blob because it is keyed

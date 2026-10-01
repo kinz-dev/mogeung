@@ -187,6 +187,9 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
     if let Err(e) = state.repair_reingested_history().await {
         tracing::warn!("could not repair re-ingested history: {e}");
     }
+    if let Err(e) = state.backfill_artifacts().await {
+        tracing::warn!("could not backfill artifacts: {e}");
+    }
 
     state.scan().await;
     tracing::info!(

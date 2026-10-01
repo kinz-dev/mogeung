@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-09-25
+updated: 2026-10-01
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -85,6 +85,8 @@ anything else raises an alert. Counts below are from the author's corpus on
 | `agent-name` | 249² | **Read** — `agentName`, the session's title under a second name |
 | `atis-latch` | 384² | Ignored — `atis`, and it is the empty string in every one |
 | `cost-state` | 78³ | **Read** — `totalAPIDuration` and `totalToolDuration`. Its `totalCostUSD` and `modelUsage` are deliberately left; see below |
+| `artifact-comment-monitor` | 62⁴ | **Read** — every artifact the session published: UUID, `title`, `writtenAtMs`, `state`. See below |
+| `artifact-autoreact-ledger` | 133⁴ | Ignored — comment threads already acted on, and empty in every one |
 
 ¹ From a **later** sweep and not comparable with the column above: 2026-08-07,
 across the 60 newest transcripts of a corpus that had grown to 315.
@@ -94,6 +96,8 @@ corpus rather than a window, so these two are comparable with each other and
 with nothing above them.
 
 ³ From the 2026-08-29 sweep, 246 transcripts and 120,949 lines.
+
+⁴ From the canary on 2026-10-01: 12 transcripts carried them.
 
 **`cost-state` is the CLI's own accounting, and mogeung reads half of it**
 (`R-J63`, ruled on 2026-08-29 after the canary had been raising it since
@@ -153,6 +157,27 @@ They took opposite dispositions, and the reasoning is the point:
   cheaper than discovering from a queue of untitled sessions that the one we
   read had been retired. Its `sessionId` is the transcript's own in every line,
   so despite the name it cannot smuggle a *subagent's* name into a session.
+
+**The two `artifact-` types arrived together** and were raised by the canary on
+2026-10-01, as *"2 thing(s) it cannot see"* in the status bar. They are Claude
+Code's bookkeeping for a published claude.ai artifact it watches for comments.
+
+- **`artifact-comment-monitor` is read** (`R-J115`). Its `artifacts` map is
+  keyed by UUID; each entry has a `title`, a `state` (`armed` in all 70 seen —
+  one value, so not read as a vocabulary) and `writtenAtMs`. The line is
+  **re-emitted whole** whenever the list changes, so a line is the session's
+  artifacts so far rather than one addition. `serde_json` sorts the map's keys,
+  so the CLI's own newest-first order is put back from `writtenAtMs`. The page
+  lives at `https://claude.ai/artifact/` plus the UUID's 128 bits in base58
+  (Bitcoin alphabet), left-padded with `1` to 22 characters — **verified, not
+  documented**, against the artifact list; `session::artifact_url` pins it.
+- **`artifact-autoreact-ledger` is ignored** for having nothing in it, as
+  `atis-latch` is. It looks like the record of which comment threads were acted
+  on — `threads`, `turnTimestamps`, `stampHighWater`, `everHadThreads`,
+  sometimes `interrupted` — and `threads` and `turnTimestamps` were empty in all
+  152 entries, because no comment had been sent to a session on this machine.
+  So its shape when it fills is unknown, and a ledger that starts filling will
+  not be loud.
 
 Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
 `version`, `isSidechain`, `uuid`, `parentUuid`. Also seen: `effort`, `slug`,

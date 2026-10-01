@@ -11,6 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use mogeung_core::health::LineClass;
+use mogeung_core::session::{artifact_url, Artifact};
 use mogeung_core::transcript::EventKind;
 use mogeung_core::verify::VerifyKind;
 use serde_json::Value;
@@ -56,6 +57,16 @@ pub const KNOWN_IGNORED: &[&str] = &[
     // loud, which is the honest cost of ignoring a type by its name rather
     // than by its shape — noted here so the next sweep can look.
     "atis-latch",
+    // Claude Code's record of which comment threads on a published artifact it
+    // has already acted on: `threads`, `turnTimestamps`, `stampHighWater`,
+    // `everHadThreads`, sometimes `interrupted`. Found 2026-10-01 when the
+    // canary raised it — 133 lines in 12 transcripts, and in **every one**
+    // `threads` and `turnTimestamps` were empty, because no comment had yet been
+    // sent to a session on this machine. So it is ignored for having nothing in
+    // it, as `atis-latch` is, and the same honest cost applies: a ledger that
+    // starts filling will not be loud. Its sibling `artifact-comment-monitor`
+    // is read — see `HANDLED`.
+    "artifact-autoreact-ledger",
 ];
 
 /// Types this parser extracts data from.
@@ -94,6 +105,13 @@ pub const HANDLED: &[&str] = &[
     "agent-name",
     "last-prompt",
     "file-history-delta",
+    // Every artifact this session published and is watching for comments:
+    // UUID, title, `state` (`armed` in all 70 entries swept 2026-10-01) and
+    // `writtenAtMs`. Re-emitted whole each time it changes, so a line is the
+    // session's list so far rather than one addition. Read for the title and
+    // the link, `R-J115`; `state` is not, because one value seen is not a
+    // vocabulary.
+    "artifact-comment-monitor",
 ];
 
 /// The outcome of reading one transcript line.
@@ -176,6 +194,9 @@ pub struct Parsed {
     /// for an afternoon of work.
     pub api_ms: Option<u64>,
     pub tool_ms: Option<u64>,
+    /// The artifacts an `artifact-comment-monitor` line lists, newest first.
+    /// `R-J115`.
+    pub artifacts: Vec<Artifact>,
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -602,6 +623,28 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
             out.tool_ms = v.get("totalToolDuration").and_then(Value::as_u64).filter(|n| *n > 0);
         }
 
+        // The session's published artifacts, `R-J115`. The map is keyed by
+        // UUID and `serde_json` sorts keys, so the order the CLI wrote is lost
+        // on parse; `writtenAtMs` puts it back, newest first. An entry with no
+        // title, or a key that is not a UUID, is skipped rather than shown as
+        // a link that goes nowhere.
+        "artifact-comment-monitor" => {
+            let mut found: Vec<(u64, Artifact)> = v
+                .get("artifacts")
+                .and_then(Value::as_object)?
+                .iter()
+                .filter_map(|(id, a)| {
+                    let title = str_at(a, "title").filter(|t| !t.trim().is_empty())?;
+                    Some((
+                        a.get("writtenAtMs").and_then(Value::as_u64).unwrap_or(0),
+                        Artifact { id: id.clone(), title: title.trim().to_string(), url: artifact_url(id)? },
+                    ))
+                })
+                .collect();
+            found.sort_by(|a, b| b.0.cmp(&a.0));
+            out.artifacts = found.into_iter().map(|(_, a)| a).collect();
+        }
+
         // Records a file the session is tracking edits to.
         "file-history-delta" => {
             if let Some(p) = str_at(&v, "trackingPath") {
@@ -801,6 +844,9 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
         // quietest way to build a feature that does nothing.
         && out.api_ms.is_none()
         && out.tool_ms.is_none()
+        // `R-J115`, which made exactly the mistake described above until a
+        // test parsed a monitor line and got `Barren` back.
+        && out.artifacts.is_empty()
     {
         return None;
     }
@@ -886,7 +932,7 @@ mod tests {
     /// has been up long enough to make it.
     #[test]
     fn types_found_in_the_real_corpus_are_all_classified() {
-        for ty in ["queue-operation", "pr-link", "frame-link", "bridge-session", "atis-latch"] {
+        for ty in ["queue-operation", "pr-link", "frame-link", "bridge-session", "atis-latch", "artifact-autoreact-ledger"] {
             let line = format!(r#"{{"type":"{ty}","sessionId":"s"}}"#);
             assert_eq!(
                 class(&line),
@@ -911,6 +957,37 @@ mod tests {
     #[test]
     fn a_nameless_agent_name_is_barren_rather_than_quietly_skipped() {
         assert_eq!(class(r#"{"type":"agent-name","sessionId":"s"}"#), LineClass::Barren);
+    }
+
+    /// `R-J115`. The map arrives sorted by UUID — `serde_json` sorts keys — and
+    /// the session wants newest first, so the order here is the reverse of the
+    /// keys on purpose: a parser that kept key order would fail it.
+    #[test]
+    fn a_monitor_line_lists_the_artifacts_newest_first_with_their_links() {
+        let line = r#"{"type":"artifact-comment-monitor","v":1,"sessionId":"s","artifacts":{
+            "4441b4aa-62f5-45c7-9410-5fb1ce6eac01":{"state":"armed","writtenAtMs":1000,"title":"Older"},
+            "eabc93e7-90b3-4df5-8aa3-586c831393e8":{"state":"armed","writtenAtMs":2000,"title":"Newer"}}}"#
+            .replace('\n', "");
+        let got = parsed(&line).artifacts;
+        let titles: Vec<&str> = got.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(titles, ["Newer", "Older"]);
+        assert_eq!(got[0].url, "https://claude.ai/artifact/VzCr55rMjnsNhymTNAA12P");
+        assert_eq!(got[1].id, "4441b4aa-62f5-45c7-9410-5fb1ce6eac01");
+    }
+
+    /// No title, or a key that is not a UUID, is no link — and a line left with
+    /// none is `Barren`, so a reshaped monitor shows up on the health page
+    /// instead of as sessions that quietly stopped having artifacts.
+    #[test]
+    fn a_monitor_line_with_nothing_linkable_is_barren() {
+        for line in [
+            r#"{"type":"artifact-comment-monitor","sessionId":"s","artifacts":{}}"#,
+            r#"{"type":"artifact-comment-monitor","sessionId":"s"}"#,
+            r#"{"type":"artifact-comment-monitor","sessionId":"s","artifacts":{"not-a-uuid":{"title":"x"}}}"#,
+            r#"{"type":"artifact-comment-monitor","sessionId":"s","artifacts":{"eabc93e7-90b3-4df5-8aa3-586c831393e8":{"state":"armed"}}}"#,
+        ] {
+            assert_eq!(class(line), LineClass::Barren, "{line}");
+        }
     }
 
     #[test]

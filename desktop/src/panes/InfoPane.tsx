@@ -7,6 +7,7 @@ import { Chip, Dim, Empty, Mono, PaneHeader } from "@/ui/primitives";
 import { compact, fmtDur, num, secsSince, stamp } from "@/lib/format";
 import { repoName, sessionLabel, sourceColor, sourceLabel, unverified } from "@/wire/types";
 import { SignalRunner } from "@/ui/SignalRunner";
+import { openArtifact } from "@/lib/tauri";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -21,6 +22,7 @@ export function InfoPane() {
   const s = useSelectedSession();
   const subagents = useStore((st) => (st.selected ? st.subagents[st.selected] : undefined));
   const send = useStore((st) => st.send);
+  const pushError = useStore((st) => st.pushError);
 
   if (!s) return <Empty>select a session</Empty>;
 
@@ -114,6 +116,27 @@ export function InfoPane() {
                 <span className={c.contradicted ? "text-[var(--red)]" : undefined}>{c.text}</span>
                 <Dim className="block text-xs">{c.evidence}</Dim>
               </Field>
+            ))}
+          </>
+        )}
+
+        {/* Every page, where the pane header has room for the newest. `R-J115`. */}
+        {(s.artifacts?.length ?? 0) > 0 && (
+          <>
+            <div className="mt-2 px-3 text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase">
+              Artifacts ({s.artifacts!.length})
+            </div>
+            {s.artifacts!.map((a) => (
+              <div key={a.id} className="px-3 py-px">
+                <button
+                  type="button"
+                  title={a.url}
+                  onClick={() => openArtifact(a.url).catch((e) => pushError(`could not open ${a.title}: ${e}`))}
+                  className="text-left text-xs text-[var(--blue)] underline-offset-2 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+                >
+                  {a.title}
+                </button>
+              </div>
             ))}
           </>
         )}

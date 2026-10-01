@@ -104,6 +104,46 @@ pub struct OpenTool {
     pub at: DateTime<Utc>,
 }
 
+/// A page this session published on claude.ai. `R-J115`.
+///
+/// Read from Claude Code's `artifact-comment-monitor` line, which names every
+/// artifact the session is watching for comments — which is every one it
+/// published. The line carries a UUID and a title and nothing else worth having.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Artifact {
+    /// The UUID the CLI keys it by.
+    pub id: String,
+    pub title: String,
+    /// `https://claude.ai/artifact/<short id>`, worked out by the daemon so a
+    /// client never has to. See [`artifact_url`].
+    pub url: String,
+}
+
+/// The page an artifact UUID lives at, or `None` for something that is not one.
+///
+/// The CLI writes a UUID; the link claude.ai hands out is a 22-character short
+/// id. The two are the same 128 bits: the short id is the UUID's integer in
+/// base58 (Bitcoin's alphabet), **left-padded with `1` to 22 characters**.
+/// Verified 2026-10-01 against all 32 of this machine's artifacts — four by
+/// round trip, and `1UubfdUC3X7SzjLRVVJwwb` for the padding, a 122-bit value
+/// that unpadded would be 21 characters. Undocumented, like everything else
+/// mogeung reads; the test pins the four.
+pub fn artifact_url(uuid: &str) -> Option<String> {
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let hex: String = uuid.chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut n = u128::from_str_radix(&hex, 16).ok()?;
+    let mut id = [b'1'; 22];
+    for slot in id.iter_mut().rev() {
+        *slot = ALPHABET[(n % 58) as usize];
+        n /= 58;
+    }
+    // 58^22 > 2^128, so 22 digits always hold it; `n` is spent by now.
+    Some(format!("https://claude.ai/artifact/{}", std::str::from_utf8(&id).ok()?))
+}
+
 /// A file this session touched, with when. Cumulative `touched_files` cannot
 /// answer "are two agents fighting over this *right now*" — `R-B3` needs recency.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +351,10 @@ pub struct Session {
     /// still widens exactly when you widen it, in the UI.
     #[serde(default)]
     pub announced_dirs: Vec<String>,
+
+    /// Pages this session published on claude.ai, newest first. `R-J115`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<Artifact>,
 }
 
 impl Session {
@@ -394,5 +438,37 @@ impl Session {
         out.sort_unstable();
         out.dedup();
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::artifact_url;
+
+    /// Four pairs read off claude.ai on 2026-10-01 — the UUID from a
+    /// transcript, the link from the artifact list. `R-J115`.
+    #[test]
+    fn an_artifact_uuid_is_its_short_link_in_base58() {
+        for (uuid, short) in [
+            ("eabc93e7-90b3-4df5-8aa3-586c831393e8", "VzCr55rMjnsNhymTNAA12P"),
+            ("d7d593cb-4c39-4f58-b890-e60f92ff96d6", "TepnvDrNn73k9X6Bdd8RWD"),
+            ("f30b545c-35f4-44b7-af89-5e9344d3e601", "X1hqqFEPa98gPe6trzqmbn"),
+            ("4441b4aa-62f5-45c7-9410-5fb1ce6eac01", "9RrtdqMgCWL5qa1DYUCbo6"),
+            // 122 bits: unpadded this is 21 characters, and the real link is 22.
+            ("03e57f0b-6d03-44e1-b595-814f46155f5e", "1UubfdUC3X7SzjLRVVJwwb"),
+        ] {
+            assert_eq!(
+                artifact_url(uuid).as_deref(),
+                Some(format!("https://claude.ai/artifact/{short}").as_str()),
+                "{uuid}"
+            );
+        }
+    }
+
+    #[test]
+    fn something_that_is_not_a_uuid_has_no_link() {
+        for bad in ["", "eabc93e7", "not-a-uuid-at-all-not-a-uuid-at-all", "zabc93e7-90b3-4df5-8aa3-586c831393e8"] {
+            assert_eq!(artifact_url(bad), None, "{bad}");
+        }
     }
 }

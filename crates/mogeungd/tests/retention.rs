@@ -68,6 +68,7 @@ fn aged_session(id: &str, days_ago: i64, transcript: &str) -> Session {
         claims: vec![],
         source: SessionSource::ClaudeCode,
         announced_dirs: vec![],
+        artifacts: vec![],
     }
 }
 

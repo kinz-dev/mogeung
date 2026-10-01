@@ -502,6 +502,25 @@ pub fn provisional_session(
     s
 }
 
+/// Fold one `artifact-comment-monitor` line's list into what a session already
+/// has. `R-J115`.
+///
+/// The line is the whole list so far, so it leads; anything known before and
+/// absent now stays behind it, because a page that has left the CLI's watch
+/// list has not left claude.ai.
+fn merge_artifacts(have: &mut Vec<mogeung_core::session::Artifact>, line: Vec<mogeung_core::session::Artifact>) {
+    if line.is_empty() {
+        return;
+    }
+    let mut merged = line;
+    for a in std::mem::take(have) {
+        if !merged.iter().any(|m| m.id == a.id) {
+            merged.push(a);
+        }
+    }
+    *have = merged;
+}
+
 /// A session with nothing in it but its id — for tests and fixtures, here and
 /// in `tests/`.
 pub fn blank_session_with_id(id: &str) -> Session {
@@ -569,6 +588,7 @@ fn blank_session(
         claims: Vec::new(),
         source,
         announced_dirs: Vec::new(),
+        artifacts: Vec::new(),
     }
 }
 
@@ -1677,7 +1697,9 @@ impl AppState {
     /// from, and inventing a divisor would be worse than leaving the record
     /// visibly odd.
     pub async fn repair_reingested_history(&self) -> Result<()> {
-        if self.store.schema_version() >= crate::store::SCHEMA_VERSION {
+        // Its own version, not `SCHEMA_VERSION`: that moved on to 2, and a
+        // database already at 1 must not be "repaired" a second time.
+        if self.store.schema_version() >= 1 {
             return Ok(());
         }
         let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
@@ -1755,7 +1777,54 @@ impl AppState {
                 tracing::warn!("vacuum after repair failed: {e}");
             }
         }
-        self.store.set_schema_version(crate::store::SCHEMA_VERSION)
+        self.store.set_schema_version(1)
+    }
+
+    /// Give sessions read before `R-J115` the artifacts they published. Runs
+    /// once, gated on the schema version.
+    ///
+    /// Transcripts resume from a saved offset, so a session whose monitor
+    /// lines were read by an older build would show no artifact until it
+    /// published another. Only those lines are folded — every other line was
+    /// already counted, and folding it again is the bug `repair_reingested_history`
+    /// exists to undo. A transcript too big to read whole gets the same
+    /// treatment as any other here: a match is a substring test on a line, and
+    /// nothing else is kept.
+    pub async fn backfill_artifacts(&self) -> Result<()> {
+        if self.store.schema_version() >= 2 {
+            return Ok(());
+        }
+        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        let mut found = 0usize;
+        for mut s in sessions {
+            if !s.source.has_claude_event_history() {
+                continue;
+            }
+            let Ok(file) = std::fs::File::open(&s.transcript_path) else {
+                continue;
+            };
+            let mut lists = Vec::new();
+            for line in std::io::BufRead::lines(std::io::BufReader::new(file)).map_while(|l| l.ok()) {
+                if !line.contains("\"artifact-comment-monitor\"") {
+                    continue;
+                }
+                if let Some(p) = adapter::parse_line(&line).parsed() {
+                    lists.push(p.artifacts);
+                }
+            }
+            if lists.is_empty() {
+                continue;
+            }
+            for list in lists {
+                merge_artifacts(&mut s.artifacts, list);
+            }
+            found += 1;
+            self.put(s).await;
+        }
+        if found > 0 {
+            tracing::info!("backfilled artifacts for {found} session(s)");
+        }
+        self.store.set_schema_version(2)
     }
 
     /// Recompute cross-session collisions and publish any that changed.
@@ -1994,6 +2063,10 @@ impl AppState {
             if let Some(ms) = p.tool_ms {
                 s.tool_ms = s.tool_ms.max(ms);
             }
+            // The line is the whole list so far, so it leads; anything known
+            // before and absent now stays behind it, because a page that has
+            // left the CLI's watch list has not left claude.ai. `R-J115`.
+            merge_artifacts(&mut s.artifacts, p.artifacts);
             if p.last_activity.is_some() {
                 s.last_activity = p.last_activity;
             }
@@ -5435,7 +5508,7 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         deletions, error, transcript_path, reviewed,
         open_tools, snoozed_until, collisions, loop_signal,
         tmux_target, provisional, limit_hit_at, limit_resets, verify_runs,
-        claims, source, announced_dirs, origin,
+        claims, source, announced_dirs, origin, artifacts,
     } = after;
 
     *id != before.id
@@ -5473,6 +5546,8 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         || *source != before.source
         || *announced_dirs != before.announced_dirs
         || *origin != before.origin
+        // A new page to go and read, or one renamed. `R-J115`.
+        || *artifacts != before.artifacts
 }
 
 /// Equal, ignoring the fields that move every scan by construction. `R-J55`.
@@ -7461,6 +7536,13 @@ mod perf_gate_tests {
                 })
             }),
             ("announced_dirs", |s| s.announced_dirs.push("/d".into())),
+            ("artifacts", |s| {
+                s.artifacts.push(mogeung_core::session::Artifact {
+                    id: "u".into(),
+                    title: "t".into(),
+                    url: "https://claude.ai/artifact/x".into(),
+                })
+            }),
         ];
         for (name, mutate) in loud {
             let mut after = base.clone();
