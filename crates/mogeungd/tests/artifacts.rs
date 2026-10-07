@@ -92,7 +92,7 @@ async fn a_session_read_before_artifacts_existed_gets_them_once() {
     state.backfill_artifacts().await.unwrap();
     assert_eq!(artifacts(&state).await, expected());
     assert_eq!(state.sessions.read().await[ID].turns, turns, "only monitor lines are folded");
-    assert_eq!(state.store.schema_version(), mogeungd::store::SCHEMA_VERSION);
+    assert_eq!(state.store.schema_version(), 2, "the artifact pass's own mark");
 
     // Once: a second call finds the version set and reads nothing.
     state.sessions.write().await.get_mut(ID).unwrap().artifacts.clear();

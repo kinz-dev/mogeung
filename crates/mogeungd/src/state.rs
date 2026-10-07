@@ -544,6 +544,7 @@ fn blank_session(
     Session {
         id,
         title: None,
+        custom_title: None,
         name: None,
         api_ms: 0,
         tool_ms: 0,
@@ -1697,7 +1698,7 @@ impl AppState {
     /// from, and inventing a divisor would be worse than leaving the record
     /// visibly odd.
     pub async fn repair_reingested_history(&self) -> Result<()> {
-        // Its own version, not `SCHEMA_VERSION`: that moved on to 2, and a
+        // Its own version, not `SCHEMA_VERSION`: that has moved on since, and a
         // database already at 1 must not be "repaired" a second time.
         if self.store.schema_version() >= 1 {
             return Ok(());
@@ -1825,6 +1826,49 @@ impl AppState {
             tracing::info!("backfilled artifacts for {found} session(s)");
         }
         self.store.set_schema_version(2)
+    }
+
+    /// Give sessions read before `R-J120` the name you gave them. Once.
+    ///
+    /// `backfill_artifacts`' reasoning, for `custom-title` lines: they are
+    /// behind the saved offset, so the scan never sees them again, and a
+    /// session renamed before this build would otherwise keep a generated
+    /// title until the CLI next re-emitted the rename. Only those lines are
+    /// folded, and the last one wins — it is the name in force.
+    pub async fn backfill_custom_titles(&self) -> Result<()> {
+        if self.store.schema_version() >= 3 {
+            return Ok(());
+        }
+        let sessions: Vec<Session> = self.sessions.read().await.values().cloned().collect();
+        let mut found = 0usize;
+        for mut s in sessions {
+            if !s.source.has_claude_event_history() {
+                continue;
+            }
+            let Ok(file) = std::fs::File::open(&s.transcript_path) else {
+                continue;
+            };
+            let mut last = None;
+            for line in std::io::BufRead::lines(std::io::BufReader::new(file)).map_while(|l| l.ok()) {
+                if !line.contains("\"custom-title\"") {
+                    continue;
+                }
+                if let Some(t) = adapter::parse_line(&line).parsed().and_then(|p| p.custom_title) {
+                    last = Some(t);
+                }
+            }
+            let Some(t) = last else {
+                continue;
+            };
+            s.title = Some(t.clone());
+            s.custom_title = Some(t);
+            found += 1;
+            self.put(s).await;
+        }
+        if found > 0 {
+            tracing::info!("backfilled a custom title for {found} session(s)");
+        }
+        self.store.set_schema_version(3)
     }
 
     /// Recompute cross-session collisions and publish any that changed.
@@ -2027,7 +2071,12 @@ impl AppState {
             if p.version.is_some() {
                 s.version = p.version;
             }
-            if p.title.is_some() {
+            // A `/rename` pins the title; the generated ones Claude Code keeps
+            // writing in between only land while nothing is pinned. `R-J120`.
+            if let Some(t) = p.custom_title {
+                s.title = Some(t.clone());
+                s.custom_title = Some(t);
+            } else if p.title.is_some() && s.custom_title.is_none() {
                 s.title = p.title;
             }
             if p.last_prompt.is_some() {
@@ -5508,11 +5557,12 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         deletions, error, transcript_path, reviewed,
         open_tools, snoozed_until, collisions, loop_signal,
         tmux_target, provisional, limit_hit_at, limit_resets, verify_runs,
-        claims, source, announced_dirs, origin, artifacts,
+        claims, source, announced_dirs, origin, artifacts, custom_title,
     } = after;
 
     *id != before.id
         || *title != before.title
+        || *custom_title != before.custom_title
         || *name != before.name
         || *last_prompt != before.last_prompt
         || *cwd != before.cwd
@@ -7524,6 +7574,7 @@ mod perf_gate_tests {
             }),
             ("snoozed_until", |s| s.snoozed_until = Some(Utc::now())),
             ("title", |s| s.title = Some("t".into())),
+            ("custom_title", |s| s.custom_title = Some("t".into())),
             ("cwd", |s| s.cwd = "/elsewhere".into()),
             ("base_sha", |s| s.base_sha = Some("deadbeef".into())),
             ("verify_runs", |s| {

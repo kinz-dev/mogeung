@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-10-01
+updated: 2026-10-07
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -87,6 +87,10 @@ anything else raises an alert. Counts below are from the author's corpus on
 | `cost-state` | 78³ | **Read** — `totalAPIDuration` and `totalToolDuration`. Its `totalCostUSD` and `modelUsage` are deliberately left; see below |
 | `artifact-comment-monitor` | 62⁴ | **Read** — every artifact the session published: UUID, `title`, `writtenAtMs`, `state`. See below |
 | `artifact-autoreact-ledger` | 133⁴ | Ignored — comment threads already acted on, and empty in every one |
+| `custom-title` | 373⁵ | **Read** — `customTitle`, the name you gave the session with `/rename`. It **pins** the title. See below |
+| `agent-color` | 329⁵ | Ignored — `agentColor`, the colour the CLI draws a renamed session in |
+| `continued-in` | 1⁵ | Ignored, by decision — `continuedInSessionId`, the session this one carried on in. See below |
+| `fork-context-ref` | 27⁵ | Ignored — subagent bookkeeping: `parentSessionId`, `parentLastUuid`, `contextLength` |
 
 ¹ From a **later** sweep and not comparable with the column above: 2026-08-07,
 across the 60 newest transcripts of a corpus that had grown to 315.
@@ -98,6 +102,8 @@ with nothing above them.
 ³ From the 2026-08-29 sweep, 246 transcripts and 120,949 lines.
 
 ⁴ From the canary on 2026-10-01: 12 transcripts carried them.
+
+⁵ From `--bin sweep` on 2026-10-07, 411 files and 232,120 lines.
 
 **`cost-state` is the CLI's own accounting, and mogeung reads half of it**
 (`R-J63`, ruled on 2026-08-29 after the canary had been raising it since
@@ -157,6 +163,10 @@ They took opposite dispositions, and the reasoning is the point:
   cheaper than discovering from a queue of untitled sessions that the one we
   read had been retired. Its `sessionId` is the transcript's own in every line,
   so despite the name it cannot smuggle a *subagent's* name into a session.
+  **Corrected 2026-10-07**: it *can* disagree. In every transcript with a
+  `/rename` it carries the renamed title rather than `ai-title`'s, so the
+  queue's name flipped between the two under last-writer-wins. The rename is
+  now read from `custom-title`, which pins; see below.
 
 **The two `artifact-` types arrived together** and were raised by the canary on
 2026-10-01, as *"2 thing(s) it cannot see"* in the status bar. They are Claude
@@ -178,6 +188,30 @@ Code's bookkeeping for a published claude.ai artifact it watches for comments.
   152 entries, because no comment had been sent to a session on this machine.
   So its shape when it fills is unknown, and a ledger that starts filling will
   not be loud.
+
+**Four more were found by `--bin sweep`, not by the canary**, on 2026-10-07 —
+and the canary's silence is the lesson. The status bar said *"1 thing(s) it
+cannot see"*, and the one thing was the upgrade to 2.1.292. These four had been
+written since 2026-09-25, but the daemon counts unknown lines only from its own
+start, and a restart resumes each transcript from its saved offset. So a type
+first written before the last restart is never counted again, and every update
+restarts the daemon. `R-J121` files that gap. The cure for now is the one
+`bridge-session` taught: after an upgrade, run the sweep.
+
+- **`custom-title` is read, and it pins** (`R-J120`). It is the name *you*
+  gave the session. Claude Code **re-emits it interleaved with `ai-title`** for
+  the rest of the session (`custom`, `ai`, `custom`, `ai`, …), so it cannot
+  share `title`'s last-writer-wins. Once it is seen, `Session.custom_title`
+  holds it and no generated title lands over it. A blank one is barren, and
+  the generated title stands. A one-off backfill (`SCHEMA_VERSION` 3) gives
+  sessions renamed before this build their name, folding only these lines.
+- **`agent-color` is ignored.** It is cosmetic, written beside every rename.
+- **`continued-in` is ignored by decision**, and it is the one that carries
+  something. A session that continued in another is finished, so the queue
+  could stop offering it. But one line on the whole machine is not a shape to
+  build on.
+- **`fork-context-ref` is ignored.** It appears only in `subagents/` files, and
+  which parent a subagent belongs to is already known from where its file lives.
 
 Common top-level fields: `timestamp`, `cwd`, `gitBranch`, `sessionId`,
 `version`, `isSidechain`, `uuid`, `parentUuid`. Also seen: `effort`, `slug`,

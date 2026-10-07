@@ -355,6 +355,14 @@ pub struct Session {
     /// Pages this session published on claude.ai, newest first. `R-J115`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<Artifact>,
+
+    /// The name you gave the session in Claude Code (`/rename`), when you have.
+    /// It **pins** `title`: Claude Code keeps re-emitting its generated title
+    /// in between, and a title chosen by a person outranks one guessed by the
+    /// CLI. Clients read `title`; this is the daemon's memory of the pin.
+    /// `R-J120`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
 }
 
 impl Session {

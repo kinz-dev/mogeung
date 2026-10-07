@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-01
+updated: 2026-10-07
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -30,8 +30,9 @@ Sessions are keyed by Claude Code's uuid. mogeung generating its own id would
 mean maintaining a mapping for no benefit — the session belongs to the CLI, not
 to us.
 
-`Session::label()` falls back in descending usefulness: `ai-title` → last prompt
-→ registry name → short id.
+`Session::label()` falls back in descending usefulness: `title` → last prompt
+→ registry name → short id. `title` is the CLI's generated `ai-title` until you
+`/rename` the session, and your name from then on (`custom_title`, below).
 
 **A prompt is something you typed.** Until `R-J39` it also included whatever a
 slash command printed: `<local-command-stdout>` arrives as a `user` line with a
@@ -214,6 +215,10 @@ would be. The repair checks for version 1 itself rather than for
 `SCHEMA_VERSION`, so a database already repaired is not repaired again when the
 constant moves.
 
+**Version 3 is a backfill too** (`R-J120`), on the same pattern:
+`backfill_custom_titles` folds only `custom-title` lines, last one wins, and
+gives a session renamed before this build its name and its pin.
+
 **`semantic_index` is the opposite kind of table, and is treated as one.** It
 is a **cache**: every row is recomputable from the corpus, so it is dropped and
 rewritten wholesale on a rebuild rather than migrated — a half-rebuilt index
@@ -326,3 +331,12 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
 The store also grew a `signals` table (per-repo signal command and its
 last run, `R-E2`) — a real table rather than a blob because it is keyed
 by repo, not session.
+
+## Session fields added 2026-10-07
+
+- `custom_title` — the name you gave the session with `/rename` (`R-J120`).
+  It **pins** `title`. Claude Code re-emits its generated `ai-title` interleaved
+  with the rename for the rest of the session, so the fold lets a generated
+  title land only while this is empty. Clients read `title` and never need this
+  field; it is the daemon's memory of the pin, persisted so a restart cannot
+  hand the name back to the CLI's guess. Defaulted and skipped when absent.

@@ -28,6 +28,7 @@ fn aged_session(id: &str, days_ago: i64, transcript: &str) -> Session {
         tool_ms: 0,
         id: id.into(),
         title: None,
+        custom_title: None,
         name: None,
         last_prompt: None,
         cwd: "/tmp".into(),

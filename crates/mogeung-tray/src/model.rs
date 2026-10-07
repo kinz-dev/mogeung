@@ -109,6 +109,7 @@ mod tests {
             tool_ms: 0,
             id: id.into(),
             title: None,
+            custom_title: None,
             name: None,
             last_prompt: None,
             cwd: "/r".into(),

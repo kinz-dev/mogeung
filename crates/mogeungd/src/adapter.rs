@@ -67,6 +67,22 @@ pub const KNOWN_IGNORED: &[&str] = &[
     // starts filling will not be loud. Its sibling `artifact-comment-monitor`
     // is read — see `HANDLED`.
     "artifact-autoreact-ledger",
+    // The colour the CLI draws a session's name in: `agentColor` and a
+    // `sessionId`, nothing else. Found by the sweep 2026-10-07 — 329 lines in
+    // 4 transcripts, every one written beside a `/rename`. Cosmetic, and the
+    // window has its own colours.
+    "agent-color",
+    // A pointer to the session this one carried on in: `continuedInSessionId`
+    // and a timestamp. Found 2026-10-07, **one** line on this machine. It does
+    // carry something — a session that continued elsewhere is finished, and
+    // the queue could stop offering it — but one line is not a shape to build
+    // on, so it is ignored by decision rather than by oversight. `R-J120`.
+    "continued-in",
+    // Subagent bookkeeping: `agentId`, `parentSessionId`, `parentLastUuid`,
+    // `contextLength`. Found 2026-10-07 — 27 lines, every one in a
+    // `subagents/` file. Which parent a subagent belongs to is already known
+    // from where its file lives.
+    "fork-context-ref",
 ];
 
 /// Types this parser extracts data from.
@@ -103,6 +119,8 @@ pub const HANDLED: &[&str] = &[
     "ai-title",
     // A second writer of the title, found 2026-08-20. See the parse arm.
     "agent-name",
+    // The name *you* gave the session, which outranks both. `R-J120`.
+    "custom-title",
     "last-prompt",
     "file-history-delta",
     // Every artifact this session published and is watching for comments:
@@ -158,6 +176,9 @@ pub struct Parsed {
     pub version: Option<String>,
     /// Claude Code's own generated title for the conversation.
     pub title: Option<String>,
+    /// A title the human set with `/rename`. Kept apart from `title` because
+    /// it pins: the fold lets it outrank every generated one. `R-J120`.
+    pub custom_title: Option<String>,
     pub last_prompt: Option<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
@@ -602,8 +623,26 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
         // It cannot smuggle in a *subagent's* name, which is what the type's
         // spelling suggests it might: its `sessionId` was the transcript's own
         // in every line swept.
+        //
+        // **Corrected 2026-10-07**: it *can* disagree. In the four transcripts
+        // with a `/rename` it carries the renamed title, not `ai-title`'s — so
+        // under last-writer-wins the queue's name flipped between the two. The
+        // rename is now read from `custom-title` below, and that is what holds.
         "agent-name" => {
             out.title = str_at(&v, "agentName").map(str::to_string);
+        }
+
+        // The title you set with `/rename`. Found 2026-10-07 — 373 lines in 4
+        // transcripts. Claude Code **re-emits it interleaved with `ai-title`**
+        // for the rest of the session (`custom`, `ai`, `custom`, `ai`, …), so
+        // it cannot share `title`'s last-writer-wins; it goes in its own field
+        // and the fold pins it. Blank is no title, which degrades to the
+        // generated one rather than to an empty row. `R-J120`.
+        "custom-title" => {
+            out.custom_title = str_at(&v, "customTitle")
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string);
         }
 
         "last-prompt" => {
@@ -831,6 +870,7 @@ fn extract(v: &Value, ty: &str) -> Option<Parsed> {
 
     if out.events.is_empty()
         && out.title.is_none()
+        && out.custom_title.is_none()
         && out.last_prompt.is_none()
         && out.touched.is_empty()
         && out.announced_dirs.is_empty()
@@ -957,6 +997,21 @@ mod tests {
     #[test]
     fn a_nameless_agent_name_is_barren_rather_than_quietly_skipped() {
         assert_eq!(class(r#"{"type":"agent-name","sessionId":"s"}"#), LineClass::Barren);
+    }
+
+    /// A `/rename` is its own field, not `title`: the fold has to tell it apart
+    /// from the generated titles it is interleaved with. `R-J120`.
+    #[test]
+    fn a_rename_is_read_apart_from_the_generated_title() {
+        let p = parsed(r#"{"type":"custom-title","customTitle":"  MDA - venue  ","sessionId":"s"}"#);
+        assert_eq!(p.custom_title.as_deref(), Some("MDA - venue"));
+        assert_eq!(p.title, None, "a rename must not land in last-writer-wins");
+    }
+
+    #[test]
+    fn a_blank_rename_is_barren_rather_than_an_empty_name() {
+        let l = r#"{"type":"custom-title","customTitle":"   ","sessionId":"s"}"#;
+        assert_eq!(class(l), LineClass::Barren);
     }
 
     /// `R-J115`. The map arrives sorted by UUID — `serde_json` sorts keys — and

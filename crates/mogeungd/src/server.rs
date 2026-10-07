@@ -190,6 +190,9 @@ pub async fn prepare(opts: &Options) -> Result<Arc<AppState>> {
     if let Err(e) = state.backfill_artifacts().await {
         tracing::warn!("could not backfill artifacts: {e}");
     }
+    if let Err(e) = state.backfill_custom_titles().await {
+        tracing::warn!("could not backfill custom titles: {e}");
+    }
 
     state.scan().await;
     tracing::info!(

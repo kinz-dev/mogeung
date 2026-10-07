@@ -20,7 +20,10 @@ use std::sync::Mutex;
 ///    `AppState::repair_reingested_history`.
 /// 2: sessions read before `R-J115` carry no artifacts, because their monitor
 ///    lines are behind the saved offset. See `AppState::backfill_artifacts`.
-pub const SCHEMA_VERSION: u32 = 2;
+/// 3: sessions renamed before `R-J120` carry the generated title, because
+///    their `custom-title` lines are behind the saved offset. See
+///    `AppState::backfill_custom_titles`.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub struct Store {
     conn: Mutex<Connection>,
