@@ -33,12 +33,19 @@ const MAX_HITS: usize = 20;
 /// The window the CLI enforces. Not configurable because it is not ours.
 const WINDOW_HOURS: i64 = 5;
 
-/// A model as the price table sees it: the id the transcript wrote, and
-/// whether the message ran in fast mode. Two prices, so two keys.
+/// A model as the price table sees it: the id the transcript wrote, whether
+/// the message ran in fast mode, and whether its prompt paid the model's
+/// long-prompt rate. Different prices, so different keys.
+///
+/// `long` is decided per message (`pricing::long_prompt`) because only a
+/// message knows its own prompt size; it is `false` for every model without a
+/// long tier, so it splits nothing but Haiku 5.5. The report folds the two
+/// halves back into one row — `rank` — since they are one model to read.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct ModelKey {
     model: String,
     fast: bool,
+    long: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -344,17 +351,29 @@ impl UsageScanner {
 /// Price a set of models and order them the way they are read: dearest first,
 /// and — since an unpriced model has no cost to sort on — by tokens after
 /// that, so a model we cannot price still lands near the top when it is big.
+///
+/// Each key is priced on its own and **then** merged by `(model, fast)`: a
+/// long-prompt half has its own rate, so it has to be costed before its tokens
+/// are added to the short half's, and a model is one row to read however many
+/// rates it paid.
 fn rank(rows: Vec<(ModelKey, TokenSplit, u64)>, day: &str) -> Vec<ModelBurn> {
-    let mut out: Vec<ModelBurn> = rows
-        .into_iter()
-        .map(|(key, tokens, messages)| ModelBurn {
-            cost_usd: pricing::cost_usd(&key.model, key.fast, day, &tokens),
+    let mut merged: BTreeMap<(String, bool), ModelBurn> = BTreeMap::new();
+    for (key, tokens, messages) in rows {
+        let cost = pricing::cost_usd(&key.model, key.fast, key.long, day, &tokens);
+        let row = merged.entry((key.model.clone(), key.fast)).or_insert_with(|| ModelBurn {
+            cost_usd: Some(0.0),
             model: key.model,
             fast: key.fast,
-            tokens,
-            messages,
-        })
-        .collect();
+            tokens: TokenSplit::default(),
+            messages: 0,
+        });
+        row.tokens.add(&tokens);
+        row.messages += messages;
+        // Unpriced anywhere is unpriced: a total that left half out would be
+        // a number in the same font as a real one.
+        row.cost_usd = row.cost_usd.zip(cost).map(|(a, b)| a + b);
+    }
+    let mut out: Vec<ModelBurn> = merged.into_values().collect();
     out.sort_by(|a, b| {
         b.cost_usd
             .unwrap_or(0.0)
@@ -491,12 +510,14 @@ fn fold_line(entry: &mut FileUsage, line: &str) {
     // The model this message ran on. Absent on a handful of lines even in a
     // healthy corpus, and an unnamed model cannot be priced — it is counted
     // under `?`, which the report carries as unpriced rather than as free.
+    let model = msg
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("?")
+        .to_string();
     let key = ModelKey {
-        model: msg
-            .get("model")
-            .and_then(|m| m.as_str())
-            .unwrap_or("?")
-            .to_string(),
+        long: pricing::long_prompt(&model, tin),
+        model,
         fast: usage.get("speed").and_then(|s| s.as_str()) == Some("fast"),
     };
     entry.by_model.entry(key.clone()).or_default().add(&split);
@@ -889,5 +910,34 @@ mod tests {
         let mut sc = UsageScanner::default();
         let r = sc.report(dir.path(), now);
         assert_eq!(r.sessions[0].tokens_out, 2);
+    }
+
+    /// **A long Haiku 5.5 prompt is priced at the long rate, and the model is
+    /// still one row.** The tier is decided per message, so a day holding one
+    /// short and one long prompt has to cost each at its own rate — $0.10 and
+    /// $0.50 per million in — and then read as a single model.
+    #[test]
+    fn a_long_prompt_is_priced_per_message_and_shown_as_one_model() {
+        let dir = Scratch::new("long-prompt");
+        let slug = dir.path().join("-home-u-projects-alpha");
+        std::fs::create_dir_all(&slug).unwrap();
+        let now = Utc::now();
+        let line = |tin: u64| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"{}","message":{{"model":"claude-haiku-5-5","content":[],"usage":{{"input_tokens":{tin},"output_tokens":0}}}}}}"#,
+                iso(now)
+            )
+        };
+        write_lines(&slug.join("aaaa.jsonl"), &[line(100_000), line(200_000)]);
+
+        let r = UsageScanner::default().report(dir.path(), now);
+        assert_eq!(r.models.len(), 1, "{:?}", r.models);
+        let m = &r.models[0];
+        assert_eq!((m.model.as_str(), m.messages, m.tokens.fresh_in), ("claude-haiku-5-5", 2, 300_000));
+        // 100k at $0.10 + 200k at $0.50 = $0.01 + $0.10.
+        let cost = m.cost_usd.unwrap();
+        assert!((cost - 0.11).abs() < 1e-9, "{cost}");
+        assert!((r.days[0].cost_usd - 0.11).abs() < 1e-9);
+        assert!(r.unpriced_models.is_empty());
     }
 }

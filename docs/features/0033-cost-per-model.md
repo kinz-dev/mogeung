@@ -1,7 +1,7 @@
 ---
 title: Cost per model
 status: shipped
-updated: 2026-08-08
+updated: 2026-10-08
 roadmap: [R-J21]
 depends_on: [A4, A31]
 ---
@@ -84,6 +84,13 @@ a wrong total beats a panic on a format nobody documents.
 | `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6` | $5 | $25 |
 | `claude-sonnet-5`, `claude-sonnet-4-6` | $3 | $15 |
 | `claude-haiku-4-5` | $1 | $5 |
+
+> **Rates refreshed 2026-10-08** (`R-J123`). The table above is what was read
+> on 2026-08-08 and is kept as the record of it; `pricing.rs` is the table in
+> force. Four things changed: five models were added, the cache read became a
+> per-model multiple, Haiku 5.5 is priced by prompt length, and Sonnet 5's
+> $2/$10 became its standard price — so the expiry described below never
+> happened, and the `INTRO` row that priced it was removed.
 
 Three things this table does that a hard-coded constant would not:
 

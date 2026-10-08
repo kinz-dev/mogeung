@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-01
+updated: 2026-10-08
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -908,7 +908,11 @@ echo their question, `#[serde(default)]` on everything new:
   [ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md), and the
   shape is arranged so a client cannot accidentally overstate it:
   `TokenSplit` separates the four input buckets, which are priced 1 : 0.1
-  : 1.25 : 2 and were previously summed into one `tokens_in`; `ModelBurn`
+  : 1.25 : 2 and were previously summed into one `tokens_in` (the read is
+  the model's own multiple since `R-J123` — 0.025 on Fable 5.1, 0.05 on
+  Opus 5.5 and Sonnet 5.5 — and Haiku 5.5's long prompts are costed per
+  message before they are summed, so one `ModelBurn` row can hold two
+  rates); `ModelBurn`
   carries `cost_usd` as an **option**, where `null` means no published
   rate rather than free; `unpriced_models` names every model missing from
   the totals; and `rates_as_of` dates the price table so a client can say
