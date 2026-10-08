@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-01
+updated: 2026-10-08
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/lan.rs
@@ -262,8 +262,10 @@ isolation action.
 ## The scan loop
 
 Once, before the first scan, the one-off passes `PRAGMA user_version` gates:
-the repair (`AppState::repair_reingested_history`, version 1) and then the
-artifact backfill (`AppState::backfill_artifacts`, version 2, `R-J115`). They
+the repair (`AppState::repair_reingested_history`, version 1), the artifact
+backfill (`AppState::backfill_artifacts`, version 2, `R-J115`) and then the
+custom-title backfill (`AppState::backfill_custom_titles`, version 3, `R-J120`),
+which gives a session renamed before that build the name you gave it. They
 run first so the pass that follows folds onto a clean, complete record rather
 than on top of a duplicated or partial one — see
 [data-model.md](data-model.md#repair). Each checks its own version number, so a
@@ -605,6 +607,13 @@ Git log's columns becoming shares of its width, because a file from that morning
 holds pixels under the same key. `gitLogColumns` is then completed field by
 field *after* the migration has had its say, the way `zoom` is — the one case
 where a saved object is thrown away rather than filled in.
+
+**A behaviour can change without a bump** when it moves under a key that is
+new. The Files tree's single click opened a preview until `R-J122`, and now
+opens only when `filesClickOpens` is ticked. That reverses what every existing
+window did, but no saved file holds the key, so the fill on load gives each one
+the new default (`false`) and nobody's choice is moved, because nobody had
+made one.
 
 Session ids are not stable across `/clear`, which mints a new one for the same
 conversation, so anything keyed by one has to be able to *move*. The window

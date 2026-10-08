@@ -7,14 +7,23 @@
  *
  * Read-only, permanently. Pillar K, and the daemon offers no write path at all,
  * so this could not edit even if it wanted to.
+ *
+ * **The keyboard reaches it** (`R-J122`). Focus the tree and type: the letters
+ * are a fuzzy search over the whole worktree, drawn as the tree of what
+ * matched (`speedSearch.ts`). The arrows walk the rows — or, while searching,
+ * the matches — and Enter opens. A click only moves that cursor unless *open
+ * on click* is ticked, because a tree that opens every row you touch is one
+ * you cannot look around.
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, ChevronRight, Crosshair, FolderPlus, Plus, RefreshCw, X } from "lucide-react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ChevronDown, ChevronRight, Crosshair, FolderPlus, Plus, RefreshCw, Search, X } from "lucide-react";
 import { FileIcon } from "@/ui/FileIcon";
 import { useStore } from "@/store";
-import { Dim, Empty, IconButton, Input, Loading } from "@/ui/primitives";
+import { Checkbox, Dim, Empty, IconButton, Input, Loading, Mono } from "@/ui/primitives";
 import { basename, explorerFetch, fileFilter, join, openFile, reveal, toggleDir } from "@/lib/explorer";
+import { speedSearch } from "@/lib/speedSearch";
 import { chooseFolder } from "@/lib/tauri";
 import { parseFilePaneId } from "@/lib/panes";
 import { cn } from "@/lib/cn";
@@ -37,6 +46,39 @@ interface FlatRow {
  *  monorepo must not be what discovers that. */
 const HIT_CAP = 300;
 
+/**
+ * Keys the tree takes from the window while it has focus. `R-J122`.
+ *
+ * The arrows are the queue's everywhere else (`queue.next`), and a tree whose
+ * arrows moved the queue instead would be no tree at all. Every *character*
+ * is the tree's too, through `data-type-to-search`. `Escape` is claimed only
+ * while there is a search for it to clear.
+ */
+const TREE_KEYS = "ArrowUp ArrowDown ArrowLeft ArrowRight Home End Enter Backspace";
+
+/** A name with the letters a search matched picked out. */
+function Marked({ name, marks, className }: { name: string; marks: readonly number[]; className?: string }) {
+  if (marks.length === 0) return <span className={className}>{name}</span>;
+  const on = new Set(marks);
+  const parts: React.ReactNode[] = [];
+  for (let i = 0; i < name.length; ) {
+    const lit = on.has(i);
+    let j = i;
+    while (j < name.length && on.has(j) === lit) j++;
+    parts.push(
+      lit ? (
+        <mark key={i} className="bg-transparent font-semibold text-[var(--amber)]">
+          {name.slice(i, j)}
+        </mark>
+      ) : (
+        name.slice(i, j)
+      ),
+    );
+    i = j;
+  }
+  return <span className={className}>{parts}</span>;
+}
+
 export function FilesTool() {
   const id = useStore((s) => s.selected);
   const session = useStore((s) => (s.selected ? s.sessions[s.selected] : null));
@@ -45,6 +87,13 @@ export function FilesTool() {
   const send = useStore((s) => s.send);
   const [filter, setFilter] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Type-to-search, and the row the keyboard is on. `R-J122`. The cursor is
+  // deliberately not "open": with *open on click* off you can stand on a file
+  // without it taking the centre, which is the point of turning it off.
+  const [speed, setSpeed] = useState("");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const clickOpens = useStore((s) => s.prefs.filesClickOpens);
   // Following the file you are reading. `R-J25`.
   const follow = useStore((s) => s.prefs.filesFollow);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -87,18 +136,27 @@ export function FilesTool() {
 
   const match = useMemo(() => fileFilter(filter), [filter]);
 
+  // A search and a cursor are about one worktree; another session's tree
+  // starts clean rather than filtered by what you typed at the last one.
+  useEffect(() => {
+    setSpeed("");
+    setCursor(null);
+  }, [id]);
+
   // A filter searches the **whole worktree**, not the part that happens to be
   // expanded. Filtering the visible rows was the obvious implementation and the
   // wrong feature: a file two collapsed folders down could not be found however
   // exactly you typed its name, which reads as "the filter is broken" rather
   // than "you have not opened that folder". Asked for on first keystroke and
   // kept until the refresh button drops it.
+  // Type-to-search asks for the same walk, for the same reason.
+  const wantsTree = !match.empty || speed !== "";
   useEffect(() => {
-    if (!id || match.empty) return;
+    if (!id || !wantsTree) return;
     if (st?.treePaths || st?.treePending) return;
     patchExplorer(id, { treePending: true });
     send({ cmd: "list_tree", session_id: id });
-  }, [id, match.empty, st?.treePaths, st?.treePending, patchExplorer, send]);
+  }, [id, wantsTree, st?.treePaths, st?.treePending, patchExplorer, send]);
 
   const rows = useMemo<FlatRow[]>(() => {
     if (!st) return [];
@@ -130,6 +188,22 @@ export function FilesTool() {
     return out;
   }, [st]);
 
+  const found = useMemo(
+    () => speedSearch(st?.treePaths ?? [], speed, st?.workspace?.dirs ?? [], HIT_CAP),
+    [st?.treePaths, st?.workspace?.dirs, speed],
+  );
+  const searching = speed !== "";
+
+  // Each letter puts the cursor on the best match, which is what Enter then
+  // opens — you type until the right file is under it, as in IntelliJ.
+  useEffect(() => {
+    if (searching) setCursor(found.best);
+  }, [searching, found.best]);
+
+  useEffect(() => {
+    if (cursor) rowRefs.current.get(cursor)?.scrollIntoView?.({ block: "nearest" });
+  }, [cursor]);
+
   // Matches are flat and carry their directory, because a hit three levels down
   // needs to say where it is — and indenting a filtered list by a depth whose
   // parents are not on screen only looks like damage.
@@ -143,6 +217,110 @@ export function FilesTool() {
   // open file instead, which is more useful anyway: it says what you have out,
   // not which tab happens to be forward.
   const openPaths = st ? st.open.map((t) => t.path) : [];
+
+  /**
+   * A single click on a file. `R-J122`.
+   *
+   * It moves the cursor, and opens the file only when *open on click* is
+   * ticked — a preview, as it always was. A double click still pins, whichever
+   * way the box is set, so opening never needs the box.
+   */
+  const clickFile = (path: string) => {
+    setCursor(path);
+    if (clickOpens && id) openFile(id, path);
+  };
+
+  /** Ref for a row, so the cursor can be scrolled to wherever it lands. */
+  const rowRef = (path: string) => (el: HTMLElement | null) => {
+    if (el) rowRefs.current.set(path, el);
+    else rowRefs.current.delete(path);
+  };
+
+  /**
+   * The tree's keys. `R-J122`.
+   *
+   * While searching, the arrows walk the **matches** and skip the folders
+   * drawn above them: those folders are there to say where a hit is, and
+   * stopping on one would be a keypress spent on something you cannot open.
+   * Enter opens the file pinned — it was asked for by name — and lands the
+   * plain tree on it, so letting go of the search does not lose your place.
+   */
+  const onTreeKey = (e: ReactKeyboardEvent) => {
+    if (!id || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key.length === 1) {
+      // A space starts nothing: it is far likelier a stray key than the first
+      // letter of a file name. Inside a search it is a character like any other.
+      if (e.key === " " && !searching) return;
+      e.preventDefault();
+      setSpeed((q) => q + e.key);
+      return;
+    }
+    const walk = searching ? found.files : rows.map((r) => r.path);
+    const at = cursor ? walk.indexOf(cursor) : -1;
+    const go = (i: number) => {
+      const next = walk[Math.min(Math.max(i, 0), walk.length - 1)];
+      if (next) setCursor(next);
+    };
+    const row = !searching ? rows[rows.findIndex((r) => r.path === cursor)] : undefined;
+    switch (e.key) {
+      case "Backspace":
+        if (!searching) return;
+        setSpeed((q) => q.slice(0, -1));
+        break;
+      case "Escape":
+        if (!searching) return;
+        setSpeed("");
+        break;
+      case "ArrowDown":
+        go(at < 0 ? 0 : at + 1);
+        break;
+      case "ArrowUp":
+        go(at < 0 ? 0 : at - 1);
+        break;
+      case "Home":
+        go(0);
+        break;
+      case "End":
+        go(walk.length - 1);
+        break;
+      case "ArrowRight":
+        // Open a folder; on an open one, step into it.
+        if (row?.isDir && !row.gone) {
+          if (!row.open) toggleDir(id, row.path);
+          else go(at + 1);
+        }
+        break;
+      case "ArrowLeft":
+        // Shut a folder; anywhere else, go up to the folder you are in.
+        if (row?.isDir && row.open) toggleDir(id, row.path);
+        else if (row && row.depth > 0) {
+          for (let i = at - 1; i >= 0; i--) {
+            if (rows[i].depth === row.depth - 1) {
+              setCursor(rows[i].path);
+              break;
+            }
+          }
+        }
+        break;
+      case "Enter":
+        if (!cursor) return;
+        if (searching) {
+          if (!found.files.includes(cursor)) return;
+          openFile(id, cursor, { pin: true });
+          setSpeed("");
+          reveal(id, cursor);
+        } else if (row?.isDir) {
+          if (!row.gone) toggleDir(id, row.path);
+        } else if (row) {
+          openFile(id, row.path, { pin: true });
+        }
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
   /**
    * Folders this session has been seen working in that the workspace does not
@@ -172,6 +350,19 @@ export function FilesTool() {
           {repoName(session)}
         </span>
         <div className="ml-auto flex items-center gap-0.5">
+          {/* Off by default (`R-J122`): a click moves the cursor, a double
+              click or Enter opens. Ticked, a click previews the file, which was
+              the tree's rule before it. */}
+          <Checkbox
+            checked={clickOpens}
+            onChange={(v) => setPrefs({ filesClickOpens: v })}
+            label="open on click"
+            title={
+              clickOpens
+                ? "a single click previews the file — untick so a click only selects it"
+                : "a single click only selects a file; double click or Enter opens it — tick to open on a single click"
+            }
+          />
           {/* Sticky rather than a one-shot, because the ask was to *sync* the
               view: a button you press after every file is the thing being
               complained about. The tab's own menu has the one-shot for anyone
@@ -260,11 +451,12 @@ export function FilesTool() {
                 <div
                   key={p}
                   title={p}
-                  onClick={() => openFile(id, p)}
+                  onClick={() => clickFile(p)}
                   onDoubleClick={() => openFile(id, p, { pin: true })}
                   className={cn(
                     "flex cursor-default items-center gap-1 whitespace-nowrap py-px pr-3 pl-2 text-sm hover:bg-[var(--bg-faint)]",
                     openPaths.includes(p) && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                    cursor === p && "ring-1 ring-inset ring-[var(--ring)]",
                   )}
                 >
                   <FileIcon name={basename(p)} className="shrink-0" />
@@ -286,8 +478,100 @@ export function FilesTool() {
           )}
         </div>
       ) : (
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pb-2">
-        {!st?.dirs[""] ? (
+      <>
+        {/*
+          The search you are typing, above the tree it is shaping. Outside the
+          scroll so it cannot be scrolled away from — it is the only sign that
+          the tree on screen is not the whole tree.
+        */}
+        {searching && (
+          <div className="flex shrink-0 items-center gap-1 border-b border-[var(--border)] px-2 py-0.5 text-xs">
+            <Search size={11} className="shrink-0 text-[var(--dim)]" />
+            <Mono
+              className={cn(
+                "truncate",
+                st?.treePaths && found.total === 0 ? "text-[var(--red)]" : "text-[var(--text-strong)]",
+              )}
+            >
+              {speed}
+            </Mono>
+            <Dim className="shrink-0 text-2xs">
+              {!st?.treePaths
+                ? "walking the worktree…"
+                : found.total === 0
+                  ? "no match"
+                  : found.total > HIT_CAP
+                    ? `best ${HIT_CAP} of ${found.total}`
+                    : `${found.total} match${found.total === 1 ? "" : "es"}`}
+            </Dim>
+            <button
+              type="button"
+              title="clear the search (Escape)"
+              aria-label="clear the search"
+              onClick={() => setSpeed("")}
+              className="ml-auto shrink-0 opacity-50 outline-none transition-opacity duration-[var(--dur-fast)] hover:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--ring)]"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        )}
+      {/*
+        Focusable as a whole rather than row by row, so a click anywhere in it
+        is what gives it the keys. `data-type-to-search` hands it every
+        character (`focusOwns`); `data-owns-keys` names the rest.
+      */}
+      <div
+        ref={scrollRef}
+        tabIndex={0}
+        aria-label="files — type to search"
+        data-type-to-search=""
+        data-owns-keys={searching ? `${TREE_KEYS} Escape` : TREE_KEYS}
+        onKeyDown={onTreeKey}
+        className="min-h-0 flex-1 overflow-auto pb-2 outline-none"
+      >
+        {searching ? (
+          !st?.treePaths ? (
+            <Loading what="walking the worktree" />
+          ) : found.rows.length === 0 ? (
+            <Empty hint="the name is matched, letters in order — type a / to match the whole path. Escape clears">
+              nothing matches
+            </Empty>
+          ) : (
+            <div className="min-w-max">
+              {found.rows.map((r) => (
+                <div
+                  key={r.path}
+                  ref={rowRef(r.path)}
+                  title={r.path}
+                  onClick={() => {
+                    if (!r.isDir) clickFile(r.path);
+                  }}
+                  onDoubleClick={() => {
+                    if (!r.isDir) openFile(id, r.path, { pin: true });
+                  }}
+                  className={cn(
+                    "flex cursor-default items-center gap-1 whitespace-nowrap py-px pr-3 text-sm hover:bg-[var(--bg-faint)]",
+                    openPaths.includes(r.path) && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                    cursor === r.path && "ring-1 ring-inset ring-[var(--ring)]",
+                  )}
+                  style={{ paddingLeft: 6 + r.depth * 12 }}
+                >
+                  {r.isDir ? (
+                    <ChevronDown size={11} className="shrink-0 text-[var(--dim)]" />
+                  ) : (
+                    <span className="w-[11px] shrink-0" />
+                  )}
+                  <FileIcon name={r.name} isDir={r.isDir} open={r.isDir} className="shrink-0" />
+                  <Marked
+                    name={r.name}
+                    marks={r.marks}
+                    className={r.isDir ? "text-[var(--dim)]" : "text-[var(--text)]"}
+                  />
+                </div>
+              ))}
+            </div>
+          )
+        ) : !st?.dirs[""] ? (
           <Loading what="listing" />
         ) : rows.length === 0 ? (
           <Empty>this folder is empty</Empty>
@@ -296,13 +580,17 @@ export function FilesTool() {
             {rows.map((r) => (
               <div
                 key={r.path}
+                ref={rowRef(r.path)}
                 title={r.path}
                 onClick={() => {
-                  if (r.isDir) toggleDir(id, r.path);
-                  // Single click previews, double click pins — the tree's
-                  // existing rule. `openFile` raises the Code pane, so a click
-                  // from here is never a no-op, whatever tab is forward.
-                  else openFile(id, r.path);
+                  if (r.isDir) {
+                    setCursor(r.path);
+                    toggleDir(id, r.path);
+                  }
+                  // A click selects; it previews only with *open on click*
+                  // ticked (`R-J122`). `openFile` raises the Code pane, so an
+                  // opening click is never a no-op, whatever tab is forward.
+                  else clickFile(r.path);
                 }}
                 onDoubleClick={() => {
                   if (!r.isDir) openFile(id, r.path, { pin: true });
@@ -310,6 +598,7 @@ export function FilesTool() {
                 className={cn(
                   "flex cursor-default items-center gap-1 whitespace-nowrap py-px pr-3 text-sm hover:bg-[var(--bg-faint)]",
                   openPaths.includes(r.path) && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                  cursor === r.path && "ring-1 ring-inset ring-[var(--ring)]",
                 )}
                 style={{ paddingLeft: 6 + r.depth * 12 }}
               >
@@ -358,6 +647,7 @@ export function FilesTool() {
           </div>
         )}
       </div>
+      </>
       )}
 
       {/*
@@ -366,7 +656,7 @@ export function FilesTool() {
         the filter hides this — a list of what you *might* add has no business
         answering "where is `mod.rs`".
       */}
-      {match.empty && hints.length > 0 && (
+      {match.empty && !searching && hints.length > 0 && (
         <div className="shrink-0 border-t border-[var(--border)] px-2 py-1">
           <Dim className="block text-2xs">
             worked in by this session — not in the workspace

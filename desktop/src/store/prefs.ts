@@ -193,6 +193,15 @@ export interface Prefs {
   /** The Files tree follows the file you are reading. `R-J25`. */
   filesFollow: boolean;
   /**
+   * A single click on a file in the Files tree opens it. `R-J122`.
+   *
+   * **Off by default**, which reverses the tree's old rule on ask: a click
+   * that opened a preview made the tree unusable for looking around it, since
+   * every row you touched took the centre. Off, a click only moves the cursor
+   * and a double click or Enter opens.
+   */
+  filesClickOpens: boolean;
+  /**
    * Suggested folders you have waved away, by repository root. `R-J39`.
    *
    * A preference and not a daemon fact: refusing a suggestion says nothing
@@ -381,6 +390,7 @@ export const defaultPrefs = (): Prefs => ({
   dockMax: false,
   infoOpen: false,
   filesFollow: false,
+  filesClickOpens: false,
   dismissedDirs: {},
   infoHeight: 240,
   notesEditorHeight: 256,

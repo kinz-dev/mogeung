@@ -1241,7 +1241,8 @@ const VIEWER_KEYS = new Set([
  *   same collision `j` had, one key over. A claim is checked *before* the
  *   viewer rule below, because it is the more specific statement, and it is
  *   declared on the component rather than listed here so the claim lives beside
- *   the thing making it.
+ *   the thing making it. **`data-type-to-search`** is the wide form of a claim:
+ *   every single-character key, for a list you search by typing at it.
  * - **A writable editor owns everything**, which is the per-editor check the
  *   paragraph above said would be needed *"if a Monaco here ever becomes
  *   editable"*. One did: `R-L5`'s scratch files, on 2026-09-03, and this was
@@ -1264,6 +1265,11 @@ export function focusOwns(key: string, doc: Document = document): boolean {
   // A surface that has named this key wins it. `R-L8`.
   const claim = el.closest<HTMLElement>("[data-owns-keys]");
   if (claim?.dataset.ownsKeys?.split(/\s+/).includes(key)) return true;
+  // A surface you type to search owns every character, the way a text box does
+  // — it just has no box. `R-J122`'s Files tree: `[` typed into it is the start
+  // of a file name, not *previous pane*. Named keys still go through the claim
+  // above, so the arrows and Enter are opted into one by one.
+  if (key.length === 1 && el.closest("[data-type-to-search]")) return true;
   // Before the viewer check, and that order is the fix: a writable editor is
   // also a `.monaco-editor`, so asking the general question first would answer
   // the specific one wrongly.
