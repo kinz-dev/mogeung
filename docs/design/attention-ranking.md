@@ -16,19 +16,6 @@ cloning the whole board once per tick. Nothing about the ordering changed —
 the genericity is a calling convention, and `&[Session]` callers (the HTTP
 queue, the snapshot, every test) compile as before.
 
-**What ranking does not read.** The session record has grown workspace and
-discovery fields (`R-J39`/`R-J40`) and none of them is an input here: a folder
-you added, or one you were offered, says nothing about whether a session needs
-you. Recorded because `attention.rs` is covered by this document, so every
-change to that file asks the question — and the answer has been "no" each time.
-
-Checked again on 2026-10-01 and 2026-10-07, when `R-J115` gave `Session` its
-`artifacts` and `R-J120` its `custom_title`: each commit touched this file only
-to add the new field to the test fixture's `Session` literal. Neither is an
-input — a page a session published, or a name you gave it, says nothing about
-whether it needs you. `custom_title` pins `title`, which `label()` reads for
-the notifier and the window, and `rank` never reads a label.
-
 ## Reasons
 
 Scored in this order. The order the code *evaluates* them in is stated below
@@ -55,6 +42,11 @@ responded, so it no longer needs you.
 about this one" has to mean it, or you would never trust it enough to use it.
 The row ranks `idle` with the detail *snoozed* and stays visible; the window
 marks it with a small clock and offers *Wake*.
+
+**`RateLimited` is neither `Failed` nor `AwaitingInput`** (`R-G1`): there is
+nothing to fix, and typing does not help. It usually means several sessions
+went dark at once, and the queue should look like exactly that. Cleared when a
+new human turn or real assistant output shows the session moving again.
 
 ### `APPROVE` vs `WAITING` (`R-B4`)
 
@@ -88,39 +80,6 @@ Claude Code publishes `status: idle` in its own live registry, so blockage on a
 human is a **fact we are told**, not something inferred. In v0.1 this could only
 be guessed after the fact from permission denials, and it was the largest
 documented gap. See [ADR-0003](../decisions/0003-observe-do-not-spawn.md).
-
-## What is on a `Session` and stays out of the score (2026-08-29)
-
-`R-J63` put `api_ms` and `tool_ms` on `Session` — how long the CLI says a session
-spent waiting on the API and running tools. **Neither is an input here, and that
-is deliberate rather than pending.**
-
-Time on the API is not urgency. A session that has burned an hour of API time
-may be finished, may be looping, and may be doing exactly what it was asked;
-none of that is *needs you*, which is what this ranking answers. Wiring it in
-would denominate attention in a misleading unit, which is the specific mistake
-[ADR-0005](../decisions/0005-tokens-not-dollars.md) made and
-[ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md) kept out of the
-queue when it brought dollars back for one view only.
-
-The numbers are worth having — they answer *where did this session's time go*,
-which nothing else mogeung reads can — and the Info pane is where they belong.
-
-**`provisional` (`R-J75`, 2026-09-10) is not read either, and the row it marks
-ranks on almost nothing.** A tmux pane running an agent that has not written a
-line yet is published as a session with `provisional: true`
-([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)),
-carrying only what the pane can prove: alive, a pid, a cwd where the platform
-will say, and zero of everything else. Ranking does not look at the flag. It
-looks at the evidence, and the evidence places the row at `running` — alive,
-no registry status, nothing to be blocked on — with the detail *working*. Two
-consequences follow from the row being rebuilt every scan with its clocks set
-to now: it can never become `STALLED`, since it is never silent for longer than
-a scan, and it never earns the within-tier tie-break, so it sits at exactly
-100, the floor of the tier. When the agent writes its first line the real
-session takes the pane and is ranked on its own, so the row moves the moment it
-becomes real. `R-J75` names that as its cost; this document names it as what
-ranking on evidence rather than on a flag has to do.
 
 ## Sessions from another machine (`R-I21`, 2026-09-23)
 
@@ -170,44 +129,52 @@ and gets the sentence it always showed. Rows with no clock (`Running`,
 either, because their countdown runs to a *deadline* the window already holds as
 `snoozed_until`.
 
-## RateLimited (2026-07-29)
+## The queue is gated (`R-J8`, `R-J65`)
 
-A new tier between `Failed` (900) and `NeedsReview` (800): score 850,
-label `LIMIT`. A limit-hit session is deliberately neither `Failed`
-(nothing to fix) nor `AwaitingInput` (typing does not help); it usually
-means several sessions went dark at once, and the queue should look like
-exactly that. Cleared when a new human turn or real assistant output
-shows the session moving again.
+The ranking is computed every pass and broadcast only when it differs from the
+last one sent. `AttentionItem` derives `PartialEq`, and the derive is
+load-bearing: every field of an item is part of the comparison, so a field that
+changes by construction — a rendered duration inside `detail`, which is what the
+string carried for a year — disables the gate silently. That is why `detail` is
+static and the clock travels as `since`. The gate does not reach silence and
+cannot: the tiebreak moves every 30 s for anything waiting, so a board with a
+waiting row genuinely re-ranks and is genuinely re-sent then — a handful of
+broadcasts a minute, not none. Two tests hold both halves: one tick apart an
+unchanged board ranks identically, and a minute apart the tiebreak still moves.
+Gating applies to the broadcast, never to a request: a `Rescan` or an explicit
+fetch is always answered, unchanged or not
+([wire-protocol.md](wire-protocol.md#the-contract)).
 
-## The queue is compared, not just sent (2026-08-05)
+## What ranking does not read
 
-`AttentionItem` derives `PartialEq`, and that derive is load-bearing rather
-than tidiness: the scan runs at the poll rate and used to broadcast the whole
-queue every pass, so a window sat redrawing a list that had not changed while
-agents worked. The ranking is now computed every pass as before and **sent only
-when it differs from the last one sent** (`R-J8`).
+`attention.rs` is covered by this document, so every commit to that file asks
+whether a new field is an input. The answer has been *no* each time, most
+recently on 2026-10-07, and each refusal is deliberate rather than pending:
 
-Two consequences worth stating, because both are easy to break:
-
-- **Every field of an item is part of the comparison**, including `detail`.
-  That derive is what makes the gate honest, and for a year it is also what
-  made the gate useless: `detail` carried a rendered duration, so any waiting,
-  stalled or snoozed row differed from its own previous value **by
-  construction** and the gate could never hold. Measured on 2026-08-26 against
-  the running daemon: two consecutive payloads differed in **2 rows of 223, in
-  the seconds of a duration string**, with score, reason and order unchanged —
-  and all 28.5 KB went to every window, 0.69 times a second, 1.07 MB/min. The
-  reasoning that used to sit here ("which is correct: that string is on
-  screen") was the mistake: the string being on screen argues for the *window*
-  keeping a clock, not for the daemon re-sending one. `R-J65` moved it.
-- **Silence is still not the goal, and cannot be reached.** `score` carries
-  `(waited / 30).clamp(0, 99)` so that within a tier the longest wait sorts
-  first — so a board with anything waiting genuinely re-ranks every 30 s and
-  genuinely should be re-sent then. The honest figure is ~40 broadcasts a
-  minute falling to a handful, not to none. Two tests hold both halves: one
-  tick apart an unchanged board must rank identically, and a minute apart the
-  tiebreak must still move.
-- **Gating applies to the broadcast, never to a request.** A `Rescan` or an
-  explicit fetch is always answered, unchanged or not. A request that returns
-  silence because the answer happens to match the last one is indistinguishable
-  from a daemon that has stopped.
+- **Workspace and discovery fields** (`R-J39`, `R-J40`): a folder you added, or
+  one you were offered, says nothing about whether a session needs you.
+- **`api_ms` and `tool_ms`** (`R-J63`): time on the API is not urgency. A
+  session that has burned an hour of API time may be finished, may be looping,
+  and may be doing exactly what it was asked; wiring it in would denominate
+  attention in a misleading unit, which is the specific mistake
+  [ADR-0005](../decisions/0005-tokens-not-dollars.md) made and
+  [ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md) kept out of the
+  queue when it brought dollars back for one view only. The numbers answer
+  *where did this session's time go*, which nothing else mogeung reads can, and
+  the Info pane is where they belong.
+- **`artifacts`** (`R-J115`) and **`custom_title`** (`R-J120`): a page a
+  session published, or a name you gave it, is not a reason to look.
+  `custom_title` pins `title`, which `label()` reads for the notifier and the
+  window; `rank` never reads a label.
+- **`provisional`** (`R-J75`): a tmux pane running an agent that has not
+  written a line yet is published as a session
+  ([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md))
+  carrying only what the pane can prove — alive, a pid, a cwd where the
+  platform will say, and zero of everything else. Ranking does not look at the
+  flag. It looks at the evidence, which places the row at `running` with the
+  detail *working*. Rebuilt every scan with its clocks set to now, it can never
+  become `STALLED` and never earns the within-tier tie-break, so it sits at
+  exactly 100, the floor of the tier, until the agent writes its first line and
+  the real session takes the pane. `R-J75` names that as its cost; this
+  document names it as what ranking on evidence rather than on a flag has to
+  do.

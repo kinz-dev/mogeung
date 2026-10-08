@@ -11,595 +11,243 @@ covers:
 
 # Cross-session signals
 
-> `state.rs` also holds the run state `R-N4` added, which this document
-> deliberately does not describe — that belongs to
-> [run-and-debug.md](run-and-debug.md). Noted here because both docs cover the
-> same file, so a staleness warning on one can be raised by a change that has
-> nothing to do with it. So can `R-J110`'s (2026-09-25): a live session's
-> branch read from its repository's `HEAD` each pass (`refresh_branches`, and
-> `settle_branch` in `put_or_coast`), which is a session field rather than a
-> signal between sessions, and is described in
-> [claude-code-formats.md](claude-code-formats.md) beside the transcript's
-> `gitBranch` stamp it overrides.
->
-> What *does* belong here, and is easy to mistake for the same coincidence, is
-> anything in `state.rs` that reaches out to the machine on the daemon's behalf
-> — launching a terminal, focusing one, and since `R-J34` showing a folder in
-> the file manager. They are the same family and they teach each other, so
-> they are described together below.
->
-> **Notes and their tasks are another resident** and belong to
-> [data-model.md](data-model.md) and
-> [ADR-0015](../decisions/0015-markdown-is-the-truth.md): `save_note`,
-> `set_task` and the mirror all live in `state.rs` too, and none of them reaches
-> out to the machine or reads a transcript. Added to this list on 2026-09-10,
-> when `R-L3` raised a staleness warning here by touching a file it shares — the
-> exact coincidence the paragraph above exists to name.
->
-> The **file surface** — which roots a session may be read through, and the
-> guard around them — is another resident of `state.rs` and belongs to
-> [architecture.md](architecture.md), where `R-J40`'s workspaces are described.
-> Checked when that landed rather than assumed: none of the signals here reads
-> a root. `R-J39`'s discovery pass, which suggests folders from what a session
-> has already written, reads `touched_files` — the same field collision
-> detection reads — and changes nothing about it: it only *offers* a folder,
-> and the two never meet. A collision is computed from what two transcripts *say* was touched,
-> so widening what the explorer may open changes nothing about who is editing
-> the same file as whom.
-
 Things no single agent can know about itself, because knowing them requires a
-view across sessions that none of them has. Roadmap `R-B3`, `R-B4`, `R-B5`,
-`R-B7`, and the notification discipline behind `R-C1`/`R-C4`.
-
-This is the strongest argument for the observer model beyond "it takes nothing
-away". A wrapper around one agent could never produce any of it.
+view across sessions that none of them has — and, in the same file, the few
+places the daemon reaches out to the machine on your behalf. This is the
+strongest argument for the observer model beyond "it takes nothing away": a
+wrapper around one agent could never produce any of it.
 
 ## Collision warning (`R-B3`)
 
-**Two live sessions editing the same file inside a 10-minute window.**
-
-Both sides are warned, because either might be the one you want to stop. The
-cheap version — comparing cumulative `touched_files` — is useless: any two
-sessions in a repo eventually overlap, and a warning that is always on is off.
-So each touch is timestamped (`Session::recent_touches`, capped at 200) and only
-recent ones count.
-
-**A touched path and a diff path are matched after resolution** (`R-J27`): the
-transcript writes the session's own `cwd` prefix and git answers with the
-resolved root, so a checkout reached through a symlink — or any macOS temp
-directory — spells the same file two ways. Collision detection compares paths
-from two transcripts and is therefore consistent either way; the attribution
-filter in `state.rs` compares a transcript's path against git's and is not,
-which is where the reconciliation lives.
+**Two live sessions editing the same file inside a 10-minute window.** Both
+sides are warned, because either might be the one you want to stop. Comparing
+cumulative `touched_files` would be useless — any two sessions in a repo
+eventually overlap, and a warning that is always on is off — so each touch is
+timestamped (`Session::recent_touches`, capped at 200) and only recent ones
+count. Paths are compared as two transcripts spelled them, so a checkout
+reached through a symlink is consistent on both sides
+([read-boundary.md](read-boundary.md#two-spellings-of-one-path) holds the
+reconciliation the attribution filter needs instead).
 
 Recomputed **every scan**, not only when files move, because a collision also
-*ends* — one side exits, or the window lapses — and a stale collision warning is
-worse than none. Cheaply, since `R-J57`: each live session's touch window is
-computed **once** per pass (it used to be recomputed per *pair*), detection
-runs over those precomputed sides rather than a clone of the whole board, and
-the paths sit in a `BTreeSet` so identical collisions compare equal between
-ticks instead of re-broadcasting in a shuffled order.
+*ends* and a stale warning is worse than none; cheaply, since each live
+session's touch window is computed once per pass and the paths sit in a
+`BTreeSet` so identical collisions compare equal between ticks.
 
-### What it cannot see
-
-Attribution comes from `Edit`/`Write` tool calls, so an agent that changes a
-file through a shell command is invisible to it ([A8](../product/assumptions.md)).
-It reports overlap, not conflict: two sessions editing different functions in
-one file is flagged, and is usually fine.
-
-**Git writes do not clear it.** `state.rs` gained the write verbs in
-`R-D19`–`R-D22`, and none of them participates in this signal: a collision is
-computed from what sessions *touched*, recorded from their transcripts, not
-from what the working tree currently holds. So discarding a file, or committing
-it, leaves the warning standing until the window lapses or a side exits — which
-is right. Both agents did edit that file, and undoing the edit on disk does not
-unmake the fact that two of them were working on it at once.
-
-### Two machines are never a collision (`R-I21`, 2026-09-23)
-
-Sessions mirrored from a followed daemon are not in `AppState.sessions` at
-all — they live in the federation's own map — so `detect_collisions` never
-sees them, and two sessions on two machines editing one path are not reported:
-they are editing two files that happen to share a name. Two on one machine
-still are, **on that machine**: a mirrored session carries its own daemon's
-collisions across, with the other session's id namespaced by the same machine
-so the link resolves to the right row here.
-
-### What a repair does to them
-
-Every input these signals read — `recent_touches`, `open_tools`, `recent_tools`,
-`loop_signal` — is derived from the transcript, so the `R-A6` repair pass
-(`repair_reingested_history`, and
-[data-model.md](data-model.md#repair)) zeroes them and folds the file in again
-rather than patching them. A signal computed from a doubled history is wrong in
-a way no correction factor fixes: the same touch counted twice is not a
-collision, and a tool call counted twice is four repeats where there were two.
-The rebuild is why the loop threshold below can stay a bare count.
+What it cannot see: attribution comes from `Edit`/`Write` tool calls, so an
+agent that changes a file through a shell command is invisible
+([A8](../product/assumptions.md)). It reports overlap, not conflict. Git
+writes do not clear it — discarding or committing a file does not unmake the
+fact that two agents were working on it at once. Two machines are never a
+collision: mirrored sessions live outside `AppState.sessions`, so
+`detect_collisions` never sees them, and a mirrored session carries its own
+daemon's collisions across with the other id namespaced by the same machine.
 
 ## Permission vs. instruction (`R-B4`)
 
-See [attention-ranking.md](attention-ranking.md) — an unmatched `tool_use` plus
-an idle registry means the session is sitting on a permission prompt rather than
-waiting for a new task.
-
-`Session::open_tools` is maintained incrementally: `tool_use` pushes, the
-matching `tool_result` removes, and a new human turn clears the list. Sidechain
-(subagent) tool calls are excluded — a subagent's pending tool is not something
-you can approve.
+An unmatched `tool_use` plus an idle registry means the session is sitting on
+a permission prompt rather than waiting for a new task
+([attention-ranking.md](attention-ranking.md)). `Session::open_tools` is
+maintained incrementally: `tool_use` pushes, the matching `tool_result`
+removes, a new human turn clears the list. Sidechain (subagent) tool calls are
+excluded — a subagent's pending tool is not something you can approve.
 
 ## Loop detection (`R-B7`)
 
-**The same `tool:target` four times in the last twelve calls.**
-
-Deliberately crude. It catches the common real failure — an agent retrying an
-edit that keeps not applying, or re-reading a file it has already read — without
-pretending to understand intent.
-
-It cannot distinguish "stuck" from "legitimately doing the same thing to many
-similar inputs", which is exactly why it produces an **advisory string** rather
-than a queue tier of its own. A heuristic this rough must not be able to
-reorder the board.
+**The same `tool:target` four times in the last twelve calls.** Deliberately
+crude: it catches an agent retrying an edit that keeps not applying, or
+re-reading a file it has already read, without pretending to understand
+intent. It cannot distinguish "stuck" from "legitimately doing the same thing
+to many inputs", which is why it is an advisory string rather than a tier. A
+heuristic this rough must not be able to reorder the board.
 
 ## Snooze (`R-B5`)
 
 Suppresses a session from ranking until a deadline, checked before every other
-rule including `Failed`. Persisted with the session, so it survives rescans and
-daemon restarts.
-
-The rule that makes it usable: **snooze beats everything.** A snooze that failure
-could override would be a snooze you could not rely on, and an unreliable mute
-button is one nobody presses.
+rule including `Failed`, persisted with the session. **Snooze beats
+everything** — a snooze that failure could override is one you could not rely
+on, and an unreliable mute button is one nobody presses.
 
 ## Notification discipline (`R-C1`, `R-C4`)
 
-Delivery is the easy half. The hard half is not being annoying, and the failure
-mode is identical to the one the format canary had to learn
-([health-and-canary.md](health-and-canary.md)): **a notifier that cries wolf
-trains you to dismiss it, and then the one that mattered gets dismissed too.**
+Delivery is the easy half. The hard half is not being annoying: a notifier
+that cries wolf trains you to dismiss it, and then the one that mattered gets
+dismissed too. The rule is to notify on the *transition into* needing you,
+once, per session, never on a state that is merely continuing. `Notifier::diff`
+is pure — it returns what to say and updates its own memory, sends nothing —
+so *when do we speak?* is testable without a desktop or a network. Delivery
+is `osascript` on macOS, `notify-send` on Linux, `curl` for push: one process
+on a rare event, and no HTTP client that could poison the runtime. Off unless
+asked for (`--notify`, `--push-url`, or the config keys). The notifier reads
+the merged queue, so a followed machine's waiting session notifies here,
+labelled *on HOST*, and names a session by `label()`, which a `/rename` now
+wins.
 
-The rule: notify on the *transition into* needing you, once, per session. Never
-on a state that is merely continuing. Without it, every 1.5-second scan would
-re-announce every waiting session.
+## What a repair does to them
 
-`Notifier::diff` is pure — it returns what to say and updates its own memory,
-but sends nothing. That keeps the interesting question (*when do we speak?*)
-testable without a desktop or a network. Delivery is `osascript` for banners on
-macOS and `notify-send` on Linux, and `curl` for push: one process on a rare event, and no HTTP-client dependency that
-could poison the async runtime.
-
-Off unless asked for (`--notify`, `--push-url`). A tool that starts posting
-banners the first time you run it has overstepped.
+Every input above — `recent_touches`, `open_tools`, `recent_tools`,
+`loop_signal` — is derived from the transcript, so the re-ingestion repair
+([data-model.md](data-model.md#repair)) zeroes them and folds the file in
+again rather than patching them: the same touch counted twice is not a
+collision, and a tool call counted twice is four repeats where there were two.
+The rebuild is why the loop threshold can stay a bare count.
 
 ## Starting one, and knowing whether you did (`R-B2`, `R-I3`)
 
-Launching is the other half of jumping, and on Linux it is a table of
-candidate terminals tried in order. Two things learned from it on 2026-08-02,
-both the kind that only a second machine teaches:
+The one thing mogeung starts is a real interactive CLI, unmodified, in a
+terminal or headless under tmux, and the rules are the ones a second machine
+taught:
 
-**`spawn()` succeeding is not a launch.** It means the process started. A
-terminal given flags it does not understand starts, prints a usage error and
-exits — by which time `spawn` has long since returned `Ok`. So a launch waits,
-asks whether the child is still alive, and only then calls it a success.
-Exiting **zero** immediately is also success and deliberately distinguished:
-`gnome-terminal` hands the window to its own daemon and returns at once.
+- **`spawn()` succeeding is not a launch.** A terminal given flags it does not
+  understand starts, prints usage and exits after `spawn` has returned `Ok`.
+  So a launch waits, asks whether the child is alive, and only then calls it
+  a success; exiting zero at once is also success, because `gnome-terminal`
+  hands the window to its own daemon. On Linux it is a table of candidate
+  terminals tried in order, and `x-terminal-emulator` is resolved to its real
+  target so it gets that program's flags rather than xterm's.
+- **Which CLI is the caller's choice** (`R-J51`), and `agent_command` is an
+  exhaustive `match` on `SessionSource` with no default arm
+  ([ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)):
+  a source with no recipe is an error in words, never a different agent
+  started quietly, and it is refused before a worktree is cut. The flag
+  belongs to the CLI — `--dangerously-skip-permissions` is Claude's,
+  `--approval-mode yolo` Qwen's (because Qwen writes nothing to disk when a
+  tool blocks, so an approval prompt would read as *working*),
+  `--ask-for-approval never --sandbox workspace-write` Codex's (short of the
+  flag that also drops its sandbox), `--auto` opencode's — the same ones the
+  `*mo` launchers use, so the two move together. A headless Codex launch into
+  a directory Codex has not been trusted in is refused (`R-J74`): the prompt
+  would have no window to appear in, and the answer is never given for you.
+- **The tmux session name carries the CLI** for everything that is not
+  Claude (`mogeung-qwen-<place>-<stamp>`); Claude keeps the bare
+  `mogeung-<place>-<stamp>` already written into `tmux attach` lines. Nothing
+  parses either — panes are matched by process ancestry.
+- **Every spawn goes through `env::command`**, never `Command::new`, so where
+  the program is and what the child's `PATH` will be are answered together
+  ([architecture.md](architecture.md#the-path-a-launcher-does-not-give-r-j87)).
 
-**`x-terminal-emulator` is not a terminal.** It is a Debian alternatives
-symlink to whichever one the user chose, and the flag that carries a command
-differs between them — `-e` takes argv for xterm and a single string for
-terminator. It is resolved to its real target so the row matches the program.
+### A pane running an agent that has not written (`R-J75`)
 
-### Which CLI it starts (`R-J51`)
-
-The caller's choice since 2026-08-25, and the shape of that choice is
-[ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)'s rule
-applied to the one place mogeung starts anything: `agent_command` is an
-exhaustive `match` on `SessionSource`, so the next CLI added is a compile error
-here rather than a session quietly started as Claude. There is no default arm.
-
-Three consequences worth stating, because each is a mistake the obvious version
-makes:
-
-**A source with no recipe is an error, not a fallback.** There is no way to
-start Codex from here, and the answer says so. Starting a *different* agent
-than the one asked for is the worst answer available — worse than refusing,
-because the refusal is visible and the substitution is not.
-
-**It is refused before the worktree is cut.** `worktree: true` creates a branch
-and a checkout; doing that first and discovering the recipe afterwards would
-leave both behind for a session that was never going to exist.
-
-**The flag belongs to the CLI, not to mogeung.** `--dangerously-skip-permissions`
-is Claude's and `--approval-mode yolo` is Qwen's; the daemon passes whichever
-the source names, which is still not wrapping the conversation
-([ADR-0003](../decisions/0003-observe-do-not-spawn.md)). Both are the ones
-`yolomo` and `qwenmo` use, so the three move together. Qwen's mode is `yolo`
-rather than `auto` for a reason particular to it: Qwen writes nothing to disk
-when a tool blocks on approval, so under `auto` a session waiting for a human
-reads as one busily working — the blind spot feature 0036 records, avoided by
-not creating the prompt in the first place.
-
-opencode's is its own `--auto` (`R-I25`, `scripts/opencodemo`), and for the
-opposite reason from Qwen's it is *not* buying anything back: opencode writes a
-blocked prompt to its database and mogeung reads it, so a session started
-without `--auto` would rank APPROVE when it asks. `--auto` is there because
-this is the approve-everything launcher, as the other three are; a `deny` in
-the opencode config still denies.
-
-The tmux session name carries the CLI for everything that is not Claude
-(`mogeung-qwen-<place>-<stamp>`, `mogeung-opencode-…`), which is `qwenmo`'s convention: two agents
-started in one directory are then tellable apart in `tmux ls`. Claude keeps the
-bare `mogeung-<place>-<stamp>` it has always had — a name already written into
-`tmux attach` lines should not move for a feature that did not touch it.
-Nothing in mogeung parses either; panes are matched by process ancestry.
-
-### A pane running an agent that has not written (`R-J75`, 2026-09-10)
-
-Every session above is discovered from **the agent's own bookkeeping**, and that
-has one failure no parsing fixes: an agent that is running and blocked *before*
-it writes is invisible. `R-J74` found the specific case — Codex asking whether
-it may trust a directory, opening no thread until you answer — and the general
-one covers a login expiry, a first-run migration, and anything a future CLI
-invents.
-
-So a tmux pane whose process tree contains an agent CLI is published as a
-session, marked `provisional`, identified by tmux's own `pane_id` rather than by
-the attach target: a target renumbers when a window closes, and an identity that
-is a location is not one.
+Every session is discovered from the agent's own bookkeeping, and that has one
+failure no parsing fixes: an agent that is running and blocked *before* it
+writes — Codex asking whether it may trust a directory, a login, a first-run
+migration — is invisible. So a tmux pane whose process tree contains an agent
+CLI is published as a session, marked `provisional`, identified by tmux's own
+`pane_id` rather than by the attach target (a target renumbers when a window
+closes, and an identity that is a location is not one), recomputed every scan
+and never persisted. `is_agent` reuses ADR-0025's list of programs mogeung
+must never *start* — the same list rather than a second that could drift, and
+therefore the same limit: a wrapper script calling `claude` is not `claude`.
 [ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)
-carries the reasoning, including why reconciliation is by pane and why these
-rows are never persisted.
-
-The reuse worth knowing: `is_agent` is ADR-0025's list of programs mogeung must
-never *start*, used here to recognise one. Same list rather than a second that
-could drift — and therefore the same limit, that a wrapper script calling
-`claude` is not `claude`.
-
-### And whether it can be found at all (`R-J87`)
-
-Every launch above resolves a program name, and on 2026-09-06 none of them
-could: a bundle started from the Dock gets the launchd `PATH` and no profile is
-read, so `tmux` — the one binary here nobody had written a resolver for — was
-invisible, and `tmux_panes`' forgiving *"no tmux here"* reported it as a
-session not running under tmux. The repair is `env.rs` and belongs to
-[architecture.md](architecture.md#the-path-a-launcher-does-not-give-r-j87);
-what belongs here is the consequence for this file: **`crate::env::command`
-rather than `Command::new` for anything the daemon spawns**, so that the two
-questions a launch asks — where the program is, and what the child's own `PATH`
-will be — are answered together rather than one of them by accident.
+carries the reasoning; an unclaimed opencode pane is *waiting for your first
+prompt*, because opencode writes a session the moment it is spoken to.
 
 ### Handing a folder to the desktop (`R-J34`)
 
-`open_folder` is the third thing in this file that reaches for another
-application — `open` on macOS, `xdg-open` elsewhere — and it is here rather
-than in the window for the reason the other two are: **this is the machine the
-folder is on.** A client dialled into another machine's daemon that opened the
-path locally would show whatever happens to sit there, which is `R-J27`'s
-lesson one layer up — one path is two answers on two machines.
-
-`open` is macOS-only and that is not a house style. Linux has a program called
-`open` too: `openvt`, from util-linux, which switches virtual terminals. The
-familiar name on the wrong platform would not fail — it would do something
-else, quietly and successfully.
-
-**It deliberately does not apply the lesson above.** A launch waits to see
-whether the child is still alive, because a terminal handed flags it does not
-understand exits before you can tell. A file manager is not worth that wait:
-the answer to the client is *asked*, and a handler that sat on the connection
-until a desktop had finished starting Nautilus would trade a reporting nicety
-for a stalled socket. What it does instead is **reap** — `xdg-open` hands the
-directory over and exits at once, and a child nobody waits on is a zombie, one
-per click on a button meant to be clicked often. The wait happens on a thread
-of its own, where a non-zero exit becomes a log line rather than an error the
-user has already been told did not happen.
-
-Reading a worktree and never writing it is what makes this a handoff rather
-than a step towards an editor: the moment you want to *do* something to a file,
-the answer is an application that can, which is what
-[pillar K](../product/roadmap.md#k-explicitly-not) asks for.
+`open_folder` — `open` on macOS, `xdg-open` elsewhere — is in the daemon
+rather than the window because **this is the machine the folder is on**; a
+client dialled into another machine's daemon that opened the path locally
+would show whatever happens to sit there. `open` is macOS-only and that is not
+a house style: Linux has an `open` too, `openvt`, which switches virtual
+terminals, so the familiar name on the wrong platform would do something else
+quietly and successfully. It does not wait for the child the way a launch
+does — the answer to the client is *asked*, and a handler that sat on the
+connection until a desktop had started Nautilus would stall the socket — but
+it reaps, on a thread of its own, so a click meant to be clicked often leaves
+no zombie. `open_in_intellij` and the probe beside it (`R-J92`) are the same
+shape.
 
 ## Jump to terminal (`R-B2`)
 
-Resolves a session's pid to its controlling tty (`ps -o tty=`), works out which
-terminal application owns the process, and asks that application to focus the
-matching tab.
+Resolves a session's pid to its controlling tty, works out which terminal
+application owns the process, and asks that application to focus the matching
+tab. It moves **your** window and types nothing — the agent is untouched.
 
-This closes the loop the queue opens: `WAITING` tells you which session needs
-you, and this puts you in front of it. It moves **your** window and types
-nothing — the agent is untouched.
+The owner is found by **walking the process ancestry** until something
+recognisable appears — `claude → zsh → login → iTermServer → iTerm2` is four
+levels, so checking the immediate parent fails — stopping at pid 1 or after
+12 hops. Applications are addressed by bundle id, not name, because iTerm2
+has answered to both `iTerm` and `iTerm2` across versions and
+`com.googlecode.iterm2` has not moved. Two dialects: Terminal.app's tty lives
+on the *tab* (`set frontmost` + `set selected`); iTerm2's on the *session*
+inside a tab, so the script selects window, tab, then session, and iterating
+only over tabs finds nothing. Each script activates **only after a match**,
+because when detection fails mogeung asks every terminal it knows, and a
+script that activated first would shuffle the user's windows on every miss
+(`a_miss_does_not_raise_the_application`). On Linux the X11 window is found
+through `wmctrl` and `xdotool` from the tmux clients' pids; Wayland refuses
+honestly.
 
-### Detecting the terminal
+**What still cannot work.** Terminals without AppleScript — Alacritty,
+Ghostty, kitty — cannot be driven, and neither can an individual pane inside
+`tmux` or `screen`; the error names the terminal it detected. For a tmux
+session that no longer bites, because attaching (`R-B18`) replaces focusing
+([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md),
+[ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md)). A session
+started with a bare `claude` in an unscriptable terminal remains genuinely
+unreachable, and mogeung says so. The return leg — `Ctrl+Cmd+M` raising the
+window — is the shell's ([the-window.md](the-window.md#chrome-and-panes)).
+Jump never crosses a federation hop: raising a window on another machine's
+screen is an act nobody here would see.
 
-The first implementation assumed Terminal.app and told an iTerm2 user *"no tab
-is attached to /dev/ttys003"* while their tab sat in plain view. Assuming one
-terminal was simply wrong.
+## Sending text into a session (`R-B54`)
 
-The owner is now found by **walking the process ancestry** until something
-recognisable appears. The real shape is deeper than it looks:
-
-```
-claude → zsh → login → iTermServer → iTerm2
-```
-
-Four levels, so checking the immediate parent would also have failed. The walk
-stops at pid 1 or after 12 hops.
-
-Applications are addressed by **bundle id**, not name: iTerm2 has answered to
-both `iTerm` and `iTerm2` across versions, while
-`com.googlecode.iterm2` has not moved.
-
-### The two dialects
-
-| | tty lives on | Focus |
-|---|---|---|
-| Terminal.app | the **tab** | `set frontmost` + `set selected` |
-| iTerm2 | the **session** inside a tab | `select` window, tab, then session |
-
-iTerm2's extra level is split panes. Iterating only over tabs finds nothing,
-which is its own way to fail silently.
-
-Each script `activate`s **only after a match**. That matters because when
-ancestry detection fails, mogeung falls back to asking every terminal it knows —
-and a script that activated first would shuffle the user's windows on every
-miss. Pinned by `a_miss_does_not_raise_the_application`.
-
-### Getting back (`R-B10`)
-
-Jump-to-terminal solves half a round trip. A system-wide shortcut —
-`Ctrl+Cmd+M` by default — raises the mogeung window from wherever you are, so
-the return leg is one key rather than a hunt through whatever is on screen.
-
-Registered in the Tauri shell, through `tauri-plugin-global-shortcut` — the
-same `global-hotkey` crate the egui client used directly, so the accelerator
-string and its `Cmd`-means-SUPER mapping are unchanged. Failure is reported on
-stderr but is **never fatal**: a shortcut another application already owns is an
-ordinary thing to hit, and it must not stop mogeung opening.
-
-Raising unminimises before it focuses. `set_focus` on a minimised window is a
-no-op on every platform, and the failure reads as a broken shortcut rather than
-as an iconified window.
-
-Only `Pressed` is acted on; every shortcut also reports `Released`, which would
-otherwise raise the window twice per press.
-
-**This nearly died with the egui client.** The Tauri shell had the plugin loaded
-and the capability granted, and registered nothing — so the retirement in
-[ADR-0020](../decisions/0020-the-egui-client-is-retired.md) would have deleted a
-shipped feature while the roadmap still called it `✅`. A plugin being present is
-not a feature being wired; the roadmap row is the claim, and it was checked
-against the code rather than against the dependency list.
-
-**Caveat that cannot be detected:** registering a shortcut macOS reserves for
-itself (`Cmd+Space`, `Cmd+Tab`) *succeeds* and then never fires, because the
-system consumes the key first. Verified live — `Cmd+Space` registers happily.
-`--help` says so; there is nothing to check at runtime.
-
-### Bindings as data (`R-B11`, `R-B12`)
-
-Rebinding, pane-aware navigation and import/export all needed the same thing
-first: actions had to stop being a `match` arm per key and become data. They are
-an action table plus a map to text bindings, and the event handler resolves a
-chord to an action and dispatches.
-
-Navigation actions are **pane-agnostic** — `Next` means "next thing in whatever
-has focus" — so one binding does the obvious thing in three panes instead of
-needing three bindings and a rule for which applies.
-
-Stored **client-side**. Not a breach of "every UI is a client with no local
-authority" ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)): a keymap
-is not daemon state, and a second client would rightly have its own — which is
-exactly what happened, and why the window's keymap deliberately never shared a
-file with the retired egui client's
-([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)). Two clients, two
-action vocabularies; one loader failing on the other's names would have silently
-reset a keymap rather than reporting anything.
-
-Only what you changed is stored, so a default that improves later reaches you;
-loading merges over the defaults so an action added later appears with its
-default binding rather than silently unbound.
-
-**Binding parsing rejects anything it does not fully understand.** The first
-version ignored unrecognised tokens, so `Ctl+J` — the obvious hand-edit typo —
-parsed as a bare `J`: it fired on the wrong key, and validation called it fine.
-That is the worst failure available to a keymap, because "this shortcut does
-nothing" is indistinguishable from "this action is broken". Caught by a test
-written to check the validator, which then failed on the validator itself.
-
-### Icons must be proven to render
-
-Kept as a lesson, though the code it describes went with the egui client
-([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)).
-
-egui bundled four fonts (Ubuntu-Light, Hack, NotoEmoji, emoji-icon-font), and a
-glyph outside their combined coverage drew as an **empty box, silently**: layout
-unaffected, clicks still working, and nothing but a human looking at the window
-able to tell. Four shipped that way before anyone noticed — `✎` on the flag
-button, `⌁` on blast radius, `⑂` beside the branch name, and `✓`, the
-read-marker in the file list added the same day. The fix was to funnel every
-icon through one function and have a test parse the cmap tables of the actual
-vendored `.ttf` files, so the check survived an upgrade changing what was
-bundled.
-
-The web view has the reverse problem and it is worth stating, because "we use a
-browser now" is not the same as "solved": the system font stack renders almost
-any glyph *somewhere*, so nothing shows an empty box on this machine — and an
-icon that resolves here can still fall back to something else-shaped on a
-machine with a different font set. The invariant that transferred is the first
-half: icons come from one place, so what is used is enumerable rather than
-scattered through the components.
-
-### Why not an in-app terminal
-
-The premise here was right and the conclusion was too broad — `R-B18` now ships
-one. Worth reading the correction, because the mistake is instructive.
-
-Still true: embedding a *running* session is impossible, because its pty master
-belongs to the terminal that created it and there is no way to hand that off.
-Still true: spawning our own sessions into an embedded emulator means writing a
-worse iTerm2 inside mogeung, the same trade that made v0.1 a worse Claude Code.
-
-What was missed is one line further down this page. "The multiplexer owns the
-tty" was filed as a *limitation* — the reason a tmux pane could not be focused.
-It is the whole solution. Because tmux owns the pty, and is built for several
-clients at once, mogeung can attach as one more client and the session stays
-reachable from every terminal it was already reachable from. The property listed
-as the blocker was the mechanism.
-
-The trade that made v0.1 bad is avoided for a specific, checkable reason: an
-attached session is **never trapped in mogeung**. See
-[ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md), and
-`desktop/src/lib/tmux.ts` builds that argv, and since `R-J84` it also hands
-tmux the mouse: `set-option -t <session> mouse on`, per session and never
-globally. Without it tmux enables no mouse reporting, xterm.js falls back to
-alternate-scroll, and the wheel arrives at the shell as Up/Down arrows — the
-command history, with nothing scrolling. See `desktop/src/lib/tmux.ts` for the
-argv, which was ported from the Rust
-faithfully enough to keep its tests.
-
-And then a second correction, 2026-07-29: `R-B31` ships a terminal mogeung
-*does* own the pty of — a plain shell, in a worktree, moved out of the pane
-tree and into a panel of its own a day later by `R-B33`. The surviving argument
-is the one that had to be answered, not dodged: a shell is where someone types
-`claude`, and a pty we owned outright would trap that session exactly as
-predicted. It runs under tmux for that reason, which keeps the never-trapped
-property for anything started inside it. So the paragraph above stands as
-written; what it rules out is owning the *agent's* loop, not owning a process.
-
-A third turn, 2026-07-31 (`R-I6`): against a remote daemon both panes run
-`ssh -t <target> tmux …` rather than `tmux …`. The never-trapped property is
-unchanged but its *scope* now needs saying out loud — the session is reachable
-from any terminal **on the daemon's machine**, which is where it was always
-going to be, since that is where the files and the agent are. What would have
-broken the property is the thing this replaced: running tmux locally against a
-path that only exists elsewhere, which produced a shell on the wrong machine and
-called it the session's.
-See [ADR-0011](../decisions/0011-own-a-shell-never-an-agent.md).
-
-### What still cannot work
-
-Jump-to-terminal (`R-B2`) drives terminals over AppleScript, so terminals
-without it — Alacritty, Ghostty, kitty — cannot be driven at all, and neither
-can an individual pane inside `tmux` or `screen`. The error names the terminal
-it detected rather than blaming the user's setup.
-
-For a tmux session that limitation no longer bites, because attaching (`R-B18`)
-replaces focusing rather than depending on it. A session started with a bare
-`claude` in an unscriptable terminal remains genuinely unreachable, and mogeung
-says so.
-
-## Sending text into a session (`R-B54`, 2026-08-29)
-
-The one thing in this file that reaches an agent rather than the machine around
-it, and it is here because
+The one thing in this file that reaches an agent rather than the machine
+around it, inside the fence
 [ADR-0003's 2026-08-29 amendment](../decisions/0003-observe-do-not-spawn.md#amendment--2026-08-29-a-human-may-press-send)
-put it inside the fence rather than outside: a human clicks, confirms, and the
-text they are looking at goes into that session's own tmux pane, once.
+drew: a human clicks, confirms, and the text they are looking at goes into
+that session's own tmux pane, once. `R-B2` above still types nothing; the two
+are opposite kinds of act and both end at a terminal.
 
-`R-B2` above still **types nothing** — it moves your window. This is the
-opposite kind of act and the distinction is worth keeping sharp, because the two
-sit three sections apart and both end at a terminal.
+- **The target** is `tmux_target`, already resolved for the Agent tab by
+  walking process ancestry against `tmux list-panes`. Nothing new is computed
+  for sending — a second way of working out where a session lives would be a
+  second way of being wrong about it.
+- **The gate** is `send_allowed`, set once at start-up from
+  `send::allowed(&addr)`, or the asking socket being on this machine
+  (`R-J104`). Its own flag rather than `writes_allowed` or `config_editable`:
+  those accept a token, and this door takes none. A shared secret on a LAN is
+  not a person at this machine.
+- **The delivery** is `send.rs`: `load-buffer` on stdin, `paste-buffer -p -t
+  <pane>`, `send-keys Enter`. Running it corrected two things its module doc
+  carries: tmux returns before the receiver has read, and `-p` inserts
+  bracketed-paste markers only when the program in the pane has asked for
+  that mode. The command box (`R-O12`) reuses the paste half into your own
+  shell, unsubmitted.
+- **Across a hop** (`R-I23`), a send to a mirrored session is forwarded only
+  with the follow's *allow changes* consent, and the owning daemon then
+  applies the gate to the relay as to any client — over a LAN it is refused
+  there, in its words.
 
-What `state.rs` contributes is the target and the gate:
+## What the signals do not read
 
-- **the target** is `tmux_target`, already resolved for the Agent tab by walking
-  process ancestry against `tmux list-panes` (ADR-0010). Nothing new is
-  computed for sending, which is the point — a second way of working out where a
-  session lives would be a second way of being wrong about it;
-- **the gate** is `send_allowed`, set once at start-up from
-  `send::allowed(&addr)` and read per request — or, since `R-J104`, the asking
-  socket being on this machine, which passes whatever the bind. Its own flag rather than
-  `writes_allowed` or `config_editable`: those accept a token or describe
-  outbound URLs, and this door takes neither. A shared secret on a LAN is not a
-  person at this machine.
+`state.rs` holds more than the signals: the run state (`R-N4`,
+[run-and-debug.md](run-and-debug.md)); a live session's branch read from its
+repository's `HEAD` each pass (`R-J110`, [claude-code-formats.md](claude-code-formats.md));
+notes and their tasks (`save_note`, `set_task`, the mirror —
+[data-model.md](data-model.md)); the file surface and `session_roots`
+([read-boundary.md](read-boundary.md)); the git wrappers
+([review-checkpointing.md](review-checkpointing.md),
+[wire-protocol.md](wire-protocol.md)); the model (`R-O1`), the pricing record
+and its kick (`R-J124`), the scratch directory (`R-L5`), artifacts (`R-J115`)
+and the pinned title (`R-J120`). None of them is an input to a signal:
+collision, permission-vs-instruction, loop, snooze and the notification rules
+read transcripts and the registry exactly as they always have, and when a
+model *does* feed a signal it will be pillar O's own rows saying so, with
+[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 5 the standing
+rule that its output gets a column of its own. Recorded because every commit
+to `state.rs` raises the staleness check on this document, and the answer has
+been *no signal moved* each time — most recently for `R-J115`, `R-J120` and
+`R-J124` on 2026-10-08.
 
-The delivery itself is `send.rs` — `load-buffer` on stdin, `paste-buffer -p -t
-<pane>`, `send-keys Enter` — and its module doc carries what running it
-corrected: tmux returns before the receiver has read, and `-p` inserts
-bracketed-paste markers only when the program in the pane has asked for that
-mode.
+## The insight layer
 
-### Across a hop (`R-I23`, 2026-09-23)
-
-A send to a mirrored session is forwarded to the daemon that owns it only
-with the follow's *allow changes* consent on, and that daemon then applies
-clause 4 to the relay as to any client — so over a LAN it is refused there,
-in its words ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s second
-amendment of 2026-09-23). **Jump to terminal never crosses**: raising a window
-on another machine's screen is an act nobody here would see, and the button
-says so rather than sending it.
-
-## What the signals do not read (2026-08-28)
-
-`state.rs` gained a `model` field with `R-O1`, and none of the signals above is
-an input to it or an output of it: collision warning, permission-vs-instruction,
-loop detection, snooze and the notification rules are all computed from
-transcripts and the registry exactly as before, and a configured model changes
-none of them.
-
-Recorded rather than left implicit, because `state.rs` is covered by this
-document — so every change to that file asks whether the signals moved, and the
-answer here is no. The same note in `attention-ranking.md` exists for the same
-reason. When a model *does* start feeding a signal, it will be
-[pillar `O`](../product/roadmap.md)'s own rows saying so, and
-[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 5, carried
-forward from ADR-0030, is the standing rule that its output gets a column of its own rather than being
-merged into one of these.
-
-## The insight layer (2026-07-29)
-
-Collision detection and notifications were the first cross-session
-signals; pillar F generalised the idea into `insight.rs`: literal search
-across every transcript and `history.jsonl`, per-day digests counted
-from evidence (never assistant self-reports), recurring-failure grouping
-with an auditable normalised key, prompt reuse clusters, hour-of-day
-analytics, subagent trees, decision-candidate extraction (pattern named
-on every row), and prompt-blame for a file from `touched_files` — each
-answer stating how it matched, because A8 says attribution cannot be
-certain and the UI must not pretend otherwise.
-
----
-
-*2026-09-03: `state.rs` gained `scratch_dir` (`R-L5`), a `OnceLock` a test
-sets so no test writes to the real `~/.mogeung/scratch`. Nothing in the
-signals above reads it; noted so the staleness check stays honest.*
-
-## What of `state.rs` this covers
-
-`state.rs` is also the daemon's git wrappers, described by
-[wire-protocol.md](wire-protocol.md) and
-[review-checkpointing.md](review-checkpointing.md), and its handoffs to other
-programs: `open_folder` is described above (*Handing a folder to the desktop*),
-and `open_in_intellij` with the probe beside it (`R-J92`, 2026-09-11) by
-wire-protocol.md. This document covers the
-scan loop's signals, attribution and the queue's inputs; a change to a
-handoff is not a change to a signal.
-
-Checked again on 2026-09-16, when `R-D32` gave `git_switch` its `detach` flag:
-that is a wrapper, the flag reaches git and nothing else, and no signal here
-reads it. The one thing a switch *does* touch on this side —
-`unpin_diff_bases`, which a detached checkout triggers exactly as a branch
-switch does — is [review-checkpointing.md](review-checkpointing.md)'s, where
-the base is defined.
-
-Checked again on 2026-09-21, when `R-D34` gave every git wrapper an optional
-`repo` and `git_root` a fence: the fence reads `session_roots`, never
-`recent_touches`; `compute_change`, `recompute_change` and the attribution
-filter were not touched by that commit; and `git_blame` passes `None` on
-purpose, so blame follows the file the session is reading rather than the
-checkout a Git window is pointed at. Nothing here follows the picker.
-
-Checked again on 2026-10-08, for three commits that touched `state.rs` without
-touching a signal. `R-J115` (2026-10-01) added `merge_artifacts`, the
-`artifacts` arm of the fold and `backfill_artifacts`; `R-J120` (2026-10-07)
-added the `custom_title` arm, which pins the title against the generated one,
-and `backfill_custom_titles`. Both fold a session's own transcript and belong
-to [data-model.md](data-model.md#repair) and
-[claude-code-formats.md](claude-code-formats.md); each also joined
-`significant_change`'s loud side, which is
-[architecture.md's](architecture.md#what-a-fold-compares-2026-08-26) list, not
-this one. The one thing a signal says differently: `Notifier::diff` names a
-session by `label()`, and a `/rename` now wins that name. `R-J124`
-(2026-10-08) gave `AppState` a `pricing` record, an `unpriced` list and a
-`pricing_kick`, and `health()` folds them into `UnpricedModel` and
-`PricesDiffer` — the price table's canary,
-[health-and-canary.md](health-and-canary.md)'s. Nothing here reads a collision,
-an open tool, a tool history or a snooze.
+Collision detection and notifications were the first cross-session signals;
+pillar F generalised the idea into `insight.rs`: literal search across every
+transcript and `history.jsonl`, per-day digests counted from evidence (never
+assistant self-reports), recurring-failure grouping with an auditable
+normalised key, prompt reuse clusters, hour-of-day analytics, subagent trees,
+decision-candidate extraction with the pattern named on every row, and
+prompt-blame for a file from `touched_files` — each answer stating how it
+matched, because A8 says attribution cannot be certain and the UI must not
+pretend otherwise ([wire-protocol.md](wire-protocol.md#insight-usage-and-docs)).

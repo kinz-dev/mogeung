@@ -7,728 +7,531 @@ covers:
   - crates/mogeung-core/src/federation.rs
   - crates/mogeung-core/src/pricing.rs
   - crates/mogeung-core/src/usage.rs
+  - crates/mogeung-core/src/config.rs
   - crates/mogeungd/src/api.rs
   - crates/mogeungd/src/server.rs
-  - crates/mogeung-core/src/config.rs
   - crates/mogeungd/src/scratch.rs
   - crates/mogeungd/src/notes.rs
-  - crates/mogeungd/src/model.rs
-  - crates/mogeungd/src/embed.rs
-  - crates/mogeungd/src/guide.rs
-  - crates/mogeungd/src/why.rs
 ---
 
 # Wire protocol
 
-One WebSocket carries live state: commands in, events out. Bulk reads are also
-available as plain REST so the daemon is curl-able without a UI.
+One WebSocket carries live state: commands in (`ClientMsg`, 99 variants as of
+2026-10-08), events out (`ServerMsg`, 67). Bulk reads are also plain REST so
+the daemon is curl-able without a UI. `crates/mogeung-core/src/wire.rs` is the
+contract; this document is the same thing by family, with every message in
+its table and the rules that family carries beneath it.
 
-## Commands (`ClientMsg`)
+Each command row names its **hop** class — what a daemon does with it when it
+names a session mirrored from another machine (`here`: this daemon's, never
+forwarded; `read` / `judge`: forwarded; `write`: forwarded only with the
+follow's consent; `desktop`: never, it acts on a screen) — and each event row
+its **relay** class (`board`: the watch socket carries it; `pass`: returned to
+the asker with ids rewritten; `theirs`: dropped, it describes that daemon).
+See [Identity and federation](#identity-and-federation).
 
-| Command | Effect |
-|---|---|
-| `Subscribe` | **Re-send** the full snapshot. The daemon already pushes one on connect, before the socket has said anything — so this is the explicit recovery path, not the way a client gets its first board. The window does not send it on open: doing so bought a second copy of the largest payload on the wire and nothing else (`R-J69`) |
-| `SetHunkReviewed` | Mark or unmark one hunk |
-| `ReviewAll` | Mark every hunk in the current diff |
-| `RefreshChange` | The full diff — hunks included — answered **on the asking socket only** (`R-J59`). Served from the daemon's cache unless `force` (serde-defaulted, so older clients keep their meaning) insists on git being consulted again; selection changes and summary-driven refreshes want the current answer cheaply, the pane's *recompute from disk* button wants a recompute |
-| `FetchEvents` | Replay stored transcript events from `since` |
-| `ForgetSession` | Stop tracking; drop review state |
-| `LaunchTerminal` | Open a real interactive agent CLI, optionally in a new worktree. `source` picks which one (`R-J51`) and is `#[serde(default)]` — a client built before the choice existed omits it and gets Claude Code, which is the answer it was already getting. All three CLIs have a recipe since `R-J72`; a source the daemon had none for was an error in words, never a different agent started quietly, and that arm remains the answer for any source added to the enum before its recipe. Codex's is deliberately **not** the analogue of the other two — `--ask-for-approval never --sandbox workspace-write`, not `--dangerously-bypass-approvals-and-sandbox`, because that flag also turns off a sandbox neither sibling CLI has to give up, and a click saying *yolo* does not get to make that trade for you. `headless` (`R-J61`, also serde-defaulted, to the terminal window older clients were already getting) starts a detached tmux session and opens no window at all — and is **refused for a Codex launch into a directory Codex has not been trusted in** (`R-J74`), because Codex opens no thread until that question is answered and headless gives the prompt no window to appear in, which is a running agent invisible to everyone including this daemon. The answer is never given on your behalf; `AgentHealth.trusted_dirs` carries what `~/.codex/config.toml` says so the window can warn before the click — `yolomo -d` as a daemon path; without tmux it refuses in words rather than falling back, because a fallback that opened a window would be the opposite of what was asked |
-| `Rescan` | Scan now instead of waiting for the next poll |
-| `FetchHealth` | Ask what mogeung can and cannot currently see |
-| `Snooze` | Silence a session for N minutes; 0 clears it |
-| `FetchReviewDebt` | How much of a repo's agent output nobody has read |
-| `FetchBlastRadius` | What else references the symbols a file's diff changed |
-| `FocusTerminal` | Bring the terminal *app* a live session runs in to the front — iTerm2, Terminal.app, the tmux client; not a mogeung pane |
-| `OpenFolder` | Show a session's `cwd` in the machine's file manager — Finder on macOS, `xdg-open`'s handler elsewhere (`R-J34`). A handoff, and it runs where the daemon is, because a path is not the same answer on two machines |
-| `ProbeIntellij` | Is this session's project IntelliJ's (`.idea` at the repository root, or the `cwd` outside one), and is a launcher here? Answered by `IntellijProbe` with the root, the two answers and the launcher found, once per session, so the window's button can say why it is dead before the click (`R-J92`) |
-| `OpenInIntellij` | Open the project in IntelliJ IDEA on the daemon's machine — the same handoff as `OpenFolder`, refused in words when there is no `.idea` folder or no launcher (`R-J92`) |
-| `FetchWorkspace` | A session's own root, the folders added to it by hand, any that have gone missing (`R-J40`), and the folders mogeung has *noticed* it working in — `WorkspaceHint { path, source, files }`, offered and never added (`R-J39`) |
-| `AddWorkspaceDir` / `RemoveWorkspaceDir` | Add or drop a folder. **Gated with the repository writes** — not because they write one, but because they widen what this daemon will read out, which is ADR-0012's rule wearing a third hat |
-| `ListDir` | One directory of the session's worktree, for the explorer (`R-B24`). A path is relative to the session's own root, **or absolute** — in which case it is served only from inside a folder the workspace holds (`R-J40`) |
-| `FetchFile` | One worktree file, capped and text-only — there is no write counterpart, by design. Same path rule as `ListDir` |
-| `ListTree` | Every worktree file path in one answer, for go-to-file (`R-B25`); gitignore-aware, capped at 20k with a `truncated` flag |
-| `SearchContent` | Lines matching a literal query across the worktree (`R-B25`); smart-cased, capped at 500 matches |
-| `GitLog` | A page of the session repo's commit log (`R-D10`), optionally scoped to a ref (`R-D11`) and narrowed by literal `grep`/`author`/`path`/`pickaxe` filters — a set path switches `--follow` on (file history, `R-D12`), `pickaxe` is `-S` ("when did this string appear", `R-D13`); each commit carries refs, parents and a session-attribution hint. Since `R-D27`: `all` asks for every ref (`--all`, beside `rev` when both are set), and `since`/`until` are a commit-date range in unix seconds that the daemon turns into one fixed ISO form — the client's number is never the argument. All three echo back on `GitCommits` for the stray rule |
-| `GitShow` | One commit's diff, in `Change`'s file/hunk shapes, plus its header — full message, committer, dates, parents (`R-D12`), and since `R-D27` the author's and committer's emails and git's own signature letter (`%G?`, passed through unworded); the sha is validated as hex before git sees it |
-| `GitStatus` | The repo's uncommitted state, staged and unstaged distinguished; conflicts marked, ignored paths included as `!!` dimming data |
-| `GitDiffFile` | One uncommitted file against `HEAD` (`/dev/null` when untracked) |
-| `GitBlame` | Per-line authorship, capped at 20k lines — of the worktree, or of the file at a revision (`rev`), which is what re-blame rides (`R-D11`) |
-| `GitRefs` | Branches with tracking state, tags (annotated ones dereferenced to commits), remotes, HEAD, and `FETCH_HEAD`'s mtime — display only; the daemon never fetches |
-| `GitStashes` | The stash list; `GitStashShow` one stash's diff by index — the `stash@{N}` spec is built daemon-side from a number |
-| `GitSubmodules` | Submodule paths and their status prefix |
-| `GitDiffRange` | The diff between two commits, both shas validated. `GitShow`, `GitDiffFile`, `GitStashShow` and this all take `context` (clamped ≤400) and `ignore_ws`, echoed back so a superseded cut is dropped (`R-D14`) |
-| `GitCompare` | What merging a branch would bring: merge base resolved daemon-side, answered as a `GitRangeDiff` with real shas (`R-D15`) |
-| `GitReflog` | Where HEAD has been — 100 entries, read-only recovery sight |
-| `GitWorktrees` | `git worktree list`, including the ones mogeung itself created |
-| `GitConflictFile` | A conflicted file's three stages (`:1:`/`:2:`/`:3:`), empty when a side has no version (`R-D16`) |
-| `GitFileAtRev` | One file's content at a revision (`sha`, optionally `sha^`), for the Editor's revision tabs |
+## The contract
 
-**Note what is absent:** nothing starts, steers or stops an agent
-([ADR-0003](../decisions/0003-observe-do-not-spawn.md)).
+- **Commands are fire-and-forget.** Their effect returns on the event stream
+  like any other change, so a client stays a pure projection with no
+  correlation layer.
+- **A snapshot is unsolicited on connect**, before the socket has said
+  anything, so a client is useful before it sends and reconnects self-heal.
+  The window does not send `Subscribe` on open; that bought a second copy of
+  the largest payload on the wire (`R-J69`).
+- **The scan's broadcasts are change-gated; a request never is.** `Queue`,
+  `Health` and the diff messages from the scan loop go out only when they
+  differ from what was last sent. A client that asks (`Rescan`,
+  `RefreshChange`, the review verbs) is always answered, even with an
+  identical payload — the echo is its confirmation. A gate only works if the
+  payload can hold still: a by-construction-volatile field inside a gated
+  payload silently disables the gate, which is why `AttentionItem.detail` is
+  static text and the clock travels as `since` (`R-J65`), and why `Health`
+  masks `last_scan` and `scans` from its comparison (`R-J55`).
+- **A moved diff travels as a summary; hunks travel on request** (`R-J53`).
+  The scan loop announces `ChangeSummary`; the full `ChangeUpdated` is the
+  reply to `RefreshChange` and the broadcast after a review verb.
+- **Answers only the asker can use go to the asker** (`R-J59`). Each
+  connection has a bounded reply lane (256 deep; a full lane is a stalled
+  sink and the client's own retry is the recovery) multiplexed into the one
+  event stream: the snapshot a `Subscribe` re-asks for, `FetchEvents`' replay
+  (the newest 5000), `RefreshChange`'s hunks, `FetchHealth`, the run output
+  and a revealed secret, the scratch contents, the model's chunks and reply,
+  the similar list, a loaded conversation, `SentToSession`, `Peers`, and the
+  `Error` a malformed or failed command earns. The two lanes carry no
+  cross-ordering promise.
+- **`SessionUpdated` coasts when only counters moved** (`R-J54`): token
+  totals, tool tallies and the activity line flush within a few seconds;
+  a permission prompt opening, a failure, a prompt or a status flip
+  broadcast at once. A clean shutdown flushes whatever is coasting.
+- **Answers echo their question**, so a client can drop a stray: the search
+  query, the day, the path, the ref scope, the diff options, the repository.
+- **Every field added since 2026-07 is `#[serde(default)]`**, so a daemon and
+  a window on different machines may be a build apart in either direction; a
+  client must describe an alert kind or a message it does not know rather
+  than draw it as nothing.
+- **A slow client is dropped, not tolerated**: on broadcast lag it is told to
+  reconnect rather than wedging the channel for everyone else. **A malformed
+  command produces an error, not a disconnect.** Both pinned by tests.
 
-`FocusTerminal` is not an exception. It moves *your* window; the agent is
-untouched and nothing is typed. Neither is `OpenFolder`, nor `OpenInIntellij`
-beside it: each hands a directory to another application, which is what
-[pillar K](../product/roadmap.md#k-explicitly-not)
-asks for — this window reads a worktree and never writes it, so anything you
-want to *do* to a file belongs to a program that can. Nor is "copy as prompt" a command at all — the
-client builds the text and puts it on your clipboard, and you paste it
-([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
+## Security
 
-## Events (`ServerMsg`)
+**Loopback by default**: `127.0.0.1:7717` unless `--listen` says otherwise,
+and a warning at start-up when the bind is not loopback, because anyone who
+can reach the port can read every transcript on the machine and open
+terminals on it.
 
-`Snapshot` · `SessionUpdated` · `SessionRemoved` · `Events` · `Queue` ·
-`ChangeUpdated` · `ChangeSummary` · `Health` · `ReviewDebt` · `BlastRadius` · `DirListing` ·
-`FileContent` · `TreeListing` · `ContentMatches` · `GitCommits` ·
-`GitCommitDiff` · `GitLocalChanges` · `GitFileDiff` · `GitAnnotation` ·
-`GitRefsInfo` · `GitStashList` · `GitStashDiff` · `GitSubmoduleList` ·
-`GitRangeDiff` · `GitFileAtRevContent` · `GitReflogList` ·
-`GitWorktreeList` · `GitConflictStages` · `Error`
+**A shared token, mandatory beyond loopback** (`R-I4`, `R-I10`). `--token`
+gates every HTTP and WS request; clients send `Authorization: Bearer …` or
+`?token=…`, the query form existing because a browser socket cannot set
+headers. The query token is percent-decoded before the constant-time compare,
+and raw is accepted too (`R-I19`). A wrong token is a clean 401.
+`server::admit` decides before the daemon serves anything — a non-loopback
+bind with no token stops start-up — and there is no `--insecure`; the window
+applies the same rule to the daemon it hosts.
 
-That is the 2026-07 core. The families added since — kit, notes, tasks,
-scratch, runs, the model, the reading guide, the similar list, chat history,
-`FailureClusters`, `Runs`, `SentToSession`, identity and federation — are
-described in their own sections below, and `wire.rs` is the complete list
-(67 `ServerMsg` variants and 102 `ClientMsg` as of 2026-10-08).
+**No TLS of its own.** The daemon speaks `http://` and `ws://`; the tray is
+built with `rustls` and the window's webview speaks TLS natively, so both
+dial `wss://` through a TLS-terminating reverse proxy, which is the
+recommended way to get encryption without the daemon owning certificates
+([A24](../product/assumptions.md) is the bet).
 
-**The periodic scan is change-gated; a request never is.** `Queue`, `Health`
-and the diff messages from the scan loop are sent only when their content
-differs from what was last broadcast — before the gates, every 1.5 s tick
-re-sent the full diff of every actively-writing session, and a fresh `Health`,
-to every client, unchanged or not. A client that *asks* (`Rescan`,
-`RefreshChange`, the review verbs) is always answered, even with an identical
-payload: the echo is its confirmation. New clients lose nothing to the gates —
-the snapshot carries the queue, and a session's diff is fetched on selection.
+**Three gates on top of the token**, decided per connection since 2026-09-23
+(`R-J103`, `R-J104`) — a client on this machine is admitted whatever the bind,
+everyone else is judged by the bind and the flag:
 
-**A gate only works if the payload can hold still.** `R-J65`. `Queue` was
-gated from the start and never once stayed silent, because `AttentionItem`'s
-`detail` carried a rendered duration — so any waiting row differed from its own
-previous value every tick and the whole 28.5 KB list went to every window at
-the poll rate. `detail` is static text now and the clock travels as `since`, an
-anchor instant the window renders from. `since` is
-`#[serde(default, skip_serializing_if = "Option::is_none")]`, so it is absent
-on rows that have no clock and a client built before the change parses the
-queue unchanged. The general rule this is the second instance of — `R-J55` was
-the first, for `Health` — is that **a by-construction-volatile field inside a
-gated payload silently disables the gate**; either mask it in the comparison or
-move it off the wire.
-
-**A moved diff travels as a summary; hunks travel on request.** `R-J53`. The
-scan loop announces `ChangeSummary` — per-file counts, paths, review tallies,
-no hunk bodies — because the full `Change` grows for the life of the session
-(the base is pinned at session start) and was the largest recurring payload on
-the wire. The full `ChangeUpdated` still exists on two paths: as the reply to
-`RefreshChange`, and broadcast by the review verbs, whose marks must move the
-hunks every window holds and which arrive at human rate.
-
-**Answers that only the asker can use go to the asker.** `R-J59`. Each
-connection has a **bounded** reply lane (256 deep — a full lane is a stalled
-sink, and the client's own retry is the recovery) multiplexed into the one
-event stream: `Subscribe`'s snapshot (broadcast, it made every window
-re-ingest the board whenever any window reconnected), `FetchEvents`' replay
-(served as the newest 5000 events, matching the client's own retention cap),
-`RefreshChange`'s hunks, `FetchHealth`, `RunOutputHistory`, `RunEnvValue` —
-a revealed secret, which was going to every window — the run verbs' refusals,
-and the `Error` a malformed or failed command earns through the `err` path.
-The git write verbs' error arms still broadcast (`R-J60` holds the sweep).
-The two lanes carry **no cross-ordering promise**; every message on the wire
-converges regardless. The contract is otherwise unchanged — commands still
-have no replies to await; answers still arrive on the stream.
-
-**`SessionUpdated` coasts when only counters moved.** `R-J54`. A fold that
-changed nothing but token totals, tool tallies or the activity line updates
-the daemon's memory and flushes — store row and broadcast together — within a
-few seconds; a permission prompt opening, a failure, a prompt or a status flip
-still broadcasts immediately. A clean shutdown flushes whatever is coasting.
-
-`GitCommitDiff` hunks carry R-D8's read marks (`R-D17`): the daemon feeds
-`parse_unified` the union of the repo's reviewed anchors, so a hunk a
-human read in the Changes tab arrives already marked when seen through a
-commit — anchors are content hashes, which is what makes the two views
-agree. The union is the *resolved* repository's — since `R-D34` the one the
-command named — so with a sibling checkout picked it is that checkout's
-sessions, usually none, and the hunks arrive unmarked; the marks belong to the
-session's own work, which is where the Changes tab keeps them. Its optional
-`CommitDetail` also names the branches containing
-the commit (`R-D18`, serde-defaulted so either side may be older).
-
-The `Git…` family was **read-only by protocol** until 2026-07-31: no staging,
-commit, checkout, stash-pop, fetch or any other verb that mutates a
-repository, and none to be added without an ADR — the observer rule, one
-layer down. `GitCommits` echoes the ref scope and `GitAnnotation`
-the revision it blamed, so a client that has since moved on can drop the
-stray — the stray-session rule, applied to superseded scopes.
-
-That ADR now exists.
-[ADR-0012](../decisions/0012-write-locally-never-publish.md) admits a write
-family — stage, unstage, discard, commit, branch, stash, resolve — and holds
-the line at the **network**, so `fetch`, `pull` and `push` remain absent by
-protocol.
-
-**Four landed 2026-07-31.** `GitStage`, `GitUnstage` and `GitDiscard` (`R-D19`)
-carry a `session_id` and a list of worktree paths; `GitCommit` (`R-D20`) carries
-a message, an `amend` flag and a `session_trailer` flag. They are grouped in the
-enum rather than filed beside their read siblings, so the guard that refuses
-them can name a contiguous list and a fifth is visibly joining a family with a
-rule. `R-D21` added five more the same day — `GitBranchCreate`, `GitSwitch`,
-`GitStashPush`, `GitStashPop`, `GitStashDrop` — and `R-D22` added the last one, `GitResolve`.
-The write family is complete.
-
-**One verb reaches beyond this machine**, added 2026-08-01: `GitFetch`, and its
-answer `GitFetched`. [ADR-0014](../decisions/0014-fetch-is-not-publishing.md)
-supersedes ADR-0012 and moves the line from *the network* to *publishing and
-merging* — `fetch` reads a remote and changes nothing there, `push` publishes,
-`pull` merges under a possibly-running agent. `R-D24` keeps its number and now
-means those last two, still refused by protocol.
-
-`GitFetch` passes the same guard as the write verbs, which is not a category
-error: "an open socket must not be able to make this daemon talk to someone
-else's server" is the same rule wearing a different hat. It is never sent on a
-timer, runs with `GIT_TERMINAL_PROMPT=0` and no stdin so a credential prompt
-fails rather than parking a thread for ever, and always answers — including
-when nothing moved, since a silent success cannot be told from a silent no-op.
-
-Branch names go through `valid_ref_name`, the *same* rule the read side uses to
-scope a log: narrower than git's own, refusing a leading `-`, `..` and `@{`.
-Sharing it matters more on this side, since reading a nonsense ref shows
-nothing and writing one moves the worktree. A stash is addressed by index and
-the `stash@{n}` string is built by the daemon, so no ref from outside reaches
-that argument at all.
-
-`GitResolve` takes a whole file — ours, theirs, or "what is on disk is already
-right". Whole-file because that is what `R-D16`'s three-way view shows, and a
-resolution mixing both sides is editing, which stays out permanently. Every
-path ends in `git add`, because in git a conflict is resolved by *staging* the
-result: a verb that wrote the file and left the index unmerged would show a
-conflict that looks fixed and is not. The content is deliberately **not**
-inspected — markers left in a file are committable once the index says
-resolved, and a validator refusing them would refuse legitimate content too.
-
-**Every git command takes an optional `repo` since 2026-09-16** (`R-D34`).
-Absent means what it has always meant: the session's own root. Present, it is
-resolved against `session_roots` — the session's root plus the folders added to
-its workspace (`R-J40`) — so naming a repository authorises nothing that
-browsing it did not, and one outside that set is refused before git is reached.
-`GitBlame` has none deliberately: blame follows the file you are reading, which
-belongs to the session rather than to whichever repository a window is pointed
-at. Four answers echo it back — `GitCommits`, `GitLocalChanges`, `GitRefsInfo`
-and `GitStashList` — because a write verb re-broadcasts to *every* window
-watching the session, and two of them may be pointed at two repositories; the
-client drops an answer that is not for the one it is showing. `Workspace` grew
-`repos` in the same row: which of a session's roots hold a `.git`, which a
-client cannot test for itself. The stray rule is complete for those four
-answers and no others: `GitCommitDiff`, `GitRangeDiff`, `GitFileAtRevContent`,
-`GitConflictStages`, `GitReflogList`, `GitWorktreeList` and `GitFetched` carry
-no `repo`, so an answer in flight for the checkout a window has just switched
-away from lands — a limit taken knowingly rather than an oversight, and the
-first thing to close if a stale answer is ever seen after a switch.
-
-`GitSwitch` grew one flag on 2026-09-16 (`R-D32`): `detach`, defaulted false,
-which runs `git switch --detach` and is how *checkout tag or revision* reaches
-anything that is not a branch — plain `git switch` refuses a tag and a sha
-outright. It widens nothing, because the name still goes through the rule
-below: a tag and a hex sha were always among the names it admits. A client that
-predates the flag sends no field and means what it always meant, which is what
-`#[serde(default)]` is there for.
-
-`GitSwitch` clears the pinned diff base of **every** session in that worktree
-([A9](../product/assumptions.md)): a base is the last commit before a session
-started, resolved once, and a switch can put it on another line of history
-where it is no longer an ancestor of anything checked out. Clearing rather than
-recomputing, because the scan loop already resolves a missing base — one place
-that knows how to compute a base beats two.
-
-`GitCommit` commits **only what is staged** — never `-a`. The staging list is
-the instruction, and a commit verb that could sweep in a file deliberately left
-unstaged would make the checkboxes a suggestion. The trailer is composed by the
-daemon, not the client: the id recorded has to be the one the daemon knows the
-session by, or `R-F2` could never look anything up with it.
-
-Two properties hold for every one of them:
-
-- **A dispatch-level guard**, not a per-verb check, refuses any write unless
-  the bind is loopback or a token was presented (`A24`). The write family is
-  enumerated in one function, so omitting a new verb from it is a visible gap
-  in a list of thirteen rather than a missing line in a hundred-arm match. It is
-  deliberately redundant with `server::admit`, which refuses to *start* a
-  daemon that could reach it: `admit` guards the binary, this guards the
-  router, and the router is what a test or an embedding constructs.
-- **Every write answers by re-broadcasting `GitLocalChanges`**, never by
-  reporting what it did. The client therefore holds no model of repository
-  state that could drift from git's, and the pane shows what git says one
-  round trip after the click — including when git did something other than
-  what was asked. Since `R-D34` the re-read is of the repository the write
-  **named**: `rebroadcast_status` and `after_ref_change` take the `repo` and
-  tag the status, refs and stash answers with it, so the window that asked
-  sees the checkout it wrote to, and a window on another checkout drops the
-  echo.
-
-Write failures carry **git's own words verbatim** — stderr when there is any,
-stdout otherwise, because git splits refusals across both streams and the
-commonest of all, `commit`'s "nothing to commit, working tree clean", arrives
-on stdout with a non-zero exit. A paraphrase would throw away
-the list of files and the hint that make git's own refusals actionable. See
-[feature 0025](../archive/features/0025-git-write-local.md).
-
-## Memory and skills (`R-F14`, `R-F15`)
-
-`FetchKit` → `Kit`: every memory and skill under `~/.claude`, **without
-bodies**. `FetchKitDoc { path }` → `KitDoc { path, body, truncated }`, one file
-at a time and echoing its own path, so a slow read cannot render under a file
-you have since clicked away from — the rule every search answer here follows.
-
-Two properties are load-bearing rather than incidental:
-
-- **The list carries no bodies.** 113 entries on this machine and the number
-  only grows; a list that carried every body would get slower the longer you
-  used the tool that describes it.
-- **`FetchKitDoc` takes a path from the network**, and the daemon binds
-  loopback with no token. So the path is canonicalised — through `..` and
-  symlinks — and must still sit under a published root, or it is refused.
-  Without that, "show me a skill" is "read any file this user can read". The
-  same rule `FetchFile` applies to a session's worktree, for the same reason.
-
-Both are reads of `~/.claude`, which mogeung never writes
-([CLAUDE.md](../../CLAUDE.md)) — and the stakes are higher here than for a
-transcript, because these files change what an agent does next.
-
-## Notes (`R-B35`)
-
-`NoteList`, `NoteSave`, `NoteDelete`, answered by `Notes` with the **whole
-set** every time. Not a page and not a delta: notes are small by nature, and
-replacing the client's copy wholesale is what makes two windows on one daemon
-unable to drift — the property daemon ownership was chosen for
-([ADR-0015](../decisions/0015-markdown-is-the-truth.md)).
-
-They are not in the write family and do not pass its guard. That guard is about
-not letting an open socket run **git**; these change the daemon's own store,
-like `SetHunkReviewed` and `SetSignalCommand` already did, and are covered by
-the token layer along with everything else when the bind is not loopback.
-
-An empty `id` on `NoteSave` mints a new note and the daemon answers with the id
-it chose, so a client never invents one.
-
-A `Session` may carry `provisional: true` since `R-J75` — it is a tmux pane
-running an agent that has written nothing, not a conversation the daemon has
-read. Its id is `pane:%12`, it does not outlive the pane, and nothing may be
-moored to it. Its counts are zero because they are; a client that renders those
-as facts about a conversation is lying, which is why the flag is on the wire at
-all. See
-[ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md).
-
-## Tasks (`R-L3`, 2026-09-09)
-
-`TaskList` and `TaskSet { note_id, ord, done }`; answered by
-`Tasks { tasks, closed_today }`, broadcast — and broadcast again after any
-`NoteSave` or `NoteDelete`, because a checkbox typed into a document has to
-appear in the list without being asked for.
-
-A `Task` carries `depth` and `group` since `R-L10` — how deeply the line is
-nested, and the markdown heading above it. Both are read from the document
-rather than stored anywhere: markdown already has nesting and headings, so
-neither needed new syntax, and the panel draws its folders and sub-tasks from
-these two fields alone (`R-L11`).
-
-**A task is addressed by document and position, and has no id.** There is no
-task outside a `- [ ]` line and no field on one that is not written on the line
-([ADR-0015](../decisions/0015-markdown-is-the-truth.md)), so an id would be a
-second source of truth wearing a key.
-
-**`TaskSet` rewrites the markdown.** That is the only direction that writes:
-the daemon ticks the box in the document, saves it the ordinary way — mirror
-and all — and re-derives. There is deliberately no verb that marks a task
-without touching the document it lives in, which is the shape the ADR's rule 3
-takes on the wire.
-
-`closed_today` counts **closures** since local midnight rather than tasks
-currently closed. It is the one thing the markdown cannot answer, since a
-ticked box has no memory of when.
-
-## Scratch files (`R-L5`, 2026-09-03; `R-L7` and `R-L9`, 2026-09-09)
-
-`ScratchList`, `ScratchCreate { ext }`, `ScratchRead { name }`,
-`ScratchWrite { name, content }`, and since `R-L7` the three that manage the
-files rather than their contents — `ScratchRename { name, to }`,
-`ScratchDelete { name }`, `ScratchDuplicate { name }`; answered by
-`Scratches { names }`, `ScratchContent { name, content, fresh }` and
-`ScratchSaved { name }`.
-
-**Since `R-L9` a name is a path**, relative to the scratch folder —
-`sql/query.sql` — and two more verbs manage the folders themselves:
-`ScratchMkdir { path }` and `ScratchRmdir { path }`, the second recursive.
-`ScratchCreate` gained an optional `folder`, and `Scratches` gained `folders`
-so a folder with no files in it is still on screen. There is no move verb: a
-rename to a path in another folder **is** the move, and a second verb would be
-the same power under a second name.
-
-Files, not notes: nothing is stored, the file in `~/.mogeung/scratch` **is**
-the thing, and the shape is
-[ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md).
-Two rules show in the messages:
-
-- **A path is a sequence of bare names, and containment is proved on the
-  filesystem.** `check_path` applies the old bare-name rule once per segment,
-  with a depth cap; `resolve` then joins, canonicalizes and requires the result
-  to be under the canonical scratch directory. The second is not belt-and-braces:
-  a symlinked directory inside the folder is invisible to any string rule, and
-  is how an impeccable-looking path writes outside the tree. See ADR-0035's
-  second 2026-09-09 amendment.
-- **The daemon mints every name — with one exception since `R-L7`.** A create
-  carries an extension and answers with `scratch-<n>.<ext>`; a duplicate mints
-  the same way. Every other verb carries a name, and a name that is not a bare
-  file name — a separator, a leading dot, `..` — is refused before the
-  filesystem is touched. A write on a name the daemon did not mint is an error,
-  so the write verb cannot place a file. **`ScratchRename` is the exception**:
-  it is the one verb where the window proposes a name, argued in ADR-0035's
-  2026-09-09 amendment and fenced by the same check plus a refusal to replace an
-  existing target — `std::fs::rename` clobbers silently, and a rename that
-  destroys a file the user did not name is the outcome it must not have.
-- **Content goes to the asker; the list goes to everyone.** `ScratchContent`
-  and `ScratchSaved` come down the reply lane (`R-J59`), and `fresh` is true
-  only on the answer to a create — the one message a window opens a pane on.
-  A read arrives on the same event with `fresh: false`, which is what a pane
-  restored from the layout asks for on mount. A **duplicate** answers with
-  `fresh: true`, because a copy is a new file and opening it is what you meant.
-  `Scratches` is broadcast after a create and in answer to a list, so a second
-  window learns the file exists without a pane appearing on someone else's
-  chord — and since `R-L7` after a rename or a delete too, which is how a
-  window learns to **close a pane whose file has gone**. That matters more than
-  it reads: a pane left open on a deleted file looks editable and autosaves
-  into a write the daemon refuses.
-
-Same gating posture as notes: the daemon's own directory rather than a
-repository, so not in the write family; the token layer covers them off
-loopback.
-
-Client-supplied git arguments are shape-checked before git sees them: shas
-must be hex (one trailing `^` allowed — "the parent of"), ref names are
-restricted to `[A-Za-z0-9/._-]` with no leading `-`, no `..` and no `@{`,
-and stash indices are numbers. Log filters are literal text (`-i
---fixed-strings`, never regex), attached with `=` so they cannot open a
-new argument, length-capped, control-characters refused; filter paths get
-the explorer's lexical containment. An unauthenticated socket must not be
-able to spell a flag.
-
-`ListDir` and `FetchFile` paths are relative to the session root (repo root
-when known, else cwd); the daemon canonicalises and refuses anything that
-escapes it, symlinks included. `FileContent` is capped at 256 KiB with a
-`truncated` flag, and binary files are refused — the explorer is a viewer, and
-the daemon offers nothing that writes.
-
-`ListTree` and `SearchContent` walk with the same containment, `.git` always
-excluded and gitignore honoured when the root is a repo. Both run on the
-blocking pool so a monorepo walk cannot wedge the event loop. Search skips
-binary and oversized files *silently* — a search that errors on the one
-unreadable file answers nothing. `ContentMatches` echoes the query so a client
-can drop the answer to a search the user has since replaced — the stray-session
-rule, applied to superseded queries.
-
-`Health` is pushed unsolicited — after any scan that changed what it says, and
-on a slow heartbeat (`HEALTH_HEARTBEAT_SECS`) regardless, so the health
-window's *"last scan"* line stays honest without every idle tick re-sending an
-identical snapshot (`R-J55`; `last_scan`/`scans` are masked from the
-comparison because they move by construction). The request paths republish it
-unconditionally — `Rescan`'s answer is queue *and* health, and the client's
-"rescanning…" spinner clears on the health message. A client still never has
-to ask whether the board it is showing is complete — see
-[health-and-canary.md](health-and-canary.md).
-
-**Two more alert kinds and one more row, since `R-J124`.** `unpriced_model
-{model, messages}` and `prices_differ {count}` join `Alert`'s tagged union, and
-`Health.pricing` (`#[serde(default)]`, so an older snapshot still parses)
-carries the price table's date and the last reading of Anthropic's pricing
-page. A client must describe an alert kind it does not know rather than draw it
-as nothing. The window had been doing that to `unknown_run_config_type` since
-`R-N2`, and the Health window now falls through to a sentence that names the
-kind. A `ConfigSave` also wakes the pricing task (`pricing_kick`), because
-`refresh_pricing` is read at each check rather than at start-up, so a save
-that switched readings on is acted on at once.
-
-## Run and debug (`R-N4`, `R-N5`)
-
-```
-fetch_run_configs {session_id}          -> run_configs {session_id, configs, allowed}
-run_start {session_id, config_id}       -> run_started {run}, then run_output {line}…
-run_stop {run_id}                       -> run_ended {run}
-fetch_run_output {run_id}               -> run_output_history {run_id, lines}
-reveal_run_env {session_id, config_id, key} -> run_env_value {config_id, key, value}
-```
-
-**`run_start` has no `command` field, and that absence is the feature.**
-[ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) clause 1
-is *named, not supplied*: a request identifies a configuration the repository
-itself produced, so reaching this port lets you run the project's own test suite
-rather than handing you a shell. Adding a command string here would quietly turn
-an unauthenticated loopback port into a remote shell — it is the single change
-to this file that would matter most, and it should never be made.
-
-`allowed` carries clause 4 to the client, so a panel can explain that a daemon
-was started without `--allow-run` instead of drawing buttons that will be
-refused. It is broadcast as a client on another machine reads it, and a client
-on this machine is shown `true` on the way out of its socket, because clause 4
-no longer applies to it (`R-J104`). `send_to_session` is decided per connection
-the same way: refused in words to a client not on this machine, with no token
-and no flag.
-
-**`reveal_run_env` takes one key.** `R-N6`: values never travel in
-`run_configs`, which carries variable *names* only, and unmasking is a per-value
-act — a verb returning the whole block would make *"show me this one"*
-indistinguishable from *"print every secret"*.
-
-## The model (`R-O5`, 2026-08-28)
-
-Two messages, and one of them breaks a rule the rest of this protocol has kept
-since it was written.
-
-| Direction | Message | Notes |
+| Gate | Covers | Beyond loopback |
 |---|---|---|
-| → | `model_chat { id, messages }` | The whole conversation, every time |
-| → | `model_stop { id }` | Stop that answer where it is (`R-J118`) |
-| ← | `model_reply { id, text, error, model, elapsed_ms, stopped? }` | Asking socket only |
+| the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir` | needs the token |
+| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md)) |
+| `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
+| `send_allowed` | `SendToSession` | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
+| `config_editable` | `ConfigSave` | refused, read from the bind |
 
-**`model_stop` gets no reply of its own.** The ask it names answers as it
-always does, with `stopped: true` and the words that had arrived — so a stop
-and a finish race to one `model_reply` rather than two, and a stop for an id
-already answered has nothing to say. The daemon kills the `curl` carrying the
-request, which closes the connection and is what makes the model server stop
-generating. Here, never forwarded: like the chat itself it is about this
-machine's model.
+The write guard is one function listing its family, so omitting a new verb is
+a visible gap in a list of thirteen rather than a missing line in a
+hundred-arm match; it is deliberately redundant with `admit`, which guards the
+binary where this guards the router. **Argument hygiene is not
+authentication**: shas must be hex (one trailing `^` allowed), ref names
+`[A-Za-z0-9/._-]` with no leading `-`, `..` or `@{` (`valid_ref_name`, shared
+by reads and writes), stash indices numbers, log filters literal text attached
+with `=` and length-capped, paths lexically contained. An unauthenticated
+socket must not be able to spell a flag; none of that says *which* client.
 
-**`model_chat` is the only command that carries free-form text.** Everything
-else names a thing the daemon already has — a session, a config id, a path, a
-query — which is the discipline
-[ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) clause 1
-set and the reason a client cannot make this daemon do something arbitrary.
-[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4 (carried
-forward from ADR-0030) names this as the exception and pays for it at the door: the chat is refused to any
-client **not on this machine** and there is **no flag** that opens it, because a
-daemon anyone can reach must not become a general-purpose LLM proxy. Until
-2026-09-23 that was read from the bind — `chat_allowed` false on any
-non-loopback listen — which refused a LAN-bound machine's own window too
-(`R-J103`); it is decided per connection now, from the peer address the server
-records, with a loopback client admitted and everyone else judged by the bind.
-The `Health` broadcast carries the model row as everyone else reads it, and a
-client on this machine is shown its own on the way out of its socket.
+## Sessions, the queue and review
 
-**The daemon stores no conversation.** `messages` carries the thread each time
-and nothing is kept, so the panel is ephemeral by construction rather than by a
-promise to delete something — there is no chat table to forget.
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `Subscribe` | — | `Snapshot`, to the asker | here |
+| `Rescan` | — | a scan now; `Queue` and `Health` republished unconditionally | here |
+| `FetchHealth` | — | `Health`, to the asker | here |
+| `FetchEvents` | `session_id`, `since` | `Events`, to the asker, newest 5000 | read |
+| `RefreshChange` | `session_id`, `force` | `ChangeUpdated`, to the asker; from the cache unless `force` | read |
+| `SetHunkReviewed` | `session_id`, `anchor`, `reviewed` | `ChangeUpdated`, broadcast | judge |
+| `ReviewAll` | `session_id` | `ChangeUpdated`, broadcast | judge |
+| `Snooze` | `session_id`, `minutes` (≤ 0 clears) | `SessionUpdated`, `Queue` | judge |
+| `ForgetSession` | `session_id` | `SessionRemoved` | write |
+| `FetchReviewDebt` | `repo` | `ReviewDebt` | here |
+| `FetchBlastRadius` | `session_id`, `path` | `BlastRadius` | read |
 
-**Three features ask through this one door, and that is deliberate.** Since
-`R-O7` the prompt window drafts its follow-up instruction by sending a
-`model_chat` with no `conversation`, rather than by adding a `draft_prompt`
-command carrying hunks and notes —
-[ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md) clause 1. Since `R-O4`
-the same message carries an optional `about { session_id, path, anchor }`, which
-is that ADR's *revisit if* answered as it said it would be: **a purpose on the
-one free-form message, not a second free-form family**. The exception above
-therefore stays at exactly one, and the bind refusal that pays for it covers all
-three without being written again. What tells them apart is the client's own
-request id, which is how a client already tells two questions in flight apart.
-
-**`about` sends ids and a question, never evidence.** The daemon holds the
-transcripts (ADR-0031 clause 1, carried forward from ADR-0030), so it does the retrieving: the turns leading up
-to the last edit of that file, `--bin why`'s own shape and its own count of six.
-A client could not send the turns if it wanted to — a window may be watching
-another machine's sessions — and one that could would be sending an editable
-copy of what is already here.
-
-**The answer carries its provenance, and the daemon decides it.** `model_reply`
-grew `cites`, `basis` and `narration` for `R-O4`, all `#[serde(default)]` and
-all empty for the chat panel. `basis` is `turns`, `code` or `unanswered`, and
-the third is not a failure: `--bin why` found a reason in 5 of 14 edit moments,
-so *the turns do not say why* is the **majority** answer and a client that drew
-it as an error would be reporting a bug that is not there. `narration` — every
-citation is the assistant's own — is computed here rather than in the window, so
-no client can render *the agent said it did this* as *this is why it was done*.
-
-**An older daemon ignores `about` and answers as chat**, which is the one
-degrade in this family that would otherwise be silent: a general answer arriving
-where provenance was promised. It is detectable — no `basis` — and the window
-withholds the text and says why rather than drawing it.
-
-**The answer streams. `R-O11`.** The request carries `stream: true`, and the
-daemon forwards `model_chunk` events on the asking socket as text arrives,
-always followed by exactly one `model_reply` carrying the **whole** text.
-
-That redundancy is the design rather than waste: the reply is the truth and the
-chunks are an early view of it, so a dropped chunk costs a moment of jitter
-rather than a corrupted answer, and a client that ignores chunks entirely
-behaves exactly as it did before. The client replaces its accumulated text with
-the reply's for that reason.
-
-**Deltas are coalesced, not sent per token** — 60 ms or 400 characters,
-whichever comes first. The reply lane is bounded at 256 (`R-J59`) and a fast
-endpoint emits hundreds of tokens a second; one event each would have a client
-that stalls for a moment dropped for lag, which is a worse experience than the
-wait streaming exists to remove.
-
-**It degrades to a single response.** A server that ignores `stream: true`
-answers with one JSON object and no `data:` frames; nothing is forwarded live
-and the whole body is read by the non-streaming parser, so the panel works as
-it did before. Reasoning is never streamed: it is accumulated and shown only
-when it is all there is, which is the same rule the single-response path
-follows.
-
-**The handler is spawned, not awaited.** A cold local model can take a minute,
-and the read loop awaiting it would stop that connection accepting anything
-else — the whole window frozen on one text box. The answer goes down the reply
-lane (`R-J59`) whenever it arrives, and a `health` broadcast follows it so the
-row carrying `last_error`/`last_ok_ms` is current in a panel that is probably
-open.
-
-**`text` or `error`, never both and never neither.** A refusal — nothing
-configured, an endpoint consent does not cover, a public bind — arrives as an
-ordinary `error` rather than as a silence. A panel that shows nothing reads as
-broken and gets reported as a bug in mogeung.
-
-## The reading guide (`R-O3`)
-
-`reading_guide` names a **session**, not a diff: the daemon already has the
-change, so the client asks about an id like every family before it. The answer
-is one `reading_guide_ready` carrying every file the guide was asked about.
-
-**Ranked files first, then everything else, marked.** `--bin judge`'s corpus
-run found `claude-opus-5` ranking about sixteen files of sixty and saying
-nothing about the other 44, where a local model ranked 59 of 60. Shortlisting
-is what a reading guide is for; doing it silently hides two thirds of a
-change. So the daemon appends the unranked in keyword order with
-`ranked: false`, and that rule lives in the daemon rather than in each client.
-
-**A second ordering, never a blend.** The keyword order is untouched and is
-what shows without a model. [Pillar K](../product/roadmap.md#k-explicitly-not)
-refuses a weighted mix of the two in advance, because it would look
-authoritative while still being wrong.
-
-**Every failure arrives as `error` on the same message.** A panel that shows
-nothing reads as broken — `R-O5`'s lesson, one surface over.
-
-Not on the scan tick, and not on selection: the guide is asked for by a button.
-It spends a model call of up to a minute, and ADR-0031 clause 6 keeps model
-work off anything that runs on its own.
-
-## The similar list (`R-O6`)
-
-| Direction | Message | Notes |
+| Event | Carries | Relay |
 |---|---|---|
-| → | `semantic_search { query }` | one query, embedded and ranked |
-| → | `build_semantic_index {}` | asked for, never automatic |
-| ← | `semantic_results { query, hits, model, built_ms, stale, refusal }` | asking socket only |
+| `Snapshot` | every session, the ranked queue, `daemon` identity, the runs; on connect and in answer to `Subscribe` | board |
+| `SessionUpdated` | one session, whole | board |
+| `SessionRemoved` | `session_id` | board |
+| `Queue` | the ranked list, when it differs; `since` is the clock anchor | board |
+| `Events` | transcript events, replayed or live | pass |
+| `ChangeUpdated` | one session's full diff, hunks included | pass |
+| `ChangeSummary` | per-file counts, paths, review tallies, no hunk bodies | pass |
+| `Health` | what the daemon can and cannot see; when it changed and on a 30 s heartbeat | theirs |
+| `ReviewDebt` | unread hunks per repo | theirs |
+| `BlastRadius` | what else references the symbols a file's diff changed | pass |
+| `Error` | `message`, to the asker | pass |
 
-**Two commands rather than one**, because building an index and asking it a
-question are different acts with different costs: a build embeds thousands of
-lines and takes minutes, a query embeds one. Neither happens on the scan tick —
-ADR-0031 clause 6, and `R-J8`'s rule that the poll loop does no work.
+A `Session` may carry `provisional: true` (`R-J75`): a tmux pane running an
+agent that has written nothing, id `pane:%N`, never persisted, counts zero
+because they are ([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)).
+`Health.pricing` and the alert kinds `unpriced_model` and `prices_differ`
+joined with `R-J124`; a `ConfigSave` wakes the pricing task.
 
-**The reply carries its own provenance**, and for once that is the feature
-rather than a caution: `model` and `built_ms` say what built the index and when,
-and `stale` says the corpus has grown since. An index is a photograph of
-something that keeps moving, and a list that answered as though current would be
-wrong in the direction nobody checks.
+## Files and the workspace
 
-**`refusal` is why there is nothing.** No `embed_model`, no index yet, an
-endpoint that would not answer — each is a sentence, because an empty list with
-no reason reads as *there is nothing similar*, which is a claim rather than a
-state.
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `FetchWorkspace` | `session_id` | `Workspace` | read |
+| `AddWorkspaceDir` | `session_id`, `path` | `Workspace`; passes the write guard | write |
+| `RemoveWorkspaceDir` | `session_id`, `path` | `Workspace`; passes the write guard | write |
+| `ListDir` | `session_id`, `path` (relative, or absolute inside the workspace) | `DirListing` | read |
+| `FetchFile` | `session_id`, `path` | `FileContent` | read |
+| `ListTree` | `session_id` | `TreeListing`, capped at 20k | read |
+| `SearchContent` | `session_id`, `query` (literal, smart-cased) | `ContentMatches`, capped at 500 | read |
 
-`SemanticHit` is shaped like `SearchHit` — same session, same line, same
-timestamp to open the Transcript with — so the two lists read as two answers to
-one question. What it adds is `score`; what it never gets is the word *matches*.
-`--bin judge --recall` is why: over this corpus the index found 7 of 11
-paraphrased queries where grep found 0, and on literal slices grep found 10 of
-11 where the index found 5. Complementary, and neither dominates.
+| Event | Carries | Relay |
+|---|---|---|
+| `Workspace` | the session's root, `dirs` added, `missing`, `hints` offered, `repos` that are checkouts (the session's own first) | pass |
+| `DirListing` | one directory, dirs then files, `.git` never | pass |
+| `FileContent` | one file, `truncated` past 256 KiB; binary refused | pass |
+| `TreeListing` | every path, gitignore respected, `truncated` | pass |
+| `ContentMatches` | the matches, echoing `query` | pass |
 
-## The chat history (`R-O9`)
+The rules — which roots, how containment is proved, why adding a folder is
+gated with the writes — are [read-boundary.md](read-boundary.md).
 
-`model_chat` grew a `conversation` field, and omitting it means what it has
-always meant: answer this and keep nothing. A client built before the history
-sends nothing and gets the old behaviour unchanged.
+## Git reads
 
-`chat_list`, `chat_load` and `chat_delete` are the history itself. The list
-carries **summaries, not turns** — a fortnight of asking produces more text
-than anything else this protocol sends unasked, and the panel shows one
-conversation at a time.
+Every git command takes an optional `repo` since `R-D34`: absent means the
+session's own root; present, it is resolved against `session_roots`, so
+naming a repository authorises nothing that browsing it did not. `GitBlame`
+has none on purpose. All read-only, all on the blocking pool, every argument
+shape-checked before git sees it.
 
-**Only answered exchanges are kept**, because the write is on the success arm
-of the reply. A refusal or a dead endpoint leaves nothing, which matches the
-rule the client already had: a failed exchange stays on screen and is never
-sent back as context.
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `GitLog` | `skip`, `limit`, `rev`, `all` (`--all`), `grep`, `author`, `path` (switches `--follow` on), `pickaxe` (`-S`), `since`/`until` (unix seconds, turned into one ISO form daemon-side) | `GitCommits` | read |
+| `GitShow` | `sha`, `context` (≤ 400), `ignore_ws` | `GitCommitDiff` | read |
+| `GitStatus` | — | `GitLocalChanges` | read |
+| `GitDiffFile` | `path`, `context`, `ignore_ws` | `GitFileDiff` | read |
+| `GitBlame` | `path`, `rev` (`None` blames the worktree) | `GitAnnotation`, capped at 20k lines | read |
+| `GitRefs` | — | `GitRefsInfo` | read |
+| `GitStashes` | — | `GitStashList` | read |
+| `GitStashShow` | `index`, `context`, `ignore_ws` | `GitStashDiff` | read |
+| `GitSubmodules` | — | `GitSubmoduleList` | read |
+| `GitDiffRange` | `from`, `to`, `context`, `ignore_ws` | `GitRangeDiff` | read |
+| `GitCompare` | `branch` | `GitRangeDiff`, with the merge base as `from` | read |
+| `GitReflog` | — | `GitReflogList`, 100 entries | read |
+| `GitWorktrees` | — | `GitWorktreeList`, mogeung's own included | read |
+| `GitConflictFile` | `path` | `GitConflictStages` | read |
+| `GitFileAtRev` | `sha` (a trailing `^` allowed), `path` | `GitFileAtRevContent` | read |
 
-**Refused wherever the ask is.** These rows hold the same free-form text, so a
-daemon bound beyond loopback serves no history and says so — the same shape as
-[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4 and, for the
-same reason, with no flag. `chat_history = false` is a second, different
-refusal: it still lists what was kept before the line was written, because
-hiding that would both lie about what is on disk and take away the only way to
-delete it.
+| Event | Carries | Relay |
+|---|---|---|
+| `GitCommits` | a page: `skip`, `done`, each commit with refs, parents and a session-attribution hint; echoes `rev`, `all`, `grep`, `author`, `path`, `pickaxe`, `since`, `until`, `repo` | pass |
+| `GitCommitDiff` | the files in `Change`'s shapes, hunks carrying the repository's review marks (`R-D17`), `detail` (message, committer, dates, parents, emails, signature letter, branches containing); echoes the diff options | pass |
+| `GitLocalChanges` | staged, unstaged, untracked, conflicted, ignored as `!!`; echoes `repo` | pass |
+| `GitFileDiff` | one file against `HEAD` (`/dev/null` when untracked); echoes the options | pass |
+| `GitAnnotation` | per-line authorship, `truncated`, echoes `rev` | pass |
+| `GitRefsInfo` | HEAD, branches with tracking state, tags dereferenced, remotes, `FETCH_HEAD`'s mtime; echoes `repo` | pass |
+| `GitStashList` | the stashes; echoes `repo` | pass |
+| `GitStashDiff` | one stash's diff | pass |
+| `GitSubmoduleList` | paths and status prefix | pass |
+| `GitRangeDiff` | `from` → `to`, same shapes | pass |
+| `GitReflogList` | where HEAD has been | pass |
+| `GitWorktreeList` | the worktrees | pass |
+| `GitConflictStages` | `base`, `ours`, `theirs`, empty where a side has none | pass |
+| `GitFileAtRevContent` | one file as it stood, `truncated` | pass |
 
-See [ADR-0032](../decisions/0032-the-chat-panel-remembers.md) for what this
-gives up.
+Four answers echo `repo` — commits, local changes, refs, stashes — because a
+write re-broadcasts to every window on the session and two may be pointed at
+two checkouts; a client drops an answer that is not for the one it shows. The
+other git answers carry no `repo`, so an answer in flight for a checkout the
+window just switched away from lands — a limit taken knowingly and the first
+thing to close if a stale answer is ever seen. `GitCommitDiff`'s read marks
+are the *resolved* repository's: with a sibling checkout picked they are that
+checkout's sessions', usually none.
+
+## Git writes and fetch
+
+Admitted by ADR-0012 and held at publishing and merging by
+[ADR-0014](../decisions/0014-fetch-is-not-publishing.md): no `push`, no `pull`,
+no merge, no rebase (`R-D24` holds the question and
+[ADR-0022](../decisions/0022-a-fast-forward-is-not-a-merge.md) a draft answer).
+All pass the write guard above.
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `GitStage` | `paths` | `GitLocalChanges` re-broadcast | write |
+| `GitUnstage` | `paths` | the same | write |
+| `GitDiscard` | `paths` — **the one verb with no undo**; an untracked path is deleted | the same | write |
+| `GitCommit` | `message`, `amend`, `session_trailer` — only what is staged, never `-a`; the trailer composed by the daemon | the same | write |
+| `GitBranchCreate` | `name`, `switch_to` | status, refs and stashes re-broadcast | write |
+| `GitSwitch` | `name`, `detach` (`R-D32`) — clears every pinned diff base in that worktree | the same | write |
+| `GitStashPush` | `message`, `include_untracked` | the same | write |
+| `GitStashPop` | `index` | the same | write |
+| `GitStashDrop` | `index` | the same | write |
+| `GitResolve` | `path`, `side` (ours, theirs, or what is on disk) — whole-file, every path ends in `git add`, content not inspected | the same | write |
+| `GitFetch` | — | `GitFetched` | write |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `GitFetched` | `updates`, `upstream`, `ahead`, `behind`; always sent, including when nothing moved | pass |
+
+**Every write answers by re-broadcasting what git says**, never by reporting
+what it did, so the client holds no model of repository state that could
+drift from git's — and sees it one round trip after the click, including when
+git did something other than what was asked. The re-read is of the repository
+the write **named**. Write failures carry git's own words verbatim, stderr
+when there is any and stdout otherwise, because git splits refusals across
+both and the commonest — *nothing to commit, working tree clean* — arrives on
+stdout with a non-zero exit. `GitFetch` is the one message that reaches a
+network beyond this machine: never on a timer, `GIT_TERMINAL_PROMPT=0` and no
+stdin so a credential prompt fails rather than parking a thread, always
+answered.
+
+## Machine handoffs
+
+Things that reach for another program on the daemon's machine. None steers an
+agent: focusing moves *your* window, opening hands a folder to an application
+that can edit it (pillar K), and sending is the one fenced exception.
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `LaunchTerminal` | `dir`, `worktree`, `source` (which CLI, `R-J51`), `headless` (`R-J61`) | a session appears on the board | here |
+| `FocusTerminal` | `session_id` | the terminal app comes forward | desktop |
+| `OpenFolder` | `session_id` | the file manager opens there (`R-J34`) | desktop |
+| `ProbeIntellij` | `session_id` | `IntellijProbe` (`R-J92`) | desktop |
+| `OpenInIntellij` | `session_id` | IntelliJ opens there; refused in words without `.idea` or a launcher | desktop |
+| `SendToSession` | `session_id`, `text` | `SentToSession`, to the asker (`R-B54`) | write |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `IntellijProbe` | `root`, `project`, `launcher` — once per session, so a dead button can say why | theirs |
+| `SentToSession` | `session_id`, `target` — an ack, because the gesture is invisible | pass |
+
+`LaunchTerminal` starts a real interactive CLI, unmodified, under tmux; the
+recipe is an exhaustive match on `source` with no default arm, a source
+without one is an error in words, and a headless Codex launch into a
+directory Codex has not been trusted in is refused (`R-J74`) because the
+prompt would have no window to appear in
+([cross-session-signals.md](cross-session-signals.md#starting-one-and-knowing-whether-you-did-r-b2-r-i3)).
+`SendToSession` delivers exactly the text, once, into the session's own pane,
+and the gate takes no token and no flag; the mechanics are in the same
+document.
+
+## Notes, tasks and scratch
+
+The daemon's own store and directory, not a repository: none of these pass
+the write guard, and the token covers them beyond loopback.
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `NoteList` | — | `Notes` | here |
+| `NoteSave` | `id` (empty mints one), `body`, `session_id`, `seq`, `repo` | `Notes`, then `Tasks` | here |
+| `NoteDelete` | `id` | `Notes`, then `Tasks` | here |
+| `TaskList` | — | `Tasks` | here |
+| `TaskSet` | `note_id`, `ord`, `done` — rewrites the document | `Tasks` | here |
+| `ScratchList` | — | `Scratches` | here |
+| `ScratchCreate` | `ext`, `folder` | `ScratchContent { fresh: true }` to the asker; `Scratches` broadcast | here |
+| `ScratchRead` | `name` | `ScratchContent`, to the asker | here |
+| `ScratchWrite` | `name`, `content` | `ScratchSaved`, to the asker | here |
+| `ScratchRename` | `name`, `to` — the one verb where the window proposes a name; an existing target refused | `Scratches` | here |
+| `ScratchDelete` | `name` — already gone is not an error | `Scratches` | here |
+| `ScratchDuplicate` | `name` | `ScratchContent { fresh: true }`; `Scratches` | here |
+| `ScratchMkdir` | `path` | `Scratches` | here |
+| `ScratchRmdir` | `path` — recursive; the window asks first | `Scratches` | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `Notes` | every note, whole, after any change — two windows cannot drift | theirs |
+| `Tasks` | every task with `depth` and `group`, and `closed_today` | theirs |
+| `Scratches` | every name and folder | theirs |
+| `ScratchContent` | one file, `fresh` true exactly once, on a create or duplicate | theirs |
+| `ScratchSaved` | the write landed | theirs |
+
+Notes are daemon-owned markdown mirrored one way to `~/.mogeung/notes/*.md`
+([ADR-0015](../decisions/0015-markdown-is-the-truth.md)); a task is a `- [ ]`
+line addressed by document and position with no id, and `TaskSet` is the only
+direction that writes, by rewriting the document. Scratch names are paths of
+bare names relative to the scratch folder, minted by the daemon except for a
+rename; `check_path` applies the bare-name rule per segment and `resolve`
+proves containment on the filesystem, because a symlinked directory is
+invisible to any string rule
+([ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)).
+Content goes to the asker and the list goes to everyone, which is how a second
+window learns to close a pane whose file has gone.
+
+## Skills and memory
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `FetchKit` | — | `Kit`, every entry without bodies | here |
+| `FetchKitDoc` | `path`, canonicalised and refused outside a published root | `KitDoc`, echoing the path | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `Kit` | every memory and skill under `~/.claude` | theirs |
+| `KitDoc` | one body, `truncated` | theirs |
+
+Reads of `~/.claude`, never writes; the stakes are higher than a transcript's
+because these files change what an agent does next
+([claude-code-formats.md](claude-code-formats.md)).
+
+## Runs and signals
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `FetchRunConfigs` | `session_id` | `RunConfigs` | read |
+| `RunStart` | `session_id`, `config_id` — **no command field, by design** | `RunStarted`, then `RunOutput`… | write |
+| `RunStop` | `run_id` | `RunEnded` | write |
+| `FetchRunOutput` | `run_id` | `RunOutputHistory`, to the asker | read |
+| `RevealRunEnv` | `session_id`, `config_id`, `key` — one value, by name | `RunEnvValue`, to the asker | write |
+| `SetSignalCommand` | `repo`, `command` (empty clears) | `SignalStatus` | here |
+| `RunSignal` | `session_id` — on a click, never a timer | `SignalStatus` as it starts and ends | write |
+| `FetchSignal` | `repo` | `SignalStatus` | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `RunConfigs` | the configurations and `allowed` — ADR-0025 clause 4 travelling to the client; for a mirrored session the peer's gate *and* the follow's consent | pass |
+| `Runs` | every run this daemon owns, on connect | theirs |
+| `RunStarted` · `RunOutput` · `RunEnded` | one run's life | pass |
+| `RunOutputHistory` | the buffered output, in order | pass |
+| `RunEnvValue` | one value, because it was asked for by name | pass |
+| `SignalStatus` | a repo's command, whether a run is in flight, the last result | theirs |
+
+Adding a command string to `RunStart` would turn an unauthenticated loopback
+port into a remote shell; it is the single change to this file that would
+matter most. The rest is [run-and-debug.md](run-and-debug.md).
+
+## Insight, usage and docs
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `InsightSearch` | `query`, on Enter | `InsightSearchResults` | here |
+| `FetchDigest` | `day` | `DayDigestReport` | here |
+| `FetchRecurring` | — | `RecurringFailures` | here |
+| `FetchPromptLibrary` | — | `PromptLibrary` | here |
+| `FetchAnalytics` | — | `AnalyticsReport` | here |
+| `FetchSubagents` | `session_id` | `SubagentTreeReport` | read |
+| `FetchDecisions` | `session_id` | `DecisionReport` | read |
+| `FetchFileSessions` | `path` | `FileSessions` | here |
+| `FetchDocScan` | `repo` — watched repositories only | `DocReport` | here |
+| `FetchUsage` | — | `UsageStats` | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `InsightSearchResults` · `DayDigestReport` · `RecurringFailures` · `PromptLibrary` · `AnalyticsReport` · `FileSessions` · `DocReport` | each echoing its query, day, path or repo so a stale answer drops; each row stating how it matched (A8) | theirs |
+| `SubagentTreeReport` · `DecisionReport` | one session's subagent transcripts; decision-shaped sentences, candidates never authority | pass |
+| `UsageStats` | burn per session, day, repo and model; the window-limit figure is an estimate and labelled so; `TokenSplit` separates the four input buckets, `ModelBurn.cost_usd` is an option where `null` means unpriced not free, `unpriced_models` and `rates_as_of` ([ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md)) | theirs |
+
+## The model
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `ModelChat` | `id`, `messages` (the whole conversation, every time), `conversation` (omit to keep nothing), `about { session_id, path, anchor }`, `stream` | `ModelChunk`… then one `ModelReply`, to the asker | here |
+| `ModelStop` | `id` | no reply of its own; the ask answers with `stopped: true` | here |
+| `ReadingGuide` | `session_id` | `ReadingGuideReady` | read |
+| `SemanticSearch` | `query` | `SemanticResults`, to the asker | here |
+| `BuildSemanticIndex` | — | `SemanticResults` | here |
+| `ClusterFailures` | `min_sessions` | `FailureClusters` | here |
+| `ChatList` | — | `ChatHistory` | here |
+| `ChatLoad` | `id` | `ChatConversation`, to the asker | here |
+| `ChatDelete` | `id` | `ChatHistory` | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `ModelChunk` | `delta`, coalesced at 60 ms or 400 characters | theirs |
+| `ModelReply` | `text` **or** `error`, `model`, `elapsed_ms`, `stopped`, and for `about`: `cites`, `basis` (`turns` · `code` · `unanswered`), `narration` | theirs |
+| `ReadingGuideReady` | every file, ranked first, the rest `ranked: false`; `error` on the same message | pass |
+| `SemanticResults` | hits shaped like search hits plus `score`, `model`, `built_ms`, `stale`, `refusal` | theirs |
+| `FailureClusters` | failures grouped by meaning, `model`, `refusal` | theirs |
+| `ChatHistory` | summaries, not turns | theirs |
+| `ChatConversation` | one conversation, whole | theirs |
+
+`ModelChat` is the only command that carries free-form text — everything else
+names a thing the daemon already has — and three features (the chat, the
+draft, ask-the-diff) ride it as a purpose rather than as families of their
+own. A refusal arrives as an ordinary `error`, never as silence. The handler
+is spawned, not awaited, so a cold model cannot freeze the connection. The
+rest — consent, streaming, provenance, the guide's rule, the index as a cache
+— is [model-and-proxy.md](model-and-proxy.md).
 
 ## The config file (`R-J79`)
 
-`config_get` and `config_save` both answer with one `config` event carrying the
-file, its path, the keys this daemon understands and why it may not be edited.
-Both verbs answer with the same shape on purpose: after a save you are looking
-at what the daemon **re-read**, not at what you sent, so a save that landed
-differently cannot be reported by showing the text that did not.
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `ConfigGet` | — | `Config` | here |
+| `ConfigSave` | `text`, whole-file | `Config`, with what the daemon **re-read** | here |
 
-**Whole-file, not per-key.** The file has comments in it — the shipped ones
-explain what each key costs — and a per-key writer would either drop them or
-have to become a TOML formatter.
+| Event | Carries | Relay |
+|---|---|---|
+| `Config` | `path`, `text`, the `keys` this daemon understands, `readonly` (why it may not be edited), `error`, `saved` | theirs |
 
-**The daemon validates with the parser that will read it.** `Config::check` is
-the same `toml::from_str::<Config>` the daemon runs at start-up, and `Config`
-is `deny_unknown_fields`, so a mistyped key is refused here rather than ignored
-for ever. *It saved and then did not work* is not a state that exists.
+Whole-file because the file has comments in it. The daemon validates with the
+parser that will read it — `Config` is `deny_unknown_fields`, so a mistyped
+key is refused rather than ignored for ever. Reading is open; editing is
+loopback-only, because the file holds outbound URLs. The three model keys are
+re-applied on save and a save wakes the pricing task; everything else needs a
+restart, and the window says which is which. The keys: `listen`, `addr`,
+`url`, `db`, `poll_ms`, `notify`, `push_url`, `token`, `ssh_target`,
+`advertise`, `beacon`, `model_url`, `model_name`, `embed_model`,
+`allow_remote_model`, `chat_history`, `llmproxy`, `llmproxy_bin`,
+`llmproxy_config`, `llmproxy_port`, `hotkey`, `update_check`, `update_branch`,
+`update_interval`, `update_source`, `refresh_pricing`; a flag always beats the
+file, and `--allow-run` has no file twin on purpose.
 
-**Reading is open; editing is loopback-only.** The file holds `push_url` and
-`model_url`, both outbound, so a daemon a second machine can reconfigure is a
-daemon a second machine can aim at itself. Decided from the bind in
-`server::run` beside the run and chat gates, and — like the chat gate
-([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) — with no
-flag. A read is not refused: a LAN client may see the settings it is being
-served under.
+## Identity and federation
 
-**The three model keys are re-applied on save; everything else needs a
-restart.** Those are exactly the keys the window's hosted daemon reads, and
-they are the reason this verb exists. It is not a general live-reload, and the
-window says which is which rather than implying otherwise.
+`Snapshot` and `/api/health` carry a `DaemonIdentity`: `machine_id` (the
+comparison — 16 random bytes in `~/.mogeung/machine-id`, written once),
+`host` (display), `claude_home` (which world this daemon watches), `pid`,
+`version`, `ssh_target` (how to reach it, when configured), `federation` (the
+protocol it speaks, `1`). Hostnames are not the comparison — two VMs off one
+image share a name — and unknown on either side means *not this machine*. A
+client older than the field ignores it and a newer client falls back to the
+address guess rather than refusing everything; pinned both ways.
 
-## Design rules
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `Follow` | `id` (the window's connection id; the same again replaces), `name`, `url`, `token` (its own field, never in the URL), `allow_writes` | `Peers` | here |
+| `Unfollow` | `id` | `Peers` | here |
+| `SetPeerWrites` | `id`, `allow` — the per-follow *allow changes* consent | `Peers` | here |
+| `FetchPeers` | — | `Peers`, to the asker; **nothing** to a client from another machine | here |
 
-**Commands are fire-and-forget.** Their effect returns on the event stream like
-any other change, so clients stay pure projections with no correlation layer.
+| Event | Carries | Relay |
+|---|---|---|
+| `Peers` | every follow: `id`, `name`, `url` (never a token), `state` (`connecting` · `up` · `down` · `refused` · `incompatible` · `myself`), `machine_id`, `host`, `version`, `sessions`, `allow_writes`, `detail`, `since_ms`; this machine's windows only | theirs |
 
-**Snapshot is unsolicited on connect**, so a client is useful before it sends
-anything and reconnects self-heal.
+**The id namespace.** A mirrored session's id is `@<machine_id>:<id>`, and so
+is a run's; every id in a forwarded answer is rewritten on the way back and
+stripped on the way out, and the window treats ids as opaque.
+`Session.origin` says where it runs and is how a pane knows to attach over
+ssh to *that* machine.
 
-**A slow client is dropped, not tolerated.** On broadcast lag the client is told
-to reconnect rather than wedging the channel for everyone else.
-
-**Malformed commands produce an error, not a disconnect.** Pinned by a test.
+**Every variant is classified, with no wildcard arm**, so a message added
+next month does not compile until somebody decides what crossing a hop means
+for it: `federation::hop` gives each command the class in the tables above,
+and `federation::relay_class` sorts each event a relay receives into *board*
+(dropped — the watch socket carries it), *pass* (to the asker, ids rewritten)
+and *theirs* (dropped — it describes that daemon, and a window would read it
+as this one's). **Correlation is by socket**: each window gets its own relay
+per peer, opened on its first command for that peer, reopened when the token
+or the consent changes. **No re-export**: a socket from another machine never
+receives a mirrored session, a queue item for one or a `Peers` message, and a
+command it sends about a mirrored id is refused, so following is never
+transitive. One answer is rewritten on the way through: `RunConfigs.allowed`
+for a mirrored session is the peer's gate and this follow's consent, never
+this machine's loopback authority. A follow to a daemon that sends no
+`federation` field, or an older one, stops at `incompatible`.
 
 ## REST
 
 ```
-GET  /api/health          # liveness *and* whether it is still seeing everything
+GET  /api/health                         # liveness, and whether it still sees everything; carries `daemon`
 GET  /api/queue
+GET  /api/sessions
+GET  /api/sessions/{id}
+GET  /api/sessions/{id}/events?since=N
+GET  /api/sessions/{id}/change
+POST /api/sessions/{id}/review_all
+POST /api/sessions/{id}/review           {"anchor": "...", "reviewed": true}
+POST /api/rescan
 GET  /api/repos
 GET  /api/repos/{repo}/debt
+GET  /api/repos/{repo}/docscan
+GET  /api/usage
+GET  /api/insight/search?q=...
+GET  /api/insight/digest?day=YYYY-MM-DD
+GET  /api/insight/recurring
+GET  /api/insight/prompts
+GET  /api/insight/analytics
+GET  /api/insight/file?path=...
+GET  /api/sessions/{id}/subagents
+GET  /api/sessions/{id}/decisions
 GET  /api/sessions/{id}/blast?path=...
-GET  /api/sessions/{id}/ls?path=...    # explorer (R-B24); path optional
+GET  /api/sessions/{id}/ls?path=...      # explorer; path optional
 GET  /api/sessions/{id}/file?path=...
-GET  /api/sessions/{id}/tree           # every file path (R-B25)
-GET  /api/sessions/{id}/search?q=...   # literal content search (R-B25)
-GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...&grep=...&author=...&path=...
-                                       #   &pickaxe=...&all=true&since=EPOCH&until=EPOCH (R-D13, R-D27)
-                                       # R-D10/R-D11/R-D12, all read-only.
-                                       # The write verbs are WebSocket-only:
-                                       # there is no REST route that writes.
-                                       # So is picking a repository (R-D34):
-                                       # every route here passes no repo and
-                                       # answers for the session's own.
+GET  /api/sessions/{id}/tree
+GET  /api/sessions/{id}/search?q=...
+GET  /api/sessions/{id}/git/log?skip=N&limit=N&rev=...&grep=...&author=...&path=...&pickaxe=...&all=true&since=EPOCH&until=EPOCH
 GET  /api/sessions/{id}/git/show?sha=...
 GET  /api/sessions/{id}/git/status
 GET  /api/sessions/{id}/git/diff?path=...
@@ -743,222 +546,12 @@ GET  /api/sessions/{id}/git/reflog
 GET  /api/sessions/{id}/git/worktrees
 GET  /api/sessions/{id}/git/conflict?path=...
 GET  /api/sessions/{id}/git/file_at?sha=...&path=...
-GET  /api/sessions
-GET  /api/sessions/{id}
-GET  /api/sessions/{id}/events?since=N
-GET  /api/sessions/{id}/change
-POST /api/sessions/{id}/review_all
-POST /api/sessions/{id}/review     {"anchor": "...", "reviewed": true}
-POST /api/rescan
+GET  /ws                                 # the WebSocket
 ```
 
-`/api/health` returns a `headline`, `blind_ratio`, plain-language `alerts`, and
-the full `detail` object. It is deliberately curl-able: "is the board empty
-because nothing is happening, or because mogeung went blind?" should not require
-a window.
-
-## Who is answering (`R-I5`)
-
-`Snapshot` carries an optional `DaemonIdentity`, and `/api/health` returns the
-same object under `daemon`:
-
-| Field | For |
-|---|---|
-| `machine_id` | **the comparison.** `~/.mogeung/machine-id`, 16 random bytes written once |
-| `host` | display only — "watching devbox" beats "watching 10.0.0.4:7717" |
-| `claude_home` | which world this daemon watches; two homes on one box are two worlds |
-| `pid`, `version` | so a client can name what to blame |
-| `ssh_target` | how to reach this machine, when configured. Declared for `R-I6` |
-| `federation` | the federation protocol it speaks, since `R-I21`; absent on an older build — see *Following other daemons* |
-
-This exists because the client used to answer *"am I looking at another
-machine?"* with a substring test on the address it had dialled — a question
-about routing standing in for a question about whose filesystem this is. An
-`ssh -L 7717:localhost:7717` tunnel makes a remote daemon answer on
-`127.0.0.1`, so the guess flipped to "local" and re-enabled every action that
-opens an editor or a terminal. That tunnel is the *recommended* way to reach a
-remote daemon, so the guess was wrong exactly where it mattered most.
-
-**Hostnames are not the comparison, and deliberately so** — two VMs off one
-image share a name, and a collision would silently re-enable the actions this
-gates. **Unknown on either side means "not this machine"**: refusing prints a
-sentence, acting on the wrong filesystem opens an editor on a path that is not
-there.
-
-A client older than this field ignores it; a client newer than a daemon that
-does not send it falls back to the address guess rather than refusing
-everything, because daemon and window sit on different machines and upgrade at
-different times. Both directions are pinned by
-`a_snapshot_survives_a_version_gap_in_both_directions`.
-
-## Following other daemons (`R-I21`–`R-I24`, 2026-09-23)
-
-[Feature 0047](../archive/features/0047-daemon-federation/spec.md). A daemon may
-**follow** others: it holds a socket to each, mirrors their sessions onto its
-own board, and forwards commands about a mirrored session to the daemon that
-owns it. The window still holds one socket and computes nothing.
-
-| Message | Direction | For |
-|---|---|---|
-| `follow { id, name, url, token?, allow_writes }` | → | follow a saved connection; the same `id` again replaces it, which is how a corrected token arrives. `url` without a token — the token has its own field |
-| `unfollow { id }` | → | stop, and take its sessions off the board |
-| `set_peer_writes { id, allow }` | → | the per-follow *allow changes* consent (`R-I23`), off by default |
-| `fetch_peers` | → | ask for the follow list |
-| `peers { peers: [PeerState] }` | ← | every follow: `id`, `name`, `url` (never a token), `state` (`connecting` · `up` · `down` · `refused` · `incompatible` · `myself`), `machine_id`, `host`, `version`, `sessions` mirrored, `allow_writes`, `detail` in words, `since_ms` |
-
-**All four commands are this machine's windows only.** `follow`, `unfollow`
-and `set_peer_writes` from a client on another machine are refused in words;
-`fetch_peers` from one is answered with **nothing** — every window asks on
-every snapshot, and a refusal would be a toast on each connect to a remote. So
-a window reads *no answer* as *this daemon will not let me follow*, which is
-the daemon's call rather than a guess from the address it dialled.
-
-**The id namespace.** A mirrored session's id is `@<machine_id>:<id>`, and so
-is a run's. Every `session_id` and `run_id` in a forwarded answer is rewritten
-on the way back (`federation::inbound`), and stripped on the way out
-(`federation::outbound`); the window treats ids as opaque and never splits one.
-`Session.origin` says where it runs — `machine_id`, `host`, `ssh_target`,
-`stale` — and is how a pane knows to attach over ssh to *that* machine.
-
-**Every variant is classified, with no wildcard arm**, so a message added next
-month does not compile until somebody decides what crossing a hop means for
-it. `federation::hop` sorts each `ClientMsg` into *here* (this machine's —
-notes, chat, config, insight, the follow commands), *read* (forwarded),
-*judge* (review marks and snooze — forwarded, since the marks live with the
-session), *write* (forwarded only with the consent on, then under the peer's
-own gates) and *desktop* (never forwarded: it acts on a screen nobody here is
-looking at). `federation::relay_class` sorts each `ServerMsg` a relay receives
-into *board* (dropped — the watch socket carries it), *pass* (to the asker,
-ids rewritten) and *theirs* (dropped — health, notes, the whole run list and
-the rest describe that daemon, and a window would read them as this one's).
-
-**Correlation is by socket.** The wire has no request ids, so each window gets
-its own relay socket per peer, opened on its first command for that peer and
-closed with it; what comes down it is that window's alone. A relay reopens
-when the follow's token or consent changes.
-
-**No re-export.** A socket from another machine never receives a mirrored
-session, a queue item for one, or a `peers` message, and a command it sends
-about a mirrored id is refused. Following is never transitive, so two daemons
-following each other cannot loop.
-
-**One answer is rewritten on the way through**: `run_configs.allowed` for a
-mirrored session is the peer's own gate *and* this follow's consent — never
-this machine's loopback authority, which the per-connection rewrite of
-`R-J104` applies only to this daemon's own sessions.
-
-`DaemonIdentity.federation` is the protocol a daemon speaks (`1`). A follow to
-a daemon that sends none, or an older one, stops at `incompatible` with the
-protocol it needs rather than half-following.
-
-## There is no bundled second client (`R-C3`, removed)
-
-`GET /` used to serve one self-contained HTML file speaking this same protocol —
-a phone client for triage. It shipped, was never opened, and was removed on
-2026-07-30. The point it proved survives it: a client is a projection with no
-local authority ([ADR-0001](../decisions/0001-rust-core-with-egui-ui.md)), so a
-second one costs no daemon change. The REST surface below is the standing offer;
-nothing needs to be added here to take it up.
-
-## Security
-
-**Loopback by default.** `127.0.0.1:7717` unless `--listen` says otherwise, and
-the daemon logs a warning at startup when the bind is not a loopback address —
-anyone who can reach a non-loopback port can read every transcript on the
-machine and open terminals on it.
-
-**A shared token, mandatory beyond loopback** (`R-I4`, tightened by `R-I10`).
-`--token` gates every HTTP and WS request; clients send
-`Authorization: Bearer …` or `?token=…`, the query form existing because a
-browser socket cannot set headers. Comparison is constant time, leaking length
-only. A wrong token is a clean 401.
-
-`server::admit` decides this **before the daemon serves anything** — before the
-database is opened, before the first scan — and a non-loopback bind with no
-token is an error that stops start-up rather than a warning that scrolls past.
-There is no `--insecure`: an override becomes the documented workaround, and
-binding loopback behind an ssh tunnel is both available and strictly better
-than a token in clear text. The window applies the same rule to the daemon it
-hosts, checked on the main thread so the refusal is visible rather than dying
-in a background one.
-
-Two things this still does *not* do, tracked under `R-I10`:
-
-- **The daemon serves no TLS of its own.** It speaks plain HTTP and `ws://`, so
-  a token sent straight to it travels in clear text
-  ([A24](../product/assumptions.md) is the bet: trusted network, no TLS until
-  the bet fails).
-
-  What changed on 2026-07-31 is the *client* half: the tray is built with
-  `rustls` and the window's webview speaks TLS natively, so both dial `wss://`, so putting a TLS-terminating reverse
-  proxy in front of the daemon works. That is the recommended way to get
-  encryption without the daemon growing certificate handling, key rotation and
-  a renewal story it has no business owning.
-
-  **The trap this walked into is worth remembering.** Enabling the
-  `tokio-tungstenite` TLS feature alone left rustls with no crypto provider
-  selected — which does not fail the build. It panics on the first TLS
-  connection, inside the network thread. So the tray names the provider
-  explicitly (`ring`) at start-up. The window dials from the webview, whose TLS
-  is WebKit's, and the test that asserted a real ClientHello went with the egui
-  client ([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)).
-- **Argument hygiene is not authentication.** The shape-checks above stop a
-  client spelling a flag; they say nothing about *which* client.
-
-Until then: loopback, or an ssh tunnel. See
-[guide/remote.md](../guide/remote.md).
-
-**The query token is decoded before it is compared** (2026-09-22). A
-WebSocket client cannot set a header, so the token rides `?token=…`, and a
-client that composes that URL properly percent-encodes it — `/` becomes
-`%2F`, `+` becomes `%2B`, a space becomes `+`. The gate compared the encoded
-bytes against the plain token until the first `R-I19` Test pressed against a
-real daemon was refused with a token that had a `/` in it, while the same
-token typed raw into the address had passed for weeks. Raw and decoded are
-both accepted now, each in constant time, so a hand-typed URL with a literal
-`+` keeps working; `an_encoded_query_token_passes_and_so_does_the_raw_one`
-pins it.
-
-
-## The 2026-07-29 families
-
-The one-go pass (features 0015–0022) grew the contract in five places,
-all in the established shapes — fire-and-forget commands, answers that
-echo their question, `#[serde(default)]` on everything new:
-
-- **Usage** — `FetchUsage` → `UsageStats`. The window-limit figure inside
-  is an estimate from observed limit hits and is labelled so on the type.
-  **Since `R-J21` it also carries money**, per
-  [ADR-0024](../decisions/0024-equivalent-cost-in-dollars.md), and the
-  shape is arranged so a client cannot accidentally overstate it:
-  `TokenSplit` separates the four input buckets, which are priced 1 : 0.1
-  : 1.25 : 2 and were previously summed into one `tokens_in` (the read is
-  the model's own multiple since `R-J123` — 0.025 on Fable 5.1, 0.05 on
-  Opus 5.5 and Sonnet 5.5 — and Haiku 5.5's long prompts are costed per
-  message before they are summed, so one `ModelBurn` row can hold two
-  rates); `ModelBurn`
-  carries `cost_usd` as an **option**, where `null` means no published
-  rate rather than free; `unpriced_models` names every model missing from
-  the totals; and `rates_as_of` dates the price table so a client can say
-  when it was read. `tokens_in`/`tokens_out` keep their old meaning — all
-  input buckets summed — so nothing that already read them changed.
-- **Signals** — `SetSignalCommand` / `RunSignal` / `FetchSignal` →
-  `SignalStatus`. The single place a client can make the daemon execute
-  anything, and it is a human-configured check run on an explicit click;
-  there is deliberately no timer that can reach it.
-- **Insight** — `InsightSearch`, `FetchDigest`, `FetchRecurring`,
-  `FetchPromptLibrary`, `FetchAnalytics`, `FetchSubagents`,
-  `FetchDecisions`, `FetchFileSessions` → their `*Report` twins, each
-  echoing query/day/path so stale answers drop.
-- **Docs** — `FetchDocScan` → `DocReport`, per watched repo only — the
-  daemon refuses paths no session lives in.
-- **Kit (2026-08-06)** — `FetchKit` → `Kit`, `FetchKitDoc` → `KitDoc`, the
-  path guarded against every root but the ones published.
-- **Auth (`R-I4`)** — `router_with_token` wraps everything when the
-  daemon starts with `--token`: `Authorization: Bearer …` or `?token=`
-  (the WS client cannot set headers), constant-time compare, clean 401.
-  No token → the historical open-on-loopback behaviour, byte for byte.
-
-Every **read** family keeps a REST twin (`/api/usage`, `/api/insight/*`,
-`/api/repos/{repo}/docscan`, …) so the daemon stays curl-able; the writes are
-WebSocket-only, as the REST section says.
+Every **read** family has a REST twin; the writes, the runs, the model, notes
+and scratch, the config and the follow commands are WebSocket-only, and every
+git route answers for the session's own repository — there is no `repo`
+parameter. `/api/health` returns a `headline`, `blind_ratio`, plain-language
+`alerts` and the full `detail`, because *is the board empty because nothing is
+happening, or because mogeung went blind?* should not require a window.

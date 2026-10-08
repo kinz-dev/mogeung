@@ -96,7 +96,23 @@ rejected deliberately: mogeung must never mutate your index.
 ## Attribution
 
 Several sessions can share a working tree, so the diff is filtered to the files
-that session actually edited, from its `Edit`/`Write` calls.
+that session actually edited, from its `Edit`/`Write` calls. Two rules shape
+the filter:
+
+- **Only touches inside the root are candidates** (`R-J62`). A touch that
+  resolves to a path outside the repository — a scratchpad under `/tmp`, a file
+  in another checkout — is not a reason to show nothing: a session with no
+  in-root touch at all falls back to the whole-worktree diff, which is what it
+  showed before it was ever filtered.
+- **A miss is reconciled before it is believed** (`R-J27`). `touched_files`
+  carry the spelling the transcript wrote and `repo_root` is git's resolved
+  answer, so a checkout reached through a symlink, or any macOS temp directory
+  (`/var` is a firmlink to `/private/var`), never matches as strings. The
+  ordinary case stays a string compare; on a miss the longest *existing*
+  ancestor of each side is canonicalised, because a deleted file is precisely
+  what a diff is about.
+  [read-boundary.md](read-boundary.md#two-spellings-of-one-path) has the two
+  spellings.
 
 Two sessions editing the *same* file will both show it. Git cannot separate them
 ([A8](../product/assumptions.md)).

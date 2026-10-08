@@ -17,7 +17,7 @@ covers:
 
 # Health and the format canary
 
-Everything mogeung knows comes from two undocumented file formats
+Everything mogeung knows comes from four CLIs' undocumented formats — three of files, one a database
 ([A4](../product/assumptions.md)). The parser degrades rather than crashing, so
 the realistic failure is **seeing less than it should** — and a board that has
 gone half-blind looks exactly like a quiet afternoon.
@@ -227,116 +227,73 @@ Counters are in-memory and reset when the daemon restarts. Persisting them would
 make "have I seen this type before?" survive restarts, which matters more once
 the alert has been dismissed a few times — not yet built.
 
-## The Codex taxonomy moved, and the canary said so (2026-08-26)
+## Four corpora, one tracker
 
-`R-J70`, and `A4`'s clearest evidence yet. Codex `0.149.1` renamed its turn
-boundary and wrapped message content in a completion envelope, so a rollout
-that mogeung had been reading fell to **two understood shapes out of eight**.
-Nothing broke loudly: the session still appeared, with `turns: 0`,
-`tokens_out: 0` and no `last_activity`, which is the failure mode this project
-most fears — a plausible answer that is wrong.
+The canary watches every CLI the daemon reads, and each reader reports
+through the same outcome shape (`codex.rs`, `qwen.rs` and `opencode.rs` mirror
+`LineOutcome`). The tracker keys a `BTreeMap` by source name and `Health`
+carries `agents: Vec<AgentHealth>` — `{source, present, threads, error,
+unknown, trusted_dirs}` per CLI — because a canary with nowhere to report is
+indistinguishable from a format that has not drifted, which is the exact
+failure this file exists to prevent. Alerts are prefixed by source, so
+`qwen/system/telepathy`, `codex/thought` and `opencode/part/telepathy` sit in
+one list and stay tellable apart; `unknown` is replaced wholesale each scan. A
+present install with zero threads is reported as exactly that: present,
+watched, empty. `--bin sweep` walks all four corpora and folds their unknown
+counts rather than summing hand-written terms — a sum would be a silent zero
+for a corpus nobody swept, and so a clean bill of health for a format nobody
+checked.
 
-| mogeung read | `0.149.1` writes |
-|---|---|
-| `turn_started` | `task_started` |
-| `turn_complete` | `task_complete` (and it carries the reply) |
-| `user_message` / `agent_message` | `item_completed` → `item.type` |
-| usage on turn-complete | its own `token_count` event |
-| — | `world_state` (ignored) |
+| Source | Where drift hides | Reported as |
+|---|---|---|
+| Claude Code | `type`, and the shapes beneath it that the sweep inventories: models, usage keys, content blocks | `UnknownEventType`, the bare type |
+| Codex | three levels — `item_completed` wraps an `item.type`, so drift can hide one layer deeper than `kind/item` | `event_msg/item_completed/<Type>`; `KNOWN_COMPLETED_ITEMS` holds only what has been observed, so a tool call or a file change announces itself the first time one happens |
+| Qwen Code | `system` records are three lines in five and discriminate on `subtype` | `system/<subtype>` |
+| opencode | rows of `opencode.db`, classified by row id so a re-read at the watermark does not count one twice | `part/<type>`; `tool/<status>` outside `pending`/`running`/`completed`/`error`; `message/<role>` |
 
-The canary named all six in `Health.codex_unknown` before anyone read a line of
-Codex source, which is what it is for. Two things came out of fixing it:
+**Codex.** Rollouts are read incrementally — `codex::ScanCache` tails appended
+bytes rather than re-reading every file per pass — so the per-thread counts the
+replacement is built from are cumulative in the cache, and the merged totals
+equal what a full re-read would have counted. Two streams carry the same
+words: `response_item/message` replays the model-facing transcript (system
+prompt, skills block, an `<environment_context>` blob under `role: "user"`),
+and turns and text are read from `item_completed` alone; reading both would
+count every turn twice and show a system preamble as the last thing you typed.
+`trusted_dirs` (`R-J74`) sits on the slot because it is *what mogeung knows
+about that CLI's install*, the same kind of thing as `present`: Codex opens no
+thread in a directory until you have answered its trust prompt, so a headless
+launch there stops on a prompt no window can show, and carrying the list lets
+the New session window say so before you click. Read from
+`~/.codex/config.toml`, never written — answering for you would be a launcher
+quietly widening what an agent may touch — and empty for a CLI with no such
+notion, so a window that gets no list warns about nothing rather than guessing.
 
-**The taxonomy gained a third level.** `item_completed` wraps an `item.type`,
-so drift can now hide one layer deeper than `kind/item`. It surfaces as
-`event_msg/item_completed/<Type>`, and `KNOWN_COMPLETED_ITEMS` is deliberately
-short — only what has been observed. A tool call or a file change will announce
-itself the first time one happens. That is the canary working, not a gap.
+**opencode.** A database can drift in a way a file cannot: its **layout**. The
+`session` table is read with `SELECT *` and mapped by name, as Codex's index
+is, and a column the reader depends on going missing is put in the slot's
+`error` — *"opencode.db's session table has no directory — its layout has
+changed"* — rather than silently producing no sessions. The sweep walks the
+database too, read-only, with the scan's own `classify_part` and
+`classify_message`, and inventories `finish` values, error names and tool
+names beneath them.
 
-**Two streams carry the same words.** `response_item/message` replays the
-model-facing transcript — system prompt, skills block, and an
-`<environment_context>` blob under `role: "user"`. Turns and text are read from
-`item_completed` alone; reading both would count every turn twice and show a
-system preamble as the last thing you typed.
+**The four `codex_*` fields are still populated**, marked superseded: a
+snapshot is a wire type, dropping a field is a break, and a client built before
+the list keeps working. `desktop/src/lib/agentHealth.ts` reads the list when it
+is present and reconstructs a single Codex slot from the old fields only when
+the list is *absent*, never when it is empty — an empty list from a new daemon
+is a real answer, and reading the old fields over it would resurrect a chip
+the daemon just said not to show.
 
-## Codex and rate limits (2026-07-29)
+**Nothing unobserved sits in `HANDLED`.** A handled type raises no alert, so
+pre-handling a shape nobody has seen spends the canary on exactly the event it
+was built for. A guessed structured rate-limit type did for a day — `R-G1` was
+written believing the CLI emits one, and the sweep found zero across 235
+transcripts (A20). The arm is gone, and the corpus line invented to exercise
+it with it; such a line now classifies as `Unknown` and says so loudly. The
+real limit signal is the synthetic assistant message, folded in `state.rs`.
 
-The canary now watches two corpora. Codex rollout lines classify through
-the same outcome shape (`codex.rs` mirrors `LineOutcome`); unknown kinds
-surface as `codex/<kind>` alerts and in `Health.codex_unknown`, replaced
-wholesale each scan. Rollouts are read **incrementally** (2026-08-05:
-`codex::ScanCache` tails appended bytes rather than re-reading every file
-per pass), so the per-thread counts the replacement is built from are
-cumulative in the cache — the merged totals equal what a full re-read
-would have counted, without the full re-read. A present install with zero
-threads is reported as exactly that: present, watched, empty.
-
-## A third corpus, and a list instead of a slot (2026-08-25)
-
-`R-I15` added Qwen Code, and the shape the Codex work left behind did not
-survive it. `HealthTracker` held **one** `Option<(bool, u32, …)>` and `Health`
-carried **four flat `codex_*` fields**, so a third CLI's canary had nowhere to
-report — and a canary with nowhere to report is indistinguishable from a format
-that has not drifted, which is the exact failure this whole file exists to
-prevent.
-
-So the tracker keys a `BTreeMap` by source name and `Health` carries
-`agents: Vec<AgentHealth>` — `{source, present, threads, error, unknown,
-trusted_dirs}` per CLI.
-
-`trusted_dirs` (`R-J74`) is the odd one, and it is here because it is *what
-mogeung knows about that CLI's install* — the same kind of thing as `present`.
-Codex asks whether it may work in a directory the first time it sees one and
-opens no thread until you answer, so a launch into an untrusted directory stops
-on a prompt; headless gives that prompt no window, and the result is a running,
-tmux-hosted agent invisible to you and to this daemon alike. Carrying the list
-lets the New session window say so **before** you click. It is read from
-`~/.codex/config.toml` and never written: answering the trust question for you
-would be a launcher quietly widening what an agent may touch. `#[serde(default)]`,
-and empty for a CLI with no such notion — a window that gets no list warns about
-nothing rather than guessing, and the daemon's own refusal is the backstop. Alerts are prefixed by that source, so `qwen/system/telepathy` and
-`codex/thought` sit in one list and stay tellable apart. The four `codex_*`
-fields are **still populated**: a snapshot is a wire type, dropping a field is a
-break, and a client built before this change keeps working. They are marked
-superseded, and `desktop/src/lib/agentHealth.ts` reads the list when it is
-present and reconstructs a single Codex slot from the old fields when it is
-not — falling back on *absent*, never on *empty*, because an empty list from a
-new daemon is a real answer and reading the old fields over it would resurrect
-a chip the daemon just said not to show.
-
-Qwen's taxonomy descends one level, like Codex's but for a different reason:
-its `system` records are roughly three lines in five and their real
-discriminator is `subtype`, so an unclassified one is reported as
-`system/<subtype>` and drift there is exactly as loud as drift at the top.
-`--bin sweep` now walks three corpora and folds their unknown counts rather
-than summing two hand-written terms — that sum would have been a silent zero
-for the third, and so a clean bill of health for a format nobody swept.
-
-## A fourth corpus, and it is a database (2026-09-23)
-
-`R-I25` added opencode, whose sessions are rows of `opencode.db` rather than
-lines of a file. The canary is the same idea one layer over: every `message`
-and `part` row read is classified, and an unknown one is reported by row id so
-a re-read at the watermark does not count it twice. Two levels, as for Codex
-and Qwen — `part/<type>` for a part type nobody has classified, `tool/<status>`
-for a tool state outside `pending`/`running`/`completed`/`error` — plus
-`message/<role>`. So `opencode/part/telepathy` sits in the same list as
-`qwen/system/telepathy`.
-
-A database can drift in a way a file cannot: its **layout**. The `session`
-table is read with `SELECT *` and mapped by name, as Codex's index is, and a
-column the reader depends on going missing is put in the slot's `error` —
-*"opencode.db's session table has no directory — its layout has changed"* —
-rather than silently producing no sessions. `--bin sweep` walks the database
-too, read-only, with the scan's own `classify_part` and `classify_message`,
-and inventories `finish` values, error names and tool names beneath them.
-
-**Nothing unobserved sits in `HANDLED`.** A guessed structured
-rate-limit type did for a day — `R-G1` was written believing the CLI
-emits one, and the arm was kept "in case a future CLI does" after the
-sweep found zero across 235 transcripts (A20). That is backwards: a
-handled type raises no alert, so pre-handling a shape nobody has seen
-spends the canary on exactly the event it was built for. The arm is
-gone, and the corpus line invented to exercise it with it; such a line
-now classifies as `Unknown` and says so loudly. The real limit signal is
-the synthetic assistant message, folded in `state.rs`.
+How each corpus arrived — Codex `0.149.1` renaming its turn boundary and a
+read rollout falling to two understood shapes of eight (`R-J70`), the single
+`Option` slot a third CLI outgrew (`R-I15`), the database the fourth brought
+(`R-I25`) — is in those roadmap rows.

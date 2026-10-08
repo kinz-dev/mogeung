@@ -20,47 +20,91 @@ Deliberately small. Everything in the UI is a view over these.
 | `LiveStatus` | `Busy` / `Idle` / `Unknown`, from the live registry |
 | `TranscriptEvent` | One typed event with a per-session monotonic `seq` |
 | `Change` | A session's diff: ordered `FileChange`s |
-| `ChangeSummary` | A `Change` with the hunk bodies left out — per-file counts, paths, review tallies. What the scan loop broadcasts when a diff moves (`R-J53`); the hunks travel per connection, on request |
+| `ChangeSummary` | A `Change` with the hunk bodies left out — per-file counts, paths, review tallies. What the scan loop broadcasts when a diff moves; the hunks travel per connection, on request |
 | `FileChange` | Path, status, stats, risk flags and score, `Hunk`s |
 | `Hunk` | Content anchor, header, lines, flags, score, `reviewed` |
-| `AttentionItem` | A session's queue position with reason, score, and explanation |
+| `AttentionItem` | A session's queue position with reason, score, a static `detail` and the `since` clock |
 
 ## Session identity
 
-Sessions are keyed by Claude Code's uuid. mogeung generating its own id would
-mean maintaining a mapping for no benefit — the session belongs to the CLI, not
-to us.
+Sessions are keyed by the CLI's own id; mogeung generating its own would mean
+maintaining a mapping for no benefit. A mirrored session from a followed
+machine is `@<machine_id>:<id>`, and a tmux pane running an agent that has
+written nothing is `pane:%N`; neither is ever written to the store.
 
 `Session::label()` falls back in descending usefulness: `title` → last prompt
-→ registry name → short id. `title` is the CLI's generated `ai-title` until you
-`/rename` the session, and your name from then on (`custom_title`, below).
+→ registry name → short id. `title` is the CLI's generated `ai-title` until
+you `/rename` the session, and your name from then on (`custom_title`).
 
-**A prompt is something you typed.** Until `R-J39` it also included whatever a
-slash command printed: `<local-command-stdout>` arrives as a `user` line with a
-plain-string content, the same shape a human prompt has, so a session that had
-just compacted was labelled *"Compacted (ctrl+o to see full summary)"* in the
-queue. Those lines are barren now. The command **echo**
-(`<command-name>…</command-name>`) is still a turn and still becomes a label —
-that half really is you — but it is rewritten to the command you typed rather
-than the markup around it (`R-J42`): `/clear`, `/add-dir /home/me/other`. A
-label stored before that fix is repaired when the daemon loads it, because the
-rows you are looking at are the ones already in the database. The event log is
-left as it was written.
+**A prompt is something you typed.** A slash command's printed output
+(`<local-command-stdout>`) arrives as a `user` line with a plain-string
+content, the same shape a human prompt has, so it used to label a session
+*"Compacted (ctrl+o to see full summary)"*; those lines are barren now. The
+command **echo** is still a turn and still becomes a label — that half really
+is you — rewritten to the command you typed (`/clear`, `/add-dir …`) rather
+than the markup around it (`R-J42`). A label stored before that fix is
+repaired when the daemon loads it; the event log is left as written.
+
+## Every field of a `Session`
+
+Every field added after v0.2 carries `#[serde(default)]`, because the store
+keeps whole sessions as JSON blobs and a row written by an older build must
+still load — `load_sessions` only warns on a bad row, so a missing default
+would silently lose sessions rather than fail loudly. **Persisted** says
+whether the value survives a restart or is re-derived on the first scan.
+
+| Field | For | Persisted |
+|---|---|---|
+| `id`, `cwd`, `transcript_path` | identity and where it lives; `transcript_path` is `<opencode.db>#<id>` for opencode, a locator that opens nothing | yes |
+| `title`, `name`, `last_prompt` | the label chain above | yes |
+| `custom_title` (`R-J120`) | the name you gave with `/rename`; pins `title` against the CLI's re-emitted `ai-title` | yes |
+| `repo_root`, `git_branch` | git's resolved root; the branch from the repository's `HEAD` each pass (`R-J110`), overriding the transcript's stamp | yes; branch re-read |
+| `pid`, `alive`, `live_status`, `status_since` | liveness from the OS and the registry | `pid` kept, the rest re-derived |
+| `version` | the CLI version behind the newest line | yes |
+| `started_at`, `last_event_at` | when the *process* started (the registry's `startedAt`, so every id on one pid reports the same instant); the last line this conversation wrote, which is what orders a `/clear` chain (`R-J15`) | yes |
+| `turns`, `tool_calls`, `tokens_in`, `tokens_out`, `api_ms`, `tool_ms` (`R-J63`) | the counters and the two timings from `cost-state`; none is a ranking input | yes |
+| `last_activity` | the current tool call, for the row | yes |
+| `touched_files`, `base_sha`, `files_changed`, `insertions`, `deletions` | attribution and the diff's pinned base and tallies | yes |
+| `error` | the API error that ranks `FAILED`; cleared by the next human turn | yes |
+| `reviewed` | every hunk read | yes |
+| `open_tools` (`R-B4`) | unmatched `tool_use`s — the permission-prompt signal | yes |
+| `snoozed_until` (`R-B5`) | the snooze deadline | yes |
+| `collisions` (`R-B3`), `loop_signal` (`R-B7`) | the cross-session signals, recomputed every scan | recomputed |
+| `recent_touches`, `recent_tools` | timestamped edits capped at 200, the last 12 `tool:target` keys — the inputs to the two above | yes |
+| `tmux_target` (`R-B18`) | the pane this session can be attached in; a stale one would offer a tab that attaches to nothing | re-derived |
+| `limit_hit_at`, `limit_resets` (`R-G1`) | the rate limit, from the CLI's synthetic message; cleared by movement | yes |
+| `verify_runs`, `claims` (`R-E1`, `R-E3`) | build/test/typecheck-shaped commands with outcomes; "tests pass"-shaped prose bound to them, `contradicted` when the run said otherwise; both capped | yes |
+| `source` (`R-I1`, `R-I15`, `R-I25`) | which CLI wrote the session, `claude_code` default; asked through named methods (`in_claude_live_registry()`, `has_claude_event_history()`) rather than equality, so a fifth CLI is a compile error at every site that must think about it ([ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)) | yes |
+| `announced_dirs` (`R-J39`) | folders the CLI confirmed with `/add-dir`, used only to *offer* a workspace folder | yes |
+| `artifacts` (`R-J115`) | pages this session published on claude.ai, newest first; `url` worked out by the daemon from the UUID's base58 form | yes; skipped when empty |
+| `provisional` (`R-J75`) | a pane row, rebuilt every scan | never |
+| `origin` (`R-I21`) | the machine a mirrored session runs on: `machine_id`, `host`, `ssh_target`, `stale` | never |
+
+**`alive` and `live_status` are never trusted from storage**; both are
+re-derived from the OS on the first scan. **`pid` is kept and is not a
+liveness claim**: a dead session holding its last pid is the only evidence
+that `/clear` moved that pid to a fresh id, which is how the window carries a
+label across; every consumer that needs a *live* pid gates on `alive` first.
+**`started_at` is when the process started, not the conversation**; read it
+as *how long has this window been up* and use `last_event_at` for ordering.
+Absorbing the second, third and fourth CLI added no field here, which is most
+of what [A23](../product/assumptions.md) was asking.
 
 ## Persistence
 
 SQLite at `~/.mogeung/mogeung.db`:
 
 - `sessions(id, created_at, json)` — the whole struct as a JSON blob
-- `events(run_id, seq, json)` — the column is still called `run_id`, a v0.1 name
-  that survived; it holds the session id
+- `events(run_id, seq, json)` — the column is still called `run_id`, a v0.1
+  name that survived; it holds the session id
 - `reviewed(run_id, anchor)` — which hunks you have read; the same column name
-- `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
+- `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`);
+  a real table because it is keyed by repo, not session
 - `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
   writing (`R-B35`)
 - `note_tasks(note_id, ord, text, done, depth, grp)` — a **cache** of where the
-  `- [ ]` lines in each document are, how deeply each is nested, and the heading
-  above it (`R-L3`, `R-L10`)
+  `- [ ]` lines in each document are, how deeply each is nested, and the
+  heading above it (`R-L3`, `R-L10`)
 - `task_events(note_id, text, done, at)` — append-only, the history a checkbox
   cannot keep (`R-L3`)
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
@@ -70,271 +114,87 @@ SQLite at `~/.mogeung/mogeung.db`:
   `semantic_meta(k, v)` — the **similar** list's embeddings and what built them
   (`R-O6`)
 
-**`chats` is the second one that cannot be recomputed, and it is kept
-differently from `notes` on purpose.** A note is written deliberately, one at
-a time, and is kept for ever and mirrored to markdown. A conversation
-accumulates simply by using the panel, so it is capped — 200, oldest
-*touched* first out — and it is **not** mirrored: half of it is model output,
-and [ADR-0032](../decisions/0032-the-chat-panel-remembers.md) is explicit that
-this is a convenience for finding a question again rather than a document with
-a lifetime of its own. `R-L2`'s copy-into-a-note is still how you keep one on
-purpose.
+Blob storage is a deliberate v0.x choice: the schema is still moving, and
+being able to change `Session` without a migration matters more than query
+planning at this scale. Rows that fail to deserialise are skipped with a
+warning rather than refusing to start.
 
-`turns` is the whole conversation as one JSON array. It is read whole, written
-whole and sent whole, so a row per turn would be normalisation nothing queries
-— and the common write, appending one exchange, would be a delete-and-reinsert
-anyway. `n_turns` is stored rather than derived with `json_array_length`,
-which a test caught erroring the **entire listing** when any single row's JSON
-is malformed; one bad row must cost one door, not the history.
+**Three kinds of row, by what losing them costs.**
 
-**The two task tables are the opposite case, and equally deliberate.**
-`note_tasks` is a cache of something the documents already say and
-`task_events` is its history; both are droppable by design, which is
-[ADR-0015](../decisions/0015-markdown-is-the-truth.md)'s rule 3 and the whole
-defence against a task existing in two places. Delete them, restart, and
-`prepare` rebuilds every task from the markdown — the only casualty is *when*
-things were closed, and the ADR names that as the acceptable loss. A test drops
-both tables and asserts exactly that.
-
-`note_tasks` is **dropped and recreated** when its shape changes rather than
-migrated — `R-L10` added `depth` and `grp` that way. That is the privilege of
-being a cache and not a licence taken lightly: the rebuild at startup means
-there is nothing in it to preserve. `task_events` is never dropped, because
-history is not a cache and cannot be recomputed from anything.
-
-**`notes` is the odd one, and deliberately.** Everything else here is derived:
-lose it and a rescan of `~/.claude` and git rebuilds it. A note cannot be
-recomputed from anything, which is why
-[ADR-0015](../decisions/0015-markdown-is-the-truth.md) also requires a one-way
-mirror to `~/.mogeung/notes/*.md` — the writing must not be reachable only
-through a database that only mogeung can open. The mirror is never read back.
-
-`session_id` and `seq` on a note are **tags, not a location**: together they
-anchor it to one turn of one transcript, and `seq` works as an anchor because
-it is persisted with the events and resumes from `max_seq` at startup. A note
-outlives the session being forgotten, which is what tagging rather than nesting
-buys.
-
-Blob storage is a deliberate v0.x choice: the schema is still moving, and being
-able to change `Session` without a migration matters more than query planning at
-this scale. Rows that fail to deserialise are skipped with a warning rather than
-refusing to start.
-
-**`alive` and `live_status` are never trusted from storage.** Both are
-re-derived from the OS on the first scan after startup.
+- **Derived** — `sessions`, `events`, `reviewed`, `tail_offsets`,
+  `semantic_index`: lose them and a rescan of the CLIs' homes and git rebuilds
+  them. `semantic_index` is the clearest case, a cache dropped and rewritten
+  wholesale on a rebuild because a half-rebuilt index would mix two models in
+  a space the cosine assumes is one; `vec` is little-endian `f32`s in a BLOB,
+  since a thousand floats as JSON is ten times the bytes.
+- **Yours** — `notes`: a note cannot be recomputed from anything, which is why
+  [ADR-0015](../decisions/0015-markdown-is-the-truth.md) requires a one-way
+  mirror to `~/.mogeung/notes/*.md`, never read back. `session_id` and `seq`
+  on a note are tags, not a location, so a note outlives the session being
+  forgotten. `note_tasks` and `task_events` are the opposite case on purpose:
+  the first is a cache of what the documents already say and is dropped and
+  recreated when its shape changes; the second is history and is never
+  dropped. Delete both, restart, and `prepare` rebuilds every task from the
+  markdown — the only casualty is *when* things were closed, which the ADR
+  names as the acceptable loss, and a test asserts exactly that.
+- **Convenience** — `chats`: a conversation accumulates simply by using the
+  panel, so it is capped at 200, oldest *touched* first out, and not mirrored,
+  because half of it is model output
+  ([ADR-0032](../decisions/0032-the-chat-panel-remembers.md)). `turns` is one
+  JSON array, read, written and sent whole; `n_turns` is stored rather than
+  derived with `json_array_length`, which a test caught erroring the entire
+  listing when one row's JSON is malformed.
 
 **Rows are rent, and retention collects it** (`R-J57`). A session dead past
-`RETENTION_DAYS` (30) is deleted — row, events, review marks, tail offset —
-daily and on the first scan after start. Two kinds of row are never pruned: a
-session a `notes` row anchors to (the note survives a forget by design, and a
-note pointing at a silently deleted transcript would be a broken promise),
-and one whose transcript *file* is still inside the scan's mtime window,
-because the next pass would only re-adopt and re-read it whole. Everything
-deleted is derived and re-derivable while its transcript exists; what cannot
-be recomputed — the writing — is exactly what the guard protects.
-
+`RETENTION_DAYS` (30) is deleted — row, events, marks, tail offset — daily and
+on the first scan after start, unless a note anchors to it or its transcript
+file is still inside the scan's mtime window and would only be re-adopted.
 The database opens with `journal_size_limit` set and the retention pass runs
 `wal_checkpoint(TRUNCATE)`: without both, SQLite reuses the WAL but never
-shrinks it, and the per-tick write pattern had left it at 80% of the
+shrinks it, and the per-tick write pattern had left it at 80 % of the
 database's own size.
-
-**`pid` is kept, and is not a liveness claim.** A dead session holding its last
-pid is the only evidence that `/clear` moved that pid to a fresh session id,
-which is how a client knows the two are one conversation and carries a
-hand-applied label across (`store/prefs.ts`). The scan re-derives the pid of
-everything actually running, so a remembered pid only ever survives on a session
-whose `alive` is false — and every consumer that needs a *live* pid gates on
-`alive` first. Wiping it on load broke the label migration across a daemon
-restart, the same way wiping it on death broke it inside one run.
-
-**`started_at` is when the *process* started, not the conversation.** It begins
-as the transcript file's mtime and is then overwritten every scan from the live
-registry's `startedAt`, which Claude Code sets once per process — so a session
-`/clear` minted an hour ago reports the moment its terminal was opened, and
-every id on one pid reports the same instant. Read it as "how long has this
-window been up"; `last_event_at` is the field that says when this conversation
-was last doing anything, and it is the one that can order a `/clear` chain
-(`R-J15`, and `architecture.md` on succession). Correcting it is a change to
-what the Info pane's "started" and every duration derived from it mean, so it is
-recorded here rather than quietly fixed.
 
 ### Read positions are part of the record (`R-A6`)
 
-`tail_offsets` is the one table that is neither a fold nor the user's writing:
-it says how much of each transcript has already *been* folded. It has to be
-persisted for the same reason the sessions are, and by the same process — a
+`tail_offsets` is the one table that is neither a fold nor the user's
+writing: it says how much of each transcript has already *been* folded. A
 tailer that starts empty over a database that remembers the sessions re-reads
-every transcript whole, appends the history again under fresh `seq`s, and folds
-every counter a second time. That was the shape of the 2026-08-02 bug; a
-restart replayed the entire conversation into the transcript pane and added a
-copy of it to the database, once per restart.
-
-Written **after** the lines it covers are folded in, so an interrupted pass
-re-reads a batch rather than skipping it, and deleted with the session it
-belongs to. The offset for a file that shrank is discarded on sight: a
-transcript rewritten shorter is a different file and is read again from the
-start.
+every transcript whole, appends the history again under fresh `seq`s, and
+folds every counter a second time — once per restart. Written **after** the
+lines it covers are folded in, so an interrupted pass re-reads a batch rather
+than skipping it; deleted with its session; discarded on sight for a file that
+shrank, because a transcript rewritten shorter is a different file.
 
 ### Repair
 
 `PRAGMA user_version` tracks whether stored *values* need fixing — not the
-schema, which is all `CREATE TABLE IF NOT EXISTS`. Version 1 is the repair for
-the above: it drops each session's events, zeroes the counters the fold
-produces, and re-reads the transcript from scratch under the same size cap a
-first sighting gets. Derived state is rebuilt, never patched, and nothing
-original is touched —
-[ADR-0016](../decisions/0016-rebuild-derived-state.md) has the reasoning and the
-alternatives, including why the counters cannot simply be divided down.
+schema, which is all `CREATE TABLE IF NOT EXISTS`. Each pass checks its own
+number, so a database already past it is not touched when the constant moves.
 
-Two sessions cannot be rebuilt that way, and each is handled by saying so rather
-than by guessing:
-
-- **The transcript is gone.** Nothing remains to recount from, so its event log
-  is deduplicated in place — `dedupe_events` keeps the earliest `seq` of each
-  otherwise-identical event — and its counters are left as they are. The
-  deduplication is a guess by construction: a transcript really can carry the
-  same prompt twice on one timestamp, and this collapses that pair. It is the
-  last resort, it repairs a log and can do nothing for a counter, and a record
-  left visibly odd is better than one divided by an invented number.
-- **It is not a Claude Code session.** Skipped entirely. Codex rollouts and
-  Qwen transcripts are folded by their own scans and never went through this
-  offset path, so they were never duplicated; folding one through the Claude
-  Code adapter would invent history rather than repair it. Asked as
-  `source.has_claude_event_history()` rather than `source == Codex`, which is
-  what it used to say and *meant* "not Claude" — a sentence that stopped being
-  true the moment a third CLI existed.
-
-The pass ends with `VACUUM` when it dropped anything. Deleting rows frees pages
-inside the file and returns nothing to the disk, so a database bloated by this
-bug would otherwise stay bloated after being fixed.
-
-**Version 2 is a backfill, not a repair** (`R-J115`). Sessions read before
-`artifacts` existed have their `artifact-comment-monitor` lines behind the saved
-offset, so no scan will see them again. `backfill_artifacts` reads each Claude
-Code transcript once, folds **only** those lines, and moves no counter — the
-re-ingestion version 1 exists to undo is exactly what folding anything else
-would be. The repair checks for version 1 itself rather than for
-`SCHEMA_VERSION`, so a database already repaired is not repaired again when the
-constant moves.
-
-**Version 3 is a backfill too** (`R-J120`), on the same pattern:
-`backfill_custom_titles` folds only `custom-title` lines, last one wins, and
-gives a session renamed before this build its name and its pin.
-
-**`semantic_index` is the opposite kind of table, and is treated as one.** It
-is a **cache**: every row is recomputable from the corpus, so it is dropped and
-rewritten wholesale on a rebuild rather than migrated — a half-rebuilt index
-would mix two models in a vector space the cosine assumes is one, and the only
-thing lost by deleting it is minutes of embedding. `vec` is little-endian
-`f32`s in a BLOB, because a thousand floats as JSON text is roughly ten times
-the bytes and has to be parsed on every query. `semantic_meta` holds the model
-and the build time, which is what lets the panel say *what* answered and
-whether the corpus has moved since.
+- **Version 1** repairs the above: drops each session's events, zeroes the
+  counters the fold produces, and re-reads the transcript from scratch under
+  the same size cap a first sighting gets. Derived state is rebuilt, never
+  patched ([ADR-0016](../decisions/0016-rebuild-derived-state.md)). Two
+  sessions cannot be rebuilt that way and are handled by saying so: one whose
+  transcript is gone has its event log deduplicated in place (`dedupe_events`
+  keeps the earliest `seq` of each otherwise-identical event — a guess by
+  construction, since a transcript can carry the same prompt twice on one
+  timestamp) and its counters left visibly odd rather than divided by an
+  invented number; one that is not a Claude Code session is skipped, asked as
+  `source.has_claude_event_history()`, because the other readers never went
+  through this offset path. The pass ends with `VACUUM` when it dropped
+  anything, since deleting rows returns nothing to the disk.
+- **Version 2 is a backfill** (`R-J115`): `backfill_artifacts` reads each
+  Claude Code transcript once, folds **only** `artifact-comment-monitor`
+  lines, and moves no counter.
+- **Version 3 is a backfill** (`R-J120`): `backfill_custom_titles` folds only
+  `custom-title` lines, last one wins, and gives a session renamed before this
+  build its name and its pin.
 
 ## Ephemeral state
 
 `Change` is recomputed from git on demand and cached in memory only — never
 persisted. Only the `reviewed` anchors need to survive a restart, and they are
-what make checkpointing durable.
-
-
-## Fields added after v0.2
-
-Every one carries `#[serde(default)]`. The store keeps whole sessions as JSON
-blobs, so a row written by an older build must still load rather than being
-dropped as unreadable — and `load_sessions` only warns on a bad row, which means
-a missing default would silently lose sessions rather than fail loudly.
-
-| Field | For |
-|---|---|
-| `open_tools: Vec<OpenTool>` | Permission-prompt detection (`R-B4`) |
-| `snoozed_until: Option<DateTime>` | Snooze (`R-B5`) |
-| `collisions: Vec<Collision>` | Cross-session file overlap (`R-B3`) |
-| `loop_signal: Option<String>` | Thrashing advisory (`R-B7`) |
-| `recent_touches: Vec<Touch>` | Timestamped edits, capped at 200, feeding collisions |
-| `recent_tools: Vec<String>` | Last 12 `tool:target` keys, feeding loop detection |
-| `tmux_target: Option<String>` | The pane this session can be attached in (`R-B18`) |
-
-`recent_touches` exists because `touched_files` is cumulative: "we both edited
-this file at some point today" is not a collision, and answering the question
-needs *when*, not just *what*.
-
-`tmux_target` is derived, not stored in any meaningful sense — it is re-resolved
-from the OS on every scan alongside `alive`/`pid`, and cleared when a session
-dies. A stale one would offer a terminal tab that attaches to nothing. It lives
-on `Session` rather than behind its own endpoint so a client can decide whether
-to *offer* the tab without asking a second question
-([ADR-0010](../decisions/0010-attach-a-terminal-never-own-one.md)).
-
-## Session fields added 2026-07-29
-
-All `#[serde(default)]`, so rows persisted by older builds still load:
-
-- `limit_hit_at` / `limit_resets` — the five-hour limit, recognised from
-  the CLI's synthetic assistant message; cleared by the next human turn
-  or real assistant output (`R-G1`).
-- `verify_runs` — build/test/typecheck-shaped commands with outcomes,
-  paired to their `tool_result` by id; `claims` — "tests pass"-shaped
-  prose bound to that evidence, `contradicted` when the run said
-  otherwise (`R-E1`/`R-E3`). Both capped.
-- `source` — which CLI wrote the session (`claude_code` default, `codex`,
-  `qwen_code`, `opencode`); each CLI's scan maps its own on-disk state into
-  this same struct, which is A23's test (`R-I1`, `R-I15`, `R-I25`).
-  **Absorbing the third one added no field here, and nor did the fourth**,
-  which is most of what that assumption was asking. `opencode` is spelled as
-  the product spells itself — an explicit `serde` rename, not the `open_code`
-  the variant name would give. Two questions are asked of a `SessionSource`
-  as named methods rather than as equality — `in_claude_live_registry()` and
-  `has_claude_event_history()` — so each `match` is exhaustive and a fourth
-  CLI is a compile error at every site that has to think about it; it was,
-  twice (the tmux session name and the launch recipe). See
-  [ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md).
-- `transcript_path` is a file for every source but one. An opencode session
-  lives in a database, so its value is `<opencode.db>#<session id>`: a
-  locator that opens nothing, so the panels that stream a transcript as
-  Claude JSONL find nothing rather than megabytes of binary — and not empty,
-  because an empty one tells the diff there is nothing to attribute and it
-  computes none (feature 0048).
-
-## Session fields added 2026-08-22
-
-- `announced_dirs` — folders the CLI confirmed with `/add-dir`, read from the
-  transcript and used only to **offer** a workspace folder (`R-J39`). Also
-  `#[serde(default)]`, like everything above: the store keeps whole sessions as
-  JSON blobs, so a row written yesterday must still load. Nothing reads it as
-  permission — what the daemon will serve is still only what someone added
-  through the UI, which is `R-J40`'s file and not this field.
-
-## Session fields added 2026-09-23
-
-- `origin` — the machine a session runs on, when it is not this daemon's own
-  (`R-I21`, [feature 0047](../archive/features/0047-daemon-federation/spec.md)):
-  `machine_id`, `host`, the `ssh_target` its own daemon declared, and `stale`
-  once that daemon has gone quiet. **Set only on a mirrored session**, whose id
-  is then `@<machine>:<id>` — so it is never written to the store: mirrored
-  sessions live in the federation's own map, are rebuilt from the peer's
-  snapshot on every reconnect, and are gone on restart until the follow
-  reconnects. A row in `sessions` has no `origin`, and `#[serde(default)]`
-  keeps it that way for every blob already there. `provisional` (`R-J75`,
-  [ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md))
-  is the other flag this struct gained since the section above, and is the same
-  shape: defaulted, and never persisted, because the row it marks is rebuilt
-  every scan.
-
-## Session fields added 2026-10-01
-
-- `artifacts` — pages this session published on claude.ai, newest first, each
-  an `Artifact { id, title, url }` (`R-J115`). `id` is the UUID the CLI writes;
-  `url` is worked out by the daemon (`session::artifact_url`), because the link
-  claude.ai hands out is a 22-character base58 form of the same 128 bits and a
-  client should not have to know that. Defaulted and skipped when empty. A page
-  that leaves the CLI's watch list stays here — it has not left claude.ai.
-
-## Session fields added 2026-10-07
-
-- `custom_title` — the name you gave the session with `/rename` (`R-J120`).
-  It **pins** `title`. Claude Code re-emits its generated `ai-title` interleaved
-  with the rename for the rest of the session, so the fold lets a generated
-  title land only while this is empty. Clients read `title` and never need this
-  field; it is the daemon's memory of the pin, persisted so a restart cannot
-  hand the name back to the CLI's guess. Defaulted and skipped when absent.
+what make checkpointing durable ([review-checkpointing.md](review-checkpointing.md)).
+Mirrored sessions and provisional pane rows are rebuilt from the peer's
+snapshot and from tmux respectively; nothing in SQLite refers to either.
