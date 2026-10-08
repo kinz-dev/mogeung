@@ -132,6 +132,15 @@ pub struct Config {
     /// Window: the checkout to update from. Default: the one `install.sh`
     /// recorded in `~/.mogeung/install.json` when it last installed.
     pub update_source: Option<PathBuf>,
+    /// Daemon: read Anthropic's pricing page once a week, and say where it
+    /// disagrees with the price table built in. `R-J124`,
+    /// [ADR-0042](../../../docs/decisions/0042-a-timer-may-read-a-public-page.md).
+    ///
+    /// **The value is the host**, `refresh_pricing = "platform.claude.com"`:
+    /// ADR-0031's shape, consent that says where the request goes. Absent is
+    /// no, and any other host is refused rather than reached. A reading is
+    /// compare-only for now — it prices nothing (feature 0050, phase 0).
+    pub refresh_pricing: Option<String>,
 }
 
 impl Config {

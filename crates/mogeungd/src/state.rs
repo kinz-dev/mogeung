@@ -236,6 +236,15 @@ pub struct AppState {
     quiet_sessions: Mutex<HashMap<SessionId, std::time::Instant>>,
     /// The health snapshot as last broadcast, and when. `R-J55`.
     last_health: Mutex<Option<(Health, std::time::Instant)>>,
+    /// The price table's record: the consent, and the last reading of
+    /// Anthropic's pricing page. `R-J124`. Owned by `pricing_refresh`.
+    pub pricing: Mutex<mogeung_core::health::PricingHealth>,
+    /// Anthropic models in use with no price, by message count, as of the
+    /// last usage report. `R-J124`. Folded into `health()` as alerts.
+    unpriced: Mutex<Vec<(String, u64)>>,
+    /// Ask the pricing task to look now rather than at its next tick — a
+    /// config save that may have just switched readings on. `R-J124`.
+    pub pricing_kick: tokio::sync::Notify,
     /// When the retention pass last ran. `R-J57`.
     last_retention: Mutex<Option<std::time::Instant>>,
     /// The Codex index files (db path, db mtime, wal mtime) as last read, so
@@ -702,6 +711,9 @@ impl AppState {
             change_probes: Mutex::new(HashMap::new()),
             quiet_sessions: Mutex::new(HashMap::new()),
             last_health: Mutex::new(None),
+            pricing: Mutex::new(mogeung_core::health::PricingHealth::default()),
+            unpriced: Mutex::new(Vec::new()),
+            pricing_kick: tokio::sync::Notify::new(),
             last_retention: Mutex::new(None),
             codex_index_seen: Mutex::new(None),
             proc_table: Mutex::new(None),
@@ -723,6 +735,21 @@ impl AppState {
         // free — no call is made — which is ADR-0030 clause 6 in practice.
         h.model = self.model.health();
         h.proxy = Some(self.proxy.health());
+        // The price table's canary, beside the format's. `R-J124`.
+        for (model, messages) in self.unpriced.lock().await.iter() {
+            h.alerts.push(mogeung_core::health::Alert::UnpricedModel {
+                model: model.clone(),
+                messages: *messages,
+            });
+        }
+        let mut pricing = self.pricing.lock().await.clone();
+        pricing.built_in_as_of = mogeung_core::pricing::RATES_AS_OF.to_string();
+        if !pricing.differences.is_empty() {
+            h.alerts.push(mogeung_core::health::Alert::PricesDiffer {
+                count: pricing.differences.len() as u64,
+            });
+        }
+        h.pricing = Some(pricing);
         h
     }
 
@@ -741,6 +768,8 @@ impl AppState {
         {
             Ok((scanner, report)) => {
                 *guard = scanner;
+                drop(guard);
+                self.note_unpriced(&report).await;
                 report
             }
             // A panicked scan loses its cache, not the daemon.
@@ -748,6 +777,35 @@ impl AppState {
                 tracing::warn!("usage scan failed: {e}");
                 Default::default()
             }
+        }
+    }
+
+    /// Keep the models a usage report could not price, for `health()`.
+    /// `R-J124`.
+    ///
+    /// Health is republished only when the list **changes**: a usage report
+    /// runs every time Analytics is opened, and a broadcast per open would be
+    /// the ungated publishing `R-J55` took out.
+    async fn note_unpriced(&self, report: &mogeung_core::usage::UsageReport) {
+        let mut gaps: Vec<(String, u64)> = report
+            .models
+            .iter()
+            .filter(|m| m.cost_usd.is_none() && mogeung_core::pricing::unpriced_is_a_gap(&m.model))
+            .map(|m| {
+                let label = if m.fast { format!("{} (fast)", m.model) } else { m.model.clone() };
+                (label, m.messages)
+            })
+            .collect();
+        gaps.sort();
+        let changed = {
+            let mut held = self.unpriced.lock().await;
+            let names = |v: &[(String, u64)]| v.iter().map(|g| g.0.clone()).collect::<Vec<_>>();
+            let changed = names(&held) != names(&gaps);
+            *held = gaps;
+            changed
+        };
+        if changed {
+            self.republish_health().await;
         }
     }
 

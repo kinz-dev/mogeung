@@ -59,6 +59,24 @@ describe("the config editor", () => {
   });
 
   /**
+   * The Health window's *check it weekly…* (`R-J124`): the line arrives in
+   * the draft and **is not saved** — the file on disk is unchanged until you
+   * press Save, which is the consent.
+   */
+  it("puts a line asked for elsewhere in the draft, unsaved", async () => {
+    useStore.setState({ configAppend: 'refresh_pricing = "platform.claude.com"' });
+    render(<ConfigWindow />);
+    await arrives(file());
+    expect(screen.getByRole("textbox")).toHaveValue(
+      'model_url = "http://127.0.0.1:8000/v1"\nrefresh_pricing = "platform.claude.com"\n',
+    );
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(sent.some((m) => m.cmd === "config_save")).toBe(false);
+    // Asked once: the next opening shows the file as it is.
+    expect(useStore.getState().configAppend).toBeNull();
+  });
+
+  /**
    * Saving is disabled until something has changed, so the button is never a
    * way to write the file back over a change someone made in a terminal while
    * this was open.

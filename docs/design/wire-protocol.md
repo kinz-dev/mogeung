@@ -420,6 +420,17 @@ unconditionally — `Rescan`'s answer is queue *and* health, and the client's
 to ask whether the board it is showing is complete — see
 [health-and-canary.md](health-and-canary.md).
 
+**Two more alert kinds and one more row, since `R-J124`.** `unpriced_model
+{model, messages}` and `prices_differ {count}` join `Alert`'s tagged union, and
+`Health.pricing` (`#[serde(default)]`, so an older snapshot still parses)
+carries the price table's date and the last reading of Anthropic's pricing
+page. A client must describe an alert kind it does not know rather than draw it
+as nothing. The window had been doing that to `unknown_run_config_type` since
+`R-N2`, and the Health window now falls through to a sentence that names the
+kind. A `ConfigSave` also wakes the pricing task (`pricing_kick`), because
+`refresh_pricing` is read at each check rather than at start-up, so a save
+that switched readings on is acted on at once.
+
 ## Run and debug (`R-N4`, `R-N5`)
 
 ```

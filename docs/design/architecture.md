@@ -357,6 +357,31 @@ exactly what a gate closing over a live session looks like from the outside.
 A directory's mtime changes when an entry is created or removed, which is a
 thread opening or closing, so the stamp now carries it as a fourth element.
 
+### Beside the scan: the price table's task (`R-J124`, 2026-10-08)
+
+A second loop, spawned by `server::run` next to the scan, wakes a minute after
+start-up and then every six hours, or at once when a config save wakes it
+(`pricing_kick`). Each pass does two things:
+
+1. Runs the usage report, so a model in use with no price becomes a Health
+   alert without anyone opening Analytics. The report is incremental, so this
+   costs only what was appended.
+2. Reads `refresh_pricing` from the config file and, if it names
+   `platform.claude.com` and a reading is due, fetches the pricing and
+   deprecations pages through `curl` (`pricing_refresh.rs`).
+
+It is the daemon's **first network call with no person behind it**, and
+[ADR-0042](../decisions/0042-a-timer-may-read-a-public-page.md) sets the terms:
+off by default, consent names the host, nothing about the machine is sent,
+weekly at most and six hours between attempts. The reading is compare-only.
+Its record and the readings live in `pricing/` beside the database, not under
+`~/.claude`, so a throwaway `--db` gets a throwaway record too.
+
+`refresh_pricing` is deliberately **not** an `Options` field. The window hosts
+its own daemon and builds `Options` field by field, which is how a one-field
+addition broke `install.sh` on 2026-08-29. Reading the key from the file at
+each pass also means a save takes effect without a restart.
+
 ## Codex liveness is a registry now, not a guess (2026-08-26)
 
 `R-J70`. It used to be a recency heuristic — alive meant "wrote something in

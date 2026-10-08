@@ -290,6 +290,32 @@ where
         });
     }
 
+    // The price table's checks: which models in use it cannot price, and —
+    // only if the config file consents — a weekly reading of Anthropic's
+    // pricing page to compare it with. `R-J124`, ADR-0042.
+    //
+    // The usage report runs here as well as on request so that a model with
+    // no price is raised in Health without anybody opening Analytics, which
+    // is exactly how the 2026-10-08 gap went unseen for seven weeks. It is
+    // incremental, so every run after the first reads only appended bytes.
+    {
+        let s = state.clone();
+        let dir = crate::pricing_refresh::dir_for(&opts.db);
+        *state.pricing.lock().await = crate::pricing_refresh::load(&dir);
+        tokio::spawn(async move {
+            tokio::time::sleep(crate::pricing_refresh::FIRST_CHECK_AFTER).await;
+            loop {
+                let _ = s.usage_report().await;
+                crate::pricing_refresh::check(&s, &dir).await;
+                s.republish_health().await;
+                tokio::select! {
+                    _ = tokio::time::sleep(crate::pricing_refresh::CHECK_EVERY) => {}
+                    _ = s.pricing_kick.notified() => {}
+                }
+            }
+        });
+    }
+
     {
         let s = state.clone();
         let period = Duration::from_millis(opts.poll_ms.max(250));

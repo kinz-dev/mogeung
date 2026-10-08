@@ -337,7 +337,32 @@ export type Alert =
   | { kind: "unknown_event_type"; event_type: string; count: number }
   | { kind: "malformed_lines"; count: number }
   | { kind: "version_changed"; from: string; to: string }
-  | { kind: "history_skipped"; session_id: string; skipped_bytes: number };
+  | { kind: "history_skipped"; session_id: string; skipped_bytes: number }
+  | { kind: "unknown_run_config_type"; ty: string; count: number }
+  /** A model in use with no price in this build. `R-J124`. */
+  | { kind: "unpriced_model"; model: string; messages: number }
+  /** The pricing page disagrees with this build's table. `R-J124`. */
+  | { kind: "prices_differ"; count: number };
+
+/**
+ * The price table, and the weekly reading of Anthropic's page that checks it.
+ * `R-J124`. The reading is compare-only: it prices nothing (feature 0050,
+ * phase 0).
+ */
+export interface PricingHealth {
+  /** The day the built-in table was read. */
+  built_in_as_of: string;
+  /** The host readings are consented to; `null` means they are off. */
+  host: string | null;
+  /** The consent named a host the page is not on. */
+  refusal?: string | null;
+  last_attempt: Timestamp | null;
+  last_ok: Timestamp | null;
+  last_error: string | null;
+  models_read: number;
+  differences: string[];
+  unmapped: string[];
+}
 
 export interface Health {
   last_scan: Timestamp | null;
@@ -373,6 +398,8 @@ export interface Health {
    * `R-O10`. Absent from a daemon that predates it.
    */
   proxy?: ProxyHealth | null;
+  /** Where the prices come from. `R-J124`. Absent from an older daemon. */
+  pricing?: PricingHealth | null;
   /// @deprecated Superseded by `agents`. Still sent, so an older client keeps
   /// working; read `agents` instead and get every CLI, not just the second one.
   codex_present?: boolean;

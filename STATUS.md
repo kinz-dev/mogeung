@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 775 passing |
-| Rust | 54678 lines |
-| Docs | 122 files, 41 ADRs |
+| Tests | 789 passing |
+| Rust | 55605 lines |
+| Docs | 123 files, 42 ADRs |
 
 ## Assumptions
 
@@ -69,5 +69,5 @@ Untested: **21** · At risk: **5** · Supported: 22 · Refuted: 2
 | [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `draft` | [A44, A24] |
 | [opencode adapter](docs/features/0048-opencode-adapter.md) | `in-progress` | [A4, A23] |
 | [Update in place](docs/features/0049-update-in-place.md) | `active` | [A46, A47, A48] |
-| [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `draft` | [A4, A49, A50] |
+| [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `active` | [A4, A49, A50] |
 

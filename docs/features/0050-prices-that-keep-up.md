@@ -1,6 +1,6 @@
 ---
 title: Prices that keep up
-status: draft
+status: active
 updated: 2026-10-08
 roadmap: R-J124
 depends_on: [A4, A49, A50]
@@ -59,15 +59,15 @@ weeks late, from a chart that looked wrong.
       within a week of its first use, with no rebuild and no hand edit.
 - [ ] The summary says where the rates came from and when: *rates as of
       2026-10-15, read from platform.claude.com*, or *built in, 2026-10-08*.
-- [ ] Nothing is fetched unless it has been switched on, and the switch names
+- [x] Nothing is fetched unless it has been switched on, and the switch names
       the host it reaches.
-- [ ] A page that has changed shape changes no price. The Health window says
+- [x] A page that has changed shape changes no price. The Health window says
       the page could not be read, and why, and the last good rates stay in
       force.
 - [ ] A price change applies from the day it was read, not to the history
       before it. The exception: a model's **first** price covers the days it
       was used before anyone read one, since that was its price from launch.
-- [ ] With the refresh off, a model in use that has no price raises a Health
+- [x] With the refresh off, a model in use that has no price raises a Health
       notice the day it first appears, not seven weeks later.
 
 ### Explicitly out of scope
@@ -199,6 +199,37 @@ Twenty-one rows were parsed from *Model pricing*. Every input, output and
 cache-read multiple agreed with the table `R-J123` had typed in by hand that
 morning, and 20 of the 21 names mapped to a published id. One reading, so
 `UNTESTED` still.
+
+**Built 2026-10-08: the notice and phase 0, approved as written** (*"I
+approve the plan, let's work on the analtics part first"*). Three items are
+open and wait on the phase-0 readings: pricing from a reading, its source on
+the Analytics summary, and a model's first price covering the days before it
+was read. Where the build departed from the plan:
+
+- **No checkbox in the Config window.** That window is the whole file as text,
+  deliberately: comments survive, and the daemon sends the keys it knows. A
+  form control would have been the first exception to both. The switch is in
+  the Health window's **Prices** row instead: *check it weekly…* opens the
+  configuration with `refresh_pricing = "platform.claude.com"` added to the
+  draft and **unsaved**. You see what would be written before anything is
+  read, and Save is the consent. A key already naming a wrong host is
+  replaced, not doubled, because TOML refuses a duplicate key.
+- **No `Options` field.** The task reads the key from the file at each pass,
+  so the window's hosted daemon, which builds `Options` field by field, needed
+  no change. A config save wakes the task, so switching it on takes effect at
+  once.
+- **The header is checked, not just counted.** The first parser counted six
+  columns and trusted them. The test that deletes a header column still
+  passed, because the body rows still had six cells. A49 is about columns
+  keeping their **order**, so the reader now requires the header to name
+  input, 5m write, 1h write, cache hit and output in that order.
+- **One fix found in passing.** The window's `Alert` type had no
+  `unknown_run_config_type`, which the daemon has sent since `R-N2`, so that
+  alert was drawn as an empty box. It is described now, and an alert kind the
+  window does not know falls through to a sentence naming it.
+
+Not yet run: a real reading from the installed window. That is the first of
+phase 0's four, and it waits on the update, then on the switch being turned on.
 
 [ADR-0024]: ../decisions/0024-equivalent-cost-in-dollars.md
 [ADR-0014]: ../decisions/0014-fetch-is-not-publishing.md

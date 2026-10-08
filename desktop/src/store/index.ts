@@ -896,6 +896,12 @@ export interface AppState {
   /** The config editor. `R-J79`. */
   showConfig: boolean;
   /**
+   * A line the config editor should put in its draft when it next opens —
+   * **unsaved**, so what would be written is on screen and Save is the
+   * consent. `R-J124`: the Health window's *read the pricing page weekly*.
+   */
+  configAppend: string | null;
+  /**
    * What the daemon last said its config file is, or `null` before it has been
    * asked.
    *
@@ -1228,6 +1234,7 @@ export const useStore = create<AppState>((set, get) => ({
   guides: {},
   focusRail: null,
   showConfig: false,
+  configAppend: null,
   config: null,
   conversationId: null,
   chatHistory: null,

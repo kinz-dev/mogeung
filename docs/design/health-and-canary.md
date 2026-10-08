@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -55,6 +55,8 @@ saying so.
 | `VersionChanged` | the *current* Claude Code version moves | yes |
 | `HistorySkipped` | a transcript was over the size cap | no |
 | `UnknownRunConfigType` | a `launch.json` / `tasks.json` `type` nobody classified (`R-N2`) | no |
+| `UnpricedModel` | an Anthropic model in use that the price table has no rate for (`R-J124`) | yes |
+| `PricesDiffer` | a weekly reading of the pricing page disagreed with the built-in table (`R-J124`) | yes |
 
 `HistorySkipped` is deliberately not urgent. It is a stated limitation working
 as designed, not a fault — and treating it as an emergency would train the user
@@ -164,6 +166,44 @@ row is rendered in a window and pasted into bug reports.
 It is folded in by `AppState::health` rather than tracked by `HealthTracker`:
 the tracker counts what the parsers saw, and this is a configuration plus a
 residue. Reading it costs nothing.
+
+## The price table's canary (`R-J124`, 2026-10-08)
+
+**`UnpricedModel` is the format canary for prices.** A model released after the
+price table was typed in is counted in tokens and is missing from every dollar
+total. Nothing is wrong with the transcripts, but the Analytics view is wrong
+by omission, which is the same kind of failure the event canary exists for. On
+2026-10-08 it was five models and 46% of the history's equivalent cost, seen
+only as one line under the Analytics summary, for seven weeks.
+
+It is folded in by `AppState::health` from the last usage report, as the model
+row is, because the tracker counts parser lines and this is a fact about a
+table. Two things keep it answerable:
+
+- **Only Anthropic's models** (`pricing::unpriced_is_a_gap`). A non-Claude
+  model reached through Claude Code has no Anthropic price, and an alert that
+  can never be answered teaches people to ignore the panel. Models known to be
+  unpublished (`KNOWN_UNPRICED`: `claude-mythos-preview`) are left out for the
+  same reason.
+- **It does not need Analytics to be opened.** The pricing task runs the usage
+  report every six hours as well as on request. The report is incremental, so
+  each run after the first reads only what was appended.
+
+Health is republished when the **set** of unpriced models changes, not on
+every report. Analytics asks for a report each time it opens, and a broadcast
+per open would be the ungated publishing `R-J55` removed.
+
+**`Health.pricing` is the price table's row**: the day it was read
+(`built_in_as_of`), and the weekly reading of Anthropic's page if one is
+consented to ([ADR-0042](../decisions/0042-a-timer-may-read-a-public-page.md)).
+The row holds `host`, a `refusal` when consent named the wrong host, the last
+attempt and success, the models read, the `differences`, and the names that
+mapped to no id. Like the model row it is **never a probe**. The fields are the
+residue of readings that happened, on the task's own schedule, and the record
+is kept in `pricing/state.json` beside the database so a restart reports the
+last outcome rather than *not read yet*. `PricesDiffer` is raised from
+`differences`. The reading is compare-only, so the alert means *the build's
+table is out of date*, not *a price changed on screen*.
 
 ## What this does not do
 

@@ -39,6 +39,22 @@ import { useStore } from "@/store";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Dim, Mono } from "@/ui/primitives";
 
+/**
+ * Put `line` in a config text: in place of the key's existing line, or at the
+ * end. `R-J124`.
+ *
+ * Replacing rather than adding a second, because TOML refuses a key given
+ * twice — and the case that needs it is real: a `refresh_pricing` naming the
+ * wrong host is what the Health window offers to correct.
+ */
+export function withLine(text: string, line: string): string {
+  const key = line.split("=")[0].trim();
+  const at = new RegExp(`^[ \\t]*${key}[ \\t]*=.*$`, "m");
+  if (at.test(text)) return text.replace(at, line);
+  if (!text) return `${line}\n`;
+  return `${text}${text.endsWith("\n") ? "" : "\n"}${line}\n`;
+}
+
 /** How long "saved" stays on screen. Long enough to read, short enough not to
  *  become a label that is always there and therefore never read. */
 const SAVED_FOR_MS = 4000;
@@ -68,7 +84,12 @@ export function ConfigWindow() {
   const savedAt = config?.savedAt ?? null;
   useEffect(() => {
     if (!config) return;
-    setDraft((d) => (d === null ? config.text : d));
+    // A line asked for from elsewhere goes into the first draft and is left
+    // **unsaved**: the window shows exactly what would be written, and Save
+    // is the act of agreeing to it. `R-J124`.
+    const append = useStore.getState().configAppend;
+    setDraft((d) => (d === null ? (append ? withLine(config.text, append) : config.text) : d));
+    if (append) useStore.setState({ configAppend: null });
   }, [config]);
   useEffect(() => {
     if (savedAt === null) return;

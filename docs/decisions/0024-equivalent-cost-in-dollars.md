@@ -1,7 +1,7 @@
 ---
 title: Show equivalent API cost in dollars, in one place, labelled
 status: active
-updated: 2026-08-29
+updated: 2026-10-08
 decided: 2026-08-08
 supersedes: ADR-0005
 ---
@@ -153,6 +153,36 @@ the price table should go, exactly as the original *Revisit if* says.
 The reading stays in the parser either way — `cost-state` is `HANDLED` and its
 money is skipped in one line, so adopting it later is a change of mind rather
 than a change of plumbing.
+
+## Amendment — 2026-10-08: the table is checked, and a gap in it is an alert
+
+**What changed:** the Consequences' *"It still needs a human to notice;
+nothing here checks Anthropic's pricing page"* is no longer the whole story.
+It stands as a description of what was true until this date.
+
+**Why.** It came true in the worst way. By 2026-10-08 the table was two months
+old, five models in use had no price, and 46% of the history's equivalent
+cost was missing from every total (`R-J123`). The three safeguards above all
+held: the date was shown, the gap was named, and nothing was called free. But
+the name sat in one line under the Analytics summary, and nobody read it for
+seven weeks. A safeguard that only speaks on the page you happen to open is a
+safeguard for people already looking.
+
+**The two additions** (`R-J124`, [feature 0050](../features/0050-prices-that-keep-up.md)):
+
+- **A model in use with no price is a Health alert**, raised where the format
+  canary raises an unknown event type, and counted in the status bar's
+  *things it cannot see*. It needs no network. Only Anthropic's models are
+  raised, because only they have a published price to go and find.
+- **A weekly reading of Anthropic's pricing page, on consent**, under
+  [ADR-0042](0042-a-timer-may-read-a-public-page.md). It is compare-only: the
+  reading's disagreements with the built-in table are reported and **no price
+  changes**.
+
+**What it does not change.** Condition 2 still holds as written: the rates on
+screen are the built-in table's, dated `RATES_AS_OF`. A fetched rate pricing
+anything is a further amendment, once A49 and A50 have evidence. Dollars
+remain on the Analytics view only.
 
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an

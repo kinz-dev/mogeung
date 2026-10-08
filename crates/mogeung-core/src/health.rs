@@ -59,6 +59,20 @@ pub enum Alert {
     /// configuration we do not know is still **listed**, named and refused. So
     /// this is a prompt to decide, not a warning that the board is lying.
     UnknownRunConfigType { ty: String, count: u64 },
+    /// A model in use with no price in this build. `R-J124`.
+    ///
+    /// The price table's canary. A model Anthropic has released since the
+    /// table was typed in is counted in tokens and **missing** from every
+    /// dollar total, and on 2026-10-08 that was 46% of the history — noticed
+    /// seven weeks late, from a chart that looked wrong. Raised only for
+    /// models with a published price to go and find
+    /// (`pricing::unpriced_is_a_gap`).
+    UnpricedModel { model: String, messages: u64 },
+    /// Anthropic's pricing page disagrees with this build's table. `R-J124`.
+    ///
+    /// Only from a reading that was switched on, and only a report: the
+    /// reading changes no price (feature 0050, phase 0).
+    PricesDiffer { count: u64 },
 }
 
 impl Alert {
@@ -89,6 +103,14 @@ impl Alert {
             Alert::UnknownRunConfigType { ty, count } => format!(
                 "Run configuration type {ty:?} seen {count}× — mogeung lists it but \
                  cannot run it. Classify it in runconfig::HANDLED or KNOWN_IGNORED."
+            ),
+            Alert::UnpricedModel { model, messages } => format!(
+                "Model {model:?} has no price in this build — its {messages} message(s) are \
+                 counted in tokens and missing from the equivalent cost."
+            ),
+            Alert::PricesDiffer { count } => format!(
+                "Anthropic's pricing page disagrees with this build's price table in {count} \
+                 place(s). The equivalent cost is using the build's table."
             ),
         }
     }
@@ -179,6 +201,10 @@ pub struct Health {
     /// `R-O10`. `None` from a daemon that predates it.
     #[serde(default)]
     pub proxy: Option<crate::llmproxy::ProxyHealth>,
+    /// Where the prices come from, and the last reading of Anthropic's page.
+    /// `R-J124`. `None` from a daemon that predates it.
+    #[serde(default)]
+    pub pricing: Option<PricingHealth>,
 
     // -- Codex (R-I1). Defaulted so an older daemon's snapshot still parses.
     /// A `~/.codex` install exists and is being watched.
@@ -199,6 +225,31 @@ pub struct Health {
     /// same philosophy as `unknown_types`. Replaced wholesale each scan.
     #[serde(default)]
     pub codex_unknown: Vec<(String, u64)>,
+}
+
+/// The price table, and the weekly reading that checks it. `R-J124`.
+///
+/// The reading is **compare-only** (feature 0050, phase 0): what it finds is
+/// reported here and prices nothing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PricingHealth {
+    /// The day the built-in table was read — `pricing::RATES_AS_OF`.
+    pub built_in_as_of: String,
+    /// The host readings are consented to; `None` means readings are off.
+    pub host: Option<String>,
+    /// Why a consent was refused — it named a host the page is not on.
+    #[serde(default)]
+    pub refusal: Option<String>,
+    pub last_attempt: Option<DateTime<Utc>>,
+    pub last_ok: Option<DateTime<Utc>>,
+    /// The last attempt's failure, cleared by the next success.
+    pub last_error: Option<String>,
+    /// Models the last accepted reading found.
+    pub models_read: u32,
+    /// Where the last accepted reading disagreed with the built-in table.
+    pub differences: Vec<String>,
+    /// Names on the page that mapped to no published id.
+    pub unmapped: Vec<String>,
 }
 
 /// What mogeung can see of one other agent CLI's install.

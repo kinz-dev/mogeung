@@ -9,13 +9,25 @@
  */
 
 import { useStore } from "@/store";
-import { Chip, Dim, Empty, Loading } from "@/ui/primitives";
+import { Button, Chip, Dim, Empty, Loading } from "@/ui/primitives";
 import { Dialog } from "@/ui/Dialog";
-import { humanBytes, type Alert } from "@/wire/types";
+import { humanBytes, type Alert, type PricingHealth } from "@/wire/types";
 import { agentColor, agentSlots } from "@/lib/agentHealth";
 import { num, stamp } from "@/lib/format";
 
-function alertMessage(a: Alert): string {
+/** Where the pricing page is, and the whole of the consent to read it. */
+const PRICING_HOST = "platform.claude.com";
+
+/**
+ * Whether an alert means mogeung may be lying by omission — the daemon's
+ * `Alert::is_urgent`. A skipped tail and an unrunnable run configuration are
+ * stated limits, not holes.
+ */
+export function isUrgent(a: Alert): boolean {
+  return a.kind !== "history_skipped" && a.kind !== "unknown_run_config_type";
+}
+
+export function alertMessage(a: Alert): string {
   switch (a.kind) {
     case "unknown_event_type":
       return `Unrecognised transcript event ${JSON.stringify(a.event_type)} seen ${a.count}× — mogeung is skipping it. The format may have changed.`;
@@ -25,7 +37,93 @@ function alertMessage(a: Alert): string {
       return `Claude Code is now ${a.to}, was ${a.from}. Formats move on upgrades — check the board still looks right.`;
     case "history_skipped":
       return `Session ${a.session_id.slice(0, 8)} was too large to read whole; ${humanBytes(a.skipped_bytes)} of earlier history was skipped and is not on the board.`;
+    case "unknown_run_config_type":
+      return `Run configuration type ${JSON.stringify(a.ty)} seen ${a.count}× — mogeung lists it but cannot run it.`;
+    case "unpriced_model":
+      return `Model ${JSON.stringify(a.model)} has no price in this build — its ${a.messages} message(s) are counted in tokens and missing from the equivalent cost.`;
+    case "prices_differ":
+      return `Anthropic's pricing page disagrees with this build's price table in ${a.count} place(s). The equivalent cost is using the build's table.`;
+    default:
+      // A kind from a daemon newer than this window. Said, not dropped: an
+      // alert that renders as nothing is the failure this window exists for.
+      return `An alert this window does not know how to describe: ${JSON.stringify(a)}`;
   }
+}
+
+/**
+ * The price table, and whether anything checks it. `R-J124`.
+ *
+ * Off is the default and is said plainly, with the way to turn it on — which
+ * opens the configuration with the line **added but unsaved**, so what would
+ * be fetched, from where, is on screen before anything is.
+ */
+function Prices({ p }: { p: PricingHealth }) {
+  const turnOn = () =>
+    useStore.setState({
+      showHealth: false,
+      showConfig: true,
+      configAppend: `refresh_pricing = "${PRICING_HOST}"`,
+    });
+  return (
+    <div>
+      <div className="mb-1 text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase">Prices</div>
+      <div className="space-y-1 text-xs">
+        <div>
+          The equivalent cost uses this build's price table, read {p.built_in_as_of}.
+        </div>
+        {p.refusal && <div className="text-[var(--amber)]">{p.refusal}</div>}
+        {!p.host ? (
+          <div className="flex items-center gap-2">
+            <Dim>Nothing checks it against Anthropic's pricing page.</Dim>
+            <Button
+              onClick={turnOn}
+              title={`opens the configuration with refresh_pricing = "${PRICING_HOST}" added — unsaved, so you see it before anything is read`}
+            >
+              {p.refusal ? "fix the host…" : "check it weekly…"}
+            </Button>
+          </div>
+        ) : (
+          <>
+            <Dim className="block">
+              Read from {p.host} once a week and compared. A reading changes no price yet: that waits
+              until four readings have shown the page can be trusted (feature 0050).
+            </Dim>
+            <div>
+              {p.last_ok ? (
+                <>
+                  Last read {stamp(p.last_ok)} · {num(p.models_read)} models ·{" "}
+                  {p.differences.length === 0 ? (
+                    <span className="text-[var(--green)]">agrees with this build</span>
+                  ) : (
+                    <span className="text-[var(--amber)]">
+                      {p.differences.length} difference{p.differences.length === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <Dim>Not read yet.</Dim>
+              )}
+            </div>
+            {p.last_error && (
+              <div className="text-[var(--red)]">
+                The last attempt{p.last_attempt ? ` (${stamp(p.last_attempt)})` : ""} failed: {p.last_error}
+              </div>
+            )}
+            {p.differences.map((d) => (
+              <div key={d} className="rounded-sm border border-[var(--amber)] px-2 py-0.5">
+                {d}
+              </div>
+            ))}
+            {p.unmapped.length > 0 && (
+              <Dim className="block text-2xs">
+                On the page but matched to no published id, so not compared: {p.unmapped.join(", ")}
+              </Dim>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
@@ -56,7 +154,7 @@ export function HealthWindow() {
   }
 
   const blind = health.lines_seen === 0 ? 0 : (health.lines_unknown + health.lines_malformed) / health.lines_seen;
-  const urgent = health.alerts.filter((a) => a.kind !== "history_skipped").length;
+  const urgent = health.alerts.filter(isUrgent).length;
 
   return (
     <Dialog
@@ -127,7 +225,7 @@ export function HealthWindow() {
                 <div
                   key={i}
                   className="rounded-sm border border-[var(--border)] px-2 py-1 text-xs"
-                  style={{ borderColor: a.kind === "history_skipped" ? "var(--border)" : "var(--amber)" }}
+                  style={{ borderColor: isUrgent(a) ? "var(--amber)" : "var(--border)" }}
                 >
                   {alertMessage(a)}
                 </div>
@@ -135,6 +233,8 @@ export function HealthWindow() {
             </div>
           </div>
         )}
+
+        {health.pricing && <Prices p={health.pricing} />}
 
         <div className="flex flex-wrap items-center gap-2">
           {health.current_version && <Chip color="var(--graph-0)">CLI {health.current_version}</Chip>}

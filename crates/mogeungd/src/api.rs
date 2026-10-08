@@ -1585,6 +1585,9 @@ async fn handle(
                 },
             };
             send_reply(&reply, msg);
+            // `refresh_pricing` is read at each check rather than at start-up,
+            // so a save that switched readings on is acted on now. `R-J124`.
+            state.pricing_kick.notify_one();
             // The model row in Health moves when these keys do.
             let state = state.clone();
             tokio::spawn(async move {

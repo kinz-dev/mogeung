@@ -275,6 +275,7 @@ impl HealthTracker {
             // see the configuration. The tracker counts what the parsers saw.
             model: None,
             proxy: None,
+            pricing: None,
             // The pre-`R-I15` shape, still filled for clients that read it.
             codex_present: self.agents.get("codex").map(|a| a.present).unwrap_or(false),
             codex_threads: self.agents.get("codex").map(|a| a.threads).unwrap_or(0),
