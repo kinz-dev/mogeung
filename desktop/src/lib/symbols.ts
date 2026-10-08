@@ -253,3 +253,31 @@ export function symbolGlyph(kind: SymbolKind): string {
       return "·";
   }
 }
+
+/**
+ * The symbol a line is in: the last one starting at or above it, or -1 above
+ * the first. `R-J125`.
+ *
+ * A line scanner knows where a symbol starts and not where it ends, so "in"
+ * means "after the start of, and before the next". Right for a heading, which
+ * is exactly that, and the honest best guess for a function.
+ */
+export function symbolAt(symbols: readonly { line: number }[], line: number): number {
+  let at = -1;
+  for (let i = 0; i < symbols.length && symbols[i].line <= line; i++) at = i;
+  return at;
+}
+
+/**
+ * The element a rendered document should scroll to for a source line: the
+ * last one that starts at or above it. `R-J125`.
+ *
+ * At or above, not nearest: a heading written as two lines, or one the
+ * renderer folded into something else, still lands on the section it opens
+ * rather than the one after it.
+ */
+export function blockAt<T extends { line: number }>(blocks: readonly T[], line: number): T | null {
+  let found: T | null = null;
+  for (const b of blocks) if (b.line <= line && (!found || b.line >= found.line)) found = b;
+  return found;
+}

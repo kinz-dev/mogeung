@@ -38,7 +38,7 @@ import { explorerFetch, forgetFileBodies, languageOf, wrapsByDefault } from "@/l
 import { base } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { defineMogeungThemes, monacoTheme } from "@/lib/monaco-theme";
-import { outline, symbolGlyph } from "@/lib/symbols";
+import { blockAt, outline, symbolAt, symbolGlyph } from "@/lib/symbols";
 import { Input } from "@/ui/primitives";
 import ReactMarkdown from "react-markdown";
 import { Mermaid } from "@/ui/Mermaid";
@@ -70,12 +70,19 @@ import { best } from "@/lib/search";
 function MarkdownPreview({
   content,
   onEditSource,
+  reveal,
   theme,
   zoom,
   wrap,
 }: {
   content: string;
   onEditSource: (line: number) => void;
+  /**
+   * A source line to bring to the top of the rendering. `R-J125`. `seq`
+   * moves on every ask, so asking for the same heading twice — after
+   * scrolling away from it — scrolls back.
+   */
+  reveal: { line: number; seq: number } | null;
   theme: ThemeMode;
   /**
    * The header's wrap toggle, which used to stop at Monaco. `R-J52`.
@@ -111,6 +118,27 @@ function MarkdownPreview({
   const [finding, setFinding] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * The outline, while reading markdown as markdown. `R-J125`.
+   *
+   * Asked 2026-10-08: *"I can't actually click on the outline and navigate to
+   * it directly from the UI"*. In this view the outline was still on screen
+   * and every click on it went to the editor, which this view had unmounted —
+   * so nothing moved, in the view a docs-heavy repository is mostly read in.
+   * The headings carry their source line (`data-line`, below), and a reveal
+   * scrolls to the last one at or above the line asked for.
+   */
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!reveal || !body) return;
+    const blocks = Array.from(body.querySelectorAll<HTMLElement>("[data-line]")).map((el) => ({
+      el,
+      line: Number(el.dataset.line),
+    }));
+    blockAt(blocks, reveal.line)?.el.scrollIntoView?.({ block: "start" });
+  }, [reveal]);
 
   const hits = useMemo(() => {
     const q = query.trim();
@@ -226,6 +254,7 @@ function MarkdownPreview({
           prose is a control you then have to hunt for — the same reason the
           queue is not inside anything zoomable. */}
       <div
+        ref={bodyRef}
         data-testid="preview-body"
         className="min-h-0 min-w-0 flex-1 overflow-auto px-3 py-2"
         style={zoom === 1 ? undefined : { zoom }}
@@ -245,6 +274,14 @@ function MarkdownPreview({
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
+              // Each heading says which source line it came from, which is
+              // what lets the outline scroll the rendering. `R-J125`.
+              h1: ({ node, ...rest }) => <h1 data-line={node?.position?.start.line} {...rest} />,
+              h2: ({ node, ...rest }) => <h2 data-line={node?.position?.start.line} {...rest} />,
+              h3: ({ node, ...rest }) => <h3 data-line={node?.position?.start.line} {...rest} />,
+              h4: ({ node, ...rest }) => <h4 data-line={node?.position?.start.line} {...rest} />,
+              h5: ({ node, ...rest }) => <h5 data-line={node?.position?.start.line} {...rest} />,
+              h6: ({ node, ...rest }) => <h6 data-line={node?.position?.start.line} {...rest} />,
               code({ className, children, ...rest }) {
                 if (/\blanguage-mermaid\b/.test(className ?? "")) {
                   return <Mermaid chart={String(children).trimEnd()} theme={theme} />;
@@ -303,6 +340,23 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const [outlineFilter, setOutlineFilter] = useState("");
   const [preview, setPreview] = useState(false);
   /**
+   * The outline, made to go somewhere. `R-J125`.
+   *
+   * `reveal` is the rendered markdown's half of a click (the editor's half is
+   * a Monaco call). `current` is the symbol the cursor is in, highlighted so
+   * the outline says where you are as well as where you could go. `pick` is
+   * the keyboard's row while filtering, so *go to symbol…* plus Enter goes
+   * there, as the placeholder always promised.
+   */
+  const [reveal, setReveal] = useState<{ line: number; seq: number } | null>(null);
+  const [current, setCurrent] = useState(-1);
+  const [pick, setPick] = useState(0);
+  const symbolsRef = useRef<ReturnType<typeof outline>>([]);
+  const outlineRows = useRef(new Map<number, HTMLElement>());
+  useEffect(() => {
+    outlineRows.current.get(current)?.scrollIntoView?.({ block: "nearest" });
+  }, [current]);
+  /**
    * The blame gutter, in scoped prefs rather than in this pane. `R-D31`.
    *
    * `editorWrap`'s shape, one line above, and it is here for a reason that is
@@ -354,8 +408,15 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   );
   // Reading markdown as markdown unmounts the editor without closing the
   // pane, and a fold chord must not be handed an editor that is gone.
+  //
+  // And this pane's own handle on it goes too. `R-J125`: it was left pointing
+  // at the disposed editor, so in the rendered view the outline's clicks went
+  // to an editor that no longer existed and nothing moved.
   useEffect(() => {
-    if (preview) forgetEditor(pane);
+    if (!preview) return;
+    forgetEditor(pane);
+    editorRef.current = null;
+    decorations.current = null;
   }, [preview, pane]);
 
   /**
@@ -494,6 +555,31 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
       ? false
       : wrapsByDefault(tab.path);
   const symbols = outline(tab.content, ext);
+  symbolsRef.current = symbols;
+  const shown = symbols.filter(
+    (sym) => !outlineFilter.trim() || sym.name.toLowerCase().includes(outlineFilter.trim().toLowerCase()),
+  );
+  const picked = shown.length === 0 ? -1 : Math.min(pick, shown.length - 1);
+
+  /**
+   * Go to a symbol, in whichever view is showing. `R-J125`.
+   *
+   * The rendered markdown scrolls to the heading; the editor puts the line in
+   * the middle and the cursor on it. Either way the outline marks it as where
+   * you are, so a click is answered on both sides of the pane.
+   */
+  const goTo = (sym: (typeof symbols)[number]) => {
+    setCurrent(symbols.indexOf(sym));
+    if (preview && isMarkdown) {
+      setReveal((r) => ({ line: sym.line, seq: (r?.seq ?? 0) + 1 }));
+      return;
+    }
+    const ed = editorRef.current;
+    if (!ed) return;
+    ed.revealLineInCenter(sym.line);
+    ed.setPosition({ lineNumber: sym.line, column: 1 });
+    ed.focus();
+  };
 
   const markLine = (line: number) => {
     if (!id) return;
@@ -513,6 +599,10 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
     if (id) noteCursor(pane, id, tab.path, ed.getPosition()?.lineNumber ?? 1);
     ed.onDidChangeCursorPosition((e) => {
       if (id) noteCursor(pane, id, tab.path, e.position.lineNumber);
+      // Which symbol the cursor is in, for the outline. `R-J125`. A state
+      // write, but React drops it when the answer has not changed, which on
+      // an arrow key inside one function is every time.
+      setCurrent(symbolAt(symbolsRef.current, e.position.lineNumber));
     });
     defineMogeungThemes(monaco);
     monaco.editor.setTheme(monacoTheme(theme));
@@ -614,6 +704,7 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
       {preview && isMarkdown ? (
         <MarkdownPreview
           content={tab.content}
+          reveal={reveal}
           theme={theme}
           zoom={zoom}
           wrap={wrap}
@@ -667,7 +758,31 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
       {outlineOpen && (
         <div className="flex w-56 shrink-0 flex-col border-l border-[var(--border)] bg-[var(--bg-panel)]">
           <div className="shrink-0 p-1">
-            <Input value={outlineFilter} onChange={setOutlineFilter} placeholder="go to symbol…" />
+            <Input
+              value={outlineFilter}
+              onChange={(v) => {
+                setOutlineFilter(v);
+                setPick(0);
+              }}
+              placeholder="go to symbol…"
+              ariaLabel="go to symbol"
+              // The box was always named *go to*, and Enter in it did
+              // nothing. `R-J125`.
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  const step = e.key === "ArrowDown" ? 1 : -1;
+                  setPick(Math.min(Math.max(picked + step, 0), Math.max(shown.length - 1, 0)));
+                } else if (e.key === "Enter" && picked >= 0) {
+                  e.preventDefault();
+                  goTo(shown[picked]);
+                } else if (e.key === "Escape" && outlineFilter) {
+                  e.preventDefault();
+                  setOutlineFilter("");
+                  setPick(0);
+                }
+              }}
+            />
           </div>
           <div className="min-h-0 flex-1 overflow-auto pb-2">
             {symbols.length === 0 ? (
@@ -675,27 +790,29 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
                 no symbols recognised in this file
               </Dim>
             ) : (
-              symbols
-                .filter(
-                  (sym) =>
-                    !outlineFilter.trim() ||
-                    sym.name.toLowerCase().includes(outlineFilter.trim().toLowerCase()),
-                )
-                .map((sym, i) => (
+              shown.map((sym, i) => {
+                const at = symbols.indexOf(sym);
+                return (
                   <div
-                    key={`${sym.line}:${i}`}
-                    onClick={() => {
-                      editorRef.current?.revealLineInCenter(sym.line);
-                      editorRef.current?.setPosition({ lineNumber: sym.line, column: 1 });
-                      editorRef.current?.focus();
+                    key={`${sym.line}:${at}`}
+                    ref={(el) => {
+                      if (el) outlineRows.current.set(at, el);
+                      else outlineRows.current.delete(at);
                     }}
+                    onClick={() => goTo(sym)}
                     title={`line ${sym.line}`}
-                    className="cursor-default overflow-hidden px-2 py-px font-mono text-2xs whitespace-nowrap hover:bg-[var(--bg-faint)]"
+                    aria-current={at === current ? "location" : undefined}
+                    className={cn(
+                      "cursor-default overflow-hidden px-2 py-px font-mono text-2xs whitespace-nowrap hover:bg-[var(--bg-faint)]",
+                      at === current && "bg-[var(--selection-bg)] text-[var(--text-strong)]",
+                      outlineFilter.trim() && i === picked && "ring-1 ring-inset ring-[var(--ring)]",
+                    )}
                     style={{ paddingLeft: 8 + sym.depth * 10 }}
                   >
                     <span className="text-[var(--dim)]">{symbolGlyph(sym.kind)}</span> {sym.name}
                   </div>
-                ))
+                );
+              })
             )}
           </div>
         </div>
