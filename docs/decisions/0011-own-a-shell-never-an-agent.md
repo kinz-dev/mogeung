@@ -1,7 +1,7 @@
 ---
 title: mogeung may own a shell, and runs it under tmux so nothing started inside it is trapped
 status: active
-updated: 2026-07-29
+updated: 2026-10-08
 decided: 2026-07-29
 ---
 
@@ -86,7 +86,7 @@ were all paid for once.
 
 **Hard.** Two panes now look like terminals and mean different things. That is
 what the 2026-07-29 rename was for (feature
-[0003](../features/0003-attached-terminal.md)) — Agent is the session's,
+[0003](../archive/features/0003-attached-terminal.md)) — Agent is the session's,
 Terminal is yours — and it stays a permanent source of confusion that the
 labelling has to keep answering.
 
@@ -117,6 +117,10 @@ Or if a second client ever needs the shell. This is client-local, spawned by
 the UI process; a web client asking the daemon to open a pty is a different
 decision with a much worse security story, and this ADR does not license it.
 
+
+## Amendment — 2026-10-08
+
+**One write path into the shell pane exists, on a click, and it is not the one this ADR ruled out.** `R-O12` (2026-08-29) pastes a command the human asked a model to write into the human's own shell, *unsubmitted*, through `R-B54`'s paste-buffer path; it runs only on `Alt+Enter`, a keystroke of the human's. "Nothing types into it" is narrowed to: nothing types into it unasked, nothing presses Enter for you, nothing runs on a timer — and the ruled-out list under Consequences stands word for word for those three. ADR-0008, named above as untouched, is superseded by [ADR-0034](0034-the-draft-is-a-chat-ask.md). Two details have also moved since the port: the shells are named per panel (`mog-<n>`, `desktop/src/lib/tmux.ts`) rather than per worktree, and the widget is xterm.js in the Tauri shell since [ADR-0020](0020-the-egui-client-is-retired.md), not `term.rs`.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

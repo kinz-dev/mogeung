@@ -4,9 +4,11 @@ The window. React + TypeScript + Monaco, packaged with Tauri.
 
 The daemon is unchanged and unaware, which is the whole point: this speaks the
 WebSocket protocol that existed before it did. It was built beside the egui
-window and ran against the same daemon for a day — port a pane at a time, keep
-using the client that works — and on 2026-08-05 it became the only one
-([ADR-0020](../docs/decisions/0020-the-egui-client-is-retired.md)).
+window against the same daemon and on 2026-08-05 became the only client
+([ADR-0020](../docs/decisions/0020-the-egui-client-is-retired.md)). What it
+shows and what it can do is the roadmap's business
+([docs/product/roadmap.md](../docs/product/roadmap.md)); this page is how to
+run and build it.
 
 ## Running it
 
@@ -14,13 +16,14 @@ The daemon is already what you run. Start it however you normally do, then:
 
 ```sh
 cd desktop
-npm install          # already done once
+npm install
 npm run dev          # http://localhost:1420
 ```
 
 Open `http://localhost:1420` in a browser. That is a real client — the daemon
 serves WebSocket and REST on localhost and does not care what dialled it.
-Everything except the two terminal panes works there.
+Everything except the terminal panes, the LAN listener and the connection file
+works there, and each of those says so rather than failing silently.
 
 Pointing at a different daemon: `http://localhost:1420/?url=ws://host:7717/ws`.
 It is remembered after the first time.
@@ -31,14 +34,10 @@ It is remembered after the first time.
 cd desktop && npm run tauri dev
 ```
 
-The system dependencies are already installed on this machine, and the shell
-builds and links. The two terminal panes are the only thing that needs it — a
-browser tab has no pty to hold, so in the browser they say so rather than
-showing a black rectangle.
-
-The panes have been driven daily since 2026-08-04 — the selection bug fixed on
-2026-08-05 was found by using one, which is the kind of defect no amount of
-reading the argv-building would have surfaced.
+The terminal panes (the Agent pane's `tmux attach` and your own shells), the
+UDP listener behind *Found on your LAN*, the `0600` connection file and the
+updater live in the Tauri shell — a browser tab has no pty to hold and no
+socket to listen on.
 
 Vite is told **not** to watch `src-tauri/`. That directory holds ~17k cargo
 fingerprint files once the Rust half has been built, and watching them exhausts
@@ -61,15 +60,14 @@ this machine needs. What follows is the bundler itself.
 
 One command does all three stages: `beforeBuildCommand` runs `tsc --noEmit &&
 vite build` into `dist/`, cargo builds the shell in release, and Tauri packages
-the result. On this machine that produces, under
-`desktop/src-tauri/target/release/`:
+the result. On Linux that produces, under `desktop/src-tauri/target/release/`:
 
 | | what it is |
 |---|---|
 | `mogeung-desktop` | the executable itself, ~32 MB, no installer around it |
-| `bundle/deb/mogeung_0.1.0_amd64.deb` | installs to `/usr/bin/mogeung-desktop` with icons and a desktop entry |
-| `bundle/rpm/mogeung-0.1.0-1.x86_64.rpm` | the same, for rpm distributions |
-| `bundle/appimage/mogeung_0.1.0_amd64.AppImage` | ~90 MB, self-contained — `chmod +x` and run it anywhere |
+| `bundle/deb/mogeung_<version>_amd64.deb` | installs to `/usr/bin/mogeung-desktop` with icons and a desktop entry |
+| `bundle/rpm/mogeung-<version>-1.x86_64.rpm` | the same, for rpm distributions |
+| `bundle/appimage/mogeung_<version>_amd64.AppImage` | ~90 MB, self-contained — `chmod +x` and run it anywhere |
 
 The AppImage is the one to send to someone who has nothing installed; it carries
 webkit and its libraries. The `.deb` and `.rpm` are ~15 MB because they do not,
@@ -109,47 +107,30 @@ because `mogeungd` is a path dependency. Later builds reuse the cache.
 
 The built app hosts a daemon on a thread when nothing is already listening, and
 attaches when something is — [ADR-0009](../docs/decisions/0009-the-window-may-host-a-daemon.md),
-ported faithfully in `src-tauri/src/daemon.rs`. So the binary alone is enough,
-and the top bar says `hosting` when it is the one watching. Closing that window
-stops the watching; run `mogeungd --notify` separately if you want notifications
-to outlive it.
+ported faithfully in `src-tauri/src/daemon.rs`. The hosted daemon reads
+`~/.mogeung/config.toml` for its bind, token, ssh target and beacon, exactly as
+`mogeungd` would. So the binary alone is enough, and the top bar says `hosting`
+when it is the one watching. Closing that window stops the watching; run
+`mogeungd --notify` separately if you want notifications to outlive it.
 
 Note that `cargo build --release` at the repo root does **not** build this.
 `src-tauri` is its own cargo workspace on purpose — see the comment at the top of
 `src-tauri/Cargo.toml` — so a machine without webkit's headers can still run the
-`cargo test --workspace` that CLAUDE.md gates on.
+`cargo test --workspace` that CLAUDE.md gates on. The flip side: a change to a
+public `mogeung-core` type compiles everywhere that command looks and can still
+break this shell, so `cargo check --manifest-path src-tauri/Cargo.toml` is the
+check to run after one.
 
-## What is here, and what is not
+## What writes, and what never does
 
-| | state |
-|---|---|
-| Attention queue — scopes, filters, pins, snooze, hide, collapse to a strip, group by repo (`R-B6`), label (`R-B26`), colour tags, forget | done |
-| Transcript — virtualised, markdown, find (`R-B36`), mark a turn | done |
-| Code — Monaco, read-only, tabs, split, per-file wrap, symbol outline (`R-B28`), markdown preview (`R-B29`), blame gutter (`R-D10`), in-file bookmarks | done |
-| Changes — hunks, risk flags, read marks, hide-read, hide-noise, word diff (`R-D5`), side-by-side (`R-D6`), syntax colour (`R-D4`), blast radius (`R-D9`) | done |
-| Git — log with author/path/pickaxe filters, commit diff, local changes, refs, stashes, reflog, worktrees, submodules, branch compare, range diff, three-way conflict view, fetch (`R-D11`–`R-D16`) | done |
-| Insight — **redesigned**: charts for analytics and burn, plus all eight views | done |
-| Rail — Files, Search, Notes, Bookmarks (`R-B40`, `R-B41`, `R-F13`) | done |
-| Command palette — actions and go-to-file, Tab switches | done |
-| Keyboard — the egui window's bindings, kept | done |
-| **Agent pane** (tmux attach) | done — Tauri only, and the Rust needs webkit's headers to compile |
-| **Terminal panel** (your shells) | done — same |
-| Health (`R-A4`) and keymap rebinding (`R-B12`) windows | done — this row said otherwise for a week |
-| Connections window (`R-I7`) — add, name, switch, forget | done — no LAN browsing, which needs multicast the webview cannot do |
-| Launch a session (`R-B2`), follow-up prompt builder, ambient board (`R-C5`) | done |
-| Global hotkey (`R-B10`) — `Ctrl+Cmd+M` raises the window | done — registered 2026-08-05; the plugin had been loaded and never used |
-| Verification — observed runs and claims, plus the signal runner and coverage (`R-E2`, `R-E5`) | done — the command runs only when you press it |
-| Desktop notification banners (`R-C1`) | done — off until you turn them on, and only from a window that **hosts** its daemon, so a `mogeungd --notify` cannot double up |
-| Git write verbs (`R-D19`–`R-D22`) | deliberately absent — see below |
-
-**The Code pane is a viewer and stays one.** Monaco runs with `readOnly: true`
-because a read-only editor is a strictly better *viewer* than a hand-rolled one,
-not because editing is one flag away. Pillar K, and the daemon offers no write
-path for worktree files at all.
-
-**Notes are the one thing that writes**, and that is the line ADR-0015 draws: a
-document under `~/.mogeung` is your own writing; a worktree file belongs to the
-repository.
+Monaco runs with `readOnly: true` on worktree files because a read-only editor
+is a strictly better *viewer* than a hand-rolled one, not because editing is
+one flag away: pillar K, and the daemon offers no write path for worktree files
+at all ([ADR-0019](../docs/decisions/0019-a-viewer-not-an-editor.md)). Notes,
+tasks and scratch files are the things that write, and they write under
+`~/.mogeung` only ([ADR-0015](../docs/decisions/0015-markdown-is-the-truth.md),
+[ADR-0035](../docs/decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)).
+Git writes stay local and are gated by the daemon.
 
 ## Shape
 
@@ -158,11 +139,11 @@ src/
   wire/types.ts     the protocol, hand-mirrored from mogeung-core::wire
   wire/client.ts    the socket: reconnect, re-subscribe, queue sends
   store/            one zustand store; the only place a ServerMsg is handled
-  lib/              explorer, search, keymap, formatting, Monaco theme
-  ui/               chrome — top bar, queue, rail, status, palette, diff
-  ui/tools/         the rail's four tool windows
-  panes/            the dockview panes
-src-tauri/          the native shell: ptys, global shortcut, window
+  lib/              keymap (the bindings are data), explorer, search, git, federation, formatting, Monaco theme
+  ui/               chrome — top bar, queue, rail, status, palette, diff, the windows and popups
+  ui/tools/         the rail's tool windows: Files, Search, Scratch, Notes, Tasks, Bookmarks, Ask Mogeung
+  panes/            the dockview panes: Agent, file, diff, scratch, and the dock tools
+src-tauri/          the native shell: ptys, global shortcut, the connection file, the LAN listener, popouts, the updater
 ```
 
 `src-tauri` is **its own cargo workspace**, not a member of the repo's. If it
@@ -172,9 +153,9 @@ were a member, a machine without webkit's headers could not run
 ## Checks
 
 ```sh
-npm run check   # tsc --noEmit
+npm run check   # tsc --noEmit — vitest does not typecheck, so this is not optional
 npm test        # vitest
-npm run build   # tsc + vite build
+npm run build   # tsc + vite build, which is what the bundler runs
 ```
 
 The smoke test mounts the whole window in jsdom with the socket stubbed. It

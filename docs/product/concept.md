@@ -1,7 +1,7 @@
 ---
 title: Concept
 status: active
-updated: 2026-08-01
+updated: 2026-10-08
 ---
 
 # mogeung
@@ -72,11 +72,12 @@ proposing it to anyone else. ([A10](assumptions.md))
 
 ## 3. What mogeung is
 
-A daemon that watches the Claude Code sessions you run in your own terminals,
-and a window that shows you two things:
+A daemon that watches the agent sessions you run in your own terminals —
+Claude Code, Codex, Qwen Code and opencode — and a window that shows you two
+things:
 
-**One queue across every session, ranked by who needs you.** Waiting on you,
-failed, unreviewed, stalled, running. Ranking is strict — a session can never
+**One queue across every session, ranked by who needs you.** Blocked on an
+approval, waiting on you, failed, rate-limited, unreviewed, stalled, running. Ranking is strict — a session can never
 jump into a more urgent tier — and every row states why it sits where it does.
 ([../design/attention-ranking.md](../design/attention-ranking.md))
 
@@ -85,13 +86,19 @@ than alphabetical, and anchored by content hash so that when an agent rewrites a
 file, only genuinely new work comes back unread.
 ([../design/review-checkpointing.md](../design/review-checkpointing.md))
 
-It reads only. It writes nothing to `~/.claude`. It starts exactly one thing: a
-real interactive `claude` in a terminal, wrapping nothing.
+It writes nothing to `~/.claude`. It starts no agent: it may launch the real CLI
+unmodified in a terminal, run a process the repository itself names
+([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md)), and —
+on a click and a confirmation — press send for you, once
+([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended 2026-08-29).
 
 ## 4. Principles
 
-**Observe, never wrap.** No spawning, no steering, no proxying the conversation.
-The one exception launches the real CLI unmodified.
+**Observe, never wrap.** No spawning, and no steering in the sense
+[ADR-0003](../decisions/0003-observe-do-not-spawn.md) defines it — being in the
+path between you and an agent, or between an agent's output and its own next
+input. The exceptions are the real CLI launched unmodified, and a one-shot send
+by your hand.
 
 **The daemon is the product.** Every UI is a client with no local authority.
 mogeung keeps working with no window open, and a second client is a packaging
@@ -115,17 +122,22 @@ implementation was lost to one that was not. ([assumptions.md](assumptions.md))
 
 - **Not an editor.** No language intelligence, no refactoring engine, no
   debugger. "Open in IntelliJ" is a first-class action, permanently.
-- **Not an agent.** mogeung has no model and makes no calls.
+- **Not an agent.** It never acts. A local model you point it at may read the
+  evidence and answer you, in a column of its own that never becomes evidence
+  or a tier ([ADR-0031](../decisions/0031-consent-to-a-named-host.md)); none is
+  required.
 - **Not a chat client.** You already have one, and it is better than anything we
   would build.
-- **Not multi-user or cloud.** Single developer, local-first, localhost-only.
-- **Not a replacement for git.** It reads git, and — since
-  [ADR-0012](../decisions/0012-write-locally-never-publish.md), 2026-07-30 —
-  may stage, commit, branch, stash and resolve **locally**.
-  [ADR-0014](../decisions/0014-fetch-is-not-publishing.md) then added `fetch`
-  on 2026-08-01, because the line was drawn at the network and the network was
-  the wrong thing: fetching reads someone else's server and changes nothing
-  there. **No pull, no push.** The line is publishing and merging.
+- **Not multi-user or cloud.** Single developer, local-first. It reaches
+  machines you own over ssh or a token, and follows their daemons into one queue
+  ([feature 0047](../archive/features/0047-daemon-federation/spec.md)); never a
+  cloud, never a second person.
+- **Not a replacement for git.** It reads git, and may stage, commit, branch,
+  stash, resolve and `fetch` **locally** — ADR-0012 (2026-07-30) admitted the
+  writes and [ADR-0014](../decisions/0014-fetch-is-not-publishing.md), which
+  superseded it, moved the line from the network to publishing and merging,
+  because fetching reads someone else's server and changes nothing there.
+  **No pull, no push.**
 
 ## 6. What success and failure look like
 
@@ -144,8 +156,11 @@ code you already reviewed.
 4. **Risk ordering is noise**, so you read alphabetically anyway.
    ([A3](assumptions.md))
 
-Only the third is an engineering problem. The first two decide whether any of
-this was worth building, and they are cheap to test: use it.
+**The first two were tested.** A week of use, reported 2026-08-04, carried
+70–80% of the interaction with agents, so A1 and A6 are `SUPPORTED`; what is
+still unmeasured is whether the *ranking* is right, as opposed to the queue
+existing. Only the third is an engineering problem, and the canary exists to
+make it loud.
 
 ## 7. Where the rest lives
 

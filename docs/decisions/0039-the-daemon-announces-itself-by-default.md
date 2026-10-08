@@ -1,7 +1,7 @@
 ---
 title: The daemon announces itself on the LAN by default
 status: active
-updated: 2026-09-22
+updated: 2026-10-08
 decided: 2026-09-22
 ---
 
@@ -106,3 +106,7 @@ A beacon is ever found carrying more than presence; the person running this
 does so routinely on networks they do not own; or a single incident traces
 back to something the beacon said. Any of those reopens the default, not the
 feature.
+
+## Amendment — 2026-10-08
+
+**The advert did not retire; the dated note promised here is this one.** A44's probe (2026-09-22) found the beacon the survivor, and [ADR-0040](0040-discovery-is-the-beacon.md) made it the only transport mogeung browses — and kept the mDNS advert, opt-in, as a record for other tools, with `advertise` still parsed by the daemon. "If the beacon is the survivor, `advertise` retires" was decided the other way, in ADR-0040.

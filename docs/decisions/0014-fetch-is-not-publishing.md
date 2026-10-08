@@ -1,9 +1,9 @@
 ---
 title: Fetch is admitted; publishing is not
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 decided: 2026-08-01
-supersedes: 0012
+supersedes: ADR-0012
 ---
 
 # ADR-0014 — Fetch is admitted; publishing is not
@@ -158,6 +158,10 @@ switch acts on** — found the same day: matched by path alone, a checkout on a
 peer warned about this machine's agents, since one person's machines spell
 the same repository the same way.
 
+
+## Amendment — 2026-10-08
+
+**A timer now reads a public page, and it is not a fetch.** "No poll… It happens when a human asks and at no other time" is this ADR's rule for git, and it stands. [ADR-0042](0042-a-timer-may-read-a-public-page.md) (2026-10-08) admits one unattended outbound read — a weekly GET of Anthropic's pricing page, behind a host named in the config — and argues the difference from this fence. Recorded here so a reader of this file knows the daemon is no longer entirely on-demand.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

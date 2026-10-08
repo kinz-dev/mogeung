@@ -1,12 +1,13 @@
 ---
 title: Review checkpointing and risk ordering
 status: active
-updated: 2026-09-25
+updated: 2026-10-08
 covers:
   - crates/mogeungd/src/git.rs
   - crates/mogeung-core/src/change.rs
   - crates/mogeung-core/src/review.rs
   - desktop/src/lib/diff.ts
+  - desktop/src/lib/format.ts
 ---
 
 # Review checkpointing and risk ordering
@@ -66,8 +67,8 @@ hashes rather than positions.
 - **Staging and unstaging move nothing.** They shuffle a file between the index
   and the worktree; the added and removed lines are identical either side, so
   every anchor hashes the same and every hunk stays exactly as read or unread as
-  it was. This is the property that makes committing from the pane (`R-D20`,
-  unbuilt) safe by construction rather than by care.
+  it was. This is the property that makes committing from the pane (`R-D20`)
+  safe by construction rather than by care.
 - **Discard removes hunks rather than marking them.** The content is gone, so
   the anchors simply stop appearing in any diff. Their review rows are left
   behind, harmlessly: an anchor is a hash, so a mark for content that no longer
@@ -80,12 +81,13 @@ discard something already gone.
 
 ## What the diff covers
 
-Computed against the commit the repo was on when mogeung **first saw** the
-session, and covering three sources:
+Computed against the last commit made before the session started (the base,
+below), and covering three sources:
 
 1. Committed work since that base
 2. Uncommitted edits
-3. **Untracked files** — via `ls-files --others` plus `diff --no-index`
+3. **Untracked files** — via `ls-files --others --exclude-standard`, rendered
+   in-process rather than by a `diff --no-index` per file (`R-J8`)
 
 Untracked files matter because they are exactly what an agent creating new
 modules produces, and plain `git diff` misses them entirely. `add -N` was
@@ -159,7 +161,8 @@ character-level diffing makes of reformatted code.
 The `-`/`+` marker is stripped before comparing. The first implementation did
 not, so every pair differed at position 0 and the whole line lit up, which is no
 better than having no word diff at all. Pinned by
-`the_marker_never_widens_the_highlight`.
+*never widens the highlight because of the marker* in
+`desktop/src/lib/diff.test.ts`.
 
 **The file list** is one line per file: a marker that is green `✓` when fully
 read and a risk-coloured `●` when not, the path elided from the *left*

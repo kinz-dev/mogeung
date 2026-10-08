@@ -1,7 +1,7 @@
 ---
 title: Claude Code's on-disk formats
 status: active
-updated: 2026-10-07
+updated: 2026-10-08
 covers:
   - crates/mogeungd/src/watcher.rs
   - crates/mogeungd/src/adapter.rs
@@ -15,7 +15,9 @@ covers:
 warning. This is the project's top operational risk
 ([A4](../product/assumptions.md)).
 
-Verified against Claude Code **2.1.219 / 2.1.220** only.
+The type table was last swept on 2026-10-07 against Claude Code **2.1.292**
+(`--bin sweep`, 411 files); the field samples below were taken on
+**2.1.219 / 2.1.220** and have not needed to change.
 
 ## `~/.claude/sessions/<pid>.json` — live registry
 
@@ -322,8 +324,8 @@ mapping. See [ADR-0004](../decisions/0004-git-for-diffs-not-file-history.md).
 ## `~/.claude/history.jsonl`
 
 Every prompt ever typed, with `display`, `project`, `sessionId`, `timestamp`.
-2,084 entries on this machine. Currently unused; it is the basis for roadmap
-section F.
+2,084 entries on this machine. Read by `insight.rs` for global search and the
+prompt library (roadmap section F).
 
 ## `~/.claude/skills/<name>/SKILL.md` and plugin skills — `R-F15`
 

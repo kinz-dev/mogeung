@@ -1,7 +1,7 @@
 ---
 title: More than one repository — the Git window picks
 status: active
-updated: 2026-09-16
+updated: 2026-10-08
 roadmap: [R-D34, R-D35]
 depends_on: [A19, A26]
 ---
@@ -50,7 +50,8 @@ workspace has more than one root in it.
   IntelliJ's own answer to this is a repository list in the branches popup, so
   this is parity rather than invention.
 - `A26` — *the user will commit from mogeung rather than from the terminal* —
-  `UNTESTED`, and this makes it **more** answerable rather than less: the
+  `UNTESTED` when this was written and `SUPPORTED` on 2026-10-03 by `R-D28`'s
+  week; this row made it **more** answerable rather than less: the
   commonest reason to reach for the terminal in this layout is that the repo
   you want is not the one on screen. No new write verb is added; the existing
   ones learn to name a repository.

@@ -1,7 +1,7 @@
 ---
 title: Run configurations — IntelliJ's Run tool window, its Edit dialog and its popup
 status: draft
-updated: 2026-09-17
+updated: 2026-10-08
 roadmap: [R-N9, R-N10, R-N11, R-N15, R-N16, R-N17, R-N18, R-N19, R-N20, R-N21, R-N22, R-N23, R-N24, R-N25, R-N26]
 depends_on: [A13, A32, A33, A34, A42, A43]
 ---

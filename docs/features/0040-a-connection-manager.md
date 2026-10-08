@@ -1,7 +1,7 @@
 ---
 title: A connection manager
 status: shipped
-updated: 2026-09-22
+updated: 2026-10-08
 roadmap: [R-I16]
 depends_on: [A24]
 ---
@@ -81,8 +81,11 @@ network rather than anything here.
   [ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md) drew. An
   entry may **record** the command as a note so the panel can show it beside a
   dead connection, and the panel must never execute it.
-- Testing whether an address is reachable before you switch to it.
-- Browsing the LAN for daemons. It needs multicast, which a webview cannot do.
+- Testing whether an address is reachable before you switch to it — built
+  later as `R-I19`'s *Test* button.
+- Browsing the LAN for daemons. A webview cannot listen, so when it came it
+  came through the Tauri shell as a UDP listener
+  ([feature 0046](0046-found-on-the-lan.md)).
 - Syncing the list between machines.
 - Any change to what switching means: the board still drops. What the window
   **opens on** is also untouched, and see the finding under Risks — it is not

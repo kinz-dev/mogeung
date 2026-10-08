@@ -1,0 +1,319 @@
+---
+title: Notes, documents and tasks
+status: archived
+updated: 2026-10-08
+roadmap: [R-B35, R-L1, R-L2, R-L3]
+depends_on: [A1, A6, A27]
+---
+
+# 0026 — Notes, documents and tasks
+
+The output of the `R-L1` design session, held 2026-08-02. The decisions it
+reached are recorded in
+[ADR-0015](../../decisions/0015-markdown-is-the-truth.md); this is what gets
+built and in what order.
+
+## Spec
+
+### Problem
+
+There is nowhere in mogeung to write anything down.
+
+The concrete moment: you are reading a transcript, notice that the agent
+justified a change with a claim you do not believe, and want to record *that*
+— against that turn, so it is there when you come back. Today the options are
+a terminal, a browser tab, or remembering. All three lose it.
+
+The second moment is larger and vaguer, which is why it is filed second: the
+thinking that happens *around* a session — what to try next, what went wrong
+last time, the three things to check before merging — has no home either, and
+ends up in a scratch file whose name you forget.
+
+### Assumptions
+
+- **A1 / A6** (`UNTESTED`) — the product's own premises. This feature does not
+  rest on them any more heavily than the rest of the window does.
+- **A27** (new, `UNTESTED`) — *the user will write notes inside mogeung rather
+  than in the editor already open beside it.* This is the bet, and it is the
+  same shape as `A26` was for git writes: a competing tool is one keystroke
+  away and already good at this.
+
+> The rule says: if a spec depends on an `UNTESTED` assumption, the work is to
+> test the assumption, not to build the feature.
+
+That is exactly why the order below starts where it does. `R-B35` — a note
+against a transcript turn — is the smallest thing that tests A27 honestly,
+because it is the one place a note has an obvious home and no competing tool
+is closer to hand.
+
+**The gate came off on 2026-08-05, deliberately and against the count.** The
+week produced four files, two of which were probes from building the thing —
+so two real notes, 99 and 114 bytes. By the removal condition written here in
+advance that is fewer than a handful, and this feature was due to come out
+rather than grow.
+
+It grew instead, on an explicit decision, and the reasoning is worth keeping
+because it is not "the number was close enough":
+
+- **One of the two real notes is called `todo-list`.** The want turned up
+  inside the container that was not built for it. That is `R-L3` asking for
+  itself, and a removal condition that fires on volume cannot see it.
+- **The first slice may have measured the wrong thing.** A note bound to a
+  transcript turn is a *remark*; what was asked for on the day the gate came
+  off is a **scratchpad with its own lifecycle** — *"it should be like a
+  scratch pad … the notes itself has its own lifecycle and unlike bookmark, it
+  can out-live the session/transcript."* Two notes against turns is weak
+  evidence about a pane nobody had yet.
+- **The missing gesture was named at the same time**: a button that copies a
+  conversation into a note. Without it every note starts as an empty box, and
+  an empty box competes badly with the editor already open beside it — which
+  is exactly A27's stated risk, and was never actually tested against a
+  loaded box.
+
+So A27 is not settled by this, and it is not being treated as settled: it moves
+to `AT RISK`, and what is being built is the version the ask describes. The
+honest new condition is below.
+
+**The replacement condition:** the copy-to-note buttons are the test. If a
+month of use produces notes that were *only* ever created empty — the copy
+gesture unused — then the want was for a document store this window is not the
+right home for, and pillar L comes out with that evidence rather than a count
+of files.
+
+### Acceptance
+
+- [x] A turn in the Transcript can carry a **name**, written and edited in
+      place — and it stays a name for the mark rather than becoming a document:
+      it appears in Bookmarks beside the turn it points at and **not** in the
+      Notes panel. Corrected 2026-08-06 on the report that the two overlapped;
+      the storage was always right (one table, `seq` as a tag, per ADR-0015) and
+      the views were wrong — `BookmarksTool` filtered to anchored notes and the
+      scratchpad filtered to nothing, so every mark appeared twice
+- [x] Notes are visible without opening each turn — the transcript shows where
+      they are
+- [x] A note survives the session ending, being forgotten, and the window
+      restarting — `notes` carries `session_id` as a tag with no foreign key
+      behind it, so `forget_session` leaves it standing (`store.rs`)
+- [x] Notes are one set across windows: two windows on one daemon show the same
+      note the moment it is saved
+- [x] Every note also exists as a `.md` file under `~/.mogeung/notes/`, and
+      deleting mogeung's database loses history but not the writing
+- [x] A document can be written, listed, filtered and deleted from the rail
+- [x] A turn, or a whole conversation, can be copied into a note of its own —
+      the note keeps the words rather than pointing at them, and a copied
+      conversation states what it left behind rather than looking complete
+- [x] A `- [ ]` line in any document appears in a task list, and ticking it in
+      either place agrees in both
+- [x] "What did I close today" is answerable, and the answer survives the
+      checkbox being ticked and unticked
+- [x] Dropping the derived table and restarting loses the history and nothing
+      else
+
+### Explicitly out of scope
+
+- **Editing worktree files.** Pillar K stands; `R-L4` records the question and
+  nothing more. A document under `~/.mogeung` is not a repository file.
+- **Due dates, assignees, priorities, recurrence.** Not asked for. A task is a
+  checkbox; anything more is the project manager ADR-0015 declined.
+- **Reading the disk mirror back in.** It is an export, not an input.
+  ADR-0015's revisit condition covers the case where that turns out wrong.
+- **Sharing, sync, or notes in the repository.** ADR-0015.
+- **Rich text.** Markdown, rendered by the previewer `R-B29` already built.
+
+## Plan
+
+*Drafted by an agent, approved by the human before implementation.*
+
+### Approach
+
+Four stages. The first is deliberately the smallest useful thing, because it
+is also the test of A27.
+
+**`R-B35` — a note on a turn.** A `notes` table in the daemon store, a wire
+family (`NoteList` / `NoteSave` / `NoteDelete`), and the Transcript gaining an
+affordance per turn. A note is `(id, body, created, updated)` plus optional
+`session_id` and `repo` **tags**. This stage builds the whole storage layer and
+spends it on one feature, which is what makes the later stages cheap — the same
+shape `R-D19` had for the git writes.
+
+**`R-L2` — documents.** A pane listing documents with a markdown editor and the
+existing preview. Same table, same wire; a "note on a turn" is simply a
+document that carries a `session_id` tag. There is no second model.
+
+**`R-L3` — tasks.** Parse `- [ ]` / `- [x]` out of every document on save,
+into a derived table carrying the transitions. The list is a view over that;
+ticking a box in the list rewrites the line in the document, which is the only
+direction that writes.
+
+**Mirror.** On every save, write `~/.mogeung/notes/<id>-<slug>.md`. One way,
+never read back, and stated as such in the pane so nobody edits one expecting
+it to take.
+
+### Files touched
+
+- `crates/mogeungd/src/store.rs` — `notes` and `note_tasks` tables, and the
+  rebuild path that makes the second droppable
+- `crates/mogeungd/src/notes.rs` (new) — parse, mirror, and the task extractor
+- `crates/mogeung-core/src/wire.rs` — the note family, and `Note` on the wire
+- `crates/mogeungd/src/api.rs` — dispatch, plus REST for grep-ability
+- `crates/mogeung-ui/src/app.rs` — the transcript affordance, then the pane
+- `docs/design/data-model.md` — the first daemon table that is not derived
+
+### Risks and unknowns
+
+- **A27 is the whole bet**, and the competing tool is better than the one
+  competing with `R-D20` was: an editor is already open, already has your
+  keybindings, and already holds the file you are talking about. The
+  mitigation is the order — test it at `R-B35` scale before building `R-L2` —
+  and the removal condition above.
+- **Two representations exist**, which this codebase has avoided everywhere
+  else. ADR-0015's rebuild rule is the entire defence and needs a test that
+  actually exercises it: drop the derived table, restart, assert nothing but
+  history is missing.
+- **Notes follow the daemon, not the window.** Watching a remote machine shows
+  that machine's notes, while pins and labels for the same machine sit in a
+  file on the machine the *window* runs on (`R-I11`, one day earlier). They
+  agree about scope and disagree about who holds the bytes, so two windows on
+  one daemon show the same notes and different pins. Both are defensible and
+  the pair will confuse somebody; the guide has to explain them together rather
+  than separately. **`R-I12` records the argument that `R-I11` should move**,
+  which would remove the asymmetry — filed rather than acted on, because it
+  reverses a shipped decision that has not been used yet.
+- **Ticking a box rewrites a document under the user.** If the document is open
+  in the editor pane at the time, two writers exist. Unknown whether to refuse,
+  reload, or merge — and it is the same class of question `R-D21` asked about
+  switching branches under a running agent, which was answered by warning
+  rather than by guessing.
+- **`- [ ]` appears in ordinary prose**, including in any note that quotes this
+  spec. A parser that is too eager turns a quotation into a task. Fenced code
+  blocks must be excluded at minimum.
+
+## Notes
+
+**`Ctrl+S` saves, and only inside Notes.** Asked for 2026-08-06 with the scope
+attached — *"only when `Ctrl+S` will trigger the save button"* — and the scope
+is the interesting half. `Ctrl+S` means *save* in every editor anyone arrives
+from, so a window-wide binding would claim it on behalf of a panel that is
+usually shut, and claim it from the Code pane, which is the surface most likely
+to want it next. It is therefore a capture-phase listener gated on
+`root.contains(document.activeElement)` — the same shape `Ctrl+F` in this panel
+already used, and deliberately **not** an entry in `ACTIONS`, because everything
+in that list fires window-wide by design.
+
+Two details worth keeping. The handler goes through the same `save` the button
+calls rather than sending its own copy of `note_save`, so the two cannot drift;
+and the not-dirty check moved *into* `save`, because the button was refusing by
+being `disabled` and a keyboard path has no disabled state to inherit. It
+`preventDefault`s even when there is nothing to save — the alternative is the
+webview offering to write the window to disk as an `.html` file, and a stray
+`Ctrl+S` that did that would be worse than one that quietly did nothing.
+
+*Filled during implementation.*
+
+### `R-L3` built 2026-09-09
+
+The checklist half, three years of project-manager features later than it could
+have been and none of them present. A task is a `- [ ]` line, `note_tasks`
+caches where those lines are, and `task_events` remembers the transitions.
+
+- **The parser is the risk this spec named**, and it is fenced accordingly:
+  fenced code blocks are excluded (a note holding a README must not sprout that
+  README's checklist), **block quotations** are too — `R-L2`'s copy-a-turn puts
+  an agent's words in verbatim, so a quoted `- [ ]` is somebody else's plan —
+  and four-space indentation reads as a code block while two reads as a nested
+  task, which is a real case. Thirteen tests.
+- **`ord` is the address, not the line number.** A line number moves when
+  anything above it is edited; `ord` only moves when a *checkbox* above it does,
+  which is what a tick can safely be aimed at. Ticking rewrites the box and
+  nothing else — not the indent, the bullet or the text — so it cannot reformat
+  a line you wrote.
+- **History is keyed by the task's words**, because that is the only identity a
+  line in a document has. Rewrite the words and it is a different task, which is
+  the honest reading of a line that no longer says what it said.
+- **`closed_since` counts closures, not closed tasks.** Ticking, unticking and
+  ticking again is one job done, and unticking does not un-close what happened.
+- **The drop-and-rebuild property has the test the risks list asked for.** It
+  drops both tables, reopens, rebuilds from the documents, and asserts every
+  task returns and only the history is thinner. `prepare` rebuilds at startup,
+  which is what makes the claim true rather than aspirational.
+- **The one open question this leaves** is the one the risks list raised and
+  did not answer: ticking a box rewrites a document that may be open in the
+  Notes editor at the time. Today the editor holds its own draft and will
+  overwrite on the next save. Not solved, and not pretended otherwise — it is
+  the same class as `R-D21`'s branch-switch, which was answered by warning
+  rather than by guessing.
+
+### Amended 2026-09-10, on the first report
+
+> I can't get any task display. it always show "no tasks"
+
+**The panel was right and the feature was still wrong.** None of the notes on
+that machine held a checkbox, so an empty list was the honest answer — and
+nothing in the window could put a checkbox into a note. `R-L1` decided a task is
+a line in a document and this spec built exactly that, without noticing that
+*writing the line* had no home: you had to know the markdown, and find the Notes
+panel, before the Tasks panel could show you anything at all.
+
+There is now a box at the top of the panel. A task typed there is **appended to
+a document** called *Tasks*, created the first time — which keeps ADR-0015's
+rule 2 exactly as it was, because adding a task is writing a line and nothing
+else.
+
+**And a worse thing was found on the way.** The e2e suite had been writing its
+notes into the **real** `~/.mogeung/notes`: `AppState` let `scratch_dir` be
+overridden and never the mirror, and the note test asserted against
+`notes::mirror_dir()` — so it passed *because* it was inspecting the folder it
+was polluting. Six orphan files on this machine, one per run. `notes_dir` is now
+overridable the way `scratch_dir` always was, the harness sets it, and the test
+checks its own directory. The lesson is the shape of the assertion rather than
+the missing field: a test that reads the same global the code writes cannot tell
+you the code wrote in the wrong place.
+
+### Nesting and grouping, 2026-09-10 (`R-L10`)
+
+> how to have indented tasks? … or grouping of tasks?
+
+**The first was a bug report wearing a question mark.** `R-L3`'s parser treated
+four spaces as an indented code block, which is right at the top level of a
+document and wrong inside a list: markdown measures a code block from the
+enclosing block's content column, so a checkbox indented four spaces under
+another checkbox is one level in. Every task nested that way was silently
+dropped — and four spaces is the more common convention. The reporter's own note
+used it, and had lost its middle line.
+
+The rule is now: **an indented checkbox is nested when there is a list to nest it
+in, and code when there is not**, with a stack of open indents rather than a
+fixed step, because markdown does not fix the step.
+
+Depth was not recorded at all before this, so even two-space nesting rendered
+flat. A `Task` now carries `depth` and the panel indents by it.
+
+**Grouping needed no new syntax.** A markdown heading already says *these things
+belong together*, so a task carries the nearest heading above it. Groups keep
+document order rather than sorting, and a task above the first heading stays
+ungrouped — *not filed* is not the same as filed under nothing.
+
+### The panel draws the shape, 2026-09-10 (`R-L11`)
+
+> enhance the display of the Tasks so that it reflects the grouping (show it as
+> a folder like structure) and sub tasks (indented tasks)
+
+`R-L10` taught the parser both and the panel drew neither properly — a heading
+was a label, and depth was padding. A heading is now a folder that shuts and
+says *3 of 5* while closed; a task with children has its own twisty and says
+what is left under it when folded.
+
+- **A done parent stays visible while an open child needs it.** Hiding ticked
+  tasks is what makes a checklist a list of what to do; hiding a ticked *parent*
+  orphans its children. This is the rule that would have gone wrong quietly.
+- **Depth is renumbered as it nests.** Markdown lets you over-indent, and two
+  levels of blank indentation is a gap nobody wrote.
+- **A heading used twice is two sections.** Merging them would move tasks up
+  the page.
+- **Ticking a parent does not tick its children**, and a test says so. A
+  cascade would write lines the user never ticked, which is exactly what
+  ADR-0015 forbids this panel to do.
+
+The shape lives in `lib/taskTree.ts` with its own tests, like `scratchTree.ts`:
+every interesting decision here is about what stays visible, and a test should
+be able to state that without rendering anything.

@@ -1,7 +1,7 @@
 ---
 title: A pane pops out into a window of its own, and that window is an ordinary client
 status: active
-updated: 2026-09-25
+updated: 2026-10-08
 decided: 2026-09-08
 ---
 
@@ -220,3 +220,7 @@ dockview does in a browser tab; the shell now agrees with both. The
 **Still not seen in the shipped app**: the close routing and the window's
 destruction are shell behaviour, which a browser tab cannot show. The client's
 half is pinned against a real dockview.
+
+## Amendment — 2026-10-08
+
+**One fact under Context is wrong, and the decision does not depend on it.** "tmux sizes a session to its smallest attached client" describes tmux's default; `yolomo` sets `window-size latest` ([ADR-0021](0021-the-pane-sizes-the-window.md)), so a session follows whichever client last sent input. Two heads still churn — the resize ping-pongs with focus rather than clamping to the smaller — so the consequence drawn from it holds.

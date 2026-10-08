@@ -1,7 +1,7 @@
 ---
 title: Consent to a remote model endpoint names the host, and may be given in the config file
 status: active
-updated: 2026-08-28
+updated: 2026-10-08
 decided: 2026-08-28
 supersedes: ADR-0030
 ---
@@ -145,6 +145,10 @@ reading it. One host, or all of them, said out loud.
 - `R-O2`'s harness says the model's reading is not worth the screen space, in
   which case pillar O comes out and this goes with it.
 
+
+## Amendment — 2026-10-08
+
+**Clause 4 is decided per connection, not from the bind — a rule in force since 2026-09-23 and recorded on the wrong ADR until today.** "Refused entirely on a non-loopback bind with no flag" became, on 2026-09-23: a client on this machine, a loopback peer, may use `model_chat` whatever the daemon is bound to; every other client is judged by the bind and the flag exactly as before. The reason is `R-J103`: `R-I17`'s step 7 lets the daemon a window hosts bind the LAN from `config.toml`, and the window on that same machine was refused its own chat. The amendment was appended to [ADR-0030](0030-a-model-reads-the-evidence.md), the ADR this one superseded, so the active ADR stated the dead rule for a fortnight. It lives here now; ADR-0030's amendments of 2026-09-23 remain the fuller argument, and [ADR-0032](0032-the-chat-panel-remembers.md) and [ADR-0034](0034-the-draft-is-a-chat-ask.md), which restate clause 4, read this one. A relayed `model_chat` for a mirrored session is still refused: chat never asks about another machine's session ([ADR-0013](0013-one-window-one-daemon.md), second amendment).
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

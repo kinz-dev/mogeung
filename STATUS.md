@@ -7,11 +7,11 @@
 | Branch | `main` |
 | Tests | 789 passing |
 | Rust | 55605 lines |
-| Docs | 123 files, 42 ADRs |
+| Docs | 125 files, 42 ADRs |
 
 ## Assumptions
 
-Untested: **21** · At risk: **5** · Supported: 22 · Refuted: 2
+Untested: **19** · At risk: **6** · Supported: 23 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -21,53 +21,11 @@ Untested: **21** · At risk: **5** · Supported: 22 · Refuted: 2
 
 | Feature | Status | Depends on |
 |---|---|---|
-| [Trust the tool](docs/features/0001-trust-the-tool.md) | `shipped` | [A4] |
-| [Sharpen triage, reach and review](docs/features/0002-sharpen-triage-and-review.md) | `shipped` | [A1, A3, A6, A8] |
-| [Attached terminal](docs/features/0003-attached-terminal.md) | `shipped` | [A11, A12] |
-| [A queue that answers the click](docs/features/0004-a-queue-that-answers-the-click.md) | `shipped` | [A1, A6] |
-| [Reachable by keyboard](docs/features/0005-reachable-by-keyboard.md) | `shipped` | [A1, A13] |
-| [Dockable panes](docs/features/0006-dockable-panes.md) | `shipped` | [A14] |
-| [File explorer](docs/features/0007-file-explorer.md) | `shipped` | [A13, A15] |
-| [Explorer workbench](docs/features/0008-explorer-workbench.md) | `shipped` | [A13, A15, A16] |
-| [Session labels](docs/features/0009-session-labels.md) | `shipped` | [A13, A17] |
-| [Git view](docs/features/0010-git-view.md) | `shipped` | [A13, A18] |
-| [Git depth — reading parity with a commercial client](docs/features/0011-git-depth.md) | `shipped` | [A13, A18, A19] |
-| [Git table stakes — commit details, log filtering, file history](docs/features/0012-git-table-stakes.md) | `shipped` | [A13, A18, A19] |
-| [Git reach — forensics, ergonomics, refs, conflicts, review-state](docs/features/0013-git-reach.md) | `shipped` | [A13, A18, A19] |
-| [IntelliJ-style commit view — file tree, one file's diff, details](docs/features/0014-intellij-commit-view.md) | `shipped` | [A13] |
-| [Rate limits and token burn](docs/features/0015-rate-limits.md) | `shipped` | [A4, A20] |
-| [Verification — claims against evidence](docs/features/0016-verification.md) | `shipped` | [A4, A7, A21] |
-| [Cross-session intelligence](docs/features/0017-cross-session.md) | `shipped` | [A1, A4, A22] |
-| [Editor reach — git ergonomics, navigation, comforts](docs/features/0018-editor-reach.md) | `shipped` | [A13, A15, A16] |
-| [Waiting count in the tray](docs/features/0019-waiting-count-tray.md) | `shipped` | [A25] |
-| [Codex adapter](docs/features/0020-codex-adapter.md) | `in-progress` | [A4, A23] |
-| [Linux reach and remote daemon](docs/features/0021-linux-and-remote.md) | `in-progress` | [A13, A24] |
-| [Doc sprawl — inventory, staleness, GC, derived progress](docs/features/0022-doc-inventory.md) | `shipped` | [A10] |
-| [Polish — geometry, config, CLI, empty states, diff speed](docs/features/0023-polish.md) | `shipped` | [A19] |
-| [In-app terminal](docs/features/0024-in-app-terminal.md) | `shipped` | [] |
-| [Local git writes — stage, commit, branch, stash](docs/features/0025-git-write-local.md) | `active` | [A18, A19, A24, A26] |
-| [Notes, documents and tasks](docs/features/0026-notes-and-tasks.md) | `active` | [A1, A6, A27] |
-| [The right tool-window rail](docs/features/0027-right-rail.md) | `shipped` | [A13, A14, A15, A16, A28] |
-| [Global search](docs/features/0028-global-search.md) | `shipped` | [A13, A22, A29] |
-| [The React desktop client](docs/features/0029-desktop-client.md) | `shipped` | [A1, A6, A13, A14, A15, A16] |
-| [Two agents at once](docs/features/0030-two-agents-at-once.md) | `shipped` | [A30, A14, A11] |
-| [The wall](docs/features/0031-the-wall.md) | `shipped` | [A1, A6] |
-| [A pane per file](docs/features/0032-a-pane-per-file.md) | `shipped` | [A14, A15, A16, A30] |
-| [Cost per model](docs/features/0033-cost-per-model.md) | `shipped` | [A4, A31] |
-| [Mermaid in the file pane, then the Transcript](docs/features/0034-mermaid-in-the-file-pane.md) | `shipped` | [A6] |
-| [Run and Debug](docs/features/0035-run-and-debug.md) | `active` | [A4, A32, A33, A34] |
-| [Qwen Code adapter](docs/features/0036-qwen-code-adapter.md) | `in-progress` | [A4, A23] |
-| [Performance pass 3 — the chatter, not the disk](docs/features/0037-performance-pass-3.md) | `draft` | [A4] |
-| [A local model beside the agents](docs/features/0038-a-local-model.md) | `in-progress` | [A3, A4, A29, A35, A36, A37, A38, A40, A41] |
-| [Scratch files](docs/features/0039-scratch-files.md) | `shipped` | [A27] |
+| [A local model beside the agents](docs/features/0038-a-local-model.md) | `shipped` | [A3, A4, A29, A35, A36, A37, A38, A40, A41] |
 | [A connection manager](docs/features/0040-a-connection-manager.md) | `shipped` | [A24] |
-| [A pane in its own window](docs/features/0041-a-pane-in-its-own-window.md) | `shipped` | [A30] |
-| [The Git tool window — IntelliJ's log, in the dock](docs/features/0042-git-tool-window.md) | `active` | [A13, A18, A19, A26] |
-| [The Git Operations popup — IntelliJ's two popups, on a keystroke](docs/features/0043-git-operations-popup.md) | `active` | [A13, A19, A26] |
 | [More than one repository — the Git window picks](docs/features/0044-more-than-one-repository.md) | `active` | [A19, A26] |
 | [Run configurations — IntelliJ's Run tool window, its Edit dialog and its popup](docs/features/0045-run-configurations.md) | `draft` | [A13, A32, A33, A34, A42, A43] |
-| [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `draft` | [A44, A24] |
-| [opencode adapter](docs/features/0048-opencode-adapter.md) | `in-progress` | [A4, A23] |
-| [Update in place](docs/features/0049-update-in-place.md) | `active` | [A46, A47, A48] |
-| [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `active` | [A4, A49, A50] |
+| [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `shipped` | [A44, A24] |
+| [opencode adapter](docs/features/0048-opencode-adapter.md) | `shipped` | [A4, A23] |
+| [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `shipped` | [A4, A49, A50] |
 

@@ -30,6 +30,25 @@ covers:
   - crates/mogeungd/src/federation.rs
   - desktop/src/lib/federation.ts
   - desktop/src/lib/queue.ts
+  - crates/mogeungd/src/server.rs
+  - crates/mogeungd/src/machine.rs
+  - crates/mogeungd/src/model.rs
+  - crates/mogeungd/src/llmproxy.rs
+  - crates/mogeungd/src/pricing_refresh.rs
+  - crates/mogeungd/src/workspace.rs
+  - crates/mogeungd/src/discovery.rs
+  - crates/mogeungd/src/guide.rs
+  - crates/mogeungd/src/why.rs
+  - crates/mogeungd/src/version.rs
+  - crates/mogeungd/src/bin/judge.rs
+  - crates/mogeungd/src/bin/why.rs
+  - crates/mogeungd/src/bin/beacon.rs
+  - crates/mogeung-core/src/config.rs
+  - crates/mogeung-core/src/model.rs
+  - crates/mogeung-core/src/llmproxy.rs
+  - desktop/src/lib/tmux.ts
+  - desktop/src/lib/dial.ts
+  - desktop/src/lib/gitActions.ts
 ---
 
 # Architecture
@@ -199,7 +218,7 @@ before git sees an argument. See
 [wire-protocol.md](wire-protocol.md) for the family and its hygiene rules.
 
 In the window it is the **Git tool window** since 2026-09-11 (`R-D26`,
-[feature 0042](../features/0042-git-tool-window.md)): a dock tool with Log,
+[feature 0042](../archive/features/0042-git-tool-window.md)): a dock tool with Log,
 Local changes, Stash and More tabs, and the Log tab as three panes — a branch
 tree grouped on `/`, a virtualised graph log under a filter bar, and a commit
 inspector that shows the files as a tree, the details beneath, and one file's
@@ -253,9 +272,10 @@ here fails. It never runs on a timer, and it never pushes or merges.
 [ADR-0003](../decisions/0003-observe-do-not-spawn.md) and the diagram above.
 The *repository* is a separate question, and was answered differently on
 2026-07-30: [ADR-0012](../decisions/0012-write-locally-never-publish.md)
-admits local git writes and rules out every remote verb. Unbuilt as of this
-writing, and it changes only the git surface — no session, prompt or agent
-is touched by any of it. Note that the daemon already had one repository
+admitted local git writes, built 2026-07-31 (`R-D19`–`R-D22`), and
+[ADR-0014](../decisions/0014-fetch-is-not-publishing.md) then moved the line
+from the network to publishing and merging, admitting `fetch`. It changes only
+the git surface — no session, prompt or agent is touched by any of it. Note that the daemon already had one repository
 write before that ADR: `git worktree add`, on an explicit launch-with-
 isolation action.
 
@@ -1028,8 +1048,12 @@ existed.
 
 ## What is deliberately absent
 
-No supervisor, no child processes, no writes to `~/.claude`. See
-[ADR-0003](../decisions/0003-observe-do-not-spawn.md).
+No supervisor over an agent, and no writes to `~/.claude`
+([ADR-0003](../decisions/0003-observe-do-not-spawn.md)). The children the
+daemon does own are a process you named
+([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md)), a
+signal command you configured (`R-E2`) and its own llmproxy
+([ADR-0033](../decisions/0033-a-proxy-of-our-own.md)); none of them is an agent.
 
 ## Diff attribution, and two spellings of one path
 
@@ -1167,8 +1191,9 @@ session's bytes and are precisely the fields it was about to blank.
 
 It binds every field by name instead. Adding a field to `Session` is now a
 **compile error** in that function until someone decides which side of the mask
-it belongs on — the same guarantee, with no allocation. The nine masked fields
-are the counters and the histories that move whenever a transcript grows.
+it belongs on — the same guarantee, with no allocation. The eleven masked fields
+are the counters, the two timings and the histories that move whenever a
+transcript grows.
 
 ## Modules added 2026-07-29
 

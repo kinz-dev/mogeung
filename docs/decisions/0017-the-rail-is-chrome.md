@@ -1,7 +1,7 @@
 ---
 title: The rail is chrome; the tile tree is content
 status: active
-updated: 2026-09-28
+updated: 2026-10-08
 decided: 2026-08-03
 ---
 
@@ -14,7 +14,7 @@ on 2026-08-03.
 
 The first is the tile tree: `egui_tiles` holds Changes, Transcript, Info, Debt,
 Agent, Editor, Git and Insight as draggable, splittable tabs
-([feature 0006](../features/0006-dockable-panes.md), assumption A14). The
+([feature 0006](../archive/features/0006-dockable-panes.md), assumption A14). The
 second is plain edge panels outside that tree — the Attention queue on the left
 and the terminal across the bottom, neither of which is a tile and neither of
 which can be dragged into one.
@@ -118,6 +118,10 @@ never a tile in the centre, and nothing here opens that door. If a shell beside
 an Agent pane in the centre is asked for, that is a new decision about whether
 the terminal is still chrome, not an extension of this one.
 
+
+## Amendment — 2026-10-08
+
+**The widgets named here are the egui client's, and one sentence was reversed.** `egui_tiles` and `egui::Panel::right` are dockview and a React strip since [ADR-0020](0020-the-egui-client-is-retired.md) (2026-08-05); the rule — tiles are session views, the rail is chrome — survived the port unchanged, which is why the 2026-09-28 amendment could talk dockview without saying so. "The rail shows one tool at a time… Files and Search cannot be open together" was reversed by [ADR-0027](0027-the-rail-stacks.md) on 2026-08-19: the rail stacks.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

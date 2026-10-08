@@ -34,7 +34,7 @@ build was `0.1.0`. Three things make this a decision rather than a feature:
 ## Decision
 
 The shell may update the window, in four steps the window asks for one at a
-time ([feature 0049](../features/0049-update-in-place.md), `R-J105`):
+time ([feature 0049](../archive/features/0049-update-in-place.md), `R-J105`):
 
 1. **An update is a commit.** The shell reads the branch the build follows
    (`main` by default) in the checkout `install.sh` recorded, once a minute, and

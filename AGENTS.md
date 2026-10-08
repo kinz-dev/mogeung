@@ -1,7 +1,7 @@
 # Working on mogeung
 
-mogeung watches the Claude Code sessions the user runs and tells them which one
-needs attention. **It never starts, steers or stops an agent.**
+mogeung watches the agent sessions the user runs — Claude Code, Codex, Qwen
+Code, opencode — and tells them which one needs attention. **It never starts, steers or stops an agent.**
 
 ## Read first
 
@@ -67,7 +67,7 @@ Never edit its output.
 
 - The daemon is the product; every UI is a client with no local authority.
 - Never write to `~/.claude`. Read only.
-- Parsers for Claude Code's formats must degrade, never panic — they are
+- Parsers for the agent CLIs' formats must degrade, never panic — they are
   undocumented and change without warning.
 - Prefer a test that would fail today over a test that documents what already
   works.
@@ -94,7 +94,7 @@ cargo run -q -p mogeungd --bin runconfigs   # what run configurations exist here
 cargo run -q -p mogeungd --bin beacon -- listen   # does a LAN beacon cross the mesh? (A44)
 ```
 
-### Run the sweep after a Claude Code or Codex upgrade
+### Run the sweep after any agent CLI upgrade
 
 `A4` says the formats are undocumented and move without warning, and the
 canary proves it — but the canary only speaks from a **running daemon**, so
@@ -135,7 +135,7 @@ Learnt on 2026-08-28, from a guard in a test that `tsc` correctly called
 always-true.
 
 **The same hole exists in Rust, and it is wider.** `desktop/src-tauri` is
-[deliberately its own workspace root](../desktop/src-tauri/Cargo.toml) so that a
+[deliberately its own workspace root](desktop/src-tauri/Cargo.toml) so that a
 missing `libwebkit2gtk-4.1-dev` cannot take down `cargo test --workspace` — a
 good trade that costs this: **nothing in the list above compiles the shell.**
 So a field added to any public `mogeung-core` struct compiles everywhere the
@@ -150,8 +150,6 @@ cannot run it, say so when handing back rather than leaving it unsaid. Learnt on
 both client suites passed, the docs checked, and the install failed on a
 one-field initializer in `daemon.rs`. Same lesson as the paragraph above, one
 language over.
-
-## Testing
 
 ## Agent skills
 

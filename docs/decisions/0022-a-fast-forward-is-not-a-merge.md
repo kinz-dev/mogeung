@@ -1,6 +1,6 @@
 ---
 title: A fast-forward is not a merge; pushing is still publishing
-status: proposed
+status: draft
 updated: 2026-08-07
 decided: —
 ---

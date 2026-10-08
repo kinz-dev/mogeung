@@ -1,7 +1,7 @@
 ---
 title: The window is replaced, the daemon is not
 status: active
-updated: 2026-08-04
+updated: 2026-10-08
 decided: 2026-08-04
 ---
 
@@ -106,6 +106,10 @@ still running while it happens.
 - The port starts wanting protocol changes. That means the boundary was drawn in
   the wrong place, and the boundary is the reason this is safe.
 
+
+## Amendment — 2026-10-08
+
+**The fallback was taken away on purpose.** "The egui client is still there, and keeping it is the fallback" held for one day: [ADR-0020](0020-the-egui-client-is-retired.md) (2026-08-05) deleted it at parity, as this ADR's own terms allowed.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

@@ -1,12 +1,14 @@
 ---
 title: Reviewing changes
 status: active
-updated: 2026-09-16
+updated: 2026-10-08
 ---
 
 # Reviewing changes
 
-Open a session and choose **Changes**.
+Open a session and choose **Changes** (`Alt+2`). The repository itself —
+log, branches, staging, commits — is the Git tool window, on its own page:
+[git.md](git.md).
 
 ## Read in the order given
 
@@ -16,6 +18,9 @@ sink and are hidden by default. A file scores as its riskiest hunk.
 
 **This is keyword matching, not analysis.** Treat it as reading order. It will
 flag a variable named `password_field` and miss a subtle bug in a boring file.
+With a local model configured, **reading guide** asks it for an order of its
+own, shown beside the keyword order and never blended into it
+([ADR-0031](../decisions/0031-consent-to-a-named-host.md)).
 
 ## Tick as you read
 
@@ -30,25 +35,41 @@ So when the agent edits the file again:
 You never read the same code twice. **hide read** narrows the view to what is
 actually new.
 
-Caveat: reformatting changes the content, so a purely cosmetic edit makes a hunk
-unread again.
+Anchors ignore indentation and internal whitespace, so re-indenting a file does
+not bring back hunks you already read. Normalisation stops at whitespace on
+purpose: string contents and case still count, because the failure to avoid at
+all costs is marking code you have *not* read as read.
 
 ## What the diff includes
 
-Committed work since the session started, uncommitted edits, and **untracked new
-files** — which plain `git diff` misses and which is exactly what an agent
-creating new modules produces.
+Committed work since the base, uncommitted edits, and **untracked new files** —
+which plain `git diff` misses and which is exactly what an agent creating new
+modules produces.
 
-Two limits worth knowing:
+The base is **the last commit made before the session started**, so a session
+that predates the daemon still diffs against the right commit. The base is
+pinned the first time a session is seen and cleared when the branch is switched
+([review-checkpointing.md](../design/review-checkpointing.md)).
 
-- The base is repo HEAD *when mogeung first saw the session*, so sessions that
-  predate the daemon show only uncommitted work.
-- Two sessions editing the same file both show it. Git cannot separate them.
+Two sessions editing the same file both show it. Git cannot separate them, and
+the queue's `⚠ COLLISION` is the warning.
 
 ## Finishing
 
-**Mark all read** clears the session out of the queue. Nothing is written to
-your repo — review state lives only in mogeung's database.
+**mark every hunk read** clears the session out of the queue. Nothing is written
+to your repo — review state lives only in mogeung's database.
+
+## Verification
+
+Under the session's **Info**, mogeung lists the build, test and typecheck
+commands the agent ran and how each ended, and binds a "tests pass"-shaped
+claim in its prose to the nearest run — or marks it *unverified* when nothing
+was run. A per-repo **signal** command (a test suite, a typecheck) runs only
+when you press it and its result sits beside the agent's claims, never merged
+with them; with lcov output it shows coverage over the changed lines. The
+**Run** dock tool (`Alt+4`) starts a configuration the repository itself
+contains, and a run you started is shown beside the claim the same way
+([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md)).
 
 ## Handing off
 
@@ -58,7 +79,6 @@ manager** (Finder on a Mac, your desktop's handler elsewhere), and
 **IntelliJ IDEA**. The IntelliJ button is live when the project has a `.idea`
 folder and a launcher was found there; otherwise it is dead and its hover
 says which. Editing properly is not mogeung's job and is not planned to be.
-
 
 ## The transcript
 
@@ -74,12 +94,12 @@ Markdown; output a program emitted is monospace.*
 
 - **markdown** turns rendering off if you want the raw text.
 - **thinking** hides reasoning blocks entirely.
-- The clipboard button on any message copies it — egui labels are not
-  selectable, so this is how you get text out.
+- The clipboard button on any message copies it; the transcript's own button
+  exports the whole conversation as a Markdown file.
+- Find (`Ctrl+F` in the pane) searches it, substring and regex side by side.
 
-Only the most recent 150 events are drawn, with a **show earlier** button.
-Markdown is parsed per visible event per frame, so an unbounded transcript would
-tie the frame rate to how long the session has been running.
+The pane is virtualised, so a long session costs nothing to scroll; it opens at
+the newest turn.
 
 ## The file list
 
@@ -101,26 +121,23 @@ everything is a change and the emphasis stops meaning anything.
 
 **≡ / ⇹** switches unified and side-by-side. Side-by-side pairs a removed line
 with the addition that replaced it, which is what makes the word diff readable.
-
-## Reformatting no longer resurrects hunks
-
-Anchors ignore indentation and internal whitespace, so re-indenting a file does
-not bring back hunks you already read.
-
-Normalisation stops at whitespace on purpose. String contents and case still
-count, because the failure to avoid at all costs is marking code you have *not*
-read as read.
+A large diff opens collapsed; `Ctrl+D` on a file opens its diff as a pane in
+the centre, where it has the window's height and can pop out.
 
 ## Flagging and the follow-up prompt
 
 `✎ flag` on a hunk collects it. The prompt window turns everything you flagged
 into text — file, hunk header, the actual changed lines, plus any note you add —
-and offers one button: **Copy to clipboard.**
+and offers two actions: **copy**, and **send**.
 
-**mogeung does not send it.** You paste it into that session's terminal
-yourself. That friction is deliberate and permanent: a supervision layer that
-starts putting words into agents is the thing that made v0.1 worse than a plain
-terminal ([ADR-0008](../decisions/0008-build-the-prompt-never-send-it.md)).
+**Copy** is always there. **Send** puts exactly the text on screen into that
+one session's tmux pane, after a confirmation that names the session and shows
+the first line, once; mogeung never reads the reply and never sends on its own
+([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended 2026-08-29).
+The confirmation cannot see what the session's screen is showing, so a menu
+waiting there would take the Enter — read the pane first. With a local model
+configured, **draft** writes the prompt for you from the flagged hunks; the
+raw concatenation stays one click away, and drafting never sends.
 
 Quoting the real diff lines matters — an agent handed the hunk does better than
 one handed "fix the error handling in state.rs".
@@ -136,119 +153,9 @@ anything dynamic. Treat it as "these places mention it, you may want to look".
 
 ## Debt
 
-The **Debt** tab answers "how much of what agents wrote in this repo has nobody
-read?", counted in hunks and listed riskiest-first. Clicking a file jumps
-straight to it.
+The **Debt** tool (`Alt+5`) answers "how much of what agents wrote in this repo
+has nobody read?", counted in hunks and listed riskiest-first. Clicking a file
+jumps straight to it.
 
 It only covers sessions mogeung has seen — work from before it was watching is
 not in the number.
-
-## The Git tool window
-
-**Git** in the bottom dock (`Alt+9`) is the repository the selected session
-is in — IntelliJ's tool window, in mogeung's colours.
-
-**Log** is three panes. On the left, the branches: HEAD, Local, one node per
-remote, Tags, grouped on `/`, with a search box and a star for favourites. A
-click **scopes the log to that ref and checks nothing out**. In the middle,
-one row per commit — the graph, the subject with its refs as chips, author,
-date — and at the end of a row the two marks that are mogeung's: a blue dot
-for a commit that probably came from this session, and *read* once every hunk
-of it has been read. The columns have a header and share the pane's width,
-so they scale with it; drag a divider to move the line between two columns,
-and the shares are kept. Above the rows, the filter bar: *text or hash*, then
-Branch, User, Date and Paths. Enter runs the query; a hash selects that
-commit; `author:`, `path:` and `find:` in the box reach the same fields the
-dropdowns do. What is in force is named beneath the bar, with *clear* beside
-it. The default is every branch, which is what the graph needs; any text
-filter hides the graph, because lanes drawn over a subset would join dots
-that are not adjacent.
-
-On the right, the selected commit: its files as a tree with counts, and the
-details beneath — message, hash, author and email, date, the signature state,
-and the branches that contain it. **Click a file and its diff replaces the
-details**, read marks and all; *all files* is the root row; *details* brings
-the message back. `n` and `p` step through the hunks and across files. The
-strip's ⧉, `Ctrl+D`, or `Enter` on the file you already have selected opens
-that diff as a pane in the centre, where a long read has the window's height
-and can pop out into a window of its own; it closes like a file. `Ctrl+D` in
-the log opens the selected commit's whole diff the same way. A **double-click
-on a file** opens the file itself, as it stood at that commit, in the Code
-pane.
-
-**Local changes** is the working tree, grouped Conflicted · Staged · Unstaged
-· Untracked, with a *this session* toggle and the selected file's diff — or
-its three sides when it is conflicted. **Stash** lists what is shelved and
-shows one through the same inspector. **Console** is every git question this
-window asked, in order, with what came back — git's refusals in its own
-words, and the fetch report in full. **More** holds the reflog, the worktrees
-and the submodules.
-
-Three panes at the dock's usual height is a cramped IntelliJ, and IntelliJ
-knows it: **maximise** the dock with the button on its strip, `Alt+Shift+9`,
-or a double-click on the open tool's tab, and the centre folds away until
-you restore it.
-
-Right-click a commit for copy sha, copy subject, copy as patch, a link to the
-commit on GitHub or GitLab, and *mark* — two marked ends make a range diff.
-Right-click a branch for *compare with the current branch*, which shows what
-merging it would bring, from the merge base.
-
-The keyboard: `/` is the search box; `↑` `↓` or `j` `k` move the log; `Enter`
-steps into the file tree and `Esc` back; `n` `p` walk hunks; `Ctrl+T`
-fetches, and the header says when the last fetch was, because ahead/behind is
-only as true as that.
-
-**And it acts.** In Local changes the checkbox is the index: tick a file to
-stage it, untick to take it out of the next commit; *stage all* and *unstage
-all* sit on each group's header. The commit box on the right takes a message,
-*amend*, and *name this session in a trailer* — a `Mogeung-Session:` line
-that prompt-blame reads back — and commits only what is staged, never `-a`.
-Right-click a file for *discard*, which asks first and names every file,
-because git keeps no copy. A conflicted file's three-way view offers *take
-ours*, *take theirs* and *mark resolved*. Right-click a branch to *check it
-out*; if an agent is running in that worktree the window names it and asks,
-because git cannot see an agent reading files that silently change. The
-branch pane's `+` makes a new branch from HEAD. Stash has *Stash all*, and
-*pop* and *drop* on each entry. Every refusal comes back in git's own words.
-
-Nothing here reaches a remote but fetch. Pull and push are not in this
-window, by decision.
-
-## The git popups
-
-Everything above is a tool window you open, find a tab in, and click. `Alt+` `
-is the same verbs on one key: IntelliJ's **Git Operations** popup, numbered.
-
-| | |
-|---|---|
-| `1` | Commit… — the Local changes tab, cursor in the message box |
-| `2` | Commit File… — stages the selected file first |
-| `3` | Rollback… — names the file and asks, as discard always does |
-| `4` | Show History — the log, scoped to the selected file |
-| `5` | Annotate with Git Blame — the blame gutter, for that file |
-| `6` | Show Diff |
-| `7` | Branches… — the second popup |
-| `8` | Push… — **refuses**, and says why |
-| `9` `0` | Stash and unstash |
-
-Below the numbers: *Update Project (fetch)*, *Worktrees…*, *Copy Branch Name*
-and *Show Local History*, which here means the reflog — mogeung keeps no record
-of your edits, and git's own is the nearest true answer.
-
-A digit runs its entry; `↑` `↓` and `Enter` do the same; `Escape` closes. An
-entry with nothing to act on — *Rollback* with no file selected — **says so**
-rather than doing nothing, and the list stays up, because the answer is usually
-the entry below.
-
-`7`, or `Ctrl+Shift+` ` on its own, opens **Branches**: one box that searches
-branches *and* actions, the repository and the branch it is on, the branches you
-were last looking at, then Local, Remote and Tags grouped on `/`. `Enter` checks
-one out — behind the same warning the branch pane gives when an agent is live in
-that worktree. Right-click a branch for compare, its log, copy name and
-favourite. *New Branch…* makes one from HEAD; *Checkout Tag or Revision…* takes
-a tag or a sha and leaves HEAD detached, which is the one place in the window
-that does.
-
-Merge, rebase and pull-into are not there, for the reason push is not: this
-window writes locally and never publishes.

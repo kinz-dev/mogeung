@@ -2,7 +2,7 @@
 title: <feature name>
 status: draft
 updated: <YYYY-MM-DD>
-roadmap: <roadmap item id, e.g. R-B3>
+roadmap: [<roadmap item ids, e.g. R-B3, R-B4>]
 depends_on: [<assumption ids, e.g. A1, A6>]
 ---
 

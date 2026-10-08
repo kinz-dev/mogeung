@@ -2,7 +2,7 @@
 title: A model may read mogeung's evidence; the daemon holds it and the bytes stay on the machine
 status: superseded
 superseded_by: ADR-0031
-updated: 2026-09-23
+updated: 2026-10-08
 decided: 2026-08-28
 ---
 
@@ -199,6 +199,10 @@ too (`R-J104`), by [ADR-0025](0025-run-a-process-you-named-never-an-agent.md)'s
 and [ADR-0003](0003-observe-do-not-spawn.md)'s own amendments. The config
 editor (`R-J79`) is the one bind-read gate left, and is its own decision.
 
+
+## Amendment — 2026-10-08
+
+**Note.** The two amendments above were appended after this ADR had been superseded, so for a fortnight the rule in force lived on a dead ADR while [ADR-0031](0031-consent-to-a-named-host.md), the active one, stated the old clause 4. ADR-0031's amendment of this date carries the per-connection rule; the text above stays as the fuller argument.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

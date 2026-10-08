@@ -1,7 +1,7 @@
 ---
 title: How this project's documentation works
 status: active
-updated: 2026-08-24
+updated: 2026-10-08
 ---
 
 # The doc system
@@ -27,9 +27,9 @@ nobody said where to put things, so everyone defaults to `PLAN.md` at the root.
 | Folder | Holds | Lifecycle |
 |---|---|---|
 | `product/` | Thesis, roadmap, assumptions | Long-lived, edited freely |
-| `decisions/` | ADRs — why we chose what we chose | **Immutable.** Supersede, never edit |
+| `decisions/` | ADRs — why we chose what we chose | **Immutable.** Amend by dated section; supersede only a reversal |
 | `design/` | How the system works **today** | Rewritten freely; no history |
-| `features/` | Work in flight: spec, plan, notes | Archived on ship |
+| `features/` | Work in flight: spec, plan, notes | Moved to `archive/features/` on the last verdict |
 | `guide/` | User documentation | Follows released behaviour |
 | `agents/` | How agent skills should read this repo | Edited when the tooling changes |
 | `archive/` | Superseded docs | Never deleted, never read by default |
@@ -38,7 +38,12 @@ nobody said where to put things, so everyone defaults to `PLAN.md` at the root.
 The split between `design/` and `decisions/` is what stops rot. A design doc is
 always "how it works now" and may be rewritten wholesale. An ADR is never
 rewritten — the record of *why we were once wrong* is the most valuable thing in
-this repo, and editing destroys it.
+this repo, and editing destroys it. A decision that is **narrowed** gains an
+`## Amendment — YYYY-MM-DD` section at the end, with `updated:` bumped; only a
+decision genuinely **reversed** is superseded, by a new ADR and
+`status: superseded` plus `superseded_by:` on the old one. An ADR written for a
+decision the owner has not yet taken is `status: draft`
+([ADR-0022](decisions/0022-a-fast-forward-is-not-a-merge.md) is one).
 
 ## Frontmatter
 
@@ -47,7 +52,7 @@ Every doc starts with:
 ```yaml
 ---
 title: Attention ranking
-status: draft | active | superseded | archived
+status: draft | active | superseded | archived   # features add shipped; see features/README.md
 updated: 2026-07-25
 ---
 ```
@@ -68,14 +73,15 @@ Feature specs add `roadmap:` and `depends_on:`:
 
 ```yaml
 roadmap: R-A1
-depends_on: [A1, A4]
+depends_on: [A4]
 ```
 
 **Two id namespaces, and they used to collide.** Roadmap items are prefixed
 (`R-A1`, `R-B3`) and live in [product/roadmap.md](product/roadmap.md);
 assumptions are bare (`A1`, `A6`) and live in
 [product/assumptions.md](product/assumptions.md). The example above is a real
-pairing: `R-A1` is the format canary, and it rests on assumption `A1`. Those are
+pairing: `R-A1` is the format canary, and it rests on assumption `A4`, the
+formats being stable enough to depend on. Roadmap `A1` and assumption `A1` were
 unrelated things that happened to share a name until 2026-07-25.
 
 `check-docs.sh` verifies that every `R-…` reference in the docs resolves to an
@@ -99,15 +105,15 @@ roadmap entry
   → notes                       (surprises worth remembering)
   → ADR if a durable choice was made
   → update docs/design/
-  → move to docs/archive/, regenerate STATUS.md
+  → move to docs/archive/features/ on the last verdict, regenerate STATUS.md
 ```
 
 ## Features: start light
 
-A feature begins as **one file**: `docs/features/0007-collision-warning.md`,
-with `## Spec`, `## Plan`, `## Notes` sections. Split it into a folder
-(`0007-collision-warning/spec.md`, `plan.md`, `notes.md`) only when it actually
-gets big enough to need it.
+A feature begins as **one file**: `docs/features/NNNN-slug.md`, with
+`## Spec`, `## Plan`, `## Notes` sections. Split it into a folder
+(`NNNN-slug/spec.md`, `plan.md`, `notes.md`) only when it actually gets big
+enough to need it.
 
 Over-structure is still sprawl. Three near-empty files per feature is ceremony
 you will resent by week three.

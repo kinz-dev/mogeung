@@ -1,7 +1,7 @@
 ---
 title: Your judgements stay in the client
 status: active
-updated: 2026-08-07
+updated: 2026-10-08
 decided: 2026-08-07
 ---
 
@@ -104,3 +104,7 @@ annoy you — or, more likely first, **you lose labels to a cleared webview
 store**. The second is the cheaper failure to guard against and does not need
 this decision reversed: an export, or a mirror to `~/.mogeung/` the way notes
 already have, would answer it while leaving ownership where it is.
+
+## Amendment — 2026-10-08
+
+**The revisit condition fired, and the remedy it named shipped.** "Your labels live somewhere with no export and no backup" stopped being true with `R-J11` (export labels, tags and pins, ✅). The judgements still live in the client, machine-scoped, exactly as decided.

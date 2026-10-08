@@ -1,7 +1,7 @@
 ---
 title: Features in flight
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 ---
 
 # Features
@@ -18,39 +18,29 @@ Numbers come from [`../product/roadmap.md`](../product/roadmap.md) ordering, not
 from the roadmap item ids. A spec must name the roadmap item it implements and
 the assumptions it depends on.
 
-On ship: update `docs/design/`, write any ADRs, move the file to
-`docs/archive/`, and regenerate `STATUS.md`.
+## Status, and where a file lives
 
-**In flight**, both `shipped` and neither dogfooded — planned and built
-2026-08-03 from four screenshots of RustRover:
+A feature's `status:` follows its roadmap rows' glyphs, and nothing else:
 
-- [0027 — the right tool-window rail](0027-right-rail.md), and the worktree
-  tree moving into it (`R-B40`, `R-B41`)
-- [0028 — global search](0028-global-search.md), the rail's second tool window
-  (`R-F13`)
+| `status:` | Meaning | Lives in |
+|---|---|---|
+| `draft` | Spec written, not approved; nothing built | `docs/features/` |
+| `active` | Approved and being built; some rows blank | `docs/features/` |
+| `shipped` | Built and installed; at least one row still ⏳ | `docs/features/` |
+| `archived` | Every row ✅ (or 🗑 or struck): the dogfooding verdict is in | `docs/archive/features/` |
 
-They are one piece of work in two specs: the rail without a tool window in it
-is nothing, and the search panel has nowhere to live until the rail exists.
-The docking rule both depend on is
-[ADR-0017](../decisions/0017-the-rail-is-chrome.md).
+On the last verdict the file moves to `docs/archive/features/` with
+`status: archived`, every link to it is re-pointed, and `STATUS.md` is
+regenerated. The first such sweep was 2026-10-08, when 43 verified features
+moved in one go; before that, "archived on ship" was a rule nobody had followed
+and `STATUS.md` listed every feature ever written as in flight.
 
-**Planned, not built, on its own branch** — specified 2026-09-23:
+## What is in flight
 
-- [0047 — daemon federation](0047-daemon-federation/spec.md), every machine's
-  sessions in this window as if they were local (`R-I18`, `R-I21`–`R-I24`),
-  built on branch `daemon-federation`. Split into `spec.md` and `plan.md`
-  because it is four phases and several weeks.
-
-**Planned, not built** — specified 2026-09-10 from a screenshot of IntelliJ's
-Git tool window:
-
-- [0042 — the Git tool window](0042-git-tool-window.md), the gap analysis, the
-  design and the plan for `R-D26`–`R-D30`
-
-**Planned, not built** — specified 2026-09-17 from two screenshots of
-IntelliJ's Run popup and its Run/Debug Configurations dialog:
-
-- [0045 — run configurations](0045-run-configurations.md), the gap analysis,
-  the design and the plan for `R-N15`–`R-N26`: the Run tool window as tabbed
-  terminals, the configurations dialog, the `Alt+Shift+F10` popup, Gradle and
-  Cargo as kinds behind a compiled-in seam
+**`STATUS.md` is the generated list** — it reads every file in this folder, so
+a hand-kept copy here would only drift. As of 2026-10-08 the folder holds
+seven: [0045](0045-run-configurations.md) (`draft`, the next priority, awaiting
+approval), [0044](0044-more-than-one-repository.md) (`active`, `R-D35` open),
+and five `shipped` awaiting a verdict — [0038](0038-a-local-model.md),
+[0040](0040-a-connection-manager.md), [0046](0046-found-on-the-lan.md),
+[0048](0048-opencode-adapter.md), [0050](0050-prices-that-keep-up.md).

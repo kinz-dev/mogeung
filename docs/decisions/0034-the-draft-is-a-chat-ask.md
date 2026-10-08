@@ -1,7 +1,7 @@
 ---
 title: A model may draft the follow-up prompt; it still leaves only by the clipboard
 status: active
-updated: 2026-08-29
+updated: 2026-10-08
 decided: 2026-08-29
 supersedes: ADR-0008
 ---
@@ -174,6 +174,10 @@ to 5 above — the chat door, the daemon keeping nothing, the raw text one click
 away, the clipboard copying what is on screen, and the draft being asked for
 rather than automatic — are untouched.
 
+
+## Amendment — 2026-10-08
+
+**Clause 4's bind rule is per connection since 2026-09-23.** "Refused outright on a bind beyond loopback" and "a daemon bound beyond loopback will not take one at all" are narrowed to clients that are not on this machine; see [ADR-0031](0031-consent-to-a-named-host.md)'s amendment of this date. The draft, the copy and the fenced send are unchanged.
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an
 `## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A

@@ -1,7 +1,7 @@
 ---
 title: opencode adapter
-status: in-progress
-updated: 2026-09-23
+status: shipped
+updated: 2026-10-08
 roadmap: [R-I25]
 depends_on: [A4, A23]
 ---

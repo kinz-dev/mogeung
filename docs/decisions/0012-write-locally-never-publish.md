@@ -2,7 +2,7 @@
 title: mogeung writes to the repository, and never publishes
 status: superseded
 updated: 2026-08-01
-superseded_by: 0014
+superseded_by: ADR-0014
 decided: 2026-07-30
 ---
 
@@ -11,12 +11,12 @@ decided: 2026-07-30
 ## Context
 
 The Git pane reached reading parity with a commercial client
-([feature 0011](../features/0011-git-depth.md)) and stopped dead at the write
+([feature 0011](../archive/features/0011-git-depth.md)) and stopped dead at the write
 half. Five documents say so, and one of them says how to change it:
 
 > **Any write operation** — staging, committing, reverting, branching.
 > Permanently, unless a future ADR argues otherwise.
-> — [feature 0010](../features/0010-git-view.md)
+> — [feature 0010](../archive/features/0010-git-view.md)
 
 > Scope creep toward a git client is the real danger; the out-of-scope list is
 > the fence, and every "just add staging" impulse goes through an ADR or dies.

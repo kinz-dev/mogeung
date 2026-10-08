@@ -1,7 +1,7 @@
 ---
 title: Attach a terminal through tmux, never own one
 status: active
-updated: 2026-07-26
+updated: 2026-10-08
 decided: 2026-07-26
 supersedes: ADR-0002
 ---
@@ -135,6 +135,10 @@ to attach to a running session. That would remove the tmux dependency and the
 workflow change with it, which are the only two things anyone actually pays for
 here.
 
+
+## Amendment — 2026-10-08
+
+**Two things moved around this ADR and neither was recorded here.** First, the pane resolution it built — which tmux pane belongs to which session — became the delivery target of [ADR-0003](0003-observe-do-not-spawn.md)'s 2026-08-29 amendment: a human-confirmed one-shot send (`R-B54`) goes into exactly that pane. "mogeung also still types nothing" above remains true of this ADR's own mechanism, the attach, and is no longer true of the product; ADR-0008, cited as standing, is superseded by [ADR-0034](0034-the-draft-is-a-chat-ask.md). Second, the vendored egui terminal widget named under Consequences (`crates/egui-term`) was deleted with the egui client ([ADR-0020](0020-the-egui-client-is-retired.md)); the attach is rendered by xterm.js in the Tauri shell with the same argv (`desktop/src/lib/tmux.ts`). The decision is untouched: attach, never own.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

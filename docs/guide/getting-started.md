@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-09-24
+updated: 2026-10-08
 ---
 
 # Getting started
@@ -16,13 +16,14 @@ the manual route.
 
 ## What mogeung does
 
-It watches the Claude Code sessions **you** run and tells you which one needs
-you. It never starts, steers or stops an agent — you keep using `claude` exactly
-as you do today.
+It watches the agent sessions **you** run — Claude Code, Codex, Qwen Code,
+opencode — and tells you which one needs you. It never starts, steers or stops
+an agent — you keep using the CLI exactly as you do today.
 
 ## Requirements
 
-Rust 1.85+, `git`, Claude Code 2.1.x on `PATH`. macOS or Linux.
+Rust 1.85+, `git`, and at least one of the four CLIs on `PATH`; `tmux`, so a
+session can be hosted in a pane. macOS or Linux.
 
 The window additionally needs node 20+ and the system webview
 (`libwebkit2gtk-4.1-dev` on Linux) to build, since it is a Tauri application —
@@ -97,7 +98,7 @@ Run one in the directory you want the agent working in. Plain `claude`, `qwen`,
 rather than one that attaches, which is the usual reason an agent shows up
 correctly and the Terminal pane stays empty.
 
-The three are siblings on purpose rather than one script with a flag
+The five are siblings on purpose rather than one script with a flag
 ([ADR-0029](../decisions/0029-an-agent-cli-is-a-variant-not-a-plugin.md)): they differ in the
 binary and in how each CLI is told to stop asking, and that is easier to read
 than to abstract. Each skips approval prompts, because an agent blocked on a
@@ -105,7 +106,7 @@ prompt it never wrote to disk reads as *working* while it waits for you.
 `codexmo` is the one that stops short of its CLI's most dangerous flag: it uses
 `--ask-for-approval never --sandbox workspace-write` rather than
 `--dangerously-bypass-approvals-and-sandbox`, because that flag also turns off a
-**sandbox**, which neither of the other two CLIs has to give up. You get your
+**sandbox**, which none of the other CLIs has to give up. You get your
 usual Codex session minus the prompts. Ask for the full bypass and it wins:
 
 ```sh
@@ -128,18 +129,23 @@ own, so restarting the daemon underneath it is fine.
 ## Options
 
 ```
-mogeungd --listen 127.0.0.1:7717 --db <path> --poll-ms 1500
+mogeungd --listen 127.0.0.1:7717 --db <path> --poll-ms 1500   # mogeungd --help for the rest
 ```
 
-The window takes no flags: which daemon it talks to is a setting, `Alt+D`. In a
+`--notify`, `--push-url`, `--token`, `--ssh-target`, `--no-beacon`,
+`--allow-run` and the model flags are the ones you will meet; every flag has a
+`config.toml` twin except `--allow-run`. The window takes no flags: which
+daemon it talks to is a setting, the connection dot in the top bar. In a
 browser (`npm run dev`) `?url=ws://host:7717/ws` points one visit somewhere else.
 
 State lives in `~/.mogeung/mogeung.db`. Nothing is ever written to `~/.claude`.
 
 ## First five minutes
 
-1. Open two or three terminals and start `claude` in different repos.
-2. Watch the left panel. Whichever session is waiting for you sorts to the top.
+1. Open two or three terminals and start `yolomo` (or `codexmo`, `qwenmo`,
+   `opencodemo`) in different repos.
+2. Watch the Attention list. Whichever session is waiting for you sorts to the
+   top.
 3. Click one, open **Changes**, and read top-down — risk order is reading order.
 4. Tick hunks as you read them.
 

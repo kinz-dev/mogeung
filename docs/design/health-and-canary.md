@@ -5,6 +5,14 @@ updated: 2026-10-08
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
+  - crates/mogeung-core/src/pricing.rs
+  - crates/mogeungd/src/pricing_refresh.rs
+  - crates/mogeung-core/src/model.rs
+  - crates/mogeung-core/src/llmproxy.rs
+  - crates/mogeungd/src/codex.rs
+  - crates/mogeungd/src/qwen.rs
+  - crates/mogeungd/src/opencode.rs
+  - desktop/src/lib/agentHealth.ts
 ---
 
 # Health and the format canary
@@ -115,14 +123,18 @@ could never fire.
 
 ## Where it surfaces
 
-- **Top bar** — grey `health` button normally; amber `⚠ N unseen` when something
-  is urgent. Always present, because the failure it reports is silent.
+- **Status bar** — *reading everything it recognises* normally; amber *N
+  thing(s) it cannot see* when any alert is raised, with `Alt+h` opening the
+  window. The window counts every alert, urgent or not, where the core's
+  `Health::headline()` counts only urgent ones — a gap filed as `R-J127`.
+  Always present, because the failure it reports is silent.
 - **Health window** — alerts first, then counts, versions and limits.
 - **`GET /api/health`** — the same data, curl-able. Answering "is the board
   empty because nothing is happening, or because mogeung went blind?" should not
   require a window.
-- **`ServerMsg::Health`** — pushed after every scan, unsolicited. A client
-  should never have to ask whether what it is showing is complete.
+- **`ServerMsg::Health`** — pushed when it changed and on a 30 s heartbeat
+  (`R-J55`), unsolicited. A client should never have to ask whether what it is
+  showing is complete.
 
 ## The model row (`R-O1`, 2026-08-28)
 

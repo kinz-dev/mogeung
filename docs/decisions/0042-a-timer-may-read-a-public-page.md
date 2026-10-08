@@ -101,3 +101,7 @@ it unchanged, and if they do not, the difference is the decision. Also revisit
 if the pricing page publishes a machine-readable price list: reading a table
 written for people is the weak part of this, and a published list would
 remove it.
+
+## Amendment — 2026-10-08
+
+**One premise overstated.** "Every outbound connection mogeung makes has had a person behind it at the moment it happened" — the LAN beacon ([ADR-0039](0039-the-daemon-announces-itself-by-default.md)) has been sent every 15 s with nobody behind it since 2026-09-22. The premise holds for connections *beyond the LAN*, which is what this ADR is about; the beacon discloses presence to the segment and reads nothing.

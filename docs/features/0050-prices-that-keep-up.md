@@ -1,6 +1,6 @@
 ---
 title: Prices that keep up
-status: active
+status: shipped
 updated: 2026-10-08
 roadmap: R-J124
 depends_on: [A4, A49, A50]

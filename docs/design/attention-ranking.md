@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -22,15 +22,26 @@ you added, or one you were offered, says nothing about whether a session needs
 you. Recorded because `attention.rs` is covered by this document, so every
 change to that file asks the question — and the answer has been "no" each time.
 
+Checked again on 2026-10-01 and 2026-10-07, when `R-J115` gave `Session` its
+`artifacts` and `R-J120` its `custom_title`: each commit touched this file only
+to add the new field to the test fixture's `Session` literal. Neither is an
+input — a page a session published, or a name you gave it, says nothing about
+whether it needs you. `custom_title` pins `title`, which `label()` reads for
+the notifier and the window, and `rank` never reads a label.
+
 ## Reasons
 
-Evaluated in this order — the first match wins.
+Scored in this order. The order the code *evaluates* them in is stated below
+the table: snooze first, then `Failed`; for a live session `RateLimited`,
+`AwaitingPermission`, `AwaitingInput`, `Stalled`, `Running`; for an ended one
+`Idle` (reviewed), `Idle` (no changes), `NeedsReview`.
 
 | Reason | Badge | Score | Fires when |
 |---|---|---|---|
 | `AwaitingPermission` | `APPROVE` | 1100 | Alive, registry `idle`, **and a tool call has no result** |
 | `AwaitingInput` | `WAITING` | 1000 | Alive and the registry reports `idle` |
 | `Failed` | `FAILED` | 900 | An API error was recorded |
+| `RateLimited` | `LIMIT` | 850 | Alive and a rate limit was hit; cleared when the session moves again |
 | `NeedsReview` | `REVIEW` | 800 | Exited, changed files, not all read |
 | `Stalled` | `STALLED` | 700 | Alive and busy, silent ≥ `stall_secs` |
 | `Running` | `running` | 100 | Alive and busy, recently active |
@@ -42,7 +53,8 @@ responded, so it no longer needs you.
 
 **Snooze is checked before everything**, including failure. "Stop telling me
 about this one" has to mean it, or you would never trust it enough to use it.
-The row stays visible with a `ZZZ` badge; it just stops competing for the top.
+The row ranks `idle` with the detail *snoozed* and stays visible; the window
+marks it with a small clock and offers *Wake*.
 
 ### `APPROVE` vs `WAITING` (`R-B4`)
 
@@ -67,7 +79,8 @@ The gap between tiers is 100 and the tiebreak caps at 99, so **a session can
 never be promoted past a more urgent tier** no matter how long it has waited. A
 brand-new `FAILED` always outranks a three-day-old `REVIEW`. Pinned by a test.
 
-`waited` is time-since-idle for `AwaitingInput`, and session duration otherwise.
+`waited` is time-since-idle for `AwaitingInput` and `AwaitingPermission`, and
+session duration otherwise.
 
 ## Why `WAITING` is not a heuristic
 
@@ -111,7 +124,7 @@ ranking on evidence rather than on a flag has to do.
 
 ## Sessions from another machine (`R-I21`, 2026-09-23)
 
-A daemon that follows others ([feature 0047](../features/0047-daemon-federation/spec.md))
+A daemon that follows others ([feature 0047](../archive/features/0047-daemon-federation/spec.md))
 ranks **one board**: its own sessions and the ones it mirrors go through
 `attention::rank` together, in `AppState::rank_board`, so a peer's waiting
 session outranks a local idle one by the same rule two local ones would. No

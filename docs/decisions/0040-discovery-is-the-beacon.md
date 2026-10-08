@@ -1,7 +1,7 @@
 ---
 title: Discovery is the beacon; mDNS stays an advert
 status: active
-updated: 2026-09-22
+updated: 2026-10-08
 decided: 2026-09-22
 ---
 
@@ -140,3 +140,7 @@ it. At 60 % per datagram, three misses in a row happen every few minutes;
 with the burst of two and four misses they happen about once in a working
 day. `MISSES_BEFORE_GONE` is 4 — sixty seconds — and the burst of two stays.
 The fence in *Consequences* is unchanged, and so is *IPv4 only*.
+
+## Amendment — 2026-10-08
+
+**`discovery::Watcher` and `discovery::browse` did not retire with the listener.** The shell's listener landed (`R-I17`), and both live on in `crates/mogeungd/src/discovery.rs` for one caller: `--bin beacon`'s probe, which counts mDNS resolutions beside beacons so the measurement A44 rests on can be re-run. Nothing in the daemon or the window browses.

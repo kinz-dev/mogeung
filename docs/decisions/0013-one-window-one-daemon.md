@@ -1,7 +1,7 @@
 ---
 title: One window watches one daemon
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 decided: 2026-07-31
 ---
 
@@ -161,7 +161,7 @@ tagged with their origin, rank the merged board itself, and forward a
 session's commands to the daemon that owns it. The window still holds one
 socket to one daemon and computes nothing. `R-I9`'s aggregating window stays
 refused; `R-I18` is the federation this ADR said to reconsider first. Built on
-branch `daemon-federation` to [feature 0047](../features/0047-daemon-federation/spec.md).
+branch `daemon-federation` to [feature 0047](../archive/features/0047-daemon-federation/spec.md).
 
 **The conditions this ADR set for reopening, one by one:**
 
@@ -218,7 +218,7 @@ branch `daemon-federation` to [feature 0047](../features/0047-daemon-federation/
 from A24's verdict to a per-follow consent.** Both at the user's direction —
 *"finish all the phases from A to D for the complete daemon-federation
 feature"* — and both recorded here because each departs from what the
-amendment above and [feature 0047](../features/0047-daemon-federation/spec.md)
+amendment above and [feature 0047](../archive/features/0047-daemon-federation/spec.md)
 said would happen. What this replaces, and what it does not:
 
 - **A45 still decides whether federation stays.** The plan was to build phase
@@ -256,6 +256,10 @@ federation protocol is refused with the protocol it needs; staleness is
 measured from when a peer was *last heard*, not from when its socket is
 finally declared dead.
 
+
+## Amendment — 2026-10-08
+
+**Pointers.** The two code links under Context (`crates/mogeung-ui/src/term.rs`, `prefs.rs`) name the egui client deleted by [ADR-0020](0020-the-egui-client-is-retired.md); the React client's equivalents are `desktop/src/lib/tmux.ts` and `desktop/src/store/prefs.ts`. The `daemon-federation` branch named in the 2026-09-23 amendment merged to `main` the same day (PR #6, `58dd753`).
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

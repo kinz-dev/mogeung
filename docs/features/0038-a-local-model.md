@@ -1,7 +1,7 @@
 ---
 title: A local model beside the agents
-status: in-progress
-updated: 2026-08-29
+status: shipped
+updated: 2026-10-08
 roadmap: [R-O1, R-O2, R-O3, R-O4, R-O5, R-O6, R-O7, R-O8, R-O9, R-O10, R-O11, R-O12]
 depends_on: [A3, A4, A29, A35, A36, A37, A38, A40, A41]
 ---
@@ -66,7 +66,7 @@ a question about a `sed` flag, a Rust lifetime, a git incantation. mogeung is
 the window that is open, and the assistant is somewhere else.
 
 **4. Search finds the words you remember, not the thing you meant.**
-[Feature 0017](0017-cross-session.md) put semantic search out of scope with a
+[Feature 0017](../archive/features/0017-cross-session.md) put semantic search out of scope with a
 reason and a sequence: *"Semantic/embedding search — honest substring/token
 search first."* Substring search shipped in 2026-07 and has been in daily use
 since, so the condition attached to that refusal is met. The sharpest cost of
@@ -86,7 +86,7 @@ sentence an agent can act on is still done by hand, in the window, every time.
 | [A35](../product/assumptions.md) | `UNTESTED` | The pillar's premise: a local model's reading of mogeung's own evidence is worth the screen space. `R-O2` is its test and it comes first |
 | [A36](../product/assumptions.md) | `UNTESTED` | `R-O4` rests on the rationale for a change being in the transcript and reachable from the line. The links exist (`R-F2`, `R-F9`); that they answer the question is the bet |
 | [A37](../product/assumptions.md) | `UNTESTED` | `R-O5`, and it is [A27](../product/assumptions.md)'s shape exactly — a text box in mogeung competing with a better one already open beside it. A27 is `AT RISK`, which is the precedent to read before building this |
-| [A40](../product/assumptions.md) | `UNTESTED` | `R-O12`'s corpus half: that the commands **agents** ran are worth completing from, more than your own shell history is. Its harness comes first, like the three above it |
+| [A40](../product/assumptions.md) | `REFUTED` (2026-08-29: the harness measured 0 of 57 and that half was removed before it was drawn) | `R-O12`'s corpus half: that the commands **agents** ran are worth completing from, more than your own shell history is. Its harness comes first, like the three above it |
 | [A41](../product/assumptions.md) | `UNTESTED` | `R-O12`'s drafted half: that a model writing a command from a sentence beats typing it, **with a coding agent already open beside you**. `A37`'s shape, with a stronger incumbent still |
 | [A38](../product/assumptions.md) | `UNTESTED` | `R-O6`: that embeddings find what substring search missed **often enough to earn a second list** |
 | [A3](../product/assumptions.md) | `UNTESTED` | `R-O3` is the first real attempt to settle it, in the direction [pillar K](../product/roadmap.md#k-explicitly-not) permits |

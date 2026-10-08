@@ -1,10 +1,12 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-09-25
+updated: 2026-10-08
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
+  - crates/mogeungd/src/send.rs
+  - crates/mogeungd/src/env.rs
 ---
 
 # Cross-session signals
@@ -26,7 +28,7 @@ covers:
 > the file manager. They are the same family and they teach each other, so
 > they are described together below.
 >
-> **Notes and their tasks are a fourth resident** and belong to
+> **Notes and their tasks are another resident** and belong to
 > [data-model.md](data-model.md) and
 > [ADR-0015](../decisions/0015-markdown-is-the-truth.md): `save_note`,
 > `set_task` and the mirror all live in `state.rs` too, and none of them reaches
@@ -35,7 +37,7 @@ covers:
 > exact coincidence the paragraph above exists to name.
 >
 > The **file surface** — which roots a session may be read through, and the
-> guard around them — is a third resident of `state.rs` and belongs to
+> guard around them — is another resident of `state.rs` and belongs to
 > [architecture.md](architecture.md), where `R-J40`'s workspaces are described.
 > Checked when that landed rather than assumed: none of the signals here reads
 > a root. `R-J39`'s discovery pass, which suggests folders from what a session
@@ -161,8 +163,8 @@ re-announce every waiting session.
 
 `Notifier::diff` is pure — it returns what to say and updates its own memory,
 but sends nothing. That keeps the interesting question (*when do we speak?*)
-testable without a desktop or a network. Delivery is `osascript` for banners and
-`curl` for push: one process on a rare event, and no HTTP-client dependency that
+testable without a desktop or a network. Delivery is `osascript` for banners on
+macOS and `notify-send` on Linux, and `curl` for push: one process on a rare event, and no HTTP-client dependency that
 could poison the async runtime.
 
 Off unless asked for (`--notify`, `--push-url`). A tool that starts posting
@@ -503,7 +505,8 @@ What `state.rs` contributes is the target and the gate:
   computed for sending, which is the point — a second way of working out where a
   session lives would be a second way of being wrong about it;
 - **the gate** is `send_allowed`, set once at start-up from
-  `send::allowed(&addr)` and read per request. Its own flag rather than
+  `send::allowed(&addr)` and read per request — or, since `R-J104`, the asking
+  socket being on this machine, which passes whatever the bind. Its own flag rather than
   `writes_allowed` or `config_editable`: those accept a token or describe
   outbound URLs, and this door takes neither. A shared secret on a LAN is not a
   person at this machine.
@@ -536,8 +539,9 @@ Recorded rather than left implicit, because `state.rs` is covered by this
 document — so every change to that file asks whether the signals moved, and the
 answer here is no. The same note in `attention-ranking.md` exists for the same
 reason. When a model *does* start feeding a signal, it will be
-[pillar `O`](../product/roadmap.md)'s own rows saying so, and ADR-0030 clause 5
-is the standing rule that its output gets a column of its own rather than being
+[pillar `O`](../product/roadmap.md)'s own rows saying so, and
+[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 5, carried
+forward from ADR-0030, is the standing rule that its output gets a column of its own rather than being
 merged into one of these.
 
 ## The insight layer (2026-07-29)
@@ -560,10 +564,12 @@ signals above reads it; noted so the staleness check stays honest.*
 
 ## What of `state.rs` this covers
 
-`state.rs` is also the daemon's git wrappers and its handoffs to other
-programs — `open_folder`, and since `R-J92` (2026-09-11) `open_in_intellij`
-and the probe beside it — and those are described by
-[wire-protocol.md](wire-protocol.md), not here. This document covers the
+`state.rs` is also the daemon's git wrappers, described by
+[wire-protocol.md](wire-protocol.md) and
+[review-checkpointing.md](review-checkpointing.md), and its handoffs to other
+programs: `open_folder` is described above (*Handing a folder to the desktop*),
+and `open_in_intellij` with the probe beside it (`R-J92`, 2026-09-11) by
+wire-protocol.md. This document covers the
 scan loop's signals, attribution and the queue's inputs; a change to a
 handoff is not a change to a signal.
 
@@ -580,3 +586,20 @@ Checked again on 2026-09-21, when `R-D34` gave every git wrapper an optional
 filter were not touched by that commit; and `git_blame` passes `None` on
 purpose, so blame follows the file the session is reading rather than the
 checkout a Git window is pointed at. Nothing here follows the picker.
+
+Checked again on 2026-10-08, for three commits that touched `state.rs` without
+touching a signal. `R-J115` (2026-10-01) added `merge_artifacts`, the
+`artifacts` arm of the fold and `backfill_artifacts`; `R-J120` (2026-10-07)
+added the `custom_title` arm, which pins the title against the generated one,
+and `backfill_custom_titles`. Both fold a session's own transcript and belong
+to [data-model.md](data-model.md#repair) and
+[claude-code-formats.md](claude-code-formats.md); each also joined
+`significant_change`'s loud side, which is
+[architecture.md's](architecture.md#what-a-fold-compares-2026-08-26) list, not
+this one. The one thing a signal says differently: `Notifier::diff` names a
+session by `label()`, and a `/rename` now wins that name. `R-J124`
+(2026-10-08) gave `AppState` a `pricing` record, an `unpriced` list and a
+`pricing_kick`, and `health()` folds them into `UnpricedModel` and
+`PricesDiffer` — the price table's canary,
+[health-and-canary.md](health-and-canary.md)'s. Nothing here reads a collision,
+an open tool, a tool history or a snooze.

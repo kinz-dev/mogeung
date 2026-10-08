@@ -152,7 +152,7 @@ a time.
 
 **mogeung cannot see the session's screen.** Permission prompts, multiple-choice
 questions and plan-mode approval are TUI rendering and never reach the
-transcript ([feature 0003](../features/0003-attached-terminal.md) is founded on
+transcript ([feature 0003](../archive/features/0003-attached-terminal.md) is founded on
 that fact). So an Enter delivered on a human's behalf can land on a menu nobody
 read. The confirmation is the mitigation and not a guarantee — it says *what* is
 being sent and *where*, and it cannot say what the screen is showing. That

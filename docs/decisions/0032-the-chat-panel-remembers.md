@@ -1,7 +1,7 @@
 ---
 title: The chat panel keeps its conversations, and the daemon is where they live
 status: active
-updated: 2026-08-28
+updated: 2026-10-08
 decided: 2026-08-28
 ---
 
@@ -132,6 +132,10 @@ are in, as it always did.
   asked about X* is a better question than *scan the titles*, and the list
   becomes a fallback rather than the way in.
 
+
+## Amendment — 2026-10-08
+
+**Clause 4's bind rule is per connection since 2026-09-23.** "ADR-0031 clause 4 refuses `model_chat` on a bind beyond loopback" reads now: refused to a client that is not on this machine, whatever the bind. [ADR-0031](0031-consent-to-a-named-host.md)'s amendment of this date records the rule; nothing about what the panel keeps changes.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

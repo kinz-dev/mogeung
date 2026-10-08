@@ -1,7 +1,7 @@
 ---
 title: Use git for diffs, not Claude Code's file-history
 status: active
-updated: 2026-07-25
+updated: 2026-10-08
 decided: 2026-07-25
 ---
 
@@ -41,3 +41,7 @@ exactly what an agent creating new modules produces.
 - Two sessions editing the *same* file both show it. Git cannot separate them
   and neither can we ([A8](../product/assumptions.md)).
 - Revisit if `file-history` gains a documented index — it would fix all four.
+
+## Amendment — 2026-10-08
+
+**`D7` shipped.** "Committed work disappears from the diff as the base moves with HEAD. Roadmap `D7`" is answered: `R-D7`, commit-aware diffing with the base pinned to the last commit before the session started, is ✅, and `D7` is the pre-2026-07-25 spelling of `R-D7`. The consequence above is historical.

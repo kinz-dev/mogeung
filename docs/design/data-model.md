@@ -1,12 +1,13 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-07
+updated: 2026-10-08
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
   - crates/mogeung-core/src/transcript.rs
   - crates/mogeungd/src/store.rs
+  - crates/mogeungd/src/notes.rs
 ---
 
 # Data model
@@ -15,7 +16,7 @@ Deliberately small. Everything in the UI is a view over these.
 
 | Type | What it is |
 |---|---|
-| `Session` | An observed Claude Code session. Identified by **Claude Code's own** session id — mogeung mints no identifiers |
+| `Session` | An observed agent session from any of the four CLIs (`SessionSource`). Identified by **the CLI's own** session id — mogeung mints no identifiers |
 | `LiveStatus` | `Busy` / `Idle` / `Unknown`, from the live registry |
 | `TranscriptEvent` | One typed event with a per-session monotonic `seq` |
 | `Change` | A session's diff: ordered `FileChange`s |
@@ -51,8 +52,9 @@ left as it was written.
 SQLite at `~/.mogeung/mogeung.db`:
 
 - `sessions(id, created_at, json)` — the whole struct as a JSON blob
-- `events(session_id, seq, json)`
-- `reviewed(session_id, anchor)` — which hunks you have read
+- `events(run_id, seq, json)` — the column is still called `run_id`, a v0.1 name
+  that survived; it holds the session id
+- `reviewed(run_id, anchor)` — which hunks you have read; the same column name
 - `signals(repo, command, last_run)` — the per-repo signal command (`R-E2`)
 - `notes(id, body, created, updated, session_id, seq, repo)` — the user's own
   writing (`R-B35`)
@@ -306,7 +308,7 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
 ## Session fields added 2026-09-23
 
 - `origin` — the machine a session runs on, when it is not this daemon's own
-  (`R-I21`, [feature 0047](../features/0047-daemon-federation/spec.md)):
+  (`R-I21`, [feature 0047](../archive/features/0047-daemon-federation/spec.md)):
   `machine_id`, `host`, the `ssh_target` its own daemon declared, and `stale`
   once that daemon has gone quiet. **Set only on a mirrored session**, whose id
   is then `@<machine>:<id>` — so it is never written to the store: mirrored
@@ -327,10 +329,6 @@ All `#[serde(default)]`, so rows persisted by older builds still load:
   claude.ai hands out is a 22-character base58 form of the same 128 bits and a
   client should not have to know that. Defaulted and skipped when empty. A page
   that leaves the CLI's watch list stays here — it has not left claude.ai.
-
-The store also grew a `signals` table (per-repo signal command and its
-last run, `R-E2`) — a real table rather than a blob because it is keyed
-by repo, not session.
 
 ## Session fields added 2026-10-07
 

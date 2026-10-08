@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 ---
 
 # Watching a remote machine
@@ -41,7 +41,7 @@ terminal, launching one. Those refuse rather than acting on the wrong box.
 ## Choosing a daemon from the window
 
 The flags below are how you reach a daemon the first time. After that, use the
-window: click the connection dot in the top bar, or press `Alt+D`.
+window: click the connection dot in the top bar.
 
 **To move between saved daemons, use the name beside the dot.** It opens a
 list of every saved daemon with its state, checked when the list opens:
@@ -79,8 +79,7 @@ daemon who it is without switching**, and answers with its host, version and
 queue length; a refused token and an unreachable host look the same to a
 socket, and the line says so. Each entry has a name, a URL and an optional token. The row you last
 connected to is marked *last used*, but **no launch dials a remote for you** —
-you pick it, per session. `--url` on the command line still points that run
-wherever you say.
+you pick it, per session.
 
 > This changed on 2026-07-31. Until then the last-used connection was reopened
 > automatically, which was sticky in both directions: a window started at home
@@ -140,7 +139,8 @@ tolerates a version skew in either direction for optional fields, but not for
 new messages.
 
 **The window takes no command-line flags.** It is a Tauri application, and where
-it dials is a setting rather than an argument: `Alt+D`, then Connect. In the
+it dials is a setting rather than an argument: the connection dot, then
+Connect. In the
 browser (`npm run dev`, or any build served over http) `?url=` on the page does
 the same thing for one visit, which is how you point a second tab at a second
 daemon. The `mogeung --url …` invocations in older notes were the egui window's,
@@ -223,9 +223,6 @@ token = "…"
 ssh_target = "you@devbox"
 ```
 
-Add `--advertise` if you want the window's network scan to find it. Off by
-default, deliberately — see "Choosing a daemon from the window" above.
-
 Copy the token it printed. Leave `--token` off and the daemon will not start —
 it prints what to do instead and exits. Set it and the daemon still warns at
 startup that the token is travelling in clear text; that warning is not
@@ -234,8 +231,9 @@ boilerplate.
 There is no `--insecure`. If you want a listening daemon with no token, the
 answer is Route A: bind loopback and let ssh carry it.
 
-**On your laptop:** `Alt+D` → **Add**, name it, URL `ws://devbox:7717/ws`, paste
-the token, Save, Connect.
+**On your laptop:** the connection dot → **Add** (or **Add** on the daemon's
+row under *Found on your LAN*), name it, URL `ws://devbox:7717/ws`, paste the
+token, Save, Connect.
 
 The token rides the WebSocket URL as `?token=…`, because a browser socket
 cannot carry a custom header. Over HTTP the window sends
@@ -254,8 +252,9 @@ listen = "0.0.0.0:7717"
 token  = "…"
 # how a client reaches this machine for terminal panes (R-I6)
 ssh_target = "dev@devbox"
-# announce on the local network so the window's scan finds it (R-I8)
-advertise = true
+# the beacon that fills other windows' "Found on your LAN" is on by default;
+# `beacon = false` silences it. `advertise = true` adds an mDNS record for
+# other tools' browsers; nothing of mogeung's reads it (ADR-0040)
 ```
 
 Then the dev box is just `mogeungd`. Set the file's permissions to `600` — it
@@ -283,7 +282,7 @@ mogeung.example.com {
 }
 ```
 
-Then point the window at the proxy — `Alt+D` → **Add**, with
+Then point the window at the proxy — the connection dot → **Add**, with
 `wss://mogeung.example.com/ws` and the token.
 
 Keep the token. The proxy encrypts the path; it does not decide who may use it,
@@ -345,7 +344,7 @@ agents run on two or three machines, **follow** them instead: this machine's
 daemon connects to each one you follow, and their sessions join your
 Attention list — ranked with yours by one ranking, grouped under their
 machine, this machine first, each row marked **on HOST**.
-[Feature 0047](../features/0047-daemon-federation/spec.md).
+[Feature 0047](../archive/features/0047-daemon-federation/spec.md).
 
 1. Save the other machine's daemon as a connection with its token, as for
    switching — the LAN list's **add** is the quickest way.
@@ -451,21 +450,22 @@ which machine to run that on.
 
 ## Troubleshooting
 
-**Scan finds nothing.** In order of likelihood: the daemon was not started with
-`--advertise`; its `--listen` is loopback, which refuses to advertise because
-nobody could reach it; a firewall is blocking the port (macOS prompts on first
-bind — a dismissed prompt looks exactly like a network problem); the two
-machines are on different subnets or a guest VLAN; or the network drops
-multicast between hosts, which many do.
+***Found on your LAN* lists nothing.** In order of likelihood: the daemon was
+started with `--no-beacon` or `beacon = false`; a firewall is blocking udp/7717
+(macOS prompts on first bind — a dismissed prompt looks exactly like a network
+problem); the two machines are on different subnets or a guest VLAN, which a
+directed broadcast does not cross; or you are in a browser tab, which cannot
+listen. A loopback-bound daemon *is* listed, as *on its own machine only*.
 
 To tell a silent daemon apart from a silent network, ask the protocol directly
 rather than through the UI:
 
 ```sh
-cargo run -p mogeungd --example browse_probe
+cargo run -q -p mogeungd --bin beacon -- listen     # on the laptop: what arrives?
+cargo run -q -p mogeungd --bin beacon               # on the dev box: send
 ```
 
-Same code the Scan button runs, with nothing else in the way.
+Same codec the daemon and the window use, with nothing else in the way.
 
 **"refusing to listen on … with no token."** Working as intended: a bind beyond
 loopback needs `--token`. It applies to a daemon the *window* is hosting too —
@@ -481,10 +481,6 @@ $SHELL -lc "command -v tmux"'` answers both in one go.
 
 **"could not bind — is a daemon already running?"** on the dev box. One already
 is. That is the design: whoever wins the bind is the daemon. Attach to it.
-
-**The window started its own daemon instead of attaching.** You used `--addr`
-where you wanted `--url`. `--addr` races for the local bind first; `--url` never
-starts a daemon, which is what you want when the daemon is elsewhere.
 
 **Connected, but the board is empty.** The daemon warns at startup when the
 machine has no transcripts at all — check its log for *"is Claude Code installed

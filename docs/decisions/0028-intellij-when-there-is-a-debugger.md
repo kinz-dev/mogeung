@@ -1,7 +1,7 @@
 ---
 title: IntelliJ's checked-in configurations are taken up, and wait for the debugger
 status: active
-updated: 2026-08-20
+updated: 2026-10-08
 decided: 2026-08-20
 ---
 
@@ -150,6 +150,10 @@ them runnable.**
   long way in eleven days on one machine, and one machine on one day is exactly
   what ADR-0026 warned against trusting.
 
+
+## Amendment — 2026-10-08
+
+**The sequencing was reversed by feature 0045.** "Nothing is built until `R-N9` lands" placed IntelliJ's checked-in files behind the debugger. The run rework specified 2026-09-17 and made the next priority on 2026-10-03 ([feature 0045](../features/0045-run-configurations.md)) reads them as its fifth stage (`R-N23`), before the debugger (`R-N9`–`R-N11`, its seventh): the reader is useful to Run on its own, and the debugger no longer gates it. Everything else here stands — `workspace.xml` deferred, dead rows not listed.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

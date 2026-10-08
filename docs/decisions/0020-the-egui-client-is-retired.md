@@ -1,7 +1,7 @@
 ---
 title: The egui client is retired, and its code is deleted
 status: active
-updated: 2026-08-05
+updated: 2026-10-08
 decided: 2026-08-05
 ---
 
@@ -108,6 +108,10 @@ where webkit is unavailable, or a remote box where only a terminal is possible.
 That is not an argument for restoring egui; it is an argument for a client with
 *fewer* requirements than either, against the same unchanged protocol.
 
+
+## Amendment — 2026-10-08
+
+**Two sentences overtaken.** "`scripts/install.sh` stops installing a window" lasted until `R-J43` (2026-09-06): the script builds and installs the Tauri window again, as a `.deb` on Linux, and [ADR-0041](0041-the-window-updates-itself-through-the-os.md) updates it in place. "`R-I12` — move this state into the daemon — is the honest fix and is now the *only* fix" was answered *no* by [ADR-0023](0023-judgements-stay-in-the-client.md) two days later; the exposure it named was closed instead by `R-J11`, an export of labels, tags and pins.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

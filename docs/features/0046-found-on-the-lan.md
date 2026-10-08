@@ -1,7 +1,7 @@
 ---
 title: Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window
-status: draft
-updated: 2026-09-23
+status: shipped
+updated: 2026-10-08
 roadmap: [R-I17]
 depends_on: [A44, A24]
 ---
@@ -54,9 +54,9 @@ streams"*, which is exactly the loss the ask names.
 
 - **A44** — *a UDP datagram to the subnet's directed broadcast address crosses
   the Orbi mesh reliably enough for a beacon every 15 s, where mDNS multicast
-  may not* — `UNTESTED`. **The first work is to test it, not to build.** Phase 0
-  below is that test, and its verdict decides whether phase 1 is a beacon or a
-  port of the browse that already exists.
+  may not* — `UNTESTED` when this was written, and **`SUPPORTED` on 2026-09-22**
+  by phase 0 below, which ran before anything was built and decided that phase
+  1 is a beacon rather than a port of the browse that already existed.
 - **A24** — *a read-only daemon is safe to reach over a trusted network with a
   shared token, without TLS* — `UNTESTED`, unchanged by phases 0 and 1: nothing
   new crosses the wire that a token does not already gate. **Phase 2 deepens
@@ -109,7 +109,7 @@ streams"*, which is exactly the loss the ask names.
 
 **Phase 2 — remote sessions in this window** (`R-I18`; the ask's *Day 2*)
 
-> **Moved 2026-09-23 to [feature 0047](0047-daemon-federation/spec.md)**, its own spec
+> **Moved 2026-09-23 to [feature 0047](../archive/features/0047-daemon-federation/spec.md)**, its own spec
 > and plan on branch `daemon-federation`, once it was chosen and costed. The lines
 > below are kept as they were first written; 0047 is the one that is current.
 

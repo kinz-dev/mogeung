@@ -1,13 +1,13 @@
 ---
 title: Issue tracker for the engineering skills
 status: active
-updated: 2026-08-24
+updated: 2026-10-08
 ---
 
 # Issue tracker: the roadmap and the feature docs
 
-mogeung does not use GitHub Issues. None has ever been filed, and the repo has
-a remote only to hold the code. Work lives in two files in this tree, and the
+mogeung does not use GitHub Issues. None has ever been filed; the repo's remote
+holds the code and the occasional self-merged pull request for multi-day work. Work lives in two files in this tree, and the
 engineering skills read and write there:
 
 - **`docs/product/roadmap.md`** — the ranked backlog. One table row per item,
@@ -32,8 +32,9 @@ Read [the doc system's rules](../README.md) before writing to either.
   [`docs/product/assumptions.md`](../product/assumptions.md).
 - **Comment on a ticket** — append to the feature doc's `## Notes`.
 - **Close** — set the roadmap row's status glyph and the feature doc's
-  `status:`, then move the doc to `docs/archive/` and run
-  `./scripts/gen-status.sh`.
+  `status:`; when every row of a feature is ✅, move the doc to
+  `docs/archive/features/` (re-pointing the links to it) and run
+  `./scripts/gen-status.sh`. See [features/README.md](../features/README.md).
 
 Every write here is a doc change, so **`./scripts/check-docs.sh` must pass
 before handing back.** It is not optional and it needs no network.
@@ -65,4 +66,6 @@ that ceremony.
 
 ## Pull requests as a request surface
 
-**No.** This is a solo repo and commits land straight on `main`.
+**Usually not.** This is a solo repo and commits land straight on `main`; a
+multi-day feature may ride a branch and a self-merged pull request, as
+federation did (PR #6).

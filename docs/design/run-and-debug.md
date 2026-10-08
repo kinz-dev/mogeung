@@ -14,7 +14,7 @@ covers:
 # Run and debug
 
 Where a run configuration comes from, and what makes one safe to name over a
-socket. The *why* is [feature 0035](../features/0035-run-and-debug.md);
+socket. The *why* is [feature 0035](../archive/features/0035-run-and-debug.md);
 [ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) and
 [ADR-0026](../decisions/0026-other-peoples-run-configurations.md) are the
 decisions this implements.

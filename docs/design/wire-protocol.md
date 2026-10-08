@@ -8,6 +8,14 @@ covers:
   - crates/mogeung-core/src/pricing.rs
   - crates/mogeung-core/src/usage.rs
   - crates/mogeungd/src/api.rs
+  - crates/mogeungd/src/server.rs
+  - crates/mogeung-core/src/config.rs
+  - crates/mogeungd/src/scratch.rs
+  - crates/mogeungd/src/notes.rs
+  - crates/mogeungd/src/model.rs
+  - crates/mogeungd/src/embed.rs
+  - crates/mogeungd/src/guide.rs
+  - crates/mogeungd/src/why.rs
 ---
 
 # Wire protocol
@@ -77,6 +85,12 @@ client builds the text and puts it on your clipboard, and you paste it
 `GitRefsInfo` · `GitStashList` · `GitStashDiff` · `GitSubmoduleList` ·
 `GitRangeDiff` · `GitFileAtRevContent` · `GitReflogList` ·
 `GitWorktreeList` · `GitConflictStages` · `Error`
+
+That is the 2026-07 core. The families added since — kit, notes, tasks,
+scratch, runs, the model, the reading guide, the similar list, chat history,
+`FailureClusters`, `Runs`, `SentToSession`, identity and federation — are
+described in their own sections below, and `wire.rs` is the complete list
+(67 `ServerMsg` variants and 102 `ClientMsg` as of 2026-10-08).
 
 **The periodic scan is change-gated; a request never is.** `Queue`, `Health`
 and the diff messages from the scan loop are sent only when their content
@@ -236,7 +250,7 @@ Two properties hold for every one of them:
 - **A dispatch-level guard**, not a per-verb check, refuses any write unless
   the bind is loopback or a token was presented (`A24`). The write family is
   enumerated in one function, so omitting a new verb from it is a visible gap
-  in a list of three rather than a missing line in a 45-arm match. It is
+  in a list of thirteen rather than a missing line in a hundred-arm match. It is
   deliberately redundant with `server::admit`, which refuses to *start* a
   daemon that could reach it: `admit` guards the binary, this guards the
   router, and the router is what a test or an embedding constructs.
@@ -255,7 +269,7 @@ stdout otherwise, because git splits refusals across both streams and the
 commonest of all, `commit`'s "nothing to commit, working tree clean", arrives
 on stdout with a non-zero exit. A paraphrase would throw away
 the list of files and the hint that make git's own refusals actionable. See
-[feature 0025](../features/0025-git-write-local.md).
+[feature 0025](../archive/features/0025-git-write-local.md).
 
 ## Memory and skills (`R-F14`, `R-F15`)
 
@@ -486,8 +500,8 @@ else names a thing the daemon already has — a session, a config id, a path, a
 query — which is the discipline
 [ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) clause 1
 set and the reason a client cannot make this daemon do something arbitrary.
-[ADR-0030](../decisions/0030-a-model-reads-the-evidence.md) clause 4 names this
-as the exception and pays for it at the door: the chat is refused to any
+[ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4 (carried
+forward from ADR-0030) names this as the exception and pays for it at the door: the chat is refused to any
 client **not on this machine** and there is **no flag** that opens it, because a
 daemon anyone can reach must not become a general-purpose LLM proxy. Until
 2026-09-23 that was read from the bind — `chat_allowed` false on any
@@ -514,7 +528,7 @@ three without being written again. What tells them apart is the client's own
 request id, which is how a client already tells two questions in flight apart.
 
 **`about` sends ids and a question, never evidence.** The daemon holds the
-transcripts (ADR-0030 clause 1), so it does the retrieving: the turns leading up
+transcripts (ADR-0031 clause 1, carried forward from ADR-0030), so it does the retrieving: the turns leading up
 to the last edit of that file, `--bin why`'s own shape and its own count of six.
 A client could not send the turns if it wanted to — a window may be watching
 another machine's sessions — and one that could would be sending an editable
@@ -779,7 +793,7 @@ different times. Both directions are pinned by
 
 ## Following other daemons (`R-I21`–`R-I24`, 2026-09-23)
 
-[Feature 0047](../features/0047-daemon-federation/spec.md). A daemon may
+[Feature 0047](../archive/features/0047-daemon-federation/spec.md). A daemon may
 **follow** others: it holds a socket to each, mirrors their sessions onto its
 own board, and forwards commands about a mirrored session to the daemon that
 owns it. The window still holds one socket and computes nothing.
@@ -875,8 +889,8 @@ Two things this still does *not* do, tracked under `R-I10`:
   ([A24](../product/assumptions.md) is the bet: trusted network, no TLS until
   the bet fails).
 
-  What changed on 2026-07-31 is the *client* half: both clients are now built
-  with `rustls` and can dial `wss://`, so putting a TLS-terminating reverse
+  What changed on 2026-07-31 is the *client* half: the tray is built with
+  `rustls` and the window's webview speaks TLS natively, so both dial `wss://`, so putting a TLS-terminating reverse
   proxy in front of the daemon works. That is the recommended way to get
   encryption without the daemon growing certificate handling, key rotation and
   a renewal story it has no business owning.
@@ -884,11 +898,10 @@ Two things this still does *not* do, tracked under `R-I10`:
   **The trap this walked into is worth remembering.** Enabling the
   `tokio-tungstenite` TLS feature alone left rustls with no crypto provider
   selected — which does not fail the build. It panics on the first TLS
-  connection, inside the network thread. So both binaries name the provider
-  explicitly (`ring`) at start-up, and
-  `the_window_speaks_wss_not_just_ws` asserts a real TLS ClientHello reaches the
-  wire, because the alternative failure is a panic nobody sees until they try
-  the thing this was added for.
+  connection, inside the network thread. So the tray names the provider
+  explicitly (`ring`) at start-up. The window dials from the webview, whose TLS
+  is WebKit's, and the test that asserted a real ClientHello went with the egui
+  client ([ADR-0020](../decisions/0020-the-egui-client-is-retired.md)).
 - **Argument hygiene is not authentication.** The shape-checks above stop a
   client spelling a flag; they say nothing about *which* client.
 
@@ -946,5 +959,6 @@ echo their question, `#[serde(default)]` on everything new:
   (the WS client cannot set headers), constant-time compare, clean 401.
   No token → the historical open-on-loopback behaviour, byte for byte.
 
-Every WS command keeps a REST twin (`/api/usage`, `/api/insight/*`,
-`/api/repos/{repo}/docscan`, …) so the daemon stays curl-able.
+Every **read** family keeps a REST twin (`/api/usage`, `/api/insight/*`,
+`/api/repos/{repo}/docscan`, …) so the daemon stays curl-able; the writes are
+WebSocket-only, as the REST section says.

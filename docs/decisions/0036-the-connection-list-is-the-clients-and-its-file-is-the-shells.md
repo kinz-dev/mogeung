@@ -1,7 +1,7 @@
 ---
 title: The connection list is the client's, and its file is the shell's
 status: active
-updated: 2026-09-23
+updated: 2026-10-08
 decided: 2026-09-08
 ---
 
@@ -198,3 +198,6 @@ time.
 *Revisit if* gains: a peer's token turns up anywhere but `peers.json` — a log
 line, a wire message, an error — which would mean the fence above has a hole.
 
+## Amendment — 2026-10-08
+
+**"Read-only across the hop until A24 has a verdict" was replaced the same day it was written.** [ADR-0013](0013-one-window-one-daemon.md)'s second amendment (2026-09-23) put two gates in its place: a per-follow *allow changes* consent, off by default and settable only from a window on this machine, and the owning daemon's own gates judging the relay as a client from elsewhere. ADR-0014, ADR-0025 and ADR-0003 were amended to match on that date; this file was not. The store's own fences — only what you chose to follow, the token never leaves, nothing re-exported — stand.

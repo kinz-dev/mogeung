@@ -1,21 +1,22 @@
 ---
 title: Domain docs for the engineering skills
 status: active
-updated: 2026-08-24
+updated: 2026-10-08
 ---
 
 # Domain docs
 
 How the engineering skills consume this repo's domain documentation. This is a
-single-context repo: one product, one vocabulary, three crates and a client.
+single-context repo: one product, one vocabulary, three crates and two clients
+(the window and the tray).
 
 ## Before exploring, read these
 
 - `docs/design/context.md` — the glossary, if it exists.
 - [`docs/decisions/`](../decisions/0003-observe-do-not-spawn.md) — the ADRs.
   Read the ones touching the area you are about to work in. **They live in
-  `decisions/`, not `docs/adr/`**, and they are immutable: supersede, never
-  edit.
+  `decisions/`, not `docs/adr/`**, and they are immutable: a narrowing is an
+  appended, dated amendment; only a reversal supersedes.
 - `docs/design/` — how the system works today.
 - [`docs/product/assumptions.md`](../product/assumptions.md) — what we believe
   and have not checked. Nothing here is designed without it.

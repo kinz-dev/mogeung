@@ -22,7 +22,7 @@ ok()   { printf '  \033[32m ok \033[0m %s\n' "$*"; }
 # --- 1. no markdown at the repository root except the allowed few -------------
 say ""
 say "Root markdown files"
-allowed="AGENTS.md CLAUDE.md README.md CHANGELOG.md STATUS.md"
+allowed="AGENTS.md CLAUDE.md README.md STATUS.md"
 for f in *.md; do
     [ -e "$f" ] || continue
     # A file git ignores is not this repository's to police. Several other
