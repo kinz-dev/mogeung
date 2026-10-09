@@ -1,7 +1,7 @@
 ---
 title: Domain docs for the engineering skills
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 ---
 
 # Domain docs
@@ -46,4 +46,6 @@ If your output contradicts an ADR, say so rather than silently overriding:
 > _Contradicts ADR-0003 (observe, do not spawn), but worth reopening because…_
 
 That one in particular is load-bearing: mogeung never starts, steers or stops
-an agent, and v0.1 was thrown away over it.
+an agent it did not start itself, and v0.1 was thrown away over it. Since its
+2026-10-09 amendment the one exception is a *seat* — an agent mogeung launched
+in Gau Geung mode — and nothing promotes a session it merely found to one.

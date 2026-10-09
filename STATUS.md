@@ -4,14 +4,14 @@
 
 | | |
 |---|---|
-| Branch | `main` |
+| Branch | `gau-geung` |
 | Tests | 789 passing |
 | Rust | 55605 lines |
-| Docs | 128 files, 42 ADRs |
+| Docs | 129 files, 43 ADRs |
 
 ## Assumptions
 
-Untested: **19** · At risk: **6** · Supported: 23 · Refuted: 2
+Untested: **22** · At risk: **6** · Supported: 23 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before

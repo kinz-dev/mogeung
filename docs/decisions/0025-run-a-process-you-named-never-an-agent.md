@@ -1,7 +1,7 @@
 ---
 title: mogeung runs a process you named, and never an agent
 status: active
-updated: 2026-09-23
+updated: 2026-10-09
 decided: 2026-08-09
 ---
 
@@ -205,6 +205,46 @@ to refuse. An environment value never crosses without the same consent.
 Clauses 1–3 are untouched: an id the repository did not produce, or a
 configuration that would start an agent, is refused by the peer to every
 client.
+
+## Amendment — 2026-10-09
+
+**Clause 2 is narrowed: a *seat definition* may name an agent CLI. A *run
+configuration* still may not.**
+[ADR-0003's amendment of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started)
+lets the daemon start a seat — an agent CLI it launches itself, in Gau Geung
+mode, as the real CLI in a tmux pane — and this ADR's *"never starts an
+agent"* is where that lands.
+
+**Clause 1 holds in full.** The wire carries the id of a team or seat
+definition the daemon already holds under `~/.mogeung`
+([ADR-0043](0043-a-seat-is-configured-at-launch-never-in-your-home.md),
+clause 8), never a command line. A client still cannot ask this daemon to
+execute something it does not already contain; it can only ask for a seat the
+user already defined.
+
+**Clause 2's refusal by name stands for every run configuration.** A `claude`
+in a repository's `launch.json` is refused as it always was, and the Revisit
+condition above about a shell script that calls one is unchanged. The seat
+launcher is a **different verb**: it resolves the CLI from the definition's own
+field through the exhaustive match
+[ADR-0029](0029-an-agent-cli-is-a-variant-not-a-plugin.md) requires, so a
+fifth CLI is a compile error here as everywhere. The two verbs share the
+`AGENTS` list and nothing else — one uses it to refuse, the other to choose.
+
+**Clause 3 holds, with one difference the design leans on.** The daemon owns
+the seat's lifecycle, but the process itself lives in tmux and **outlives the
+daemon by design** ([ADR-0011](0011-own-a-shell-never-an-agent.md)). A run that
+survives a daemon restart is an orphan to be found; a seat that survives one
+is re-adopted from the launch record, which is why that record is persisted.
+
+**Clause 4 and both amendments of 2026-09-23 apply to the seat verbs exactly
+as to the run verbs.** A loopback client may start, send to and stop a seat
+whatever the bind; any other client needs `--allow-run` and a token; a seat
+verb that crosses a hop is judged by the daemon that owns the seat. The
+exposure is larger than *"run this repository's own test suite"* — it is
+*"start an agent on this machine, and tell it something"* — which is the
+reason no new flag was invented to make it easier, and the reason `A24`'s
+*read-only* is qualified a second time rather than quietly kept.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
