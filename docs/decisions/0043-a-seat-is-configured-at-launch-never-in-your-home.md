@@ -208,6 +208,21 @@ qualified again.
   That is this ADR failing at the one thing it is for, and the response is to
   find the write path and close it, not to document the surprise.
 
+## Amendment — 2026-10-09, later
+
+**Clause 4 is narrowed to worktrees mogeung did not create.**
+[ADR-0019's amendment of this date](0019-a-viewer-not-an-editor.md) lets the
+daemon write into a **team's** worktree — one it made with `git worktree add`
+for a team of seats — so guidance *may* be a file there, in a marked block,
+listed on the team's panel, never committed by mogeung. Clause 4's reason
+stands exactly where the reason applies: a checkout the user works in by hand
+is never written, because a `claude` started there by hand would read the
+file, which is the surprise clause 1 forbids. A team worktree is mogeung's
+room; a hand-started session in it is the user walking into that room, and
+the panel lists what is on the floor. Flags remain the first mechanism
+(clause 2). A file is for what a flag cannot carry, or for guidance the user
+wants to read in the tree beside the code it is about.
+
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an
 `## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A

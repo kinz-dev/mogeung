@@ -356,6 +356,48 @@ Or if Claude Code grows a sanctioned way to enqueue a prompt, which should
 replace `send-keys` for seats as the 2026-08-29 text already says it should
 for a human's send.
 
+## Amendment — 2026-10-09, later: a handover may be composed by a model
+
+**Fence 3 of the amendment above is narrowed: an automatic send is declared
+text, *or a handover the daemon had a model compose for a seat*.** Asked the
+same day, in the walkthrough that followed: *"a handover recap should be model
+composed, which could write much better than a human user."*
+
+A handover is what a seat is told when it starts, restarts, or takes the baton
+— what the team is doing, what its predecessor did, where it stopped.
+OpenRig's restore passes one. Template text cannot write it; a model reading
+the evidence can, and the user is right that it writes it better.
+
+### The fences on a composed handover
+
+1. **Composed from what the model may already read**, under
+   [ADR-0031](0031-consent-to-a-named-host.md) clause 1: the team's documents,
+   the seats' transcripts and diffs, notes. Nothing a seat said is laundered
+   into a fact by passing through — the handover is an *input* to a seat,
+   never evidence about one, and ADR-0031 clause 5 stands.
+2. **Composed in the daemon, on the seat's own trigger.** The daemon holds the
+   endpoint; the trigger is a seat event the team's policy names — start,
+   restart, baton passed — never a scan tick, and never a model's own
+   decision to speak. With no endpoint configured the seat starts without a
+   handover and the row says so (clause 6 of that ADR). A handover that would
+   have to be composed on a host the config does not consent to is not
+   composed.
+3. **Shown in full, and logged as the model's.** On the seat's row before it
+   is delivered where the policy says *after you read it*, and after
+   otherwise; in the send log as *sent by mogeung, composed by <model> at
+   <host>*.
+4. **It is an automatic send.** It counts against the team's per-hour cap,
+   counts as a hop when it carries what another seat said or did, and stops
+   with the pause switch — fence 4 above, unchanged.
+5. **Only for a seat.** The model has no path into an observed session's
+   input, and a human's draft in the window keeps
+   [ADR-0034](0034-the-draft-is-a-chat-ask.md)'s two buttons.
+
+What this does not reopen: the loop with nobody in it. The model composes
+*what* is said; the policy, read by a human, decides *when*; the budget and
+the switch bound *how often*. A model that chose when to speak to an agent
+would be the thing fence 3 was written to prevent, and it is still prevented.
+
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an
 `## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A

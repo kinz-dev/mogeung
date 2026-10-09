@@ -1,7 +1,7 @@
 ---
 title: mogeung reads code and never writes it
 status: active
-updated: 2026-09-03
+updated: 2026-10-09
 decided: 2026-08-04
 ---
 
@@ -117,6 +117,80 @@ belongs to no repository. The fences ADR-0035 adds are what keep it that way:
 the daemon mints the name, refuses anything that is not a bare file name in
 that directory, and does the write. `readOnly: true` and its message stand for
 every worktree file, and the daemon still has no verb that writes one.
+
+## Amendment — 2026-10-09: a team's worktree is written, in Gau Geung mode
+
+**The decision is narrowed to every worktree that is not a team's.** In Gau
+Geung mode —
+[ADR-0003's amendment of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started)
+— the daemon creates worktrees for a team of seats, and in those worktrees,
+and only those, mogeung writes: files it generates for the team, and files a
+human edits in the Code pane. Asked 2026-10-09, in the walkthrough of what
+still blocked the OpenRig port: *"No, I don't think we should keep it as 'a
+viewer not an editor' anymore, at least for the gau-geung mode."*
+
+**Why the objection this ADR rests on no longer holds there.** The decisive
+cost above was the concurrent writer, *"structural rather than occasional"*,
+and the Revisit condition named its cure: *"a session that can be asked to
+pause."* A seat is a session the daemon started and owns, in a worktree the
+daemon made for it. For the first time the daemon knows the writers: which
+seats live in the worktree, and whether each is busy or idle from the CLI's
+own registry — the fact v0.1 could not see and this product was rebuilt to
+read. The problem is not solved in general, and *"editing only files no live
+session has touched"* stays rejected for the reason given, `A8`. It is solved
+for a worktree whose only writers are seats, which is what a team worktree
+is.
+
+### The fences
+
+1. **Only a team's worktree.** One the daemon created with `git worktree add`
+   for a team, in Gau Geung mode. The user's own checkout is never written,
+   and a team set up to work in one — which the spec may allow — gets no file
+   writes there: guidance goes by system-prompt append only
+   ([ADR-0043](0043-a-seat-is-configured-at-launch-never-in-your-home.md),
+   clause 2). The Code pane stays `readOnly: true`, message and all, for every
+   file outside a team worktree, and everywhere outside Gau Geung mode.
+2. **Two kinds of write, both the daemon's.** *Generated files* — guidance
+   (`CLAUDE.md`, `AGENTS.md`, `QWEN.md` or their local variants), the team's
+   own documents (its spec, scopes, plan), and workspace-level settings a CLI
+   reads only from the workspace — written inside marked blocks, listed on the
+   team's panel as files mogeung wrote, never committed by mogeung, and removed
+   with the team where the block is the whole file. *A human's edit in the
+   Code pane* — the first write verb in the protocol, carrying the team, the
+   path, the content, and the hash of the content it was opened from.
+3. **The save refuses rather than guesses.** It refuses when the file on disk
+   no longer matches the hash it was opened from — an agent wrote under you —
+   and shows the difference. It refuses while any seat in that worktree is
+   busy, unless you say otherwise on that save. `R-D21` warned; this refuses.
+   Reloading under the user and merging, the two bad resolutions named above,
+   are not built.
+4. **Judged like the seat verbs.** Per connection, as
+   [ADR-0025's amendment of this date](0025-run-a-process-you-named-never-an-agent.md):
+   a loopback client may write, any other needs `--allow-run` and a token, and
+   a relayed write is the owning daemon's to refuse. `A24` is rewritten again
+   by this: a daemon with Gau Geung mode on is not read-only, and the ledger
+   must say so.
+5. **Scratch and notes are unchanged**, and the third bullet's distinction
+   holds with one more case: a note is yours and belongs to no repository; a
+   generated file belongs to the team and goes with it; a worktree edit
+   belongs to the repository and is made by you.
+
+### What it costs
+
+[Pillar K](../product/roadmap.md#k-explicitly-not)'s *"an editor — explicitly
+not"* is narrowed to the same scope, and says so. A write verb exists, and
+every cost the Context counted is paid: the protocol has one,
+[ADR-0012](0012-write-locally-never-publish.md)'s guard has to cover it, `A24`
+moves. The product now has two Code panes that look the same and behave
+differently — the *two panes look like terminals* problem of
+[ADR-0011](0011-own-a-shell-never-an-agent.md), one pane over — and the panel
+has to say which it is showing.
+
+**Revisit if** a team worktree is ever found with a writer that is not a seat
+— a hand-started agent, an editor, a script — in which case fence 3's busy
+check was reading the wrong thing and the write should have refused. Or if
+fence 3's refusal is overridden routinely: then it is decoration, and the
+honest response is to take the override away rather than to soften the check.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

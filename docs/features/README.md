@@ -1,7 +1,7 @@
 ---
 title: Features in flight
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 ---
 
 # Features
@@ -38,9 +38,11 @@ and `STATUS.md` listed every feature ever written as in flight.
 ## What is in flight
 
 **`STATUS.md` is the generated list** — it reads every file in this folder, so
-a hand-kept copy here would only drift. As of 2026-10-08 the folder holds
-seven: [0045](0045-run-configurations.md) (`draft`, the next priority, awaiting
-approval), [0044](0044-more-than-one-repository.md) (`active`, `R-D35` open),
+a hand-kept copy here would only drift. As of 2026-10-09 the folder holds
+eight: [0051](0051-gau-geung.md) (`draft`, the Gau Geung epic, decided and
+not built), [0045](0045-run-configurations.md) (`draft`, the next priority,
+awaiting approval), [0044](0044-more-than-one-repository.md) (`active`,
+`R-D35` open),
 and five `shipped` awaiting a verdict — [0038](0038-a-local-model.md),
 [0040](0040-a-connection-manager.md), [0046](0046-found-on-the-lan.md),
 [0048](0048-opencode-adapter.md), [0050](0050-prices-that-keep-up.md).

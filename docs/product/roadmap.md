@@ -1,7 +1,7 @@
 ---
 title: Roadmap
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 ---
 
 # Roadmap
@@ -1118,6 +1118,48 @@ See [feature 0038](../features/0038-a-local-model.md).
 
 ---
 
+## P. Gau Geung — a team of agents — **decided 2026-10-09 (`R-P1` ✅); nothing built. Phase 0 is three ledger tests (`R-P2`), the team component waits on a design session with wireframes (`R-P7`), and one decision is still open (`R-P11`)**
+
+Asked 2026-10-08 as a new epic: port the ideas in OpenRig — a tmux harness
+that runs a *team* of agent CLIs in seats, sends between them and shows the
+whole in a TUI — into mogeung as a mode, *"but better, with more info, and
+looks more like a real application"*. The gap analysis found a third of
+OpenRig to be observation mogeung already does or could; the rest starts,
+steers or configures agents, which the keystone ADR refused. On 2026-10-09
+the fences were read back one at a time and three were relaxed on purpose:
+[ADR-0003](../decisions/0003-observe-do-not-spawn.md) now owns a **seat** it
+started itself, [ADR-0019](../decisions/0019-a-viewer-not-an-editor.md) writes
+into a team's worktree, and a model may compose a seat's handover
+([ADR-0031](../decisions/0031-consent-to-a-named-host.md),
+[ADR-0034](../decisions/0034-the-draft-is-a-chat-ask.md)).
+[ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+is new, and keeps every user home untouched. Every session mogeung merely
+finds keeps every old guarantee. The spec is
+[feature 0051](../features/0051-gau-geung.md); the rows below are its
+phases, and the three ideas filed under `B` on 2026-10-04 — `R-B70` (a recap),
+`R-B71` (obligations and *parked*), `R-B72` (context fill) — are inputs to
+`R-P7` rather than rows here.
+
+**Vocabulary.** A *seat* is a session the daemon launched in this mode; a
+*team* is a named set of seats with one policy; *observed* is every other
+session; a *hop* is one agent-to-agent delivery with no human between.
+
+| # | Item | Size | Status |
+|---|---|---|---|
+| R-P1 | **The decisions** — the walkthrough of every ADR in the way, then the amendments: ADR-0003 (a seat is owned: birth decides ownership, never wrap, declared text, visible/budgeted/stoppable with a hop budget of three, the owning daemon judges), ADR-0011 (a write path into seat panes only; no tmux, no seats), ADR-0025 (a seat definition may name an agent CLI), ADR-0038 (a seat is never provisional), ADR-0019 (a team's worktree is written), ADR-0031 and ADR-0034 (a model composes a seat's handover), and ADR-0043 (configured at launch, never in your home; a separate home opt-in per CLI). `A51`–`A53` filed. Decided and recorded 2026-10-09 on branch `gau-geung` | M | ✅ |
+| R-P2 | **Phase 0: test `A51`, `A52`, `A53`** — hooks and a status line through `--settings` fire and fire only for that session; a flags-only launch leaves `~/.claude/settings.json` and `~/.claude.json` as a plain launch would; a worktree of a trusted repository shows no trust dialog. Scripts, not features; if `A51` or `A52` fails, ADR-0043 says the opt-in home becomes Claude Code's default | S | |
+| R-P3 | **Team and seat definitions** — daemon-owned under `~/.mogeung`, edited in the window, mirrored one way as markdown (ADR-0043 clause 8). A seat names its CLI, its working directory or a fresh worktree, its guidance, its permission mode; a team names its seats, its policy (wakes, watchdogs, the hop budget, the per-hour cap) and its pause switch. *"UI come first for the team config"*, 2026-10-09; import and export are `R-P12` | M | |
+| R-P4 | **Boot a team** — N real CLIs in one tmux session, one worktree per seat where asked, the session id chosen by the daemon where the CLI takes one, a launch record that outlives the daemon so a restarted daemon re-adopts its seats, and *stop* that leaves the worktree behind — removing one is a separate click that runs only when it is clean. Per daemon only on day one: *"let's have a team on the same box only"* | L | |
+| R-P5 | **Seat signals** — a loopback hook receiver with a token per seat; Claude Code's hooks and status line through `--settings`, opencode's through a plugin in a directory mogeung owns; Codex and Qwen seats carry none unless opted into a home mogeung owns, and the row says which kind of seat it is. Hook events get `HANDLED` / `KNOWN_IGNORED` like transcript lines | M | |
+| R-P6 | **Sends** — a human's send into a seat (`R-B54`'s path, no change), declared wakes and watchdogs from the team's policy, agent-to-agent delivery held after three hops and ranked as needing you, the per-hour cap (default still to set), the pause switch, and a send log on every seat row. A readiness press waits on `R-P11` | L | |
+| R-P7 | **The team component** — a new component for a team, not a tile in the session tree, with OpenRig's overall-status view as the starting point: topology, pulse (*needs you · parked with baton · blocked on agents*), needs, seat detail. *"I want another brainstorm and planning session on this UI design … draw some wireframe as a base for discussion"* — so the design session comes first, and whether the component is a mode on a chord or a home is decided there against `A1` | L | |
+| R-P8 | **The team's tmux session** — a grouped layout the daemon lays out for the team, which is also the terminal-only view: *"we can have a tmux client but ideally I want it to have a special grouped layout."* No TUI client; `tmux attach` is the client | S | |
+| R-P9 | **Writes in a team's worktree** — generated guidance and team documents in marked blocks, listed and never committed; the Code pane editable there, through a write verb that refuses when the file moved under you or a seat is busy. ADR-0019's amendment; `A24` rewritten again | M | |
+| R-P10 | **A model-composed handover** — composed in the daemon on a seat's start, restart or baton, shown and logged as the model's, counted as an automatic send. ADR-0003's later amendment, ADR-0031 and ADR-0034 | M | |
+| R-P11 | **Read a seat's pane** — `tmux capture-pane` on a seat, classified into the handful of gate shapes a TUI shows and the transcript never carries: permission menu, plan approval, trust, login, *press Enter*. ADR-0010 renders a pane and nothing admits reading one, so this is an ADR before it is a feature, and **one question is still open**: seat panes only, or observed panes too behind an opt-in. Not answered in the 2026-10-09 walkthrough; recommended *seats only* for day one | M | |
+| R-P12 | **Import and export a team** — a definition out as a file, and an OpenRig `rig.yaml` in, read as other people's configuration (ADR-0026). *"later I can import/export the config"* | S | |
+| R-P13 | **Deferred, to be reviewed again** — a read-only MCP surface for seats (candidate C10, launchable through `--mcp-config` and blocked by no ADR for a seat), hooks for observed sessions (`R-B73`, still undecided and separate), and teams across machines (an amendment to ADR-0013 when wanted). *"defer, but we need to review this again"* | — | |
+
 ## K. Explicitly not
 
 - **An editor.** Handoff to IntelliJ/VS Code, permanently. `R-B24` reads files
@@ -1125,6 +1167,12 @@ See [feature 0038](../features/0038-a-local-model.md).
   draws, not an exception to it. *(A revisit was raised 2026-08-02 and filed
   as `R-L4`. Nothing is decided, and until an ADR says otherwise this bullet
   is what stands.)*
+  *(Narrowed 2026-10-09 to every worktree that is not a **team's**: in Gau
+  Geung mode the daemon writes generated files into a worktree it created for
+  a team of seats, and the Code pane saves there behind a save that refuses
+  under a busy seat or a file that moved —
+  [ADR-0019's amendment](../decisions/0019-a-viewer-not-an-editor.md). Outside
+  that worktree and that mode, this bullet stands as written.)*
 - **Anything that re-acquires the conversation loop.** See
   [ADR-0003](../decisions/0003-observe-do-not-spawn.md), and
   [ADR-0003's 2026-08-29 amendment](../decisions/0003-observe-do-not-spawn.md#amendment--2026-08-29-a-human-may-press-send) for where the line
@@ -1140,6 +1188,13 @@ See [feature 0038](../features/0038-a-local-model.md).
   refused by name, and nothing there starts, prompts or interrupts an agent.
   [ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md) is
   the argument, and the bullet above is the line it was written against.)*
+  *(Narrowed 2026-10-09: a **seat** — a session the daemon started itself in
+  Gau Geung mode — may have its loop owned, under five fences and a hop budget
+  of three, by
+  [ADR-0003's 2026-10-09 amendment](../decisions/0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started);
+  a model may compose a seat's handover by its later amendment of the same
+  day. A session mogeung merely found keeps this bullet whole, and nothing
+  promotes one to a seat.)*
 - **Cloud or multiplayer.** *(Asked about as Kubernetes on 2026-08-11, and the
   two halves separate: **watching** an agent that happens to run in a cluster is
   the same observation this product already does, filed as `R-I14` and gated on
