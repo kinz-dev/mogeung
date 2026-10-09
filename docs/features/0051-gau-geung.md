@@ -90,6 +90,12 @@ rule it changed.
   graph and the table together, not one behind a toggle. A seat's detail is a
   pane in the mode's own tile tree — holdable and splittable like any pane,
   as `R-B49` made the Agent pane — not a drawer that follows the selection.
+- **Five lanes for seats in a team; badges for everything else.** *"Can we
+  keep the five lanes when it is a part of a team?"* Yes. The pulse is the
+  team's, so OpenRig's five lanes — needs you, parked with baton, blocked on
+  agents, now, just finished — apply to seats, each card carrying mogeung's
+  badge inside; a session outside a team keeps its badge on the queue and
+  never enters a lane.
 - **The window arranges its own grid; tmux's layout is for a terminal.**
   *"of course the window arrange its own grid. I thought that is not a
   question and by existing design."* It is: each seat's terminal is a pane
