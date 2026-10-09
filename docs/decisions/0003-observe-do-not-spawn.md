@@ -398,6 +398,28 @@ What this does not reopen: the loop with nobody in it. The model composes
 the switch bound *how often*. A model that chose when to speak to an agent
 would be the thing fence 3 was written to prevent, and it is still prevented.
 
+## Amendment — 2026-10-09, evening: a seat talks only to its own team
+
+**Fence 4 above gains a sentence: a seat may address only the seats of its
+own team.** Asked when the wireframes for the team component drew two teams
+side by side and the question could no longer be avoided: *"ok, a seat only
+talks to its own team."*
+
+The reason is what a team is. A team is the unit of policy — one hop budget,
+one hourly cap, one pause switch, one set of wakes and watchdogs. A message
+from a seat in one team to a seat in another would be a delivery between two
+policies, counted against which budget, stopped by which switch, and visible
+in which log. Rather than answer that three ways, the delivery is refused:
+the seat's command to send names a seat, the daemon resolves it within the
+sender's team, and a name outside it is an error the seat sees. Two teams
+that need to talk are one team, or they talk through you — a human's send
+into any seat is unchanged, and so is the queue, which ranks every team's
+seats on one board.
+
+Nothing else moves. The hop count, the cap and the pause stay per team as
+fence 4 already said; fence 1 still makes an observed session unreachable
+from any seat.
+
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an
 `## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A

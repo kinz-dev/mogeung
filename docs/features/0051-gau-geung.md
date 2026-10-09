@@ -83,6 +83,11 @@ rule it changed.
   kept; a known shape may rank with *(screen)* in its detail; one press,
   Enter, for the one shape that asks for it; trust and login stay yours.
   Observed panes are that ADR's revisit, after a week of seat captures.
+- **A seat talks only to its own team.** *"ok, a seat only talks to its own
+  team."* A team is the unit of policy, so a delivery between teams would be
+  a delivery between two budgets and two pause switches; it is refused, and
+  two teams that must talk are one team or talk through you. ADR-0003's
+  evening amendment of 2026-10-09.
 
 ### Still open
 
@@ -128,6 +133,10 @@ rule it changed.
       needing me; my send resets the chain.
 - [ ] One switch pauses every automatic send for a team, and typing in a pane
       always works.
+- [ ] Two teams run at once: the queue ranks both teams' seats on one board
+      with each seat's team named, the all-teams view shows every team's
+      counters and pause switch, and a seat's attempt to address a seat in
+      the other team is refused with the reason shown.
 - [ ] A hand-started `claude` on this machine shows nothing of mogeung's in
       `/hooks` and its home is byte-identical before and after a team ran
       (`A52`'s test, run as a check rather than once).
@@ -150,6 +159,7 @@ rule it changed.
 ### Explicitly out of scope
 
 - Adopting an observed session as a seat. Birth only.
+- A message from a seat to a seat in another team.
 - A TUI client. The team's tmux session is the terminal view.
 - Teams across machines; a seat on a followed machine.
 - A read-only MCP surface for seats; hooks for observed sessions (`R-B73`).
