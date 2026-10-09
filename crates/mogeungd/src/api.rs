@@ -2383,13 +2383,16 @@ async fn handle(
         // broadcast of the whole set, which carries no `allowed` because a
         // broadcast has no one connection to answer for.
         ClientMsg::TeamList => match state.teams() {
-            Ok(teams) => send_reply(
-                reply,
-                ServerMsg::Teams {
-                    teams,
-                    allowed: Some(state.runs.allowed() || from_this_machine),
-                },
-            ),
+            Ok(teams) => {
+                send_reply(
+                    reply,
+                    ServerMsg::Teams {
+                        teams,
+                        allowed: Some(state.runs.allowed() || from_this_machine),
+                    },
+                );
+                send_reply(reply, state.seats_msg().await);
+            }
             Err(e) => err(e),
         },
         ClientMsg::TeamSave { team } => {
@@ -2407,6 +2410,48 @@ async fn handle(
             }
             match state.delete_team(&id) {
                 Ok(teams) => state.broadcast(ServerMsg::Teams { teams, allowed: None }),
+                Err(e) => err(e),
+            }
+        }
+        // Boot and stop. `R-P4`. The same gate as a run start, for the same
+        // reason; the seat rows are refreshed at once rather than at the
+        // next scan, so the click is answered by rows, not by a wait.
+        ClientMsg::TeamBoot { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            let outcome = state.boot_team(&id).await;
+            state.broadcast(state.seats_msg().await);
+            state.refresh_provisional().await;
+            state.publish_queue().await;
+            if let Err(e) = outcome {
+                err(e);
+            }
+        }
+        ClientMsg::TeamStop { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.stop_team(&id).await {
+                Ok(_) => {
+                    state.broadcast(state.seats_msg().await);
+                    state.refresh_provisional().await;
+                    state.publish_queue().await;
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::SeatWorktreeRemove { team_id, seat } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.remove_seat_worktree(&team_id, &seat).await {
+                Ok(dir) => send_reply(
+                    reply,
+                    ServerMsg::Error {
+                        message: format!("removed the worktree at {} — its branch stays", dir.display()),
+                    },
+                ),
                 Err(e) => err(e),
             }
         }

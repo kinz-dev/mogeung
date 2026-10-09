@@ -98,6 +98,7 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // runs on that machine and nowhere else, so its definition is edited
         // there. Teams across machines are `R-P13`'s deferral.
         TeamList | TeamSave { .. } | TeamDelete { .. } => Hop::Here,
+        TeamBoot { .. } | TeamStop { .. } | SeatWorktreeRemove { .. } => Hop::Here,
         ScratchList
         | ScratchCreate { .. }
         | ScratchRead { .. }
@@ -179,7 +180,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         // About that machine's desktop; never asked across a hop.
         IntellijProbe { .. } => Relay::Theirs,
         GitFetched { .. } => Relay::Pass,
-        Notes { .. } | Tasks { .. } | Teams { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
+        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
         ModelChunk { .. } | ModelReply { .. } => Relay::Theirs,
         ReadingGuideReady { .. } | SentToSession { .. } => Relay::Pass,
         SemanticResults { .. } | FailureClusters { .. } | ChatHistory { .. } | ChatConversation { .. } | Config { .. } => {

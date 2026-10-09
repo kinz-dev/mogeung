@@ -40,7 +40,7 @@ and `STATUS.md` listed every feature ever written as in flight.
 **`STATUS.md` is the generated list** — it reads every file in this folder, so
 a hand-kept copy here would only drift. As of 2026-10-09 the folder holds
 eight: [0051](0051-gau-geung.md) (`draft`, the Gau Geung epic: decided,
-phase 0 run, the definitions built, the launcher next), [0045](0045-run-configurations.md) (`draft`, the next priority,
+phase 0 run, the definitions and the launcher built, not yet booted for real), [0045](0045-run-configurations.md) (`draft`, the next priority,
 awaiting approval), [0044](0044-more-than-one-repository.md) (`active`,
 `R-D35` open),
 and five `shipped` awaiting a verdict — [0038](0038-a-local-model.md),

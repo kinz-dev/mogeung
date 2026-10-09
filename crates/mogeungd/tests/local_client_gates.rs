@@ -185,3 +185,27 @@ async fn without_a_peer_address_a_team_write_is_judged_by_the_bind() {
     let why = ask(&url, ClientMsg::TeamDelete { id: "x".into() }, error_text).await;
     assert!(why.contains("--allow-run"), "{why}");
 }
+
+/// `R-P4`: starting a team is judged like starting a run. Past the gate, the
+/// next refusal in line is the lookup — the error names the team, not the bind.
+#[tokio::test]
+async fn the_window_on_this_machine_is_past_the_boot_gate() {
+    let url = lan_bound_daemon("boot-local", true).await;
+    let why = ask(&url, ClientMsg::TeamBoot { id: "no-such-team".into() }, error_text).await;
+    assert!(why.contains("no team with id"), "{why}");
+    let why = ask(&url, ClientMsg::TeamStop { id: "no-such-team".into() }, error_text).await;
+    assert!(why.contains("no seat of this team is running"), "{why}");
+}
+
+#[tokio::test]
+async fn without_a_peer_address_boot_stop_and_remove_are_judged_by_the_bind() {
+    let url = lan_bound_daemon("boot-unknown", false).await;
+    for cmd in [
+        ClientMsg::TeamBoot { id: "x".into() },
+        ClientMsg::TeamStop { id: "x".into() },
+        ClientMsg::SeatWorktreeRemove { team_id: "x".into(), seat: "s".into() },
+    ] {
+        let why = ask(&url, cmd, error_text).await;
+        assert!(why.contains("--allow-run"), "{why}");
+    }
+}

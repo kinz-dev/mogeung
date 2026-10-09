@@ -342,6 +342,17 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
               did nothing — and this is one that has not been *able* to. The
               terminal is the point: open it and type.
             */}
+            {/*
+              A seat: an agent the daemon started itself, from a team. `R-P4`.
+              Named on the row, team and seat, because a seat ranks on the
+              same queue as everything else and must never pass for a session
+              you started by hand.
+            */}
+            {session?.seat && (
+              <Chip color="var(--blue)" title={`a seat of team ${session.seat.team} — started by mogeung in Gau Geung mode`} className="shrink-0">
+                {session.seat.team}/{session.seat.seat}
+              </Chip>
+            )}
             {session?.provisional && (
               <Chip
                 color="var(--amber)"

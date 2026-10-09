@@ -5,7 +5,7 @@
 //! matters far less than being able to change `Run` without a migration.
 
 use anyhow::Result;
-use mogeung_core::team::Team;
+use mogeung_core::team::{SeatLaunch, Team};
 use mogeung_core::wire::Note;
 use mogeung_core::{Session, TranscriptEvent};
 use rusqlite::{params, Connection};
@@ -211,6 +211,16 @@ impl Store {
                 created INTEGER NOT NULL,
                 updated INTEGER NOT NULL,
                 json    TEXT NOT NULL
+            );
+
+            -- Seat launches. `R-P4`. Derived state: which panes are seats,
+            -- kept so a restarted daemon re-adopts them (ADR-0025's
+            -- amendment, clause 3). Not mirrored (ADR-0043 clause 8).
+            CREATE TABLE IF NOT EXISTS seat_launches (
+                team_id TEXT NOT NULL,
+                seat    TEXT NOT NULL,
+                json    TEXT NOT NULL,
+                PRIMARY KEY (team_id, seat)
             );
             "#,
         )?;
@@ -478,6 +488,45 @@ impl Store {
     pub fn delete_team(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM teams WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Every seat launch on record. A row that fails to deserialise is
+    /// skipped with a warning, as a session's is.
+    pub fn load_launches(&self) -> Result<Vec<SeatLaunch>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT team_id, seat, json FROM seat_launches ORDER BY team_id, seat")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (team, seat, json) = r?;
+            match serde_json::from_str::<SeatLaunch>(&json) {
+                Ok(l) => out.push(l),
+                Err(e) => tracing::warn!("skipping seat launch {team}/{seat}: {e}"),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn save_launch(&self, l: &SeatLaunch) -> Result<()> {
+        let json = serde_json::to_string(l)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO seat_launches (team_id, seat, json) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(team_id, seat) DO UPDATE SET json = ?3",
+            params![l.team_id, l.seat, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_launch(&self, team_id: &str, seat: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "DELETE FROM seat_launches WHERE team_id = ?1 AND seat = ?2",
+            params![team_id, seat],
+        )?;
         Ok(())
     }
 
@@ -929,6 +978,33 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mogeung-store-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Store::open(&dir.join("t.db")).unwrap()
+    }
+
+    /// A launch record round-trips, and a stop deletes it. `R-P4`.
+    #[test]
+    fn a_seat_launch_survives_the_store_until_stopped() {
+        use mogeung_core::session::SessionSource;
+        let s = store("launches");
+        let l = SeatLaunch {
+            team_id: "t1".into(),
+            team: "port".into(),
+            seat: "builder".into(),
+            cli: SessionSource::Codex,
+            session_id: None,
+            pane_id: "%9".into(),
+            tmux_target: "geung-port-builder:0.0".into(),
+            tmux_session: "geung-port-builder".into(),
+            dir: "/w".into(),
+            worktree: true,
+            files_dir: "/f".into(),
+            started: 7,
+        };
+        s.save_launch(&l).unwrap();
+        s.save_launch(&l).unwrap();
+        let back = s.load_launches().unwrap();
+        assert_eq!(back, vec![l.clone()]);
+        s.delete_launch("t1", "builder").unwrap();
+        assert!(s.load_launches().unwrap().is_empty());
     }
 
     /// A team round-trips whole — seats, policy, the inherited mode as

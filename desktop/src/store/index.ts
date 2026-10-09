@@ -47,6 +47,7 @@ import type {
   Note,
   Task,
   Team,
+  SeatLaunch,
   PromptCluster,
   FailureCluster,
   RecurringFailure,
@@ -695,6 +696,8 @@ export interface AppState {
   /** Whether this connection may save or delete a team — the daemon's answer
    *  to `team_list`, kept across broadcasts, which carry none. */
   teamsAllowed: boolean;
+  /** Every seat the daemon has started and not stopped. `R-P4`. */
+  seatLaunches: SeatLaunch[];
   /**
    * The daemons this one follows, and where each stands. `R-I21`.
    *
@@ -1202,6 +1205,7 @@ export const useStore = create<AppState>((set, get) => ({
   notes: [],
   teams: [],
   teamsAllowed: true,
+  seatLaunches: [],
   peers: null,
   foldedGroups: [],
   noteOpenId: null,
@@ -1918,6 +1922,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "teams":
         set(msg.allowed === undefined ? { teams: msg.teams } : { teams: msg.teams, teamsAllowed: msg.allowed });
+        break;
+      case "seats":
+        set({ seatLaunches: msg.launches });
         break;
       case "peers":
         set({ peers: msg.peers });

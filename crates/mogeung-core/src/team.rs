@@ -295,9 +295,96 @@ impl Team {
     }
 }
 
+/// A session's membership: which team, which seat. `R-P4`, ADR-0038's
+/// amendment. On the daemon's own row from birth, and carried over onto the
+/// CLI's real session when it claims the pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatTag {
+    pub team_id: String,
+    /// The team's name, for the row; the id is the key.
+    pub team: String,
+    pub seat: String,
+}
+
+/// A seat the daemon started: the launch record. `R-P4`.
+///
+/// Derived state, not the user's writing — persisted so a restarted daemon
+/// re-adopts its seats (ADR-0025's amendment, clause 3), not mirrored
+/// (ADR-0043 clause 8). The pane id is the identity the scan matches on; the
+/// target beside it is a location that renumbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatLaunch {
+    pub team_id: String,
+    pub team: String,
+    pub seat: String,
+    pub cli: SessionSource,
+    /// The session id the daemon chose, where the CLI takes one (Claude Code,
+    /// Qwen Code); `None` where the CLI chooses its own (Codex, opencode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// tmux's own `%12`.
+    pub pane_id: String,
+    /// `name:0.0` at birth — what a terminal attaches to.
+    pub tmux_target: String,
+    /// The tmux session the daemon made for this seat alone.
+    pub tmux_session: String,
+    /// Where it runs: the worktree the daemon made, or the team's checkout.
+    pub dir: String,
+    /// `dir` is a worktree the daemon made and may remove when clean.
+    #[serde(default)]
+    pub worktree: bool,
+    /// Where the generated files live, under `~/.mogeung/seats/`.
+    #[serde(default)]
+    pub files_dir: String,
+    /// Unix seconds.
+    pub started: i64,
+}
+
+impl SeatLaunch {
+    /// The daemon's own row id for this seat before the CLI's session claims
+    /// it: the chosen session id where there is one, so the real session is
+    /// the same row; else a seat id, never a `pane:` id.
+    pub fn row_id(&self) -> String {
+        match &self.session_id {
+            Some(id) => id.clone(),
+            None => format!("seat:{}:{}", self.team_id, self.seat),
+        }
+    }
+
+    pub fn tag(&self) -> SeatTag {
+        SeatTag {
+            team_id: self.team_id.clone(),
+            team: self.team.clone(),
+            seat: self.seat.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launch_row_is_the_chosen_session_or_a_seat_id_never_a_pane() {
+        let mut l = SeatLaunch {
+            team_id: "t1".into(),
+            team: "port".into(),
+            seat: "builder".into(),
+            cli: SessionSource::Codex,
+            session_id: None,
+            pane_id: "%7".into(),
+            tmux_target: "geung-port-builder:0.0".into(),
+            tmux_session: "geung-port-builder".into(),
+            dir: "/w".into(),
+            worktree: true,
+            files_dir: "/f".into(),
+            started: 1,
+        };
+        assert_eq!(l.row_id(), "seat:t1:builder");
+        l.session_id = Some("abc".into());
+        assert_eq!(l.row_id(), "abc");
+        assert_eq!(l.tag().seat, "builder");
+    }
 
     #[test]
     fn a_seat_without_an_override_takes_the_teams_mode() {

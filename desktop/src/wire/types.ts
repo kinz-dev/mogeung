@@ -180,6 +180,12 @@ export interface Session {
    */
   provisional?: boolean;
   /**
+   * This session is a seat: an agent the daemon started itself from a team
+   * definition (`R-P4`, ADR-0038's amendment). On the daemon's own row from
+   * birth and carried onto the CLI's real session when it claims the pane.
+   */
+  seat?: SeatTag;
+  /**
    * The machine this session runs on, when it is not the daemon's own.
    * `R-I21`, feature 0047. Set only on a session the daemon **mirrors** from
    * one it follows; its id is then `@<machine>:<id>`, and the daemon forwards
@@ -1115,6 +1121,28 @@ export interface Team {
   updated: number;
 }
 
+/** Which team, which seat. */
+export interface SeatTag {
+  team_id: string;
+  team: string;
+  seat: string;
+}
+/** A seat the daemon started and has not stopped: the launch record. `R-P4`. */
+export interface SeatLaunch {
+  team_id: string;
+  team: string;
+  seat: string;
+  cli: SessionSource;
+  session_id?: string;
+  pane_id: string;
+  tmux_target: string;
+  tmux_session: string;
+  dir: string;
+  worktree: boolean;
+  files_dir: string;
+  started: number;
+}
+
 export interface Note {
   id: string;
   /** Markdown. Empty is legal and means a plain bookmark. */
@@ -1332,6 +1360,11 @@ export type ClientMsg =
   | { cmd: "team_list" }
   | { cmd: "team_save"; team: Team }
   | { cmd: "team_delete"; id: string }
+  /** Boot and stop a team, and remove one stopped seat's clean worktree.
+   *  `R-P4`. Judged like `run_start`. */
+  | { cmd: "team_boot"; id: string }
+  | { cmd: "team_stop"; id: string }
+  | { cmd: "seat_worktree_remove"; team_id: string; seat: string }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *
@@ -1556,6 +1589,8 @@ export type ServerMsg =
   /** Every team, after any change. `allowed` only on the answer to
    *  `team_list`; a broadcast omits it and the window keeps what it had. */
   | { ev: "teams"; teams: Team[]; allowed?: boolean }
+  /** Every seat the daemon has started and not stopped. `R-P4`. */
+  | { ev: "seats"; launches: SeatLaunch[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
   | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }

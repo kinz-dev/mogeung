@@ -1,7 +1,7 @@
 ---
 title: The read boundary
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/workspace.rs
@@ -102,6 +102,15 @@ at.
   [ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)).
 - **The doc inventory** (`R-H1`) answers for watched repositories only; the
   daemon refuses a path no session lives in.
+- **A seat's files** (`R-P4`, feature 0051) live under `~/.mogeung/seats/`
+  — a guidance file, and a home of its own when asked — and are the daemon's
+  to write. The one write into a *worktree* is a marked block in a Codex
+  seat's `AGENTS.md`, only in a worktree the daemon made and taken back at
+  stop ([ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)'s amendment);
+  a seat in the team's checkout gets no write at all, and a Codex seat that
+  would need one there is refused in words. Nothing is written under the
+  user's own agent homes, ever
+  ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)).
 
 ## Two spellings of one path
 

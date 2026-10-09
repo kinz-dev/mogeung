@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -141,6 +141,22 @@ therefore the same limit: a wrapper script calling `claude` is not `claude`.
 [ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)
 carries the reasoning; an unclaimed opencode pane is *waiting for your first
 prompt*, because opencode writes a session the moment it is spoken to.
+
+### A pane the daemon made: a seat (`R-P4`)
+
+The one pane that is **not** found is one the daemon started itself, in Gau
+Geung mode ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s amendment
+of 2026-10-09). Its launch record — pane id, the session id the daemon chose
+where the CLI takes one, the tmux session, the directory — is persisted, and
+the scan publishes a row from it from birth: the chosen id as the row's id,
+or `seat:<team>:<seat>`, never `pane:` and never `provisional`, with the
+seat's tag on it. The provisional pass skips a seat's pane. When the CLI's own
+session appears, `tag_seats` — a post-pass shaped like the branch refresh —
+carries the tag onto it by the chosen id or by the pane it runs in, and the
+seat row stands down; a seat whose pane has gone stays as a dead row until
+the team is stopped, so a seat that died is seen rather than silently
+missing ([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)'s
+amendment; [architecture.md](architecture.md#the-daemon-may-own-a-process)).
 
 ### Handing a folder to the desktop (`R-J34`)
 

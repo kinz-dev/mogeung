@@ -1,11 +1,12 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
   - crates/mogeungd/src/state.rs
+  - crates/mogeungd/src/seat.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -247,9 +248,28 @@ and spawning opt-in beyond loopback by `--allow-run`, read from the bind once
 by the code that bound the socket so the start-up refusal and the per-request
 gate cannot disagree ([run-and-debug.md](run-and-debug.md)). A signal command
 you configured, on a click (`R-E2`). And its own llmproxy
-([model-and-proxy.md](model-and-proxy.md)). Never an agent: `run::AGENTS` is
-the list refused by name, and the same list is what recognises an agent in a
-tmux pane ([cross-session-signals.md](cross-session-signals.md)).
+([model-and-proxy.md](model-and-proxy.md)). Never an agent you started:
+`run::AGENTS` is the list refused by name, and the same list is what
+recognises an agent in a tmux pane ([cross-session-signals.md](cross-session-signals.md)).
+
+**And since 2026-10-09, a seat** (`R-P4`, feature 0051): an agent the daemon
+starts itself from a team definition it holds, in Gau Geung mode
+([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s amendment). `seat.rs`
+composes each CLI's argv and environment from the definition through one
+match per `SessionSource` — session id where the CLI takes one, permission
+mode in the CLI's own flag, the two layers of guidance by a flag or a file
+under `~/.mogeung`, a home of its own only when asked
+([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md))
+— and starts it in a tmux session of its own, in a worktree cut on
+`geung/<team>/<seat>` or the team's checkout. The **launch record** (pane id,
+chosen session id, tmux session, directory) is persisted so a restarted
+daemon re-adopts the seat; the scan publishes a seat's row from the record
+from birth, never as a `pane:` row, and a post-pass (`tag_seats`) carries the
+tag onto the CLI's own session once it claims the pane or the chosen id
+([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)'s
+amendment). A stop ends the processes and forgets the records; the worktrees
+stay, and removing one is a separate verb that refuses a dirty tree. Boot,
+stop and remove are judged like a run start.
 
 ### The PATH a launcher does not give (`R-J87`)
 
@@ -351,6 +371,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
+| `team.rs` (both) · `seat.rs` | team and seat definitions, their mirror; the seat launcher and its records | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

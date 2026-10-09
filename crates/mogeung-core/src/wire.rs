@@ -370,6 +370,14 @@ pub enum ClientMsg {
     /// to stamp whatever the client sent.
     TeamSave { team: crate::team::Team },
     TeamDelete { id: String },
+    /// Start every seat of a team that is not already running. `R-P4`. Judged
+    /// like `RunStart`; what it starts is the definition and nothing else.
+    TeamBoot { id: String },
+    /// End every seat's process. The worktrees stay; removing one is the verb
+    /// below, which refuses when the worktree is dirty.
+    TeamStop { id: String },
+    /// Remove one stopped seat's worktree, when it is clean.
+    SeatWorktreeRemove { team_id: String, seat: String },
 
     // -- Scratch files. `R-L5`, ADR-0035.
     //
@@ -1485,6 +1493,9 @@ pub enum ServerMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         allowed: Option<bool>,
     },
+    /// Every seat the daemon has started and not stopped. `R-P4`. The whole
+    /// set, after a boot or a stop, and in answer to `TeamList`.
+    Seats { launches: Vec<crate::team::SeatLaunch> },
 
     /// Every scratch file's name, newest first. `R-L5`.
     ///

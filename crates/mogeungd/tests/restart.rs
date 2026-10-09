@@ -278,3 +278,49 @@ async fn a_team_outlives_the_daemon_that_defined_it() {
     assert_eq!(std::fs::read_dir(&teams_dir).unwrap().count(), 0, "the mirror goes with it");
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// A seat outlives the daemon that started it. `R-P4`, ADR-0025's amendment
+/// clause 3: the launch record is persisted, and a restarted daemon lists the
+/// seat's row from it — here as a dead row, because the pane the record
+/// names does not exist on this machine, which is the honest answer rather
+/// than no row at all.
+#[tokio::test]
+async fn a_seat_is_re_adopted_from_its_launch_record() {
+    use mogeung_core::session::SessionSource;
+    use mogeung_core::team::SeatLaunch;
+    let home = std::env::temp_dir().join(format!("mogeung-restart-seat-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    {
+        let store = Store::open(&db(&home)).unwrap();
+        store
+            .save_launch(&SeatLaunch {
+                team_id: "t1".into(),
+                team: "port".into(),
+                seat: "builder".into(),
+                cli: SessionSource::Codex,
+                session_id: None,
+                pane_id: "%999999".into(),
+                tmux_target: "geung-port-builder:0.0".into(),
+                tmux_session: "geung-port-builder".into(),
+                dir: home.to_string_lossy().into_owned(),
+                worktree: false,
+                files_dir: home.join("files").to_string_lossy().into_owned(),
+                started: 1_700_000_000,
+            })
+            .unwrap();
+    }
+    let state = boot(&home).await;
+    assert_eq!(state.launches.read().await.len(), 1, "the record came back with the daemon");
+    let snap = state.snapshot(false).await;
+    let mogeung_core::ServerMsg::Snapshot { sessions, .. } = snap else { panic!("not a snapshot") };
+    let row = sessions.iter().find(|s| s.id == "seat:t1:builder").expect("the seat's row, from its record");
+    assert!(!row.alive, "its pane is not on this machine, so it is a dead row, not a missing one");
+    assert!(!row.provisional);
+    assert_eq!(row.seat.as_ref().map(|t| t.team.as_str()), Some("port"));
+
+    // A stop clears the record; the next daemon has nothing to re-adopt.
+    state.stop_team("t1").await.unwrap();
+    assert!(Store::open(&db(&home)).unwrap().load_launches().unwrap().is_empty());
+    std::fs::remove_dir_all(&home).ok();
+}

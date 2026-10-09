@@ -302,6 +302,13 @@ pub struct Session {
     /// id, which does not outlive the pane.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provisional: bool,
+    /// This session is a seat: an agent the daemon started itself, in Gau
+    /// Geung mode, from a team definition. `R-P4`, ADR-0038's amendment. On
+    /// the daemon's own row from birth, never `provisional`, never a `pane:`
+    /// id, and carried over onto the CLI's real session when it claims the
+    /// pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<crate::team::SeatTag>,
 
     /// The machine this session runs on, when it is not this one. `R-I21`,
     /// [feature 0047](../../../docs/features/0047-daemon-federation/spec.md).

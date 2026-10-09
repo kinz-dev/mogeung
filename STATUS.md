@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `gau-geung` |
-| Tests | 801 passing |
-| Rust | 56692 lines |
+| Tests | 816 passing |
+| Rust | 57965 lines |
 | Docs | 131 files, 44 ADRs |
 
 ## Assumptions

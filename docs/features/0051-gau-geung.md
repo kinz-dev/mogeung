@@ -223,8 +223,9 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    rows, and ADR-0043 is amended if the first two fail. **Done 2026-10-09**:
    `A51`–`A53` supported, twelve fixtures pinned, ADR-0043 unamended.
    **`R-P3` built the same evening** (⏳ until used): the definitions, the
-   store, the wire and the Teams window; `R-P4`'s launcher is next and the
-   window draws its Boot button grey until then.
+   store, the wire and the Teams window. **`R-P4` built the same night** (⏳):
+   the launcher, the launch record, seat rows from birth, Boot and Stop in
+   the window, and a worktree removed only when clean.
 1. **`R-P3` and `R-P4`, the daemon's model.** A `Team` and a `Seat` in
    `mogeung-core`; a `teams` table and a `seat_launches` launch record in the
    store; a `Team*`/`Seat*` wire family carrying ids (ADR-0025's amendment);
@@ -276,6 +277,17 @@ seat gets), `store.rs` (the `teams` table), `state.rs` (`save_team`,
 `ui/TeamsWindow.tsx` (opened from the top bar's Users button and
 `Alt+Shift+g`; `Alt+g` is kept for the mode), `App.tsx`, `TopBar.tsx`,
 `lib/keymap.ts`; tests in each. Docs: `wire-protocol.md`, `data-model.md`.
+
+`R-P4`, built: `crates/mogeungd/src/seat.rs` (the launcher: names, the two
+layers of guidance, `compose` per CLI, the marked block, the tmux start, stop,
+the clean-only worktree removal), `mogeung-core/src/team.rs` (`SeatLaunch`,
+`SeatTag`), `session.rs` (`seat`), `wire.rs` (`TeamBoot`, `TeamStop`,
+`SeatWorktreeRemove`; `Seats`), `store.rs` (`seat_launches`), `state.rs`
+(`launches`, `seat_row`, `tag_seats`, the seat rows in `refresh_provisional`,
+`boot_team`, `stop_team`, `remove_seat_worktree`), `api.rs`; the window's
+`types.ts`, `store/index.ts`, `TeamsWindow.tsx` (Boot, Stop, the seat's
+status and *remove worktree*), `QueuePanel.tsx` (the seat chip). Docs:
+`architecture.md`, `wire-protocol.md`, `data-model.md`.
 
 ### Risks and unknowns
 
@@ -338,3 +350,19 @@ seat gets), `store.rs` (the `teams` table), `state.rs` (`save_team`,
   the rebooted state had its mirror pointed away — caught by the assertion,
   harmless because the directory did not exist, and the reason `teams_dir`
   is a `OnceLock` a test must set, like `notes_dir`.
+- 2026-10-09, `R-P4`. One tmux session **per seat**, not one per team: the
+  window attaches to each seat's pane on its own (decided 2026-10-09) and
+  `tmux_panes` already keys everything on the pane id, so a session per seat
+  is what the scan, the send path and the Agent pane all already understand;
+  `R-P8`'s grouped layout can link the seat windows into a team session for
+  `tmux attach` without moving a process. The one write into a worktree is
+  Codex's guidance — a marked block in `AGENTS.md`, taken back at stop —
+  because Codex has no flag that appends to its instructions and
+  `model_instructions_file` replaces them; a Codex seat in the team's
+  checkout with guidance and no home of its own is refused in words. Codex
+  has no plan mode and is refused that mode by name. A seat whose pane has
+  gone is a dead row until the team is stopped, so a seat that died is seen
+  rather than silently missing. Nothing here has booted a real team yet: the
+  launcher's composition, the records, the rows and the gates are tested,
+  the tmux start is `yolomo`'s shape with `-P -F` for the pane id, and the
+  first boot is the dogfooding `R-P4`'s ⏳ waits on.

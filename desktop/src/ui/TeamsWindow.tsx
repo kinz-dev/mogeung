@@ -29,7 +29,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { FolderOpen, Plus, Save, Trash2, X } from "lucide-react";
+import { Eraser, FolderOpen, Play, Plus, Save, Square, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import { chooseFolder } from "@/lib/tauri";
 import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, teamSummary } from "@/lib/teams";
@@ -118,6 +118,7 @@ export function TeamsWindow() {
   const open = useStore((s) => s.showTeams);
   const teams = useStore((s) => s.teams);
   const allowed = useStore((s) => s.teamsAllowed);
+  const launches = useStore((s) => s.seatLaunches);
   const send = useStore((s) => s.send);
   // What is being edited, and what it was when it arrived. `base` is `null`
   // for a team that does not exist yet; the two differ when there is
@@ -266,11 +267,42 @@ export function TeamsWindow() {
               <Dim className="w-20 shrink-0 text-2xs">name</Dim>
               <Input value={draft.name} onChange={(v) => patch({ name: v })} ariaLabel="team name" autoFocus={draft.id === ""} className="flex-1" />
               <span className="ml-auto flex items-center gap-1">
-                <Button size="sm" disabled title="boots the team — R-P4, not built yet">
-                  Boot team
+                {/* Boot and stop. `R-P4`. Boot starts what is *saved*: a
+                    dirty draft is grey with that reason, so a click never
+                    starts a definition you are still typing. */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!allowed || draft.id === "" || dirty || draft.seats.length === 0}
+                  title={
+                    !allowed
+                      ? (refusal ?? "")
+                      : draft.id === ""
+                        ? "save the team first"
+                        : dirty
+                          ? "save your changes first — Boot starts what is saved"
+                          : draft.seats.length === 0
+                            ? "a team with no seats boots nothing"
+                            : "start every seat that is not already running, each in a tmux session of its own"
+                  }
+                  onClick={() => send({ cmd: "team_boot", id: draft.id })}
+                >
+                  <Play size={12} /> Boot team
                 </Button>
-                <Button size="sm" disabled title="stops the team's seats — R-P4, not built yet">
-                  Stop team
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!allowed || !launches.some((l) => l.team_id === draft.id)}
+                  title={
+                    !allowed
+                      ? (refusal ?? "")
+                      : launches.some((l) => l.team_id === draft.id)
+                        ? "end every seat's process — the worktrees stay"
+                        : "no seat of this team is running"
+                  }
+                  onClick={() => send({ cmd: "team_stop", id: draft.id })}
+                >
+                  <Square size={12} /> Stop team
                 </Button>
               </span>
             </div>
@@ -498,6 +530,38 @@ export function TeamsWindow() {
                       starts as <Mono>{PERMISSION_LABEL[permissionFor(draft, seat)]}</Mono> · signals: {seatSignals(seat)}
                     </Dim>
                   </div>
+                  {/* What the daemon says about this seat right now: its
+                      tmux session while running, else the one click that
+                      removes a worktree a stop left behind — refused by the
+                      daemon when it is dirty. */}
+                  {(() => {
+                    const running = launches.find((l) => l.team_id === draft.id && l.seat === seat.name);
+                    if (running) {
+                      return (
+                        <div className="mt-1" data-testid={`seat-${i}-status`}>
+                          <Dim className="text-2xs">
+                            running in <Mono>{running.tmux_session}</Mono> · {running.dir}
+                          </Dim>
+                        </div>
+                      );
+                    }
+                    if (seat.works_in === "worktree" && draft.id !== "") {
+                      return (
+                        <div className="mt-1 flex items-center gap-1" data-testid={`seat-${i}-status`}>
+                          <Dim className="text-2xs">stopped</Dim>
+                          <Button
+                            size="sm"
+                            disabled={!allowed}
+                            title="remove this seat's worktree, when it is clean — the daemon refuses a dirty one and says what is in it; the branch stays"
+                            onClick={() => send({ cmd: "seat_worktree_remove", team_id: draft.id, seat: seat.name })}
+                          >
+                            <Eraser size={12} /> remove worktree
+                          </Button>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               ))}
             </div>

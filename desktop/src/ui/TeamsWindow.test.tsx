@@ -127,11 +127,54 @@ describe("the Teams window", () => {
     expect(sent).toContainEqual({ cmd: "team_delete", id: "t1" });
   });
 
-  it("draws Boot and Stop grey, naming the row that builds them", () => {
+  /** `R-P4`. Boot starts what is saved; Stop is grey until something runs. */
+  it("boots a saved team and stops a running one", () => {
     render(<TeamsWindow />);
     arrives([team()]);
     const boot = screen.getByText("Boot team").closest("button")!;
+    const stop = screen.getByText("Stop team").closest("button")!;
+    expect(boot).not.toBeDisabled();
+    expect(stop).toBeDisabled();
+    expect(stop.title).toContain("no seat of this team is running");
+    fireEvent.click(boot);
+    expect(sent).toContainEqual({ cmd: "team_boot", id: "t1" });
+
+    // A draft you are still typing is not what Boot starts.
+    fireEvent.change(screen.getByLabelText("team name"), { target: { value: "renamed" } });
     expect(boot).toBeDisabled();
-    expect(boot.title).toContain("R-P4");
+    expect(boot.title).toContain("save your changes first");
+  });
+
+  it("shows where a seat runs, and offers to remove a stopped seat's worktree", () => {
+    render(<TeamsWindow />);
+    arrives([team()]);
+    act(() =>
+      useStore.setState({
+        seatLaunches: [
+          {
+            team_id: "t1",
+            team: "port-openrig",
+            seat: "planner",
+            cli: "claude_code",
+            session_id: "abc",
+            pane_id: "%3",
+            tmux_target: "geung-port-openrig-planner:0.0",
+            tmux_session: "geung-port-openrig-planner",
+            dir: "/home/you/.mogeung/worktrees/mogeung/port-openrig-planner",
+            worktree: true,
+            files_dir: "/f",
+            started: 1,
+          },
+        ],
+      }),
+    );
+    expect(screen.getByTestId("seat-0-status").textContent).toContain("running in geung-port-openrig-planner");
+    expect(screen.getByText("Stop team").closest("button")).not.toBeDisabled();
+    fireEvent.click(screen.getByText("Stop team"));
+    expect(sent).toContainEqual({ cmd: "team_stop", id: "t1" });
+    // The builder is not running: its worktree can be asked away.
+    expect(screen.getByTestId("seat-1-status").textContent).toContain("stopped");
+    fireEvent.click(screen.getByText("remove worktree"));
+    expect(sent).toContainEqual({ cmd: "seat_worktree_remove", team_id: "t1", seat: "builder" });
   });
 });

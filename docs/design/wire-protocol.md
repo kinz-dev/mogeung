@@ -14,6 +14,7 @@ covers:
   - crates/mogeungd/src/notes.rs
   - crates/mogeung-core/src/team.rs
   - crates/mogeungd/src/team.rs
+  - crates/mogeungd/src/seat.rs
 ---
 
 # Wire protocol
@@ -105,7 +106,7 @@ everyone else is judged by the bind and the flag:
 | Gate | Covers | Beyond loopback |
 |---|---|---|
 | the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir` | needs the token |
-| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
+| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete`, `TeamBoot`, `TeamStop`, `SeatWorktreeRemove` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
 | `send_allowed` | `SendToSession` | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
@@ -358,10 +359,14 @@ amendment.
 | `TeamList` | — | `Teams`, to the asker, with `allowed` | here |
 | `TeamSave` | `team` — whole; an empty `id` mints one, and the daemon stamps `created` and `updated` whatever was sent | `Teams`, broadcast | here |
 | `TeamDelete` | `id` | `Teams`, broadcast | here |
+| `TeamBoot` | `id` — starts every seat not already running; a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once | here |
+| `TeamStop` | `id` — ends every seat's process; the worktrees stay | `Seats`, broadcast | here |
+| `SeatWorktreeRemove` | `team_id`, `seat` — a stopped seat's worktree, only when clean | an `Error` naming what was removed or why not, to the asker | here |
 
 | Event | Carries | Relay |
 |---|---|---|
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
+| `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory — after a boot or stop and with every `TeamList` answer | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
 and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
@@ -378,6 +383,17 @@ and the error names the field. It does not check that the repository exists or
 the CLI is installed: those refusals belong to the launcher, at the moment they
 matter. The window's `lib/teams.ts` mirrors the rule so Save is grey with the
 same words while you type; the daemon's answer is still the one that counts.
+
+**A seat's row is known from birth** (`R-P4`). A `Session` carries `seat`
+— team id, team, seat — and the daemon publishes one per launch record from
+the moment the process starts: its id is the session id the daemon chose
+where the CLI takes one (Claude Code, Qwen Code), so the CLI's own session is
+the same row, or `seat:<team>:<seat>` where the CLI chooses its own; never
+`pane:`, never `provisional`. When the real session claims the pane or the id
+the tag moves onto it, and a seat whose pane has gone stays as a dead row
+until the team is stopped. Nothing on this wire starts a seat but a
+definition the daemon holds: the launcher's match per CLI is in `seat.rs`,
+and the command line never travels.
 
 **Two layers, on the wire as an absence.** A seat's `permission` is omitted
 when it inherits the team's, and its `guidance` is its own, appended after the

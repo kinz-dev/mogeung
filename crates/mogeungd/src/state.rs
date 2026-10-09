@@ -141,6 +141,13 @@ pub struct AppState {
     /// the reason `notes_dir` is: a test must not write into the developer's
     /// real `~/.mogeung/teams`.
     pub teams_dir: std::sync::OnceLock<PathBuf>,
+    /// Where a seat's generated files live. `R-P4`. Overridable as the
+    /// mirrors are, so a test never writes under the real `~/.mogeung/seats`.
+    pub seats_dir: std::sync::OnceLock<PathBuf>,
+    /// Every seat this daemon has started and not stopped: the launch
+    /// records, loaded from the store so a restarted daemon re-adopts its
+    /// seats. `R-P4`, ADR-0025's amendment clause 3.
+    pub launches: tokio::sync::RwLock<Vec<mogeung_core::team::SeatLaunch>>,
     /// The daemons this one follows, and what it mirrors from them. `R-I18`,
     /// feature 0047. **Not in `sessions`**: see `federation.rs` for why.
     pub federation: crate::federation::Federation,
@@ -515,6 +522,50 @@ pub fn provisional_session(
     s
 }
 
+/// The daemon's own row for a seat, before the CLI's session claims it.
+/// `R-P4`, ADR-0038's amendment.
+///
+/// Known from the record, not found: the id is the chosen session id or a
+/// seat id, never `pane:`; the tag is on it from birth; `alive` is whether the
+/// pane still exists, and a seat whose pane has gone is a dead row until the
+/// team is stopped. The pid is the agent's where the pane shows one, so the
+/// window's succession can move across when the real session appears.
+pub fn seat_row(
+    l: &mogeung_core::team::SeatLaunch,
+    pane: Option<&Pane>,
+    agent_pid: Option<u32>,
+    now: chrono::DateTime<Utc>,
+) -> Session {
+    let started = chrono::DateTime::from_timestamp(l.started, 0).unwrap_or(now);
+    let mut s = blank_session(l.row_id(), l.cli, started, started);
+    s.alive = pane.is_some();
+    s.pid = agent_pid.or(pane.map(|p| p.pid));
+    s.tmux_target = pane.map(|p| p.target.clone());
+    s.cwd = l.dir.clone();
+    s.repo_root = crate::git::repo_root(std::path::Path::new(&l.dir))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    s.seat = Some(l.tag());
+    s.name = Some(if pane.is_some() {
+        format!("{}/{} — seat, nothing written yet", l.team, l.seat)
+    } else {
+        format!("{}/{} — seat, exited", l.team, l.seat)
+    });
+    s
+}
+
+/// The seat a session belongs to: by the chosen id, or by the pane it runs in.
+pub fn seat_tag_for(
+    launches: &[mogeung_core::team::SeatLaunch],
+    session_id: &str,
+    pane_id: Option<&str>,
+) -> Option<mogeung_core::team::SeatTag> {
+    launches
+        .iter()
+        .find(|l| l.session_id.as_deref() == Some(session_id) || pane_id.is_some_and(|p| p == l.pane_id))
+        .map(|l| l.tag())
+}
+
 /// Fold one `artifact-comment-monitor` line's list into what a session already
 /// has. `R-J115`.
 ///
@@ -595,6 +646,7 @@ fn blank_session(
         // becomes known.
         tmux_target: None,
         provisional: false,
+        seat: None,
         origin: None,
         limit_hit_at: None,
         limit_resets: None,
@@ -677,6 +729,7 @@ impl AppState {
         }
         let (tx, _) = broadcast::channel(8192);
         let identity = crate::machine::identity(&claude_home, None);
+        let launches = store.load_launches().unwrap_or_default();
         Ok(Arc::new(AppState {
             store,
             sessions: RwLock::new(sessions),
@@ -690,6 +743,8 @@ impl AppState {
             scratch_dir: std::sync::OnceLock::new(),
             notes_dir: std::sync::OnceLock::new(),
             teams_dir: std::sync::OnceLock::new(),
+            seats_dir: std::sync::OnceLock::new(),
+            launches: tokio::sync::RwLock::new(launches),
             federation: crate::federation::Federation::default(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
@@ -1570,6 +1625,9 @@ impl AppState {
         // Panes running an agent that has not written yet. `R-J75`, ADR-0038.
         // Last, because suppression needs the real sessions this scan just
         // settled — a provisional row exists only while nothing better does.
+        // A seat's own session, once it has one, carries the seat's tag.
+        // `R-P4`. Before the provisional pass, which skips a claimed pane.
+        self.tag_seats().await;
         self.refresh_provisional().await;
         self.publish_queue().await;
         self.publish_health().await;
@@ -1644,48 +1702,70 @@ impl AppState {
     /// that has a pid, rather than by comparing target strings: a target
     /// renumbers when a window closes, and matching on one would show two rows
     /// for one agent the first time somebody tidied their windows.
-    async fn refresh_provisional(&self) {
+    pub(crate) async fn refresh_provisional(&self) {
         let panes = tmux_panes();
+        let (parents, table) = if panes.is_empty() {
+            (HashMap::new(), Vec::new())
+        } else {
+            (process_parents(), process_commands())
+        };
         let mut out = Vec::new();
-        if !panes.is_empty() {
-            let parents = process_parents();
-            let table = process_commands();
+        let now = Utc::now();
+        let (claimed, known): (std::collections::HashSet<String>, std::collections::HashSet<String>) = {
+            let sessions = self.sessions.read().await;
+            let claimed = sessions
+                .values()
+                .filter(|s| s.alive)
+                .filter_map(|s| s.pid)
+                .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
+                .collect();
+            let known = sessions.values().filter(|s| s.alive).map(|s| s.id.clone()).collect();
+            (claimed, known)
+        };
 
-            let claimed: std::collections::HashSet<String> = {
-                let sessions = self.sessions.read().await;
-                sessions
-                    .values()
-                    .filter(|s| s.alive)
-                    .filter_map(|s| s.pid)
-                    .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
-                    .collect()
-            };
-
-            let now = Utc::now();
-            for pane in &panes {
-                if claimed.contains(&pane.id) {
-                    continue;
-                }
-                let Some((pid, program)) = agent_process_in_pane(pane, &table) else {
-                    continue;
-                };
-                let mut s = provisional_session(pane, &program, now);
-                // The agent's own pid, not the pane's: the pane usually holds a
-                // shell, and the real session that later claims this pane will
-                // carry the agent's pid. The window's succession — a dead
-                // session and a live one sharing a pid and a cwd — is what moves
-                // your selection across when it does.
-                s.pid = Some(pid);
-                // A row rebuilt every scan cannot remember when it was first
-                // seen, so a waiting one takes its clock from the agent process
-                // itself — or it would read *waiting 0s* on every tick.
-                if s.live_status.is_some() {
-                    if let Some(started) = crate::opencode::process_started(pid) {
-                        s.status_since = Some(started);
-                    }
-                }
-                out.push(s);
+        // Seats first. `R-P4`, ADR-0038's amendment: a pane the daemon made
+        // is known from birth — its row carries the seat's tag and the
+        // chosen session id, is never a `pane:` row, and exists until the
+        // CLI's own session claims the pane (or the chosen id). A seat whose
+        // pane has gone is a dead row, not a vanished one: the record says
+        // it was started, and a stop is what clears it.
+        let mut seat_panes = std::collections::HashSet::new();
+        for l in self.launches.read().await.iter() {
+            seat_panes.insert(l.pane_id.clone());
+            if claimed.contains(&l.pane_id) {
+                continue;
             }
+            if l.session_id.as_ref().is_some_and(|id| known.contains(id)) {
+                continue;
+            }
+            let pane = panes.iter().find(|p| p.id == l.pane_id);
+            let agent = pane.and_then(|p| agent_process_in_pane(p, &table)).map(|(pid, _)| pid);
+            out.push(seat_row(l, pane, agent, now));
+        }
+
+        for pane in &panes {
+            if claimed.contains(&pane.id) || seat_panes.contains(&pane.id) {
+                continue;
+            }
+            let Some((pid, program)) = agent_process_in_pane(pane, &table) else {
+                continue;
+            };
+            let mut s = provisional_session(pane, &program, now);
+            // The agent's own pid, not the pane's: the pane usually holds a
+            // shell, and the real session that later claims this pane will
+            // carry the agent's pid. The window's succession — a dead
+            // session and a live one sharing a pid and a cwd — is what moves
+            // your selection across when it does.
+            s.pid = Some(pid);
+            // A row rebuilt every scan cannot remember when it was first
+            // seen, so a waiting one takes its clock from the agent process
+            // itself — or it would read *waiting 0s* on every tick.
+            if s.live_status.is_some() {
+                if let Some(started) = crate::opencode::process_started(pid) {
+                    s.status_since = Some(started);
+                }
+            }
+            out.push(s);
         }
 
         // **Told to the windows that are already open.** Until 2026-09-23 this
@@ -4212,6 +4292,126 @@ impl AppState {
         self.store.load_teams()
     }
 
+    // -- Seats. `R-P4`, feature 0051. ----------------------------------------
+
+    /// Where a seat's generated files go.
+    pub fn seats_dir(&self) -> PathBuf {
+        self.seats_dir
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::seat::seats_root)
+    }
+
+    pub async fn seats_msg(&self) -> ServerMsg {
+        ServerMsg::Seats {
+            launches: self.launches.read().await.clone(),
+        }
+    }
+
+    /// Start every seat of a team that is not already running. One record
+    /// per seat started, saved as it starts, so a failure on the third seat
+    /// leaves the first two on record rather than orphaned in tmux; the
+    /// error names the seat.
+    pub async fn boot_team(&self, id: &str) -> Result<Vec<mogeung_core::team::SeatLaunch>> {
+        let team = self
+            .store
+            .load_teams()?
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("no team with id {id}"))?;
+        crate::team::validate(&team)?;
+        if team.seats.is_empty() {
+            return Err(anyhow!("the team `{}` has no seats to boot", team.name));
+        }
+        let running: Vec<String> = self
+            .launches
+            .read()
+            .await
+            .iter()
+            .filter(|l| l.team_id == id)
+            .map(|l| l.seat.clone())
+            .collect();
+        let seats_dir = self.seats_dir();
+        let bins = crate::seat::Binaries::installed();
+        for seat in &team.seats {
+            if running.contains(&seat.name) {
+                continue;
+            }
+            let launch = crate::seat::start(&team, seat, &seats_dir, &bins)
+                .map_err(|e| anyhow!("seat `{}`: {e:#}", seat.name))?;
+            self.store.save_launch(&launch)?;
+            self.launches.write().await.push(launch);
+        }
+        Ok(self.launches.read().await.clone())
+    }
+
+    /// End every seat's process and forget the records. The worktrees stay.
+    pub async fn stop_team(&self, id: &str) -> Result<Vec<mogeung_core::team::SeatLaunch>> {
+        let mine: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
+        if mine.is_empty() {
+            return Err(anyhow!("no seat of this team is running"));
+        }
+        for l in &mine {
+            crate::seat::stop(l);
+            self.store.delete_launch(&l.team_id, &l.seat)?;
+        }
+        self.launches.write().await.retain(|l| l.team_id != id);
+        Ok(self.launches.read().await.clone())
+    }
+
+    /// Remove one stopped seat's worktree, when it is clean.
+    pub async fn remove_seat_worktree(&self, team_id: &str, seat: &str) -> Result<PathBuf> {
+        if self.launches.read().await.iter().any(|l| l.team_id == team_id && l.seat == seat) {
+            return Err(anyhow!("seat `{seat}` is running — stop the team first"));
+        }
+        let team = self
+            .store
+            .load_teams()?
+            .into_iter()
+            .find(|t| t.id == team_id)
+            .ok_or_else(|| anyhow!("no team with id {team_id}"))?;
+        let s = team
+            .seat(seat)
+            .ok_or_else(|| anyhow!("no seat `{seat}` in team `{}`", team.name))?;
+        crate::seat::remove_worktree(&team, s)
+    }
+
+    /// Give the CLI's own session the seat's tag once it claims the pane or
+    /// the chosen id. `R-P4`, ADR-0038's amendment: the real session wins,
+    /// with the seat's identity carried over. Only what changed is saved and
+    /// broadcast, as `refresh_branches` does.
+    async fn tag_seats(&self) {
+        let launches = self.launches.read().await.clone();
+        if launches.is_empty() {
+            return;
+        }
+        let panes = tmux_panes();
+        let parents = if panes.is_empty() { HashMap::new() } else { process_parents() };
+        let mut changed: Vec<Session> = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in sessions.values_mut() {
+                if !s.alive || s.origin.is_some() {
+                    continue;
+                }
+                let pane = s.pid.and_then(|pid| pane_of(pid, &panes, &parents)).map(|p| p.id.clone());
+                let tag = seat_tag_for(&launches, &s.id, pane.as_deref());
+                if tag.is_some() && s.seat != tag {
+                    s.seat = tag;
+                    changed.push(s.clone());
+                }
+            }
+        }
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.quiet_sessions.lock().await.remove(&s.id);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
+    }
+
     /// Resolve one conflicted file. `R-D22`.
     pub async fn git_resolve(
         &self,
@@ -5033,7 +5233,7 @@ fn session_name(dir: &str, stamp: &str, source: SessionSource) -> String {
 /// back to the bare name is deliberate: if none of this finds it, the error
 /// should be the *terminal's* own "command not found", which at least names
 /// what it looked for.
-fn claude_binary() -> String {
+pub(crate) fn claude_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("claude");
         if cand.is_file() {
@@ -5064,7 +5264,7 @@ fn claude_binary() -> String {
 /// this because `claude` installs itself somewhere already on `PATH`;
 /// `qwenmo` did, and this is the same list it walks, kept deliberately in
 /// sync with it.
-fn qwen_binary() -> String {
+pub(crate) fn qwen_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("qwen");
         if cand.is_file() {
@@ -5147,7 +5347,7 @@ fn agent_command(source: SessionSource) -> Result<Vec<String>> {
 /// Where `opencode` actually is — the same walk as [`qwen_binary`]. The npm
 /// package links `~/.local/bin/opencode` into `node_modules`, and `bun` and
 /// the install script use their own directories; the link is the stable name.
-fn opencode_binary() -> String {
+pub(crate) fn opencode_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("opencode");
         if cand.is_file() {
@@ -5177,7 +5377,7 @@ fn opencode_binary() -> String {
 /// moves with every update. `packages/standalone/current` is listed after it,
 /// not instead of it: same binary, less stable name, reached only when the
 /// symlink is missing.
-fn codex_binary() -> String {
+pub(crate) fn codex_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("codex");
         if cand.is_file() {
@@ -5668,9 +5868,12 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         open_tools, snoozed_until, collisions, loop_signal,
         tmux_target, provisional, limit_hit_at, limit_resets, verify_runs,
         claims, source, announced_dirs, origin, artifacts, custom_title,
+        // A seat's tag is a fact about the row, not a counter. `R-P4`.
+        seat,
     } = after;
 
     *id != before.id
+        || *seat != before.seat
         || *title != before.title
         || *custom_title != before.custom_title
         || *name != before.name
@@ -6367,6 +6570,60 @@ mod terminal_tests {
     }
 
     // -- Adopting a pane. `R-J75`, ADR-0038. --------------------------------
+
+    fn launch(session_id: Option<&str>) -> mogeung_core::team::SeatLaunch {
+        mogeung_core::team::SeatLaunch {
+            team_id: "t1".into(),
+            team: "port".into(),
+            seat: "builder".into(),
+            cli: SessionSource::Codex,
+            session_id: session_id.map(String::from),
+            pane_id: "%40".into(),
+            tmux_target: "geung-port-builder:0.0".into(),
+            tmux_session: "geung-port-builder".into(),
+            dir: "/tmp".into(),
+            worktree: true,
+            files_dir: "/f".into(),
+            started: 1_700_000_000,
+        }
+    }
+
+    /// A seat's row is known from the record, not found in a pane: it carries
+    /// the tag from birth, is never provisional and never `pane:`, and a pane
+    /// that has gone makes it a dead row rather than no row. `R-P4`,
+    /// ADR-0038's amendment.
+    #[test]
+    fn a_seat_row_is_known_from_birth_and_dies_with_its_pane() {
+        let now = Utc::now();
+        let pane = Pane { id: "%40".into(), pid: 900, target: "geung-port-builder:0.0".into() };
+        let live = seat_row(&launch(None), Some(&pane), Some(901), now);
+        assert_eq!(live.id, "seat:t1:builder");
+        assert!(live.alive && !live.provisional);
+        assert_eq!(live.pid, Some(901), "the agent's pid, for the window's succession");
+        assert_eq!(live.tmux_target.as_deref(), Some("geung-port-builder:0.0"));
+        assert_eq!(live.seat.as_ref().map(|t| t.seat.as_str()), Some("builder"));
+        assert_eq!(live.source, SessionSource::Codex);
+        assert!(live.name.as_deref().unwrap().contains("nothing written yet"));
+
+        let dead = seat_row(&launch(None), None, None, now);
+        assert!(!dead.alive);
+        assert_eq!(dead.tmux_target, None);
+        assert!(dead.name.as_deref().unwrap().contains("exited"));
+
+        // Where the CLI took the daemon's id, the row *is* the session to come.
+        assert_eq!(seat_row(&launch(Some("abc")), Some(&pane), None, now).id, "abc");
+    }
+
+    /// The real session is tagged by the id the daemon chose, or by the pane
+    /// it runs in; a session in neither is nobody's seat.
+    #[test]
+    fn a_session_is_a_seat_by_chosen_id_or_by_pane() {
+        let launches = vec![launch(Some("abc"))];
+        assert!(seat_tag_for(&launches, "abc", None).is_some());
+        assert!(seat_tag_for(&launches, "other", Some("%40")).is_some());
+        assert!(seat_tag_for(&launches, "other", Some("%41")).is_none());
+        assert!(seat_tag_for(&launches, "other", None).is_none());
+    }
 
     /// The identity is the **pane**, not the target, and the prefix keeps it
     /// unmistakable for a real session id.

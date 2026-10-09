@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/store/index.ts
@@ -60,6 +60,18 @@ carries no address on the wire — lands on the latest row still waiting. The
 graph's lanes and the file trees are pure functions under `lib/` with their
 own tests; nothing about the topology is asked of the daemon, since every
 commit row carries its parents.
+
+**Teams and seats are the daemon's, cached here** (`R-P3`, `R-P4`). `teams`
+and `seatLaunches` are replaced wholesale on every `teams` and `seats`
+message, as `notes` is; `teamsAllowed` is kept only from the answer to
+`team_list`, because a broadcast carries no gate. The Teams window
+(`ui/TeamsWindow.tsx`, the top bar's Users button, `Alt+Shift+g` — spelled
+`Alt+Shift+KeyG` in `MAC_KEYS`, with `Alt+g` kept for the mode `R-P7` builds)
+edits a draft and sends it whole; the daemon validates, stamps and mints, and
+`lib/teams.ts` mirrors its rules so Save is grey with the daemon's words
+before a click. A seat's row on the queue carries a `team/seat` chip from the
+`seat` tag the daemon puts on it, so a seat never passes for a session you
+started by hand.
 
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept

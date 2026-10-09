@@ -306,6 +306,7 @@ mod tests {
             recent_tools: vec![],
             tmux_target: None,
             provisional: false,
+            seat: None,
             origin: None,
             limit_hit_at: None,
             limit_resets: None,

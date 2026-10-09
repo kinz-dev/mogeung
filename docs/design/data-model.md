@@ -113,6 +113,9 @@ SQLite at `~/.mogeung/mogeung.db`:
   whole struct as a JSON blob with the seats inside it (`R-P3`, feature 0051);
   a blob for the reason sessions are one, so a seat gaining a field needs no
   migration
+- `seat_launches(team_id, seat, json)` — which panes are seats: the launch
+  record a restarted daemon re-adopts from (`R-P4`). Derived, not the user's
+  writing, so not mirrored; a stop deletes the row
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
