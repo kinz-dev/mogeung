@@ -83,6 +83,13 @@ rule it changed.
   kept; a known shape may rank with *(screen)* in its detail; one press,
   Enter, for the one shape that asks for it; trust and login stay yours.
   Observed panes are that ADR's revisit, after a week of seat captures.
+- **The component is a mode, with both views, and seat detail is a pane.**
+  From the wireframes, 2026-10-09: *"1. mode 2. graph and table 3. pane."*
+  The team component is a mode on a chord like the wall, never a home
+  screen, so the queue stays chrome and `A1` is untouched. Topology shows the
+  graph and the table together, not one behind a toggle. A seat's detail is a
+  pane in the mode's own tile tree — holdable and splittable like any pane,
+  as `R-B49` made the Agent pane — not a drawer that follows the selection.
 - **A seat talks only to its own team.** *"ok, a seat only talks to its own
   team."* A team is the unit of policy, so a delivery between teams would be
   a delivery between two budgets and two pause switches; it is refused, and
@@ -91,8 +98,6 @@ rule it changed.
 
 ### Still open
 
-- **Where the component lives** — a mode on a chord, as the wall is, or a
-  home screen that argues with `A1`. Decided in the design session.
 
 ### Assumptions
 
