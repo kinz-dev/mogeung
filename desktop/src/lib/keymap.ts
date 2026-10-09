@@ -795,6 +795,16 @@ export const ACTIONS: Action[] = [
     run: () => useStore.setState({ showConfig: true }),
   },
   {
+    id: "teams",
+    label: "Teams",
+    group: "Windows",
+    // Shift+g, leaving the bare `Alt+g` for the Gau Geung mode itself
+    // (`R-P7`): the definitions window is the one you open to set a team up,
+    // the mode is the one you live in.
+    keys: ["Alt+Shift+g"],
+    run: () => useStore.setState({ showTeams: true }),
+  },
+  {
     id: "theme",
     label: "Cycle the theme",
     group: "Windows",
@@ -955,6 +965,9 @@ export const MAC_KEYS: Record<string, string[]> = {
   // `⌘,` is the settings chord on macOS and has been for twenty years. This is
   // the one action here where following the platform costs nothing.
   config: ["Meta+comma"],
+  // Spelled by physical key, as every Option chord must be on a Mac:
+  // `⌥⇧g` composes `˝`, and a chord matched against that never fires. `R-P3`.
+  teams: ["Alt+Shift+KeyG"],
 
   // Letters where `⌘` is free.
   "rail.files": ["Meta+f"],

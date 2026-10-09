@@ -9,7 +9,7 @@
  * nowhere you can see while using it.
  */
 
-import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun } from "lucide-react";
+import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { maskToken } from "@/lib/connections";
 import { useChord } from "@/lib/keymap";
@@ -134,6 +134,16 @@ export function TopBar() {
           onClick={() => useStore.setState({ showLaunch: true })}
         >
           <Rocket size={13} />
+        </IconButton>
+        {/* Teams. `R-P3`: the definitions, kept by the daemon under
+            ~/.mogeung and edited here first. Beside the launcher because it
+            is the other way a session comes to exist — a seat the daemon
+            starts from one of these. */}
+        <IconButton
+          title="teams — define a team of seats (Gau Geung mode)"
+          onClick={() => useStore.setState({ showTeams: true })}
+        >
+          <Users size={13} />
         </IconButton>
         <IconButton
           title={

@@ -1,13 +1,15 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
   - crates/mogeung-core/src/transcript.rs
   - crates/mogeungd/src/store.rs
   - crates/mogeungd/src/notes.rs
+  - crates/mogeung-core/src/team.rs
+  - crates/mogeungd/src/team.rs
 ---
 
 # Data model
@@ -107,6 +109,10 @@ SQLite at `~/.mogeung/mogeung.db`:
   heading above it (`R-L3`, `R-L10`)
 - `task_events(note_id, text, done, at)` — append-only, the history a checkbox
   cannot keep (`R-L3`)
+- `teams(id, created, updated, json)` — a team of seats and its policy, the
+  whole struct as a JSON blob with the seats inside it (`R-P3`, feature 0051);
+  a blob for the reason sessions are one, so a seat gaining a field needs no
+  migration
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
@@ -127,9 +133,13 @@ warning rather than refusing to start.
   wholesale on a rebuild because a half-rebuilt index would mix two models in
   a space the cosine assumes is one; `vec` is little-endian `f32`s in a BLOB,
   since a thousand floats as JSON is ten times the bytes.
-- **Yours** — `notes`: a note cannot be recomputed from anything, which is why
-  [ADR-0015](../decisions/0015-markdown-is-the-truth.md) requires a one-way
-  mirror to `~/.mogeung/notes/*.md`, never read back. `session_id` and `seq`
+- **Yours** — `notes` and `teams`: neither can be recomputed from anything,
+  which is why [ADR-0015](../decisions/0015-markdown-is-the-truth.md) requires
+  a one-way mirror — `~/.mogeung/notes/*.md` for a note, `~/.mogeung/teams/*.md`
+  for a team ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+  clause 8) — never read back. A team's mirror says what each seat will be
+  started with, the inherited mode marked as the team's, and the daemon
+  stamps `created` and `updated` and mints the id, whatever a client sent. `session_id` and `seq`
   on a note are tags, not a location, so a note outlives the session being
   forgotten. `note_tasks` and `task_events` are the opposite case on purpose:
   the first is a cache of what the documents already say and is dropped and

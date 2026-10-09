@@ -1326,6 +1326,17 @@ fn send_reply(reply: &tokio::sync::mpsc::Sender<ServerMsg>, msg: ServerMsg) {
     }
 }
 
+/// Why a team may not be written from here, in words that name the clause.
+///
+/// The same sentence shape as a run refusal: a definition is what the
+/// launcher starts, so a socket that may not start a run may not write one.
+fn team_refusal() -> String {
+    "this daemon is reachable beyond loopback and was not started with --allow-run, \
+     so it will not take a team definition from here (ADR-0025 clause 4, amended \
+     2026-10-09 for seats). Edit it from a window on that machine."
+        .to_string()
+}
+
 /// Whether a command changes the repository. `R-D19`.
 ///
 /// Enumerated in one function rather than checked at each verb, so that adding
@@ -2366,6 +2377,39 @@ async fn handle(
             }
             Err(e) => err(e),
         },
+        // -- Teams. `R-P3`, feature 0051. The list is open and answers the
+        // asker with whether *it* may write; a save or delete is judged like
+        // a run verb (ADR-0025's amendment, clause 4) and answered by a
+        // broadcast of the whole set, which carries no `allowed` because a
+        // broadcast has no one connection to answer for.
+        ClientMsg::TeamList => match state.teams() {
+            Ok(teams) => send_reply(
+                reply,
+                ServerMsg::Teams {
+                    teams,
+                    allowed: Some(state.runs.allowed() || from_this_machine),
+                },
+            ),
+            Err(e) => err(e),
+        },
+        ClientMsg::TeamSave { team } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.save_team(team) {
+                Ok(teams) => state.broadcast(ServerMsg::Teams { teams, allowed: None }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::TeamDelete { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.delete_team(&id) {
+                Ok(teams) => state.broadcast(ServerMsg::Teams { teams, allowed: None }),
+                Err(e) => err(e),
+            }
+        }
         // -- Scratch files. `R-L5`, ADR-0035. The list is broadcast so two
         // windows agree on what exists; a file's content goes to whoever
         // asked, because a read must never open a pane somewhere else.

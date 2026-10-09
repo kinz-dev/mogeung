@@ -222,6 +222,9 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    exit) for each CLI and save each as a fixture. Verdicts go on the ledger
    rows, and ADR-0043 is amended if the first two fail. **Done 2026-10-09**:
    `A51`–`A53` supported, twelve fixtures pinned, ADR-0043 unamended.
+   **`R-P3` built the same evening** (⏳ until used): the definitions, the
+   store, the wire and the Teams window; `R-P4`'s launcher is next and the
+   window draws its Boot button grey until then.
 1. **`R-P3` and `R-P4`, the daemon's model.** A `Team` and a `Seat` in
    `mogeung-core`; a `teams` table and a `seat_launches` launch record in the
    store; a `Team*`/`Seat*` wire family carrying ids (ADR-0025's amendment);
@@ -262,6 +265,17 @@ To be listed per phase when each is approved. Phase 0, done: `scripts/geung-lib.
 `scripts/geung-a51.sh` to `scripts/geung-a54.sh`,
 `crates/mogeungd/tests/fixtures/screens/<cli>/<gate>.txt` with a `.meta`
 beside each, and the ledger.
+
+`R-P3`, built: `crates/mogeung-core/src/team.rs` (the types: `Team`, `Seat`,
+`Policy`, `PermissionMode`, `Wake`, `Watchdog`), `wire.rs` (`TeamList`,
+`TeamSave`, `TeamDelete`; `Teams`), `federation.rs` (both classified *here* /
+*theirs*); `crates/mogeungd/src/team.rs` (validate, mirror, the signals a
+seat gets), `store.rs` (the `teams` table), `state.rs` (`save_team`,
+`delete_team`, `teams_dir`), `api.rs` (the arms and the gate);
+`desktop/src/wire/types.ts`, `store/index.ts`, `lib/teams.ts`,
+`ui/TeamsWindow.tsx` (opened from the top bar's Users button and
+`Alt+Shift+g`; `Alt+g` is kept for the mode), `App.tsx`, `TopBar.tsx`,
+`lib/keymap.ts`; tests in each. Docs: `wire-protocol.md`, `data-model.md`.
 
 ### Risks and unknowns
 
@@ -312,3 +326,15 @@ beside each, and the ledger.
   did not name but does cover; Qwen and opencode have no trust gate; and
   every Claude capture here carries a file-tree plugin's column, which is
   what the user's screen looks like and so what a seat's will.
+- 2026-10-09, `R-P3`. Teams are stored the way notes are — the second kind
+  of thing the daemon could not recompute — with one difference the amendment
+  forced: a save is judged like a run is started, not like a note is saved,
+  because a definition is what a later click starts. The window mirrors the
+  daemon's validation so Save is grey with the daemon's words before a click,
+  and the daemon's answer still decides. The wireframe's fields are the
+  struct's fields, one for one; the only thing drawn and not built is Boot
+  and Stop, which are `R-P4`'s and say so in their tooltip. The first
+  restart test wrote its `delete` against the real `~/.mogeung/teams` before
+  the rebooted state had its mirror pointed away — caught by the assertion,
+  harmless because the directory did not exist, and the reason `teams_dir`
+  is a `OnceLock` a test must set, like `notes_dir`.

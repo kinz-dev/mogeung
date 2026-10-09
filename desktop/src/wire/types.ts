@@ -1049,6 +1049,72 @@ export interface Task {
   group?: string;
 }
 
+// -- Teams. `R-P3`, feature 0051, pillar P. A hand-mirror of `mogeung-core`'s
+// `team.rs`: a definition the daemon holds, never a command line (ADR-0025's
+// 2026-10-09 amendment). Snake case on the wire throughout.
+
+/** Claude Code's four words for how much a seat may do; the daemon maps each
+ *  to every CLI's own flag at launch (`R-P4`). */
+export type PermissionMode = "default" | "accept_edits" | "plan" | "bypass_permissions";
+export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "accept_edits", "plan", "bypass_permissions"];
+export const PERMISSION_LABEL: Record<PermissionMode, string> = {
+  default: "default",
+  accept_edits: "acceptEdits",
+  plan: "plan",
+  bypass_permissions: "bypassPermissions",
+};
+export type Handover = "after_read" | "automatic" | "none";
+export type SeatEvent = "stop" | "exit";
+export type Workplace = "worktree" | "checkout";
+/** A declared send: when `on_seat` does `on`, `to` is told `text`. */
+export interface Wake {
+  on_seat: string;
+  on: SeatEvent;
+  to: string;
+  text: string;
+}
+/** A declared nudge: a seat silent this long is told `text`. `seat` absent
+ *  means every seat. */
+export interface Watchdog {
+  seat?: string;
+  silent_minutes: number;
+  while_busy: boolean;
+  text: string;
+}
+export interface Policy {
+  hop_budget: number;
+  hourly_cap: number;
+  handover: Handover;
+  readiness_press: boolean;
+  wakes: Wake[];
+  watchdogs: Watchdog[];
+}
+export interface Seat {
+  /** Lower-case letters, digits, dashes; unique in the team. An address. */
+  name: string;
+  label: string;
+  cli: SessionSource;
+  model?: string;
+  works_in: Workplace;
+  /** Absent is the team's default, not none. */
+  permission?: PermissionMode;
+  guidance: string;
+  own_home: boolean;
+}
+export interface Team {
+  /** Empty on the way up means new; the daemon mints one. */
+  id: string;
+  name: string;
+  repo: string;
+  guidance: string;
+  permission: PermissionMode;
+  policy: Policy;
+  seats: Seat[];
+  paused: boolean;
+  created: number;
+  updated: number;
+}
+
 export interface Note {
   id: string;
   /** Markdown. Empty is legal and means a plain bookmark. */
@@ -1261,6 +1327,11 @@ export type ClientMsg =
       repo?: string | null;
     }
   | { cmd: "note_delete"; id: string }
+  /** Teams. `R-P3`. The list answers the asker with whether it may write; a
+   *  save or delete is judged like `run_start` (ADR-0025's amendment). */
+  | { cmd: "team_list" }
+  | { cmd: "team_save"; team: Team }
+  | { cmd: "team_delete"; id: string }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *
@@ -1482,6 +1553,9 @@ export type ServerMsg =
   | { ev: "kit"; entries: KitEntry[] }
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
+  /** Every team, after any change. `allowed` only on the answer to
+   *  `team_list`; a broadcast omits it and the window keeps what it had. */
+  | { ev: "teams"; teams: Team[]; allowed?: boolean }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
   | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }

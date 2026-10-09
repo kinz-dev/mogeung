@@ -5,6 +5,7 @@
 //! matters far less than being able to change `Run` without a migration.
 
 use anyhow::Result;
+use mogeung_core::team::Team;
 use mogeung_core::wire::Note;
 use mogeung_core::{Session, TranscriptEvent};
 use rusqlite::{params, Connection};
@@ -198,6 +199,18 @@ impl Store {
             CREATE TABLE IF NOT EXISTS tail_offsets (
                 path   TEXT PRIMARY KEY,
                 offset INTEGER NOT NULL
+            );
+
+            -- Teams. `R-P3`, feature 0051. The user's own writing, like a
+            -- note (ADR-0015; ADR-0043 clause 8): one JSON blob per team,
+            -- seats inside it, mirrored one way to ~/.mogeung/teams/*.md by
+            -- `team.rs`. A blob for the reason sessions are one — the shape
+            -- is moving, and a seat gaining a field must not need a migration.
+            CREATE TABLE IF NOT EXISTS teams (
+                id      TEXT PRIMARY KEY,
+                created INTEGER NOT NULL,
+                updated INTEGER NOT NULL,
+                json    TEXT NOT NULL
             );
             "#,
         )?;
@@ -421,6 +434,50 @@ impl Store {
     pub fn delete_note(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Teams (R-P3, feature 0051)
+    // -----------------------------------------------------------------------
+
+    /// Every team, most recently changed first.
+    ///
+    /// A row that fails to deserialise is skipped with a warning, as a
+    /// session's is: a definition written by a newer daemon must not stop an
+    /// older one from starting, and the blob is still on disk for the newer
+    /// one to read.
+    pub fn load_teams(&self) -> Result<Vec<Team>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT id, json FROM teams ORDER BY updated DESC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (id, json) = r?;
+            match serde_json::from_str::<Team>(&json) {
+                Ok(t) => out.push(t),
+                Err(e) => tracing::warn!("skipping team {id}: {e}"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert or update one team. `created` and `updated` are read from the
+    /// struct, which the state stamps before it gets here.
+    pub fn save_team(&self, t: &Team) -> Result<()> {
+        let json = serde_json::to_string(t)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO teams (id, created, updated, json) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(id) DO UPDATE SET updated = ?3, json = ?4",
+            params![t.id, t.created, t.updated, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_team(&self, id: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM teams WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -872,6 +929,41 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mogeung-store-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Store::open(&dir.join("t.db")).unwrap()
+    }
+
+    /// A team round-trips whole — seats, policy, the inherited mode as
+    /// absent — and comes back newest first, which is the order the window
+    /// lists them in. `R-P3`.
+    #[test]
+    fn a_team_survives_the_store_and_lists_newest_first() {
+        use mogeung_core::session::SessionSource;
+        use mogeung_core::team::{PermissionMode, Policy, Seat};
+        let s = store("teams");
+        let mut t = Team {
+            id: "t1".into(),
+            name: "port".into(),
+            repo: "/r".into(),
+            guidance: "g".into(),
+            permission: PermissionMode::AcceptEdits,
+            policy: Policy::default(),
+            seats: vec![Seat::new("builder", SessionSource::Codex)],
+            paused: false,
+            created: 1,
+            updated: 1,
+        };
+        s.save_team(&t).unwrap();
+        t.id = "t2".into();
+        t.updated = 5;
+        t.seats[0].permission = Some(PermissionMode::Plan);
+        s.save_team(&t).unwrap();
+        let back = s.load_teams().unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].id, "t2");
+        assert_eq!(back[0].seats[0].permission, Some(PermissionMode::Plan));
+        assert_eq!(back[1].seats[0].permission, None);
+        assert_eq!(back[1].policy.hop_budget, 3);
+        s.delete_team("t1").unwrap();
+        assert_eq!(s.load_teams().unwrap().len(), 1);
     }
 
     /// The retention pass keeps every session a note anchors to, so this list

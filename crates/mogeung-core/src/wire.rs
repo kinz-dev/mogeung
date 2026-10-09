@@ -9,10 +9,14 @@ use serde::{Deserialize, Serialize};
 
 /// What a client asks the daemon to do.
 ///
-/// Note what is absent: nothing here starts, steers or stops an agent. mogeung
-/// observes sessions you run yourself. The only thing it launches is a real
-/// interactive `claude` in your own terminal, which is the opposite of wrapping
-/// it.
+/// Note what is absent: nothing here starts, steers or stops an agent **you**
+/// started. mogeung observes sessions you run yourself; the only thing it
+/// launches for one is a real interactive CLI in your own terminal, which is
+/// the opposite of wrapping it. Since 2026-10-09 a *seat* — an agent the
+/// daemon starts itself, in Gau Geung mode, from a definition it already holds
+/// — is owned ([ADR-0003](../../../docs/decisions/0003-observe-do-not-spawn.md),
+/// amended); the `Team*` verbs below carry those definitions, and never a
+/// command line (ADR-0025's amendment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum ClientMsg {
@@ -350,6 +354,22 @@ pub enum ClientMsg {
         repo: Option<String>,
     },
     NoteDelete { id: String },
+
+    // -- Teams. `R-P3`, feature 0051, pillar P.
+    //
+    // A definition, never a command line: ADR-0025 clause 1 holds for a seat
+    // as for a run. `TeamList` is open like `NoteList`; `TeamSave` and
+    // `TeamDelete` are judged like the run verbs (loopback, or `--allow-run`
+    // with a token — ADR-0025's amendment, clause 4), because a definition is
+    // what the launcher will start, and a socket that may not start a run may
+    // not write what a later click starts either.
+    /// Send every team. Small by nature, so it is not paged.
+    TeamList,
+    /// Create or update one. An empty `id` mints a new team and the daemon
+    /// answers with the id it chose; `created` and `updated` are the daemon's
+    /// to stamp whatever the client sent.
+    TeamSave { team: crate::team::Team },
+    TeamDelete { id: String },
 
     // -- Scratch files. `R-L5`, ADR-0035.
     //
@@ -1449,6 +1469,22 @@ pub enum ServerMsg {
     /// one daemon cannot drift — which is the property daemon ownership was
     /// chosen for.
     Notes { notes: Vec<Note> },
+
+    /// Every team the daemon holds. `R-P3`.
+    ///
+    /// The whole set, after any change, for the reason `Notes` is: two windows
+    /// on one daemon cannot drift. `allowed` is whether *this* connection may
+    /// save or delete one — ADR-0025 clause 4 travelling to the client, the way
+    /// `RunConfigs.allowed` does, so the window can say why a button is grey
+    /// rather than letting a click fail.
+    Teams {
+        teams: Vec<crate::team::Team>,
+        /// Present on the answer to `TeamList`, absent on a broadcast: a
+        /// broadcast reaches every window and has no one connection to
+        /// answer for, and a window keeps the answer it was given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allowed: Option<bool>,
+    },
 
     /// Every scratch file's name, newest first. `R-L5`.
     ///

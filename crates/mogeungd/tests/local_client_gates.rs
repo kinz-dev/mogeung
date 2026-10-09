@@ -136,3 +136,52 @@ async fn without_a_peer_address_run_and_send_are_still_judged_by_the_bind() {
     let why = ask(&url, send("no-such-session"), error_text).await;
     assert!(why.contains("beyond loopback"), "{why}");
 }
+
+// -- Teams. `R-P3`, feature 0051: a definition is written like a run is
+// started (ADR-0025's amendment, clause 4) — by this machine whatever the
+// bind, by anyone else only with `--allow-run`.
+
+fn teams_allowed(msg: ServerMsg) -> Option<Option<bool>> {
+    match msg {
+        ServerMsg::Teams { allowed, .. } => Some(allowed),
+        _ => None,
+    }
+}
+
+fn team_named(name: &str) -> ClientMsg {
+    ClientMsg::TeamSave {
+        team: mogeung_core::team::Team {
+            id: String::new(),
+            name: name.into(),
+            repo: String::new(),
+            guidance: String::new(),
+            permission: Default::default(),
+            policy: Default::default(),
+            seats: vec![],
+            paused: false,
+            created: 0,
+            updated: 0,
+        },
+    }
+}
+
+#[tokio::test]
+async fn the_window_on_this_machine_may_write_a_team_on_a_lan_bound_daemon() {
+    let url = lan_bound_daemon("team-local", true).await;
+    let allowed = ask(&url, ClientMsg::TeamList, teams_allowed).await;
+    assert_eq!(allowed, Some(true), "the list answers the asker with its own gate");
+    // Past the gate, the next refusal in line is validation — the error names
+    // the field, not the bind.
+    let why = ask(&url, team_named(""), error_text).await;
+    assert!(why.contains("needs a name"), "{why}");
+}
+
+#[tokio::test]
+async fn without_a_peer_address_a_team_write_is_judged_by_the_bind() {
+    let url = lan_bound_daemon("team-unknown", false).await;
+    assert_eq!(ask(&url, ClientMsg::TeamList, teams_allowed).await, Some(false));
+    let why = ask(&url, team_named("port"), error_text).await;
+    assert!(why.contains("--allow-run"), "{why}");
+    let why = ask(&url, ClientMsg::TeamDelete { id: "x".into() }, error_text).await;
+    assert!(why.contains("--allow-run"), "{why}");
+}

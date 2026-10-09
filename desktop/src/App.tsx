@@ -42,6 +42,7 @@ import { ConfigWindow } from "@/ui/ConfigWindow";
 import { ConnectionsWindow } from "@/ui/ConnectionsWindow";
 import { PromptWindow } from "@/ui/PromptWindow";
 import { LaunchWindow } from "@/ui/LaunchWindow";
+import { TeamsWindow } from "@/ui/TeamsWindow";
 import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
@@ -397,6 +398,7 @@ export default function App() {
       <ConnectionsWindow />
       <PromptWindow />
       <LaunchWindow />
+      <TeamsWindow />
       <AmbientWindow />
         <LabelWindow />
         <SearchOverlay />

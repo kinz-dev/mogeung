@@ -137,6 +137,10 @@ pub struct AppState {
     /// left orphan files in a user's own notes folder, one per run, discovered
     /// 2026-09-10 while looking for something else.
     pub notes_dir: std::sync::OnceLock<PathBuf>,
+    /// Where the team mirror is written. `R-P3`, feature 0051. Overridable for
+    /// the reason `notes_dir` is: a test must not write into the developer's
+    /// real `~/.mogeung/teams`.
+    pub teams_dir: std::sync::OnceLock<PathBuf>,
     /// The daemons this one follows, and what it mirrors from them. `R-I18`,
     /// feature 0047. **Not in `sessions`**: see `federation.rs` for why.
     pub federation: crate::federation::Federation,
@@ -685,6 +689,7 @@ impl AppState {
             provisional: tokio::sync::RwLock::new(Vec::new()),
             scratch_dir: std::sync::OnceLock::new(),
             notes_dir: std::sync::OnceLock::new(),
+            teams_dir: std::sync::OnceLock::new(),
             federation: crate::federation::Federation::default(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
@@ -4158,6 +4163,53 @@ impl AppState {
         let _ = self.store.forget_tasks(id);
         let _ = crate::notes::unmirror_in(&self.notes_dir(), id);
         self.store.load_notes()
+    }
+
+    // -- Teams. `R-P3`, feature 0051. ---------------------------------------
+
+    /// The team mirror directory in force.
+    pub fn teams_dir(&self) -> PathBuf {
+        self.teams_dir
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::team::mirror_dir)
+    }
+
+    pub fn teams(&self) -> Result<Vec<mogeung_core::team::Team>> {
+        self.store.load_teams()
+    }
+
+    /// Create or update a team, and mirror it. Store first, mirror second,
+    /// for the reason `save_note` gives: the mirror is a copy.
+    ///
+    /// Validated before anything is written, so a definition that could not
+    /// be addressed never reaches the store or the file — the refusal names
+    /// the field. The daemon stamps `created` and `updated` and mints the id
+    /// of a new team; whatever the client sent for those is overwritten.
+    pub fn save_team(&self, mut team: mogeung_core::team::Team) -> Result<Vec<mogeung_core::team::Team>> {
+        crate::team::validate(&team)?;
+        let now = Utc::now().timestamp();
+        let existing = if team.id.is_empty() {
+            None
+        } else {
+            self.store.load_teams()?.into_iter().find(|t| t.id == team.id)
+        };
+        team.created = existing.as_ref().map(|t| t.created).unwrap_or(now);
+        team.updated = now;
+        if team.id.is_empty() {
+            team.id = crate::team::new_id();
+        }
+        self.store.save_team(&team)?;
+        if let Err(e) = crate::team::mirror_in(&self.teams_dir(), &team) {
+            tracing::warn!("could not mirror team {} to disk: {e}", team.id);
+        }
+        self.store.load_teams()
+    }
+
+    pub fn delete_team(&self, id: &str) -> Result<Vec<mogeung_core::team::Team>> {
+        self.store.delete_team(id)?;
+        let _ = crate::team::unmirror_in(&self.teams_dir(), id);
+        self.store.load_teams()
     }
 
     /// Resolve one conflicted file. `R-D22`.

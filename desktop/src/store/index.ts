@@ -46,6 +46,7 @@ import type {
   Health,
   Note,
   Task,
+  Team,
   PromptCluster,
   FailureCluster,
   RecurringFailure,
@@ -688,6 +689,12 @@ export interface AppState {
   radius: BlastRadius | null;
   usage: UsageReport | null;
   notes: Note[];
+  /** Every team the daemon holds. `R-P3`. Replaced wholesale on every `teams`
+   *  message and never edited in place, as `notes` is — the daemon owns them. */
+  teams: Team[];
+  /** Whether this connection may save or delete a team — the daemon's answer
+   *  to `team_list`, kept across broadcasts, which carry none. */
+  teamsAllowed: boolean;
   /**
    * The daemons this one follows, and where each stands. `R-I21`.
    *
@@ -961,6 +968,8 @@ export interface AppState {
   ambient: boolean;
   /** Start a session in a terminal. `R-B2`. */
   showLaunch: boolean;
+  /** The Teams window: definitions, edited here first (`R-P3`). */
+  showTeams: boolean;
   showTerminal: boolean;
   /** The global-search overlay. `R-F13`, the ask-and-go half. */
   searchOpen: boolean;
@@ -1191,6 +1200,8 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  teams: [],
+  teamsAllowed: true,
   peers: null,
   foldedGroups: [],
   noteOpenId: null,
@@ -1251,6 +1262,7 @@ export const useStore = create<AppState>((set, get) => ({
   diffAnswers: {},
   ambient: false,
   showLaunch: false,
+  showTeams: false,
   showTerminal: false,
   searchOpen: false,
   machineId: null,
@@ -1284,6 +1296,9 @@ export const useStore = create<AppState>((set, get) => ({
     // which is the line ADR-0015 and the client contract both draw.
     if (msg.cmd === "note_delete" || msg.cmd === "note_save") {
       client?.send({ cmd: "note_list" });
+    }
+    if (msg.cmd === "team_delete" || msg.cmd === "team_save") {
+      client?.send({ cmd: "team_list" });
     }
   },
 
@@ -1681,6 +1696,9 @@ export const useStore = create<AppState>((set, get) => ({
         // every snapshot rather than once, because a reconnect is a new
         // daemon's worth of state and the notes may be another machine's.
         client?.send({ cmd: "note_list" });
+        // Teams likewise, and for the same reason — and the answer carries
+        // whether this connection may write one, which only the daemon knows.
+        client?.send({ cmd: "team_list" });
         // The follow list too, from a daemon that has one. Cleared first: a
         // remote answers nothing, and the last daemon's list must not show.
         set({ peers: null });
@@ -1897,6 +1915,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "notes":
         set({ notes: msg.notes });
+        break;
+      case "teams":
+        set(msg.allowed === undefined ? { teams: msg.teams } : { teams: msg.teams, teamsAllowed: msg.allowed });
         break;
       case "peers":
         set({ peers: msg.peers });

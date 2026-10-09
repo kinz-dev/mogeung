@@ -210,3 +210,71 @@ async fn a_stored_label_full_of_command_markup_is_repaired_on_load() {
     // is what a session without a title falls back to.
     assert_eq!(after.last_prompt.as_deref(), Some("/clear"));
 }
+
+/// A team definition survives the daemon. `R-P3`, feature 0051, the first
+/// acceptance line of the Gau Geung spec: *"the definition survives a daemon
+/// restart"*. The id the first daemon minted is the id the second one lists,
+/// the policy comes back as written, and the mirror file is on disk for
+/// anything that is not mogeung.
+#[tokio::test]
+async fn a_team_outlives_the_daemon_that_defined_it() {
+    use mogeung_core::session::SessionSource;
+    use mogeung_core::team::{PermissionMode, Policy, Seat, Team};
+    let home = std::env::temp_dir().join(format!("mogeung-restart-team-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let teams_dir = home.join("teams");
+
+    let id = {
+        let store = Store::open(&db(&home)).unwrap();
+        let state = AppState::with_home(store, home.join("claude")).unwrap();
+        state.teams_dir.set(teams_dir.clone()).unwrap();
+        let mut seat = Seat::new("builder", SessionSource::Codex);
+        seat.permission = Some(PermissionMode::Plan);
+        let teams = state
+            .save_team(Team {
+                id: String::new(),
+                name: "port openrig".into(),
+                repo: "/home/you/mogeung".into(),
+                guidance: "Read the spec.".into(),
+                permission: PermissionMode::AcceptEdits,
+                policy: Policy { hop_budget: 2, hourly_cap: 30, ..Policy::default() },
+                seats: vec![seat],
+                paused: true,
+                created: 0,
+                updated: 0,
+            })
+            .unwrap();
+        assert_eq!(teams.len(), 1);
+        assert!(!teams[0].id.is_empty(), "the daemon mints the id");
+        assert!(teams[0].created > 0, "and stamps the clock");
+        teams[0].id.clone()
+    };
+
+    let state = boot(&home).await;
+    // The second daemon's mirror is the same directory, as it would be in
+    // production — and pointed away from the real one, as every test must.
+    state.teams_dir.set(teams_dir.clone()).unwrap();
+    let teams = state.teams().unwrap();
+    assert_eq!(teams.len(), 1);
+    let t = &teams[0];
+    assert_eq!(t.id, id);
+    assert_eq!(t.name, "port openrig");
+    assert_eq!((t.policy.hop_budget, t.policy.hourly_cap), (2, 30));
+    assert_eq!(t.seats[0].permission, Some(PermissionMode::Plan));
+    assert!(t.paused, "a paused team stays paused across a restart");
+
+    let files: Vec<String> = std::fs::read_dir(&teams_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].starts_with(&format!("{id}-port-openrig")), "{files:?}");
+    let md = std::fs::read_to_string(teams_dir.join(&files[0])).unwrap();
+    assert!(md.contains("- hop budget: 2"), "{md}");
+
+    state.delete_team(&id).unwrap();
+    assert_eq!(std::fs::read_dir(&teams_dir).unwrap().count(), 0, "the mirror goes with it");
+    std::fs::remove_dir_all(&home).ok();
+}

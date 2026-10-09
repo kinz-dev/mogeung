@@ -94,6 +94,10 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         | GitFetch { .. }
         | GitResolve { .. } => Hop::Write,
         NoteList | NoteSave { .. } | NoteDelete { .. } | TaskList | TaskSet { .. } => Hop::Here,
+        // A team is that daemon's own record, like a note (`R-P3`); a seat
+        // runs on that machine and nowhere else, so its definition is edited
+        // there. Teams across machines are `R-P13`'s deferral.
+        TeamList | TeamSave { .. } | TeamDelete { .. } => Hop::Here,
         ScratchList
         | ScratchCreate { .. }
         | ScratchRead { .. }
@@ -175,7 +179,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         // About that machine's desktop; never asked across a hop.
         IntellijProbe { .. } => Relay::Theirs,
         GitFetched { .. } => Relay::Pass,
-        Notes { .. } | Tasks { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
+        Notes { .. } | Tasks { .. } | Teams { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
         ModelChunk { .. } | ModelReply { .. } => Relay::Theirs,
         ReadingGuideReady { .. } | SentToSession { .. } => Relay::Pass,
         SemanticResults { .. } | FailureClusters { .. } | ChatHistory { .. } | ChatConversation { .. } | Config { .. } => {

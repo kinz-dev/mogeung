@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -12,6 +12,8 @@ covers:
   - crates/mogeungd/src/server.rs
   - crates/mogeungd/src/scratch.rs
   - crates/mogeungd/src/notes.rs
+  - crates/mogeung-core/src/team.rs
+  - crates/mogeungd/src/team.rs
 ---
 
 # Wire protocol
@@ -103,7 +105,7 @@ everyone else is judged by the bind and the flag:
 | Gate | Covers | Beyond loopback |
 |---|---|---|
 | the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir` | needs the token |
-| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md)) |
+| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
 | `send_allowed` | `SendToSession` | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
@@ -338,6 +340,51 @@ invisible to any string rule
 ([ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)).
 Content goes to the asker and the list goes to everyone, which is how a second
 window learns to close a pane whose file has gone.
+
+## Teams (`R-P3`, feature 0051)
+
+A team is the second kind of thing the daemon stores that it could not
+recompute — the user's own writing, like a note, and kept the same way:
+in the store, mirrored one way to `~/.mogeung/teams/<id>-<slug>.md`, served
+whole after every change ([ADR-0015](../decisions/0015-markdown-is-the-truth.md);
+[ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+clause 8). What crosses the wire is a **definition, never a command line**: a
+seat names its CLI as a `SessionSource` and the launcher (`R-P4`) composes the
+command from the variant, which is how ADR-0025 clause 1 survives its own
+amendment.
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `TeamList` | — | `Teams`, to the asker, with `allowed` | here |
+| `TeamSave` | `team` — whole; an empty `id` mints one, and the daemon stamps `created` and `updated` whatever was sent | `Teams`, broadcast | here |
+| `TeamDelete` | `id` | `Teams`, broadcast | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
+
+**A save is judged like a run is started.** `TeamList` is open; `TeamSave`
+and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
+else only with `--allow-run` and the token — because a definition is what a
+later click starts, and a socket that may not start a run may not write one
+either. The refusal names the clause. `allowed` travels on the list's answer
+the way `RunConfigs.allowed` does, so the window greys Save with the sentence
+rather than letting a click fail.
+
+**The daemon validates, not the window.** `team::validate` refuses what could
+not be addressed or counted — a seat with no name or a bad one, two seats with
+one name, a wake aimed at a seat the team lacks or at itself, a cap of zero —
+and the error names the field. It does not check that the repository exists or
+the CLI is installed: those refusals belong to the launcher, at the moment they
+matter. The window's `lib/teams.ts` mirrors the rule so Save is grey with the
+same words while you type; the daemon's answer is still the one that counts.
+
+**Two layers, on the wire as an absence.** A seat's `permission` is omitted
+when it inherits the team's, and its `guidance` is its own, appended after the
+team's by the launcher; the two are never merged in a definition. Policy —
+`hop_budget` (3), `hourly_cap` (60), `handover`, `readiness_press`, `wakes`,
+`watchdogs` — is per team, and every automatic send it can make is declared
+text in it, readable before it fires (ADR-0003's amendment, fence 3).
 
 ## Skills and memory
 

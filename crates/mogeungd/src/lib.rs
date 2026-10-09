@@ -33,6 +33,7 @@ pub mod send;
 pub mod server;
 pub mod state;
 pub mod store;
+pub mod team;
 pub mod usage;
 pub mod version;
 pub mod watcher;
