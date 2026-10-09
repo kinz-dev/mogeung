@@ -1,0 +1,40 @@
+  twenty-four                                                                │ gau-geung origin/gau-geung                               ?:9
+  twenty-five                                                                │/ : search
+  twenty-six                                                                 │  .git
+  twenty-seven                                                               │  .idea
+  twenty-eight                                                               │  .vscode                                                  
+  twenty-nine                                                                │  assets
+  thirty                                                                     │  crates                                                 ?:4
+  thirty-one                                                                 │  desktop
+  thirty-two                                                                 │  docs
+  thirty-three                                                               │  node_modules                                             
+  thirty-four                                                                │  scripts                                                ?:5
+  thirty-five                                                                │  target                                                   
+  thirty-six                                                                 │  web
+  thirty-seven                                                               │  󰊢 .gitignore                              2026-08-10 16:58
+  thirty-eight                                                               │  󰍔 AGENTS.md                               2026-10-09 10:06
+  thirty-nine                                                                │   Cargo.lock                              2026-09-22 00:27
+  forty                                                                      │   Cargo.toml                              2026-08-26 16:56
+◆ Bitten in 2s                                                               │   CLAUDE.md
+                                                                             │   LICENSE                                 2026-07-27 11:23
+╭───────────────────────────────────────────────────────────────────────────╮│   mprocs.yaml                             2026-08-28 12:58
+│ Use the AskUserQuestion tool to ask me a single question: tea or coffee?  ││  󰍔 README.md                               2026-10-09 09:59
+│ Give exactly those two options.                                           ││  󰍔 STATUS.md                               2026-10-09 11:56
+╰───────────────────────────────────────────────────────────────────────────╯│
+                                                                             │
+▍ Drink                                                                      │
+─────────────────────────────────────────────────────────────────────────────│
+ ☐ Drink                                                                     │
+                                                                             │
+Tea or coffee?                                                               │
+                                                                             │
+❯ 1. Tea                                                                     │
+     Tea                                                                     │
+  2. Coffee                                                                  │
+     Coffee                                                                  │
+  3. Type something.                                                         │
+─────────────────────────────────────────────────────────────────────────────│
+  4. Chat about this                                                         │
+                                                                             │
+Enter to select · ↑/↓ to navigate · Esc to cancel                            │
+───────────────────────────────────────────────────────────────── geung-a54 ─│

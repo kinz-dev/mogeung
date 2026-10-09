@@ -1,0 +1,7 @@
+cli=claude
+version=2.1.295 (Claude Code)
+gate=exited
+captured=2026-10-09T14:56:57+0100
+pane=140x42
+lines=4
+how=tmux capture-pane -p, trailing blank lines dropped, last 40

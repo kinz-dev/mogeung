@@ -1,0 +1,7 @@
+cli=opencode
+version=1.18.35
+gate=prompt
+captured=2026-10-09T15:04:13+0100
+pane=140x42
+lines=40
+how=tmux capture-pane -p, trailing blank lines dropped, last 40

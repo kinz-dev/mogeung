@@ -130,18 +130,26 @@ rule it changed.
 - **A39** `SUPPORTED` — a button stays a button. The fence that a human's
   send keeps its confirmation; every automatic send is a different thing with
   its own fences, and this row is not stretched to cover them.
-- **A51** `UNTESTED` — hooks and a status line through `--settings` fire for
-  that session only.
-- **A52** `UNTESTED` — a flags-only launch leaves the user's home as a plain
-  launch would.
-- **A53** `UNTESTED` — a worktree of a trusted repository shows no trust
-  dialog.
+- **A51** `SUPPORTED` — hooks and a status line through `--settings` fire for
+  that session only. Run 2026-10-09 by `scripts/geung-a51.sh`: three hooks
+  and the status line fired, all with the seat's id, and the plain launch
+  after it reached none.
+- **A52** `SUPPORTED` — a flags-only launch leaves the user's home as a plain
+  launch would. Run 2026-10-09 by `scripts/geung-a52.sh`: `settings.json`
+  untouched, and every key the seat changed in `~/.claude.json` is one every
+  launch changes (the tip rotation is the nuance; the ledger has it).
+- **A53** `SUPPORTED` — a worktree of a trusted repository shows no trust
+  dialog. Run 2026-10-09 by `scripts/geung-a53.sh`: straight to the prompt,
+  and no project entry written for the worktree's path.
 - **A54** `UNTESTED` — the gate shapes a CLI draws are few, stable and
-  readable from a capture's tail. ADR-0044's whole bet.
+  readable from a capture's tail. ADR-0044's whole bet. Twelve fixtures
+  pinned 2026-10-09 by `scripts/geung-a54.sh`; the week of seat captures is
+  `R-P11`'s.
 
-> Four are `UNTESTED`, so the work is `R-P2`: test them. Nothing in `R-P3`
-> onward is built until `A51` and `A52` have a verdict, because ADR-0043's
-> default depends on it.
+> Phase 0 ran on 2026-10-09: `A51`–`A53` are `SUPPORTED`, so ADR-0043's
+> default stands and `R-P3` may start. `A54` stays `UNTESTED` with its first
+> fixtures pinned; `R-P11` measures it for a week before `R-P6`'s readiness
+> press is turned on.
 
 ### Acceptance
 
@@ -212,7 +220,8 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    repository; and a fourth for `A54` — capture a seat's pane by hand through
    every gate (permission menu, question, plan, trust, login, press Enter,
    exit) for each CLI and save each as a fixture. Verdicts go on the ledger
-   rows, and ADR-0043 is amended if the first two fail.
+   rows, and ADR-0043 is amended if the first two fail. **Done 2026-10-09**:
+   `A51`–`A53` supported, twelve fixtures pinned, ADR-0043 unamended.
 1. **`R-P3` and `R-P4`, the daemon's model.** A `Team` and a `Seat` in
    `mogeung-core`; a `teams` table and a `seat_launches` launch record in the
    store; a `Team*`/`Seat*` wire family carrying ids (ADR-0025's amendment);
@@ -249,8 +258,10 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
 
 ### Files touched
 
-To be listed per phase when each is approved. Phase 0 touches `scripts/` and
-the ledger only.
+To be listed per phase when each is approved. Phase 0, done: `scripts/geung-lib.sh`,
+`scripts/geung-a51.sh` to `scripts/geung-a54.sh`,
+`crates/mogeungd/tests/fixtures/screens/<cli>/<gate>.txt` with a `.meta`
+beside each, and the ledger.
 
 ### Risks and unknowns
 
@@ -287,3 +298,17 @@ the ledger only.
 - 2026-10-09: decided before anything was built, on purpose — the epic's
   first phase was the gap analysis and its second was the fences. The design
   session for `R-P7` is next, with wireframes as an artifact.
+- 2026-10-09, phase 0, the same afternoon. What the scripts got wrong first:
+  a tmux pane target is `=name:` with the colon — without it `send-keys` and
+  `capture-pane` answer *can't find pane* and every screen dump is empty, so
+  the first `A51` run typed nothing and reported no `Stop`. The TUI's idle
+  words depend on the permission mode: auto mode says *shift+tab to cycle*,
+  manual mode *? for shortcuts*, and the scripts match both. What the runs
+  taught: `~/.claude.json` is written on every launch, by every launch, and
+  the tip rotation makes two launches differ at leaf level, so `A52`'s rule
+  compares key families and keeps project entries exact; a worktree gets no
+  project entry of its own; the trust dialog on 2.1.295 says *Accessing
+  workspace*; Codex's update notice is a *press Enter* gate the closed set
+  did not name but does cover; Qwen and opencode have no trust gate; and
+  every Claude capture here carries a file-tree plugin's column, which is
+  what the user's screen looks like and so what a seat's will.
