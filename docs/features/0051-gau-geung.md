@@ -3,7 +3,7 @@ title: Gau Geung — a team of agents
 status: draft
 updated: 2026-10-09
 roadmap: [R-P1, R-P2, R-P3, R-P4, R-P5, R-P6, R-P7, R-P8, R-P9, R-P10, R-P11, R-P12, R-P13]
-depends_on: [A1, A24, A39, A51, A52, A53]
+depends_on: [A1, A24, A39, A51, A52, A53, A54]
 ---
 
 # 0051 — Gau Geung: a team of agents
@@ -77,15 +77,15 @@ rule it changed.
   payloads get the transcript parsers' discipline.
 - **Deferred, to review again:** MCP for seats, hooks for observed sessions,
   teams across machines. *"defer, but we need to review this again."*
+- **A seat's pane is read; no other.** *"seats only for now, write the
+  pane-read ADR."* [ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md):
+  a closed set of shapes per CLI, `unknown` otherwise, the capture never
+  kept; a known shape may rank with *(screen)* in its detail; one press,
+  Enter, for the one shape that asks for it; trust and login stay yours.
+  Observed panes are that ADR's revisit, after a week of seat captures.
 
 ### Still open
 
-- **Reading a seat's pane** (`R-P11`). ADR-0010 renders a pane and nothing
-  admits reading one. The walkthrough's first question — seat panes only, or
-  observed panes too behind an opt-in — was not answered; the reply addressed
-  the component instead. Recommended: **seats only** for day one, which is
-  what *"keep it simple"* says. Until an ADR exists, no readiness press is
-  built and a trust or login gate on a seat is a row that needs you.
 - **Where the component lives** — a mode on a chord, as the wall is, or a
   home screen that argues with `A1`. Decided in the design session.
 
@@ -108,8 +108,10 @@ rule it changed.
   launch would.
 - **A53** `UNTESTED` — a worktree of a trusted repository shows no trust
   dialog.
+- **A54** `UNTESTED` — the gate shapes a CLI draws are few, stable and
+  readable from a capture's tail. ADR-0044's whole bet.
 
-> Three are `UNTESTED`, so the work is `R-P2`: test them. Nothing in `R-P3`
+> Four are `UNTESTED`, so the work is `R-P2`: test them. Nothing in `R-P3`
 > onward is built until `A51` and `A52` have a verdict, because ADR-0043's
 > default depends on it.
 
@@ -140,6 +142,10 @@ rule it changed.
       that refuses when the worktree is dirty.
 - [ ] A session I started by hand never receives a wake, a watchdog or a
       handover, by any path — pinned by a test over the whole send path.
+- [ ] A seat sitting on a permission menu, a question, a trust dialog or a
+      login says which on its row, with the lines it read; a screen it cannot
+      read says `unknown`; and no pane I opened myself is ever captured —
+      pinned by a test over the capture's one entry point.
 
 ### Explicitly out of scope
 
@@ -149,7 +155,11 @@ rule it changed.
 - A read-only MCP surface for seats; hooks for observed sessions (`R-B73`).
 - Writing anything under `~/.claude`, `~/.claude.json`, `~/.codex`,
   `~/.qwen` or opencode's directories, ever.
-- A readiness press, until `R-P11` has its ADR.
+- Pressing through any gate from a screen reading other than *press Enter*:
+  a permission menu is the CLI's permission mode, settled at launch; trust
+  and login are yours (ADR-0044 fence 5).
+- Reading any pane the daemon did not create. Observed panes are ADR-0044's
+  revisit, not this spec's.
 - OpenRig's agent-driven configuration (its permission-policy skill), its
   bundle installs, and its projection of skills and plugins into a workspace.
 
@@ -166,8 +176,10 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    machine: launch one `claude --settings` seat with three hooks and a status
    line and watch the daemon's receiver; hash the two home files around a
    seat and around a plain launch; boot into a fresh worktree of this
-   repository. Verdicts go on the ledger rows, and ADR-0043 is amended if the
-   first two fail.
+   repository; and a fourth for `A54` — capture a seat's pane by hand through
+   every gate (permission menu, question, plan, trust, login, press Enter,
+   exit) for each CLI and save each as a fixture. Verdicts go on the ledger
+   rows, and ADR-0043 is amended if the first two fail.
 1. **`R-P3` and `R-P4`, the daemon's model.** A `Team` and a `Seat` in
    `mogeung-core`; a `teams` table and a `seat_launches` launch record in the
    store; a `Team*`/`Seat*` wire family carrying ids (ADR-0025's amendment);
@@ -195,7 +207,12 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    the existing model endpoint under ADR-0031's consent, triggered by the
    policy engine's seat events, sent through the same path as any automatic
    send.
-7. **`R-P11`** waits on its ADR; **`R-P12`** and **`R-P13`** after the rest.
+7. **`R-P11`, the screen.** The capture type minted by the launcher and
+   accepted nowhere else, the per-CLI shape matchers with a `screens` fixture
+   corpus, the `screen` field on the seat row, the ranking hook with
+   *(screen)* in the detail, and the one press. Built after `R-P4`, measured
+   for a week before `R-P6`'s readiness press is turned on. **`R-P12`** and
+   **`R-P13`** after the rest.
 
 ### Files touched
 

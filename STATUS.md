@@ -7,11 +7,11 @@
 | Branch | `gau-geung` |
 | Tests | 789 passing |
 | Rust | 55605 lines |
-| Docs | 130 files, 43 ADRs |
+| Docs | 131 files, 44 ADRs |
 
 ## Assumptions
 
-Untested: **22** · At risk: **6** · Supported: 23 · Refuted: 2
+Untested: **23** · At risk: **6** · Supported: 23 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -28,5 +28,5 @@ Untested: **22** · At risk: **6** · Supported: 23 · Refuted: 2
 | [Found on the LAN — a beacon, a list that fills itself, and remote sessions in one window](docs/features/0046-found-on-the-lan.md) | `shipped` | [A44, A24] |
 | [opencode adapter](docs/features/0048-opencode-adapter.md) | `shipped` | [A4, A23] |
 | [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `shipped` | [A4, A49, A50] |
-| [Gau Geung — a team of agents](docs/features/0051-gau-geung.md) | `draft` | [A1, A24, A39, A51, A52, A53] |
+| [Gau Geung — a team of agents](docs/features/0051-gau-geung.md) | `draft` | [A1, A24, A39, A51, A52, A53, A54] |
 
