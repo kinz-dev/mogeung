@@ -41,9 +41,12 @@ rule it changed.
   agent* to *never an agent it did not start itself*. Five fences; ownership
   by **birth only** (*"1. birth only"*). ADR-0011, ADR-0025 and ADR-0038
   follow.
-- **Hop budget of three.** *"ok, hop budget default 3."* An agent-to-agent
-  chain is held after three hops and ranks as needing you; zero is *every
-  message through you*; a per-hour cap and a pause switch beside it.
+- **Hop budget of three, sixty automatic sends an hour.** *"ok, hop budget
+  default 3"* and, the same day, *"per hour cap 60?"* An agent-to-agent chain
+  is held after three hops and ranks as needing you; zero is *every message
+  through you*. A team may make sixty automatic deliveries in an hour — one a
+  minute, wakes, watchdogs and handovers included — and the sixty-first is
+  held the same way. A pause switch beside both.
 - **Nothing is written under any user home; a separate home is opt-in.**
   *"I don't want it affect the normal usage of a claude session"* and *"we
   can just use separate home as opt-in."*
@@ -85,7 +88,6 @@ rule it changed.
   built and a trust or login gate on a seat is a row that needs you.
 - **Where the component lives** — a mode on a chord, as the wall is, or a
   home screen that argues with `A1`. Decided in the design session.
-- **The per-hour cap's default.** Three hops are decided; the cap is not.
 
 ### Assumptions
 
@@ -93,9 +95,10 @@ rule it changed.
   more rows on a board built around one queue, and the component has to keep
   a seat that needs you on that queue rather than beside it. The design
   session's constraint.
-- **A24** `UNTESTED`, and its *read-only* word now qualified three times:
-  ADR-0025's runs, ADR-0003's seats, ADR-0019's writes. The row needs
-  rewriting before `R-P4` ships, not after.
+- **A24** `UNTESTED`, rewritten 2026-10-09 so the assumption column no
+  longer says *read-only*: the daemon's write, run and seat verbs sit behind
+  the token, `--allow-run` and per-follow consent, and that is what is bet
+  on. Every verb this spec adds goes behind the same gates.
 - **A39** `SUPPORTED` — a button stays a button. The fence that a human's
   send keeps its confirmation; every automatic send is a different thing with
   its own fences, and this row is not stretched to cover them.
