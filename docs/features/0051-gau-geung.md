@@ -90,6 +90,18 @@ rule it changed.
   graph and the table together, not one behind a toggle. A seat's detail is a
   pane in the mode's own tile tree — holdable and splittable like any pane,
   as `R-B49` made the Agent pane — not a drawer that follows the selection.
+- **The window arranges its own grid; tmux's layout is for a terminal.**
+  *"of course the window arrange its own grid. I thought that is not a
+  question and by existing design."* It is: each seat's terminal is a pane
+  attached on its own, as the Agent pane is, dragged, held and popped out
+  like any pane; the daemon's grouped layout of the team's tmux session
+  (`R-P8`) is for `tmux attach` from a terminal and the window does not
+  mirror it.
+- **Two layers for guidance and permission mode; one for the rest.** *"agree
+  per your recommendation for the two layers approach."* A team carries a
+  guidance every seat gets and a default permission mode; a seat adds its own
+  guidance and may override the mode. CLI, model and worktree are per seat
+  only, since they are never shared.
 - **A seat talks only to its own team.** *"ok, a seat only talks to its own
   team."* A team is the unit of policy, so a delivery between teams would be
   a delivery between two budgets and two pause switches; it is refused, and
