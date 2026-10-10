@@ -24,8 +24,26 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
 
-/// Types `text` into the tmux target. `R-P6`'s seam over `send::send`.
+/// Types `text` into the tmux target. `R-P6`'s seam over `send::send`. A
+/// readiness press (`R-P11`) comes through the same seam as the text
+/// `"<Enter>"`, so a test can tell it from a send; the real one presses.
 pub type Sender = Arc<dyn Fn(&str, &str) -> Result<()> + Send + Sync>;
+/// Reads a seat's pane. `R-P11`'s seam over `screen::capture`.
+pub type Capturer = Arc<dyn Fn(&crate::screen::SeatPane) -> Option<String> + Send + Sync>;
+
+/// What a seat's pane last showed, and what clause 6 of ADR-0044 needs to
+/// make an unchanged screen cost nothing. `R-P11`.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenState {
+    pub read: Option<mogeung_core::team::ScreenRead>,
+    /// The last capture's hash: the same screen is not reclassified.
+    pub hash: u64,
+    /// When the last capture was taken, unix seconds; a seat rests between.
+    pub captured_at: i64,
+    /// The capture a readiness press was made for, so one screen is pressed
+    /// once however many scans it stays up.
+    pub pressed_for: Option<u64>,
+}
 
 /// How far back to look for sessions on startup.
 const HISTORY_DAYS: i64 = 14;
@@ -163,6 +181,14 @@ pub struct AppState {
     /// recording one. `R-P6`. The one seam, so no test ever types into a
     /// real pane; the function it replaces is still the only code that does.
     pub sender: std::sync::OnceLock<Sender>,
+    /// What each seat's pane last showed, and the bookkeeping ADR-0044
+    /// clause 6 asks for — the hash, the rest, the press. `R-P11`. Keyed by
+    /// team and seat; never persisted: a capture is the scan's memory.
+    pub screens: Mutex<HashMap<(String, String), ScreenState>>,
+    /// How a seat's pane is read: `screen::capture` unless a test set one.
+    /// `R-P11`. The seam takes a `SeatPane`, which only a launch record
+    /// makes, so a test cannot capture anything a seat is not either.
+    pub capturer: std::sync::OnceLock<Capturer>,
     /// The daemons this one follows, and what it mirrors from them. `R-I18`,
     /// feature 0047. **Not in `sessions`**: see `federation.rs` for why.
     pub federation: crate::federation::Federation,
@@ -663,6 +689,7 @@ fn blank_session(
         provisional: false,
         seat: None,
         held_send: None,
+        screen: None,
         origin: None,
         limit_hit_at: None,
         limit_resets: None,
@@ -765,6 +792,8 @@ impl AppState {
             listen_addr: std::sync::OnceLock::new(),
             policy: Mutex::new(crate::policy::Engine::from_log(sends)),
             sender: std::sync::OnceLock::new(),
+            screens: Mutex::new(HashMap::new()),
+            capturer: std::sync::OnceLock::new(),
             federation: crate::federation::Federation::default(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
@@ -1647,6 +1676,9 @@ impl AppState {
         // settled — a provisional row exists only while nothing better does.
         // A seat's own session, once it has one, carries the seat's tag.
         // `R-P4`. Before the provisional pass, which skips a claimed pane.
+        // The seats' panes, read before the rows are built, so the shape
+        // rides on them. `R-P11`, ADR-0044.
+        self.screen_tick().await;
         self.tag_seats().await;
         self.refresh_provisional().await;
         // The policy's clock: watchdogs on silence, a plain seat's turn
@@ -1756,6 +1788,7 @@ impl AppState {
         let mut seat_panes = std::collections::HashSet::new();
         let launches = self.launches.read().await.clone();
         let held = self.held_sends(&launches).await;
+        let screens = self.screens.lock().await.clone();
         for l in launches.iter() {
             seat_panes.insert(l.pane_id.clone());
             if claimed.contains(&l.pane_id) {
@@ -1768,6 +1801,7 @@ impl AppState {
             let agent = pane.and_then(|p| agent_process_in_pane(p, &table)).map(|(pid, _)| pid);
             let mut row = seat_row(l, pane, agent, now);
             row.held_send = held.get(&(l.team_id.clone(), l.seat.clone())).cloned();
+            row.screen = screens.get(&(l.team_id.clone(), l.seat.clone())).and_then(|s| s.read.clone());
             out.push(row);
         }
 
@@ -4557,9 +4591,22 @@ impl AppState {
     /// there is no value of `to` an observed session could ever be. Every
     /// automatic send — a seat's message, a wake, a watchdog, a release —
     /// comes through here; `send.rs` is the only thing below it.
-    async fn type_into(&self, to: &mogeung_core::team::SeatLaunch, text: &str) -> Result<()> {
-        let sender = self.sender();
+    async fn type_into(&self, to: &mogeung_core::team::SeatLaunch, text: &str, press: bool) -> Result<()> {
         let target = to.pane_id.clone();
+        // A readiness press (`R-P11`) is Enter and nothing else: no text
+        // travels, and `send::press_enter` is the one invocation. A test's
+        // recording sender sees it as `"<Enter>"`.
+        if press {
+            if let Some(sender) = self.sender.get().cloned() {
+                return tokio::task::spawn_blocking(move || sender(&target, "<Enter>"))
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow!("the press did not run: {e}")));
+            }
+            return tokio::task::spawn_blocking(move || crate::send::press_enter(&target))
+                .await
+                .unwrap_or_else(|e| Err(anyhow!("the press did not run: {e}")));
+        }
+        let sender = self.sender();
         let text = text.to_string();
         tokio::task::spawn_blocking(move || sender(&target, &text))
             .await
@@ -4613,7 +4660,7 @@ impl AppState {
             }
             crate::policy::Verdict::Deliver { hop } => {
                 e.hop = hop;
-                match self.type_into(to, &e.text).await {
+                match self.type_into(to, &e.text, e.kind == mogeung_core::team::SendKind::Press).await {
                     Ok(()) => e.status = SendStatus::Delivered,
                     Err(err) => {
                         e.status = SendStatus::Failed;
@@ -4719,6 +4766,106 @@ impl AppState {
                     self.record_send(e).await;
                 }
             }
+        }
+    }
+
+    /// Read every seat's pane, once per rest, and keep the shape. `R-P11`,
+    /// ADR-0044: the pane comes from the launch record and nowhere else
+    /// (clause 1), the text lives here for one classification and is never
+    /// kept (clause 3), an unchanged capture is not reclassified (clause 6),
+    /// an unknown shape is raised through Health as `screen:<cli>`, and the
+    /// one press — Enter, for *press Enter*, under the team's flag — is made
+    /// once per screen and logged like every automatic send (clause 5).
+    pub async fn screen_tick(&self) {
+        use mogeung_core::team::{ScreenRead, ScreenShape, SendKind};
+        use std::hash::{Hash, Hasher};
+        /// A seat rests this long between captures: a fork per seat per
+        /// tick is `R-J53`'s lesson.
+        const REST_SECS: i64 = 2;
+        let launches = self.launches.read().await.clone();
+        if launches.is_empty() {
+            return;
+        }
+        let capturer: Capturer = self
+            .capturer
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(|p: &crate::screen::SeatPane| crate::screen::capture(p)));
+        let now = Utc::now().timestamp();
+        let mut teams: Option<Vec<mogeung_core::team::Team>> = None;
+        let mut presses: Vec<(mogeung_core::team::Team, mogeung_core::team::SeatLaunch)> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
+        for l in &launches {
+            let key = (l.team_id.clone(), l.seat.clone());
+            let due = self
+                .screens
+                .lock()
+                .await
+                .get(&key)
+                .map(|s| now - s.captured_at >= REST_SECS)
+                .unwrap_or(true);
+            if !due {
+                continue;
+            }
+            let pane = crate::screen::SeatPane::of(l);
+            let c = capturer.clone();
+            let text = tokio::task::spawn_blocking(move || c(&pane)).await.unwrap_or(None);
+            let mut screens = self.screens.lock().await;
+            let st = screens.entry(key).or_default();
+            st.captured_at = now;
+            let Some(text) = text else {
+                // The pane is gone, or tmux is: `unknown`, with a note, not an
+                // error that stops the scan.
+                if st.read.as_ref().map(|r| r.shape) != Some(ScreenShape::Unknown) || st.hash != 0 {
+                    st.read = Some(ScreenRead {
+                        shape: ScreenShape::Unknown,
+                        excerpt: vec!["the pane could not be captured — it is gone, or tmux is".into()],
+                        read_at: now,
+                    });
+                    st.hash = 0;
+                }
+                continue;
+            };
+            let hash = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut h);
+                h.finish()
+            };
+            if hash == st.hash && st.read.is_some() {
+                continue;
+            }
+            st.hash = hash;
+            let read = crate::screen::classify(l.cli, &text, now);
+            if read.shape == ScreenShape::Unknown && !text.trim().is_empty() {
+                unknown.push(l.cli.label().to_string());
+            }
+            if read.shape == ScreenShape::PressEnter && st.pressed_for != Some(hash) {
+                if teams.is_none() {
+                    teams = Some(self.store.load_teams().unwrap_or_default());
+                }
+                if let Some(team) = teams.as_ref().and_then(|ts| ts.iter().find(|t| t.id == l.team_id)) {
+                    if team.policy.readiness_press {
+                        st.pressed_for = Some(hash);
+                        presses.push((team.clone(), l.clone()));
+                    }
+                }
+            }
+            st.read = Some(read);
+        }
+        for cli in unknown {
+            self.health.lock().await.record_unknown(&format!("screen:{cli}"));
+        }
+        for (team, l) in presses {
+            let e = crate::policy::entry(
+                &team.id,
+                SendKind::Press,
+                None,
+                &l.seat,
+                "Enter",
+                "readiness press — the screen said press Enter",
+                now,
+            );
+            self.deliver(Some(&team), &l, e).await;
         }
     }
 
@@ -4842,7 +4989,7 @@ impl AppState {
             .find(|l| l.team_id == team_id && l.seat == e.to)
             .cloned()
             .ok_or_else(|| anyhow!("seat `{}` is not running — drop the send, or boot the team first", e.to))?;
-        self.type_into(&target, &e.text).await?;
+        self.type_into(&target, &e.text, e.kind == mogeung_core::team::SendKind::Press).await?;
         e.status = SendStatus::Released;
         self.record_send(e).await;
         self.refresh_seat_rows().await;
@@ -5178,6 +5325,7 @@ impl AppState {
         let panes = tmux_panes();
         let parents = if panes.is_empty() { HashMap::new() } else { process_parents() };
         let held = self.held_sends(&launches).await;
+        let screens = self.screens.lock().await.clone();
         let mut changed: Vec<Session> = Vec::new();
         {
             let mut sessions = self.sessions.write().await;
@@ -5189,11 +5337,15 @@ impl AppState {
                 let tag = seat_tag_for(&launches, &s.id, pane.as_deref());
                 let Some(t) = tag else { continue };
                 // What the policy holds for this seat rides on the same row
-                // (`R-P6`), so a held send ranks the seat it was for.
-                let h = held.get(&(t.team_id.clone(), t.seat.clone())).cloned();
-                if s.seat.as_ref() != Some(&t) || s.held_send != h {
+                // (`R-P6`), so a held send ranks the seat it was for; so does
+                // what its pane shows (`R-P11`).
+                let key = (t.team_id.clone(), t.seat.clone());
+                let h = held.get(&key).cloned();
+                let sc = screens.get(&key).and_then(|x| x.read.clone());
+                if s.seat.as_ref() != Some(&t) || s.held_send != h || s.screen != sc {
                     s.seat = Some(t);
                     s.held_send = h;
+                    s.screen = sc;
                     changed.push(s.clone());
                 }
             }
@@ -6665,12 +6817,14 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         claims, source, announced_dirs, origin, artifacts, custom_title,
         // A seat's tag is a fact about the row, not a counter. `R-P4`. What
         // the policy holds for it ranks the row, so it is heard at once. `R-P6`.
-        seat, held_send,
+        seat, held_send, screen,
     } = after;
 
     *id != before.id
         || *seat != before.seat
         || *held_send != before.held_send
+        // A gate read off the pane ranks the row; a change is heard at once. `R-P11`.
+        || *screen != before.screen
         || *title != before.title
         || *custom_title != before.custom_title
         || *name != before.name

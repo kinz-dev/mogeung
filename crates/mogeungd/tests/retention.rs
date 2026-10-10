@@ -63,6 +63,7 @@ fn aged_session(id: &str, days_ago: i64, transcript: &str) -> Session {
         provisional: false,
             seat: None,
             held_send: None,
+            screen: None,
         origin: None,
         recent_tools: vec![],
         limit_hit_at: None,

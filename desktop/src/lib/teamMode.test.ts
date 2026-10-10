@@ -144,6 +144,13 @@ describe("the views", () => {
     expect(sourceOf(launch("tester", { cli: "opencode" }), s)).toBe("plugin");
     expect(sourceOf(launch("builder", { cli: "codex", signals: { kind: "plain", events: 0, unread: 0 } }), s)).toBe("transcript");
     expect(sourceOf(undefined, s)).toBe("none");
+    // `R-P11`: a gate read off the pane is the source only when the queue
+    // ranked on it — a hook's fact outranks a screen's reading.
+    const onMenu = session("a", "planner", { screen: { shape: "permission_menu", excerpt: ["Do you want to proceed?"], read_at: 1 } });
+    expect(sourceOf(launch("planner"), onMenu, item("a", "awaiting_permission", "permission menu (screen)"))).toBe("screen");
+    expect(sourceOf(launch("planner"), onMenu, item("a", "awaiting_permission", "needs approval for Bash"))).toBe("hook");
+    const quiet = session("a", "planner", { screen: { shape: "prompt", excerpt: [], read_at: 1 } });
+    expect(sourceOf(launch("planner"), quiet, item("a", "awaiting_input", "at the prompt (screen)"))).toBe("hook");
   });
 });
 

@@ -83,6 +83,7 @@ whether the value survives a restart or is re-derived on the first scan.
 | `origin` (`R-I21`) | the machine a mirrored session runs on: `machine_id`, `host`, `ssh_target`, `stale` | never |
 | `seat` (`R-P4`, `R-P5`) | the seat this session is, when the daemon started it: `team_id`, `team`, `seat`, and `signals` — `hooked` when its hooks reach the daemon, `plain` when it is known from its transcript and screen only | yes; re-tagged every scan from the launch records |
 | `held_send` (`R-P6`) | a send the team's policy is holding for this seat — how many, why the oldest, since when — which ranks the row as needing you; never set on an observed session, because only the policy engine writes it and it addresses launch records | no; derived from the send log every scan |
+| `screen` (`R-P11`) | what this seat's pane showed at the last read: a `shape` from ADR-0044's closed set, the `excerpt` it was read from, `read_at`; a gate ranks the row with *(screen)*; never set on an observed session, because the capture takes a pane from a launch record and nowhere else; the capture itself is never kept | no; the scan's memory, re-read every rest |
 
 **`alive` and `live_status` are never trusted from storage**; both are
 re-derived from the OS on the first scan. **`pid` is kept and is not a

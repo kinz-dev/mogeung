@@ -186,6 +186,32 @@ recipient's row as `held_send` and ranks it as needing you; the Teams window
 releases or drops it. Your own send into a seat is what it always was, logged
 beside the automatic ones, and it starts the chain again.
 
+### Reading a seat's pane (`R-P11`)
+
+And since `R-P11` a seat's pane is **read**, on
+[ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md)'s
+terms and for a seat and no other. `screen.rs` takes a `SeatPane`, a type
+whose one constructor takes a launch record — a provisional row, an attach
+target, a pane of your own are not that type and cannot be captured — runs
+`capture-pane` on it once per rest, and classifies the last forty lines
+through one `match` per CLI into a closed set: permission menu, plan
+approval, question, trust, login, press Enter, rate limit, exited to a
+shell, at the prompt, working, and `unknown` for everything else, never the
+nearest guess. What rides on the row is the shape, the few lines it was read
+from and when; the capture lives in the scan's memory for one classification
+and is never stored, sent or shown to a model. An unchanged screen is not
+reclassified; a pane that cannot be captured is `unknown` with a note; a
+screen that matches nothing raises `screen:<cli>` through the Health canary,
+because four CLIs redraw their gates without warning and `A54` is the bet.
+A gate ranks the row with *(screen)* in its detail, after the registry's
+facts ([attention-ranking.md](attention-ranking.md#what-ranking-does-not-read)).
+One press exists, and it is the one the shape asks for: under the team's
+`readiness_press` — off by default until a week of captures says the shape
+is read reliably — *press Enter* is pressed once per screen, as a logged
+automatic send that is not a hop. Nothing else is ever pressed from a
+reading: a permission menu is the seat's permission mode, settled at launch,
+and trust and login are yours.
+
 ### Handing a folder to the desktop (`R-J34`)
 
 `open_folder` — `open` on macOS, `xdg-open` elsewhere — is in the daemon

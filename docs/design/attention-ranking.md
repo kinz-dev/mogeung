@@ -25,10 +25,10 @@ the table: snooze first, then `Failed`; for a live session `RateLimited`,
 
 | Reason | Badge | Score | Fires when |
 |---|---|---|---|
-| `AwaitingPermission` | `APPROVE` | 1100 | Alive, registry `idle`, **and a tool call has no result** |
-| `AwaitingInput` | `WAITING` | 1000 | Alive and the registry reports `idle` — or, since `R-P6`, the team's policy holds a send for this seat, whatever it is doing |
-| `Failed` | `FAILED` | 900 | An API error was recorded |
-| `RateLimited` | `LIMIT` | 850 | Alive and a rate limit was hit; cleared when the session moves again |
+| `AwaitingPermission` | `APPROVE` | 1100 | Alive, registry `idle`, **and a tool call has no result** — or, since `R-P11`, a seat's pane shows a permission menu, a plan approval or a question, with *(screen)* in the detail |
+| `AwaitingInput` | `WAITING` | 1000 | Alive and the registry reports `idle` — or, since `R-P6`, the team's policy holds a send for this seat, whatever it is doing — or, since `R-P11`, a seat's pane shows a trust dialog, a login or *press Enter*, named with *(screen)* |
+| `Failed` | `FAILED` | 900 | An API error was recorded — or, since `R-P11`, a seat's pane shows a shell where the agent was, *(screen)* |
+| `RateLimited` | `LIMIT` | 850 | Alive and a rate limit was hit; cleared when the session moves again — or, since `R-P11`, a seat's pane shows a rate-limit banner |
 | `NeedsReview` | `REVIEW` | 800 | Exited, changed files, not all read |
 | `Stalled` | `STALLED` | 700 | Alive and busy, silent ≥ `stall_secs` |
 | `Running` | `running` | 100 | Alive and busy, recently active |
@@ -190,3 +190,16 @@ recently on 2026-10-07, and each refusal is deliberate rather than pending:
   approval (a seat blocked on a prompt cannot take the message anyway) and
   before plain idle. An observed session never carries the field, because
   only the policy engine writes it and the engine addresses launch records.
+- **`screen`** (`R-P11`, [ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md)):
+  read, and on the ADR's terms. A gate read off a seat's pane ranks — a
+  permission menu, a plan approval or a question as `APPROVE`; trust, login
+  and *press Enter* as `WAITING`; a rate-limit banner as `LIMIT`; a shell
+  where the agent was as `FAILED` — with *(screen)* in the detail so a
+  reading is never mistaken for a fact, and the read's time as its clock.
+  The arm sits **after** the registry's own facts and the policy's hold and
+  before plain idle, which is clause 4's *a hook's fact outranks a screen's
+  reading*: a seat the registry already calls idle with an open tool is
+  `APPROVE` on evidence, and the screen adds the reason only where the
+  evidence is silent. The quiet shapes — at the prompt, working — and
+  `unknown` never rank. An observed session never carries the field: the
+  capture takes a pane from a launch record and from nowhere else.

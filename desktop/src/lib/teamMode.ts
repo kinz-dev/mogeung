@@ -18,7 +18,7 @@
  */
 
 import type { AttentionItem, Seat, SeatLaunch, SendEntry, Session, Team, TeamSends } from "@/wire/types";
-import { needsHuman, reasonLabel } from "@/wire/types";
+import { isScreenGate, needsHuman, reasonLabel } from "@/wire/types";
 
 export type Lane = "needs_you" | "parked" | "blocked" | "now" | "finished";
 
@@ -151,9 +151,13 @@ export function laneFor(
   return { lane: "now", line: session.last_activity || item?.detail || "working" };
 }
 
-/** Where the state came from: a hook that has spoken, a plugin, else the transcript. */
-export function sourceOf(launch: SeatLaunch | undefined, session: Session | undefined): StateSource {
+/** Where the state came from: a gate read off the pane (`R-P11`) when the
+ *  queue's reason is that reading, else a hook that has spoken, a plugin,
+ *  else the transcript. A hook's fact outranks a screen's reading, so the
+ *  screen is the source only when the detail says *(screen)*. */
+export function sourceOf(launch: SeatLaunch | undefined, session: Session | undefined, item?: AttentionItem): StateSource {
   if (!launch) return "none";
+  if (session?.screen && isScreenGate(session.screen.shape) && item?.detail.endsWith("(screen)")) return "screen";
   if (launch.signals.kind === "hooked") {
     if (launch.cli === "opencode") return "plugin";
     return launch.signals.events > 0 ? "hook" : "transcript";
@@ -195,7 +199,7 @@ export function seatViews(
       lane,
       line,
       badge: session && item ? reasonLabel(item.reason) : null,
-      source: sourceOf(launch, session),
+      source: sourceOf(launch, session, item),
       context: launch?.signals.context_used,
       sent: delivered.filter((e) => e.from === seat.name).length,
       received: delivered.filter((e) => e.to === seat.name).length,

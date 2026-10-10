@@ -194,6 +194,19 @@ describe("the Gau Geung mode", () => {
     expect(detail.textContent).toContain("hooked — 3 events, last Stop 1m ago · context 41% · Opus 5.5");
     expect(detail.textContent).toContain("planner → builder “start on task 1” · delivered · hop 1");
     expect(detail.textContent).toContain("your home, read only");
+    // `R-P11`: what its pane showed, with the lines it was read from.
+    act(() =>
+      useStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          p: { ...s.sessions.p, screen: { shape: "permission_menu", excerpt: ["Do you want to proceed?", "❯ 1. Yes", "  2. No"], read_at: Date.now() / 1000 - 3 } },
+        },
+      })),
+    );
+    const sc = await screen.findByTestId("screen");
+    expect(sc.textContent).toContain("shape: permission menu");
+    expect(sc.textContent).toContain("Do you want to proceed?");
+    expect(sc.textContent).toContain("never answered by mogeung");
     fireEvent.click(screen.getByText("Attach terminal"));
     expect(await screen.findByTestId("terminal-term:t1/planner")).toBeInTheDocument();
     // The row picks too, and the pane follows.

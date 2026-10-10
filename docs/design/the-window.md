@@ -116,6 +116,14 @@ theirs over yours or quietly moving the base. A refusal lands on the tab:
 theirs; *busy* names the seat and offers *save anyway*, the one override.
 `Ctrl+S` is the editor's own chord, as the scratch pane's is.
 
+**What a seat's pane showed** (`R-P11`) rides on its row as `screen` — the
+shape, the lines it was read from, when — and the mode's seat pane shows all
+three, so a misread is visible rather than silent; the topology names
+`(screen)` as a state's source only when the queue's reason is that reading,
+because a hook's fact outranks it. The window never answers a gate: the
+excerpt is beside *Attach terminal*, and the one press the policy may make is
+the daemon's.
+
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept
 in the log; an `info` shows as a toast and is not counted. `capNotices` keeps

@@ -189,6 +189,25 @@ pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> Atten
                     Some(h.since),
                 )
             }
+            // A gate read off the seat's pane (`R-P11`, ADR-0044 clause 4):
+            // after the registry's facts and the policy's hold, before plain
+            // idle, and the detail says *(screen)* so a reading is never
+            // mistaken for a fact. The quiet shapes and `unknown` never rank.
+            _ if s.screen.as_ref().is_some_and(|r| r.shape.is_gate()) => {
+                use crate::team::ScreenShape;
+                let r = s.screen.as_ref().expect("checked above");
+                let since = Some(DateTime::from_timestamp(r.read_at, 0).unwrap_or(s.last_event_at));
+                let detail = format!("{} (screen)", r.shape.label());
+                match r.shape {
+                    ScreenShape::PermissionMenu | ScreenShape::PlanApproval | ScreenShape::Question => {
+                        (AttentionReason::AwaitingPermission, detail, since)
+                    }
+                    ScreenShape::RateLimit => (AttentionReason::RateLimited, detail, None),
+                    ScreenShape::Exited => (AttentionReason::Failed, detail, None),
+                    // Trust, login, press Enter: yours, named.
+                    _ => (AttentionReason::AwaitingInput, detail, since),
+                }
+            }
             Some(LiveStatus::Idle) => (
                 AttentionReason::AwaitingInput,
                 "waiting for you".to_string(),
@@ -325,6 +344,7 @@ mod tests {
             provisional: false,
             seat: None,
             held_send: None,
+            screen: None,
             origin: None,
             limit_hit_at: None,
             limit_resets: None,

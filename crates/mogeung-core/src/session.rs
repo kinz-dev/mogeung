@@ -329,6 +329,13 @@ pub struct Session {
     /// engine addresses launch records, never sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_send: Option<HeldSend>,
+    /// What this seat's pane showed at the last read. `R-P11`, ADR-0044: a
+    /// shape from a closed set, the lines it was read from, and when. Only a
+    /// seat's row ever carries one — the capture takes a pane from the launch
+    /// record and from nowhere else — and a known gate may rank the row with
+    /// *(screen)* in its detail, after the registry's own facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<crate::team::ScreenRead>,
 
     /// The machine this session runs on, when it is not this one. `R-I21`,
     /// [feature 0047](../../../docs/features/0047-daemon-federation/spec.md).

@@ -63,7 +63,7 @@ import {
   type Lane,
   type SeatView,
 } from "@/lib/teamMode";
-import { needsHuman, sourceLabel, type AttentionReason, type Team, type TeamSends } from "@/wire/types";
+import { SCREEN_LABEL, isScreenGate, needsHuman, sourceLabel, type AttentionReason, type Team, type TeamSends } from "@/wire/types";
 
 /** The attribute the keymap reads to leave bare keys to a terminal in here. */
 export const TEAM_TILES_ATTR = "data-team-tiles";
@@ -470,6 +470,29 @@ export function SeatDetail() {
       </Dim>
       <Dim className="text-2xs">{view.line}</Dim>
       {l && <Dim className="text-2xs">{signalsLine(l.signals, now())}</Dim>}
+      {/* What its pane showed (`R-P11`, ADR-0044): the shape, when it was
+          read, and the lines it was read from — so a misread is visible
+          rather than silent. A quiet shape is a word; a gate shows its
+          excerpt; mogeung never answers a gate from here. */}
+      {view.session?.screen && (
+        <div data-testid="screen">
+          <Dim className="block text-2xs uppercase tracking-wide">
+            screen · read {agoShort(view.session.screen.read_at, now())} ago · shape: {SCREEN_LABEL[view.session.screen.shape]}
+          </Dim>
+          {view.session.screen.excerpt.length > 0 && (
+            <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-[var(--bg)] p-1.5 font-mono text-2xs text-[var(--text)]">
+              {view.session.screen.excerpt.join("\n")}
+            </pre>
+          )}
+          {isScreenGate(view.session.screen.shape) && (
+            <Dim className="block text-2xs">
+              {view.session.screen.shape === "press_enter"
+                ? "the one shape the policy may press through — readiness press, off unless the team says so"
+                : "a reading of the pane, never answered by mogeung: attach the terminal and answer it yourself"}
+            </Dim>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1">
         <Button
           size="sm"

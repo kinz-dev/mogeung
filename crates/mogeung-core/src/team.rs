@@ -456,6 +456,80 @@ impl SeatLaunch {
     }
 }
 
+// -- The screen. `R-P11`, ADR-0044. -----------------------------------------
+
+/// What a seat's pane shows, read into a closed set. `R-P11`, ADR-0044
+/// clause 2: the gates a TUI draws and the transcript never carries, plus
+/// the two quiet states, and `Unknown` for anything else — a value, never
+/// the nearest guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenShape {
+    /// *Do you want to proceed?* with numbered choices. Ranks `APPROVE`.
+    PermissionMenu,
+    /// *Exit plan mode?* Ranks `APPROVE`.
+    PlanApproval,
+    /// The CLI asked you something and waits on a pick. Ranks `APPROVE`.
+    Question,
+    /// The folder-trust dialog. Yours; ranks `WAITING` and names itself.
+    Trust,
+    /// A login. Yours; ranks `WAITING` and names itself.
+    Login,
+    /// *Press Enter to continue.* Ranks `WAITING`; the one shape the policy
+    /// may press through (clause 5).
+    PressEnter,
+    /// A rate-limit banner. Ranks `LIMIT`.
+    RateLimit,
+    /// A shell prompt where the agent was. Ranks `FAILED`.
+    Exited,
+    /// At its prompt, idle. Does not rank: the registry's word wins.
+    Prompt,
+    /// Mid-turn. Does not rank.
+    Working,
+    /// Nothing the closed set names. Never ranks.
+    #[default]
+    Unknown,
+}
+
+impl ScreenShape {
+    pub fn label(self) -> &'static str {
+        match self {
+            ScreenShape::PermissionMenu => "permission menu",
+            ScreenShape::PlanApproval => "plan approval",
+            ScreenShape::Question => "question",
+            ScreenShape::Trust => "trust dialog",
+            ScreenShape::Login => "login",
+            ScreenShape::PressEnter => "press Enter",
+            ScreenShape::RateLimit => "rate limit",
+            ScreenShape::Exited => "exited to a shell",
+            ScreenShape::Prompt => "at the prompt",
+            ScreenShape::Working => "working",
+            ScreenShape::Unknown => "unknown",
+        }
+    }
+
+    /// A gate: a shape that may rank the row (clause 4). The quiet shapes
+    /// and `Unknown` are not.
+    pub fn is_gate(self) -> bool {
+        !matches!(self, ScreenShape::Prompt | ScreenShape::Working | ScreenShape::Unknown)
+    }
+}
+
+/// What a seat's pane showed, as the row carries it: the shape, the few
+/// lines it was read from, and when. ADR-0044 clause 3: the capture itself
+/// never travels. Only a seat's row ever has one (clause 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenRead {
+    pub shape: ScreenShape,
+    /// The lines the shape was read from — the question's text, the menu's
+    /// choices — so the window shows what mogeung read rather than asking
+    /// you to trust it. Empty for the quiet shapes.
+    #[serde(default)]
+    pub excerpt: Vec<String>,
+    /// Unix seconds.
+    pub read_at: i64,
+}
+
 // -- Sends. `R-P6`. ----------------------------------------------------------
 //
 // Fence 4 of ADR-0003's 2026-10-09 amendment, as data: every automatic send
@@ -484,6 +558,11 @@ pub enum SendKind {
     /// ADR-0003's later amendment of 2026-10-09. The entry says who composed
     /// it, and a policy of *after you read it* holds it for you first.
     Handover,
+    /// The readiness press: Enter, for the one screen shape that asks for it,
+    /// under the team's `readiness_press`. `R-P11`, ADR-0044 clause 5. Not a
+    /// hop — nothing another agent did caused it — and counted against the
+    /// hour like every automatic send.
+    Press,
 }
 
 impl SendKind {
@@ -511,6 +590,7 @@ impl SendKind {
             SendKind::Watchdog => "watchdog",
             SendKind::Agent => "seat",
             SendKind::Handover => "handover",
+            SendKind::Press => "press",
         }
     }
 }
@@ -660,6 +740,11 @@ mod tests {
         assert!(SendKind::Handover.is_hop(), "it carries what other seats said and did");
         assert!(SendKind::Handover.is_automatic());
         assert!(!SendKind::Watchdog.is_hop());
+        assert!(!SendKind::Press.is_hop(), "a press is caused by a screen, not by another agent");
+        assert!(SendKind::Press.is_automatic());
+        assert!(ScreenShape::PressEnter.is_gate());
+        assert!(!ScreenShape::Prompt.is_gate() && !ScreenShape::Unknown.is_gate());
+        assert_eq!(serde_json::to_string(&ScreenShape::PermissionMenu).unwrap(), r#""permission_menu""#);
         assert!(!SendKind::Human.is_hop());
         assert!(SendKind::Watchdog.is_automatic());
         assert!(!SendKind::Human.is_automatic());

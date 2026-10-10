@@ -11,6 +11,7 @@ covers:
   - crates/mogeungd/src/policy.rs
   - crates/mogeungd/src/write.rs
   - crates/mogeungd/src/handover.rs
+  - crates/mogeungd/src/screen.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -370,6 +371,21 @@ session as predecessor; composition runs in the background, so a boot is
 answered by rows. The entry is logged *composed by <model> @ <host>* and the
 text is kept whole.
 
+**And a seat's pane is read** (`R-P11`, since 2026-10-10):
+[ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md)
+admitted reading a pane the daemon made and no other, and `screen.rs` is
+the reading. `SeatPane` has one constructor and it takes a launch record,
+which is clause 1 as a type; `classify` is a keyword matcher over the last
+forty lines through one `match` per CLI into a closed set of shapes, with
+`unknown` as a value, pinned by every fixture phase 0 captured. The scan
+reads each seat's pane once per rest (`screen_tick`, before the rows are
+built so the shape rides on them), skips an unchanged capture by its hash,
+raises an unknown screen as `screen:<cli>` through Health, and makes the one
+press — Enter, for *press Enter*, under the team's `readiness_press` — once
+per screen as a logged automatic send. A gate ranks the row with *(screen)*
+in the detail, after the registry's facts; the mode's seat pane shows the
+shape, when it was read and the lines it was read from.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
@@ -470,7 +486,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
-| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` · `handover.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree; the handover's prompt and reading | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` · `handover.rs` · `screen.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree; the handover's prompt and reading; the pane read into a closed set of shapes | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

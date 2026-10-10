@@ -130,6 +130,8 @@ export function sendBy(e: SendEntry): string {
       return e.from ?? "a seat";
     case "handover":
       return e.composed_by ? `handover (${e.composed_by})` : "handover";
+    case "press":
+      return "press";
   }
 }
 

@@ -145,6 +145,7 @@ mod tests {
             provisional: false,
             seat: None,
             held_send: None,
+            screen: None,
             origin: None,
             limit_hit_at: None,
             limit_resets: None,

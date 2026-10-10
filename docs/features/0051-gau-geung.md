@@ -301,8 +301,15 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    accepted nowhere else, the per-CLI shape matchers with a `screens` fixture
    corpus, the `screen` field on the seat row, the ranking hook with
    *(screen)* in the detail, and the one press. Built after `R-P4`, measured
-   for a week before `R-P6`'s readiness press is turned on. **`R-P12`** and
-   **`R-P13`** after the rest.
+   for a week before `R-P6`'s readiness press is turned on. **Built
+   2026-10-10** (⏳): `screen.rs` — `SeatPane` with one constructor that
+   takes a launch record, `classify` per CLI into the closed set with
+   `unknown` as a value, every phase-0 fixture pinned; the scan's
+   `screen_tick` once per rest, an unchanged capture skipped by hash,
+   `screen:<cli>` through Health; `Session.screen`; the ranking arm after
+   the registry's facts; the press, once per screen, behind
+   `readiness_press` (still off by default — the week of captures starts
+   with the first real boot). **`R-P12`** and **`R-P13`** after the rest.
 
 ### Files touched
 
@@ -423,6 +430,21 @@ that records the prompt, the gate test. The window's `types.ts`,
 `lib/teams.ts` (`sendBy`), `GauGeungMode.tsx` (the handover whole, Deliver
 and Discard, Restart with handover). Docs: `architecture.md`,
 `wire-protocol.md`, `model-and-proxy.md`.
+
+`R-P11`, built: `crates/mogeungd/src/screen.rs` (`SeatPane`, `capture`,
+`tail`, `classify`, the excerpt), `state.rs` (`ScreenState`, the `screens`
+map, the `capturer` seam, `screen_tick`, the screen on the rows in
+`refresh_provisional` and `tag_seats`, the press through `type_into`),
+`send.rs` (`press_enter`), `mogeung-core/src/team.rs` (`ScreenShape`,
+`ScreenRead`, `SendKind::Press`), `session.rs` (`Session.screen`),
+`attention.rs` (the screen arm); tests in `screen.rs` over
+`tests/fixtures/screens/`, `tests/seat_screen.rs` through the scan with a
+recording capturer. The window's `types.ts` (`ScreenShape`, `ScreenRead`,
+`SCREEN_LABEL`, `isScreenGate`), `lib/teamMode.ts` (`sourceOf` names the
+screen), `GauGeungMode.tsx` (the screen box on the seat pane). Docs:
+`attention-ranking.md`, `cross-session-signals.md`, `architecture.md`,
+`data-model.md`, `health-and-canary.md`, `the-window.md`,
+`wire-protocol.md`, `assumptions.md` (`A54`).
 
 ### Risks and unknowns
 
@@ -630,3 +652,23 @@ and Discard, Restart with handover). Docs: `architecture.md`,
   session's evidence before it ends it. One test deadlocked on its own
   mutex, not the daemon's: a `&guard[0]` in a `let` keeps the guard for the
   block. No real model has composed one over a real team yet.
+- 2026-10-10, `R-P11`. ADR-0044's first clause became a type before it
+  became a check: `SeatPane` has one constructor and it takes a launch
+  record, so the capture's one entry point cannot be handed a provisional
+  row's pane or an attach target, and the test for *no pane I opened
+  myself is ever captured* is a recording capturer that lists what it was
+  asked while a hand-started session sits on the board. The matchers are
+  keyword matching over forty lines, specific gates first, and the words
+  are the CLI versions phase 0 captured — which is the honest shape of
+  `A54`: a release that restyles its menu turns the shape `unknown` and
+  the canary says `screen:<cli>`. Two fixtures the closed set names have
+  no capture yet, *login* and *rate limit*, and their matchers are the
+  words those screens are known to use rather than words read off a
+  capture; the first real one of each is a fixture to pin. The press is
+  built behind the flag and the flag stays off by default: the week of
+  captures the plan asked for starts with the first real boot, and turning
+  the press on before it would be the readiness Enter landing on a menu
+  nobody read. A hook's fact outranks a screen's reading by the arm's
+  place in the classifier, not by a comparison: a seat the registry already
+  calls idle with an open tool is `APPROVE` on evidence before the screen
+  is looked at.

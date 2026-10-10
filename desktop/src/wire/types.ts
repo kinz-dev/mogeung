@@ -191,6 +191,8 @@ export interface Session {
    * dropped in the Teams window. `R-P6`. Never set on an observed session.
    */
   held_send?: HeldSend;
+  /** What this seat's pane showed at the last read. `R-P11`. Seats only. */
+  screen?: ScreenRead;
   /**
    * The machine this session runs on, when it is not the daemon's own.
    * `R-I21`, feature 0047. Set only on a session the daemon **mirrors** from
@@ -1181,6 +1183,51 @@ export interface SeatLaunch {
   signals: SeatSignals;
 }
 
+/**
+ * What a seat's pane shows, read into a closed set — the gates a TUI draws
+ * and the transcript never carries, the two quiet shapes, and `unknown` for
+ * anything else. `R-P11`, ADR-0044.
+ */
+export type ScreenShape =
+  | "permission_menu"
+  | "plan_approval"
+  | "question"
+  | "trust"
+  | "login"
+  | "press_enter"
+  | "rate_limit"
+  | "exited"
+  | "prompt"
+  | "working"
+  | "unknown";
+
+export const SCREEN_LABEL: Record<ScreenShape, string> = {
+  permission_menu: "permission menu",
+  plan_approval: "plan approval",
+  question: "question",
+  trust: "trust dialog",
+  login: "login",
+  press_enter: "press Enter",
+  rate_limit: "rate limit",
+  exited: "exited to a shell",
+  prompt: "at the prompt",
+  working: "working",
+  unknown: "unknown",
+};
+
+/** A gate: a shape that may rank the row. The quiet shapes and `unknown` are not. */
+export function isScreenGate(shape: ScreenShape): boolean {
+  return shape !== "prompt" && shape !== "working" && shape !== "unknown";
+}
+
+/** What a seat's pane showed at the last read: the shape, the lines it was
+ *  read from, and when (unix seconds). Only a seat's row ever has one. */
+export interface ScreenRead {
+  shape: ScreenShape;
+  excerpt: string[];
+  read_at: number;
+}
+
 /** What the policy holds for a seat: how many, why the oldest, since when. */
 export interface HeldSend {
   count: number;
@@ -1192,7 +1239,7 @@ export interface HeldSend {
 // -- Sends. `R-P6`. ADR-0003's amendment, fence 4, as the wire carries it.
 
 /** Who caused a send: you, a declared wake, a declared watchdog, a seat. */
-export type SendKind = "human" | "wake" | "watchdog" | "agent" | "handover";
+export type SendKind = "human" | "wake" | "watchdog" | "agent" | "handover" | "press";
 export type SendStatus = "delivered" | "held" | "released" | "dropped" | "refused" | "failed";
 /** One line of a team's send log: what, to whom, why, when, and what became of it. */
 export interface SendEntry {

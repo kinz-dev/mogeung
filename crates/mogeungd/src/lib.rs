@@ -33,6 +33,7 @@ pub mod run;
 pub mod runconfig;
 pub mod runner;
 pub mod scratch;
+pub mod screen;
 pub mod seat;
 pub mod send;
 pub mod server;

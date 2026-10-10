@@ -376,7 +376,7 @@ amendment.
 |---|---|---|
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
 | `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
-| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>* — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
+| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
 and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
@@ -403,7 +403,9 @@ the same row, or `seat:<team>:<seat>` where the CLI chooses its own; never
 the tag moves onto it, and a seat whose pane has gone stays as a dead row
 until the team is stopped. Nothing on this wire starts a seat but a
 definition the daemon holds: the launcher's match per CLI is in `seat.rs`,
-and the command line never travels.
+and the command line never travels. Since `R-P11` a seat's row also carries
+`screen` — the shape its pane showed, from ADR-0044's closed set, the lines
+it was read from, and when — and never the capture.
 
 **Two layers, on the wire as an absence.** A seat's `permission` is omitted
 when it inherits the team's, and its `guidance` is its own, appended after the
