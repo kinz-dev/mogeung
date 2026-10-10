@@ -99,6 +99,9 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // there. Teams across machines are `R-P13`'s deferral.
         TeamList | TeamSave { .. } | TeamDelete { .. } => Hop::Here,
         TeamBoot { .. } | TeamStop { .. } | SeatWorktreeRemove { .. } => Hop::Here,
+        // A team's sends are judged by the daemon that owns its seats
+        // (fence 5), and that is the daemon the window is on. `R-P6`.
+        TeamPause { .. } | SendRelease { .. } | SendDrop { .. } => Hop::Here,
         ScratchList
         | ScratchCreate { .. }
         | ScratchRead { .. }
@@ -180,7 +183,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         // About that machine's desktop; never asked across a hop.
         IntellijProbe { .. } => Relay::Theirs,
         GitFetched { .. } => Relay::Pass,
-        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
+        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Sends { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
         ModelChunk { .. } | ModelReply { .. } => Relay::Theirs,
         ReadingGuideReady { .. } | SentToSession { .. } => Relay::Pass,
         SemanticResults { .. } | FailureClusters { .. } | ChatHistory { .. } | ChatConversation { .. } | Config { .. } => {

@@ -144,6 +144,7 @@ mod tests {
             tmux_target: None,
             provisional: false,
             seat: None,
+            held_send: None,
             origin: None,
             limit_hit_at: None,
             limit_resets: None,

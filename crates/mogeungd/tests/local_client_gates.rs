@@ -197,6 +197,28 @@ async fn the_window_on_this_machine_is_past_the_boot_gate() {
     assert!(why.contains("no seat of this team is running"), "{why}");
 }
 
+/// `R-P6`: the pause switch is judged like a save, and a release or a drop
+/// like your own send — a release types into a seat. Past either gate the
+/// next refusal is the lookup, in words.
+#[tokio::test]
+async fn pause_is_judged_like_a_save_and_a_release_like_a_send() {
+    let url = lan_bound_daemon("sends-lan", false).await;
+    let why = ask(&url, ClientMsg::TeamPause { id: "x".into(), paused: true }, error_text).await;
+    assert!(why.contains("--allow-run"), "{why}");
+    for cmd in [
+        ClientMsg::SendRelease { team_id: "x".into(), id: "y".into() },
+        ClientMsg::SendDrop { team_id: "x".into(), id: "y".into() },
+    ] {
+        let why = ask(&url, cmd, error_text).await;
+        assert!(why.contains("beyond loopback"), "{why}");
+    }
+    let url = lan_bound_daemon("sends-local", true).await;
+    let why = ask(&url, ClientMsg::TeamPause { id: "x".into(), paused: true }, error_text).await;
+    assert!(why.contains("no team with id"), "{why}");
+    let why = ask(&url, ClientMsg::SendRelease { team_id: "x".into(), id: "y".into() }, error_text).await;
+    assert!(why.contains("no held send"), "{why}");
+}
+
 #[tokio::test]
 async fn without_a_peer_address_boot_stop_and_remove_are_judged_by_the_bind() {
     let url = lan_bound_daemon("boot-unknown", false).await;

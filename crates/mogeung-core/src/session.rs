@@ -163,6 +163,17 @@ pub struct Collision {
     pub path: String,
 }
 
+/// What the policy engine holds for one seat: how many sends, why the oldest
+/// was held, and since when. `R-P6`. The row's detail and clock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldSend {
+    pub count: u32,
+    /// The oldest held send's reason, in the policy's words.
+    pub why: String,
+    /// When the oldest was held.
+    pub since: DateTime<Utc>,
+}
+
 /// An agent session mogeung is watching.
 ///
 /// Everything here is derived from files Claude Code writes for its own
@@ -309,6 +320,15 @@ pub struct Session {
     /// pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seat: Option<crate::team::SeatTag>,
+    /// A send the team's policy is holding for this seat. `R-P6`, ADR-0003's
+    /// amendment, fence 4: the fourth hop in a chain, the sixty-first
+    /// automatic send in an hour, any send while the team is paused — kept
+    /// rather than typed, and the seat it was for ranks as needing you until
+    /// you release or drop it in the Teams window. `None` for every observed
+    /// session by construction: only the policy engine writes it, and the
+    /// engine addresses launch records, never sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_send: Option<HeldSend>,
 
     /// The machine this session runs on, when it is not this one. `R-I21`,
     /// [feature 0047](../../../docs/features/0047-daemon-federation/spec.md).

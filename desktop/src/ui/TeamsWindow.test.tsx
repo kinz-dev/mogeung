@@ -180,4 +180,46 @@ describe("the Teams window", () => {
     fireEvent.click(screen.getByText("remove worktree"));
     expect(sent).toContainEqual({ cmd: "seat_worktree_remove", team_id: "t1", seat: "builder" });
   });
+
+  /** `R-P6`. Fence 4 on screen: the counters, the switch that acts at once,
+   *  a held send with release and drop, and the log. */
+  it("shows the policy's counters, pauses at once, and releases or drops a held send", () => {
+    render(<TeamsWindow />);
+    arrives([team()]);
+    const now = Date.now() / 1000;
+    act(() =>
+      useStore.setState({
+        teamSends: [
+          {
+            team_id: "t1",
+            team: "port-openrig",
+            chain: 3,
+            hop_budget: 3,
+            this_hour: 4,
+            hourly_cap: 60,
+            paused: false,
+            held: 1,
+            log: [
+              { id: "s1", team_id: "t1", at: now - 300, kind: "wake", from: "planner", to: "builder", text: "your turn", why: "wake on `planner` Stop", status: "delivered", hop: 1 },
+              { id: "s2", team_id: "t1", at: now - 60, kind: "agent", from: "builder", to: "planner", text: "tests pass", why: "`builder` said so", status: "held", hop: 0, note: "the hop budget of 3 is spent" },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(screen.getByTestId("sends").textContent).toContain("hops 3/3 · 4/60 this hour · 1 held");
+    fireEvent.click(screen.getByText("Pause sends"));
+    expect(sent).toContainEqual({ cmd: "team_pause", id: "t1", paused: true });
+    expect(screen.getByTestId("held-sends").textContent).toContain("builder → planner “tests pass” · held — the hop budget of 3 is spent");
+    fireEvent.click(screen.getByText("release"));
+    expect(sent).toContainEqual({ cmd: "send_release", team_id: "t1", id: "s2" });
+    fireEvent.click(screen.getByText("drop"));
+    expect(sent).toContainEqual({ cmd: "send_drop", team_id: "t1", id: "s2" });
+    expect(screen.getByTestId("send-log").textContent).toContain("wake (planner) → builder “your turn” · delivered · hop 1");
+    // Nothing of this is in the definition: pausing did not dirty the draft.
+    expect(screen.getByText("Save").closest("button")).toBeDisabled();
+    // Paused from the daemon reads as paused, and the button offers to resume.
+    act(() => useStore.setState({ teamSends: [{ ...useStore.getState().teamSends[0], paused: true }] }));
+    expect(screen.getByText("Resume sends")).toBeInTheDocument();
+  });
 });

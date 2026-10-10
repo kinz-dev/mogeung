@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, signalsLine, teamSummary, validSeatName } from "./teams";
+import { countersLine, firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, sendLine, sendsFor, signalsLine, teamSummary, validSeatName } from "./teams";
 
 describe("team helpers", () => {
   it("starts a team with the owner's numbers", () => {
@@ -74,5 +74,26 @@ describe("team helpers", () => {
       ),
     ).toBe("hooked — 12 events, last Stop 2m ago · context 43% · Haiku 4.5 · 2 unread");
     expect(signalsLine({ kind: "hooked", events: 3, last_event: "Stop", last_event_at: now - 7200, unread: 0 }, now)).toContain("2h ago");
+  });
+
+  /** `R-P6`. Fence 4 on screen: the counters against their budgets, and a
+   *  log line that says who, whom, what, what became of it and when. */
+  it("renders a team's counters and its send log lines", () => {
+    const now = 2_000_000;
+    const sends = { team_id: "t1", team: "port", chain: 2, hop_budget: 3, this_hour: 5, hourly_cap: 60, paused: false, held: 0, log: [] };
+    expect(countersLine(sends)).toBe("hops 2/3 · 5/60 this hour");
+    expect(countersLine({ ...sends, held: 1, paused: true })).toBe("hops 2/3 · 5/60 this hour · 1 held · paused");
+    const agent = { id: "s1", team_id: "t1", at: now - 90, kind: "agent" as const, from: "builder", to: "planner", text: "tests pass", why: "`builder` said so", status: "delivered" as const, hop: 2 };
+    expect(sendLine(agent, now)).toBe("builder → planner “tests pass” · delivered · hop 2 · 1m ago");
+    const held = { ...agent, id: "s2", status: "held" as const, hop: 0, note: "the hop budget of 3 is spent" };
+    expect(sendLine(held, now)).toBe("builder → planner “tests pass” · held — the hop budget of 3 is spent · 1m ago");
+    const wake = { ...agent, id: "s3", kind: "wake" as const, from: "planner", to: "builder", text: "x".repeat(100), hop: 1 };
+    expect(sendLine(wake, now)).toMatch(/^wake \(planner\) → builder “x{72}…” · delivered · hop 1/);
+    const you = { ...agent, id: "s4", kind: "human" as const, from: undefined, hop: 0, why: "you pressed send" };
+    expect(sendLine(you, now)).toMatch(/^you → planner/);
+    const dog = { ...agent, id: "s5", kind: "watchdog" as const, from: undefined, to: "builder", hop: 0 };
+    expect(sendLine(dog, now)).toMatch(/^watchdog → builder/);
+    expect(sendsFor([agent, held, wake, dog], "builder").map((e) => e.id)).toEqual(["s1", "s2", "s3", "s5"]);
+    expect(sendsFor([agent, held, wake, dog], "planner").map((e) => e.id)).toEqual(["s1", "s2", "s3"]);
   });
 });

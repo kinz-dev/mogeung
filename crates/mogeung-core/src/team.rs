@@ -106,6 +106,15 @@ pub enum SeatEvent {
     Exit,
 }
 
+impl SeatEvent {
+    pub fn label(self) -> &'static str {
+        match self {
+            SeatEvent::Stop => "Stop",
+            SeatEvent::Exit => "Exit",
+        }
+    }
+}
+
 /// A declared send: when `on_seat` does `on`, `to` is told `text`. `R-P6`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wake {
@@ -441,6 +450,142 @@ impl SeatLaunch {
     }
 }
 
+// -- Sends. `R-P6`. ----------------------------------------------------------
+//
+// Fence 4 of ADR-0003's 2026-10-09 amendment, as data: every automatic send
+// is *visible* (a [`SendEntry`] on the team's log), *budgeted* (the chain and
+// the hour, counted from that log), and *stoppable* (a held entry a human
+// releases or drops, and the pause switch on the definition). The log is
+// the one source for the counters, so a daemon that restarts counts what it
+// counted before rather than starting every chain at zero.
+
+/// Who caused a send into a seat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendKind {
+    /// You pressed send — `R-B54`'s path, unchanged — or released a held one.
+    /// Logged beside the automatic ones, and the chain starts again after it.
+    Human,
+    /// A declared [`Wake`] fired on a seat's event.
+    Wake,
+    /// A declared [`Watchdog`] fired on a seat's silence.
+    Watchdog,
+    /// A seat's own words to a seat of its team, verbatim, through the
+    /// command mogeung handed it (fence 3: *delivered verbatim*).
+    Agent,
+}
+
+impl SendKind {
+    /// Does this delivery count as a hop — one agent's doing reaching
+    /// another agent's input with no human between? A seat's message is; so
+    /// is a wake, which is one seat's event typed into another, and the
+    /// shape a loop with nobody watching takes. A watchdog is not: a nudge
+    /// to a silent seat is caused by nothing another agent did.
+    pub fn is_hop(self) -> bool {
+        matches!(self, SendKind::Wake | SendKind::Agent)
+    }
+
+    /// Counted against the team's hourly cap: everything a human did not do.
+    pub fn is_automatic(self) -> bool {
+        self != SendKind::Human
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SendKind::Human => "you",
+            SendKind::Wake => "wake",
+            SendKind::Watchdog => "watchdog",
+            SendKind::Agent => "seat",
+        }
+    }
+}
+
+/// What became of a send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendStatus {
+    /// Typed into the seat's pane, once, and Enter pressed.
+    Delivered,
+    /// Kept by the policy — the hop budget spent, the cap reached, the team
+    /// paused — for a human to release or drop. The seat it was for ranks
+    /// as needing you until then.
+    Held,
+    /// A held send you released: delivered then. A human's act, so the chain
+    /// starts again after it and the hour does not count it.
+    Released,
+    /// A held send you dropped: never delivered.
+    Dropped,
+    /// Never attempted, and the sender was told why: a seat outside its
+    /// team, itself, one that is not running, nothing to say.
+    Refused,
+    /// Attempted, and tmux would not take it; the note says what it said.
+    Failed,
+}
+
+impl SendStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            SendStatus::Delivered => "delivered",
+            SendStatus::Held => "held",
+            SendStatus::Released => "released",
+            SendStatus::Dropped => "dropped",
+            SendStatus::Refused => "refused",
+            SendStatus::Failed => "failed",
+        }
+    }
+}
+
+/// One line of a team's send log: what was sent, to whom, why, when, and
+/// what became of it. `R-P6`, fence 4's *visible*.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendEntry {
+    /// Minted by the daemon, the way a note's id is.
+    pub id: String,
+    pub team_id: String,
+    /// Unix seconds, when it was judged.
+    pub at: i64,
+    pub kind: SendKind,
+    /// The seat whose doing this was: the one that spoke, or the one whose
+    /// event the wake was declared on. `None` for yours and a watchdog's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The seat it was for, by name.
+    pub to: String,
+    /// What was, or would have been, typed. Verbatim.
+    pub text: String,
+    /// Why, in a sentence: *wake on `planner` Stop*, *watchdog — silent 15
+    /// min*, *`builder` said so*, *you pressed send*.
+    pub why: String,
+    pub status: SendStatus,
+    /// Its place in the chain when it counted as a hop — 1 for the first
+    /// delivery after a human's. 0 when it was not one.
+    #[serde(default)]
+    pub hop: u32,
+    /// The hold's reason, the refusal's, or tmux's complaint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One team's counters and its log, as a client sees them. `R-P6`. Built by
+/// the daemon from the log and the definition on every change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamSends {
+    pub team_id: String,
+    pub team: String,
+    /// Hops in the chain so far: deliveries that counted as hops since you
+    /// last sent or released. Held at `hop_budget`.
+    pub chain: u32,
+    pub hop_budget: u32,
+    /// Automatic deliveries in the last hour. Held at `hourly_cap`.
+    pub this_hour: u32,
+    pub hourly_cap: u32,
+    pub paused: bool,
+    /// How many entries are held, waiting for you.
+    pub held: u32,
+    /// Oldest first. The daemon keeps the most recent entries only.
+    pub log: Vec<SendEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +629,20 @@ mod tests {
         assert_eq!(l.signals.kind, SignalKind::Plain);
         assert!(l.token.is_empty());
         assert_eq!(l.tag().signals, SignalKind::Plain);
+    }
+
+    /// Fence 4's arithmetic, as the kinds say it: a seat's message and a wake
+    /// are hops, a watchdog is not, and nothing a human did is automatic.
+    #[test]
+    fn a_wake_and_a_seats_message_are_hops_and_a_watchdog_is_not() {
+        assert!(SendKind::Agent.is_hop());
+        assert!(SendKind::Wake.is_hop());
+        assert!(!SendKind::Watchdog.is_hop());
+        assert!(!SendKind::Human.is_hop());
+        assert!(SendKind::Watchdog.is_automatic());
+        assert!(!SendKind::Human.is_automatic());
+        assert_eq!(serde_json::to_string(&SendStatus::Held).unwrap(), r#""held""#);
+        assert_eq!(serde_json::to_string(&SendKind::Agent).unwrap(), r#""agent""#);
     }
 
     #[test]

@@ -26,7 +26,7 @@ the table: snooze first, then `Failed`; for a live session `RateLimited`,
 | Reason | Badge | Score | Fires when |
 |---|---|---|---|
 | `AwaitingPermission` | `APPROVE` | 1100 | Alive, registry `idle`, **and a tool call has no result** |
-| `AwaitingInput` | `WAITING` | 1000 | Alive and the registry reports `idle` |
+| `AwaitingInput` | `WAITING` | 1000 | Alive and the registry reports `idle` — or, since `R-P6`, the team's policy holds a send for this seat, whatever it is doing |
 | `Failed` | `FAILED` | 900 | An API error was recorded |
 | `RateLimited` | `LIMIT` | 850 | Alive and a rate limit was hit; cleared when the session moves again |
 | `NeedsReview` | `REVIEW` | 800 | Exited, changed files, not all read |
@@ -182,6 +182,11 @@ recently on 2026-10-07, and each refusal is deliberate rather than pending:
   its hooks reach the daemon are facts about the row, not reasons to look. A
   seat ranks on the same queue as every session you started by hand, from the
   same evidence; what its hooks said lands on the launch record, not here.
-  `R-P6`'s policy engine reads those signals for its wakes and watchdogs, and
-  a seat it holds for you will rank as `WAITING` by the same rule everything
-  else does — the reason, not the tag.
+  What **is** read, since `R-P6`, is `held_send` — and it is a reason, not
+  the tag: the policy engine held a message for this seat (the fourth hop,
+  the cap, the pause), and nothing moves until you release or drop it. It
+  ranks `WAITING` with the hold as its detail — *a send held for it — the
+  hop budget of 3 is spent* — and the hold's time as its clock, after an
+  approval (a seat blocked on a prompt cannot take the message anyway) and
+  before plain idle. An observed session never carries the field, because
+  only the policy engine writes it and the engine addresses launch records.

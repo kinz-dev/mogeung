@@ -82,6 +82,7 @@ whether the value survives a restart or is re-derived on the first scan.
 | `provisional` (`R-J75`) | a pane row, rebuilt every scan | never |
 | `origin` (`R-I21`) | the machine a mirrored session runs on: `machine_id`, `host`, `ssh_target`, `stale` | never |
 | `seat` (`R-P4`, `R-P5`) | the seat this session is, when the daemon started it: `team_id`, `team`, `seat`, and `signals` — `hooked` when its hooks reach the daemon, `plain` when it is known from its transcript and screen only | yes; re-tagged every scan from the launch records |
+| `held_send` (`R-P6`) | a send the team's policy is holding for this seat — how many, why the oldest, since when — which ranks the row as needing you; never set on an observed session, because only the policy engine writes it and it addresses launch records | no; derived from the send log every scan |
 
 **`alive` and `live_status` are never trusted from storage**; both are
 re-derived from the OS on the first scan. **`pid` is kept and is not a
@@ -121,6 +122,14 @@ SQLite at `~/.mogeung/mogeung.db`:
   still heard, stripped before the record is served — and its `signals`
   (kind, count, last event, context fill, model), which are live state
   rewritten in memory as hooks arrive and saved only as the record is
+- `sends(team_id, id, at, json)` — a team's send log (`R-P6`): every
+  automatic send and every one of yours into a seat, as a `SendEntry` blob —
+  who, whom, the text, why, what became of it, the hop it took. **The
+  counters are derived from this table**, never stored beside it: the chain
+  is the run of hop deliveries since the last entry a human caused, the hour
+  is the automatic deliveries newer than sixty minutes, so a restarted daemon
+  counts what it counted before. Kept to the last two hundred per team plus
+  every held entry, which is a question for you and is not pruned
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)

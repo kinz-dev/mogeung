@@ -248,7 +248,16 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    engine is a small state machine per team — wakes and watchdogs on seat
    events, agent-to-agent delivery through a mailbox the seats write to by a
    command mogeung gives them — with the hop counter, the hourly cap, the
-   pause flag, and the send log as rows the panel reads.
+   pause flag, and the send log as rows the panel reads. **Built 2026-10-10**
+   (⏳): `policy.rs` — a ledger per team whose counters are read off the
+   log, a judge over the pause, the chain and the hour — and one function
+   that types into a seat, taking a launch record and nothing else; the
+   `mogeung-send` command on every seat's `PATH` posting to
+   `/api/seat/send` and resolved within the sender's team; wakes on `Stop`
+   and `Exit` from hooks, from a plain seat's liveness and from its pane;
+   watchdogs on the scan's tick; held sends on the recipient's row, ranked;
+   the pause switch, release and drop as verbs; the Teams window's live
+   sends panel. No real seat has sent yet.
 4. **`R-P7` and `R-P8`, the component and the layout.** After the design
    session. Wireframes first, as an artifact; then the component in
    `desktop/src/`, on the chord or as a home per the session's decision.
@@ -313,6 +322,31 @@ no real data), and the restart test extended for the token. The window's
 Codex sentence), `TeamsWindow.tsx` (the signals line under a running seat),
 `QueuePanel.tsx` (the kind on the chip). Docs: `architecture.md`,
 `wire-protocol.md`, `data-model.md`, `cross-session-signals.md`,
+`read-boundary.md`.
+
+`R-P6`, built: `crates/mogeungd/src/policy.rs` (the engine: `Ledger`,
+`Engine`, `Verdict`, `judge`, the chain and the hour read off the log,
+`held_for`, the watchdog memory, the liveness-to-`Stop` reading, the exit
+once, `counters_text`), `state.rs` (`type_into` — the one function that
+types into a seat, taking a launch record — `deliver`, `seat_send`,
+`policy_event`, `policy_tick`, `human_sent`, `release_send`, `drop_send`,
+`set_paused`, `sends_msg`, `held_send` on the rows, the `Sender` seam,
+`save_team` keeping `paused`), `hooks.rs` (`SEND_PATH`, `send_script`,
+`seat_event`, the counters on `status_text`), `seat.rs` (`team_tools_text`,
+`bin/mogeung-send` and `PATH`, the token for every seat with `curl`),
+`api.rs` (`/api/seat/send`, `TeamPause`, `SendRelease`, `SendDrop`, the
+human send logged), `store.rs` (the `sends` table), `mogeung-core/src/team.rs`
+(`SendKind`, `SendStatus`, `SendEntry`, `TeamSends`, `SeatEvent::label`),
+`session.rs` (`HeldSend`, `Session.held_send`), `attention.rs` (a held send
+ranks `WAITING`), `wire.rs`, `federation.rs`; tests in each, plus
+`tests/seat_sends.rs` (the receiver, the chain, the hold, the release, the
+refusals, the pause, a wake from a hook, a watchdog's tick, your own send,
+the restart) and two gate tests in `tests/local_client_gates.rs`. The
+window's `types.ts`, `store/index.ts` (`teamSends`), `lib/teams.ts`
+(`countersLine`, `sendLine`, `sendsFor`), `TeamsWindow.tsx` (the live sends
+panel: counters, the pause switch, held with release and drop, the log; a
+seat's own last sends). Docs: `architecture.md`, `wire-protocol.md`,
+`data-model.md`, `cross-session-signals.md`, `attention-ranking.md`,
 `read-boundary.md`.
 
 ### Risks and unknowns
@@ -425,3 +459,34 @@ Codex sentence), `TeamsWindow.tsx` (the signals line under a running seat),
   wakes and watchdogs — and no real seat has posted to the receiver: the
   routes, the tables and the generated files are tested, the first hooked
   boot is the dogfooding ⏳ waits on.
+- 2026-10-10, `R-P6`. The counters are **read off the log** rather than
+  kept beside it: a chain is the run of hop deliveries since the last entry a
+  human caused — a send, or a release — and an hour is the automatic
+  deliveries newer than sixty minutes, so there is one state to keep right
+  and a restarted daemon counts what it counted before (pinned by a test over
+  a reopened store). What counts as a hop was the one call the amendment left
+  open: a seat's message is, a wake is — one seat's event typed into another
+  is the shape a loop with nobody watching takes — and a watchdog is not,
+  because a nudge to a silent seat is caused by nothing another agent did;
+  it counts against the hour only. **One function types into a seat**,
+  `type_into`, and it takes a launch record: fence 1 is a type, not a check,
+  and the test for *no path reaches an observed session* is that `human_sent`
+  on an untagged session leaves every ledger untouched and nothing else can
+  be called with one. The seat's command posts plain text with the recipient
+  as a query parameter, because a JSON encoder in bash 3.2 is a bug waiting
+  to be written; the daemon's one-line answer becomes the command's exit code
+  — 0 delivered, 2 held, 1 refused — so an agent reading either knows which,
+  and a held message is told it is not lost. A plain seat gets the command
+  too, so a plain seat now carries a token (the R-P5 rule *a plain seat keeps
+  no token* was for a seat with no way back at all, which is now a seat
+  without `curl`). The pause switch became its own verb after the first
+  design showed the trap: a form opened before the pause and saved after it
+  would un-pause the team on its way through, so `TeamSave` keeps the
+  `paused` the daemon holds and `TeamPause` is the one writer. A plain seat's
+  `Stop` is its registry going busy to idle, read on the tick — Codex's
+  turn end reaches the policy that way, since its hooks are unread — and an
+  exit is read off the row once per boot. The readiness press stays a flag
+  nothing reads: `R-P11`'s week first. Nothing here has sent for real: the
+  routes, the judge, the command and the rows are tested with a recording
+  sender, and the first hooked boot that runs `mogeung-send` is the
+  dogfooding ⏳ waits on.

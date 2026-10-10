@@ -57,8 +57,39 @@ fn seat_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route(crate::hooks::HOOK_PATH, axum::routing::post(seat_hook))
         .route(crate::hooks::STATUS_PATH, axum::routing::post(seat_status))
+        .route(crate::hooks::SEND_PATH, axum::routing::post(seat_send))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .with_state(state)
+}
+
+/// A seat's own words to a teammate. `R-P6`. The same three fences as the
+/// hook routes — loopback, the seat's token, a bounded body — then the
+/// policy: the daemon resolves the name within the sender's team, judges
+/// the send against the hop budget, the cap and the pause, and types it or
+/// holds it. The answer is one line and a status the generated command
+/// turns into an exit code: 200 delivered, 202 held, anything else refused.
+async fn seat_send(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    if !crate::hooks::admit(peer) {
+        return (StatusCode::FORBIDDEN, "a seat is heard on loopback only").into_response();
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let to = q.get("to").map(String::as_str).unwrap_or("");
+    let text = String::from_utf8_lossy(&body);
+    match state.seat_send(bearer, to, &text).await {
+        None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
+        Some((code, line)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), line).into_response(),
+    }
 }
 
 async fn seat_hook(
@@ -1557,11 +1588,18 @@ async fn handle(
             };
             // Three subprocesses. Off the reactor like every other shell-out.
             let t = target.clone();
-            let sent = tokio::task::spawn_blocking(move || crate::send::send(&t, &text))
+            let typed = text.clone();
+            let sent = tokio::task::spawn_blocking(move || crate::send::send(&t, &typed))
                 .await
                 .unwrap_or_else(|e| Err(anyhow::anyhow!("the send did not run: {e}")));
             match sent {
-                Ok(()) => send_reply(&reply, ServerMsg::SentToSession { session_id, target }),
+                Ok(()) => {
+                    // A seat's log keeps your send beside the automatic ones,
+                    // and the chain starts again after it (`R-P6`). An
+                    // observed session has no ledger: nothing happens.
+                    state.human_sent(&session, &text).await;
+                    send_reply(&reply, ServerMsg::SentToSession { session_id, target })
+                }
                 Err(e) => return err(e),
             }
         }
@@ -2454,6 +2492,7 @@ async fn handle(
                     },
                 );
                 send_reply(reply, state.seats_msg().await);
+                send_reply(reply, state.sends_msg().await);
             }
             Err(e) => err(e),
         },
@@ -2515,6 +2554,38 @@ async fn handle(
                     },
                 ),
                 Err(e) => err(e),
+            }
+        }
+        // The pause switch and the two verbs on a held send. `R-P6`. Pause
+        // is judged like a save — it writes the definition; release and
+        // drop like a human's send — a release types into a seat, and a
+        // drop is the same decision the other way.
+        ClientMsg::TeamPause { id, paused } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.set_paused(&id, paused).await {
+                Ok(teams) => {
+                    state.broadcast(ServerMsg::Teams { teams, allowed: None });
+                    state.broadcast(state.sends_msg().await);
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::SendRelease { team_id, id } => {
+            if let Some(why) = send_refusal(state, from_this_machine) {
+                return err(anyhow::anyhow!(why));
+            }
+            if let Err(e) = state.release_send(&team_id, &id).await {
+                return err(e);
+            }
+        }
+        ClientMsg::SendDrop { team_id, id } => {
+            if let Some(why) = send_refusal(state, from_this_machine) {
+                return err(anyhow::anyhow!(why));
+            }
+            if let Err(e) = state.drop_send(&team_id, &id).await {
+                return err(e);
             }
         }
         // -- Scratch files. `R-L5`, ADR-0035. The list is broadcast so two

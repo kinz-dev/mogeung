@@ -7,7 +7,7 @@
  * daemon will say about them, so a form can show it before a click fails.
  */
 
-import type { PermissionMode, Policy, Seat, SeatSignals, SessionSource, Team } from "@/wire/types";
+import type { PermissionMode, Policy, Seat, SeatSignals, SendEntry, SessionSource, Team, TeamSends } from "@/wire/types";
 import { PERMISSION_LABEL } from "@/wire/types";
 
 /** The policy a new team starts with: the owner's numbers (three hops,
@@ -105,6 +105,45 @@ export function signalsLine(s: SeatSignals, now: number): string {
   if (s.model) parts.push(s.model);
   if (s.unread > 0) parts.push(`${s.unread} unread`);
   return parts.join(" · ");
+}
+
+/** One line for a team's counters — `R-P6`, fence 4's *budgeted*: the chain
+ *  against the hop budget, the hour against the cap, held and paused. The
+ *  same words the seat's own status line shows. */
+export function countersLine(s: TeamSends): string {
+  const parts = [`hops ${s.chain}/${s.hop_budget}`, `${s.this_hour}/${s.hourly_cap} this hour`];
+  if (s.held > 0) parts.push(`${s.held} held`);
+  if (s.paused) parts.push("paused");
+  return parts.join(" · ");
+}
+
+/** Who did it, for a log line: *you*, *wake*, *watchdog*, or the seat. */
+export function sendBy(e: SendEntry): string {
+  switch (e.kind) {
+    case "human":
+      return "you";
+    case "wake":
+      return `wake (${e.from ?? "?"})`;
+    case "watchdog":
+      return "watchdog";
+    case "agent":
+      return e.from ?? "a seat";
+  }
+}
+
+/** One line of the send log — `R-P6`, fence 4's *visible*: who → whom,
+ *  the text, what became of it, how long ago. The text is cut for the
+ *  line; the whole rides on the entry for the title. */
+export function sendLine(e: SendEntry, now: number): string {
+  const text = e.text.length > 72 ? `${e.text.slice(0, 72)}…` : e.text;
+  const hop = e.hop > 0 ? ` · hop ${e.hop}` : "";
+  const note = e.status !== "delivered" && e.status !== "released" && e.note ? ` — ${e.note}` : "";
+  return `${sendBy(e)} → ${e.to} “${text}” · ${e.status}${hop}${note} · ${ago(e.at, now)}`;
+}
+
+/** The entries that concern one seat: sent to it, or by it. Newest last. */
+export function sendsFor(log: SendEntry[], seat: string): SendEntry[] {
+  return log.filter((e) => e.to === seat || e.from === seat);
 }
 
 /** What the daemon would refuse, in its words, or `null`. The daemon's

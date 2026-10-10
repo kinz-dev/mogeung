@@ -378,6 +378,17 @@ pub enum ClientMsg {
     TeamStop { id: String },
     /// Remove one stopped seat's worktree, when it is clean.
     SeatWorktreeRemove { team_id: String, seat: String },
+    /// The pause switch. `R-P6`, ADR-0003's amendment fence 4: no automatic
+    /// send while set; typing in a pane always works. On the definition, so
+    /// it survives a restart, and the only verb that writes `paused` —
+    /// `TeamSave` keeps what the daemon holds. Judged like `TeamSave`.
+    TeamPause { id: String, paused: bool },
+    /// Release a send the policy held — deliver it now. Your act, so the
+    /// chain starts again after it and the hour does not count it. Judged
+    /// like `SendToSession`: it types into a seat.
+    SendRelease { team_id: String, id: String },
+    /// Drop a held send: never delivered. Judged like `SendRelease`.
+    SendDrop { team_id: String, id: String },
 
     // -- Scratch files. `R-L5`, ADR-0035.
     //
@@ -1496,6 +1507,11 @@ pub enum ServerMsg {
     /// Every seat the daemon has started and not stopped. `R-P4`. The whole
     /// set, after a boot or a stop, and in answer to `TeamList`.
     Seats { launches: Vec<crate::team::SeatLaunch> },
+    /// Every team's counters and send log. `R-P6`, fence 4's *visible*: the
+    /// chain, the hour, the pause, what is held, and the log of what was
+    /// sent, to whom, why and what became of it. The whole set, after every
+    /// change, and in answer to `TeamList`.
+    Sends { teams: Vec<crate::team::TeamSends> },
 
     /// Every scratch file's name, newest first. `R-L5`.
     ///

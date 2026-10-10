@@ -107,11 +107,11 @@ everyone else is judged by the bind and the flag:
 | Gate | Covers | Beyond loopback |
 |---|---|---|
 | the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir` | needs the token |
-| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete`, `TeamBoot`, `TeamStop`, `SeatWorktreeRemove` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
+| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete`, `TeamBoot`, `TeamStop`, `SeatWorktreeRemove`, since `R-P6` `TeamPause` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
-| `send_allowed` | `SendToSession` | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
+| `send_allowed` | `SendToSession`, and since `R-P6` `SendRelease` and `SendDrop` — releasing a held send types into a seat | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
-| a seat's own token (`hooks.rs`) | `POST /api/seat/hook`, `POST /api/seat/status` — the one surface an agent's **own process** talks to (`R-P5`) | refused, loopback only, and the shared token is not accepted there: it is a window's key, not a process's ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md) clause 3) |
+| a seat's own token (`hooks.rs`) | `POST /api/seat/hook`, `POST /api/seat/status`, and since `R-P6` `POST /api/seat/send` — the one surface an agent's **own process** talks to (`R-P5`) | refused, loopback only, and the shared token is not accepted there: it is a window's key, not a process's ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md) clause 3) |
 
 The write guard is one function listing its family, so omitting a new verb is
 a visible gap in a list of thirteen rather than a missing line in a
@@ -364,11 +364,15 @@ amendment.
 | `TeamBoot` | `id` — starts every seat not already running; a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once | here |
 | `TeamStop` | `id` — ends every seat's process; the worktrees stay | `Seats`, broadcast | here |
 | `SeatWorktreeRemove` | `team_id`, `seat` — a stopped seat's worktree, only when clean | an `Error` naming what was removed or why not, to the asker | here |
+| `TeamPause` | `id`, `paused` — the switch, on the definition; the only verb that writes `paused` (`R-P6`) | `Teams` and `Sends`, broadcast | here |
+| `SendRelease` | `team_id`, `id` — type a held send now; your act, so the chain starts again | `Sends`, broadcast; the seat rows at once | here |
+| `SendDrop` | `team_id`, `id` — never deliver it | `Sends`, broadcast; the seat rows at once | here |
 
 | Event | Carries | Relay |
 |---|---|---|
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
 | `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
+| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
 and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
@@ -423,6 +427,29 @@ it fires on every repaint, so it is never kept and is broadcast only when the
 fill or the model moved. `Session.seat` carries `signals: hooked | plain` so
 the row says which kind of seat it is, because a plain seat's silence is not
 a hooked seat's.
+
+**Sends** (`R-P6`, `policy.rs`). Fence 4 of ADR-0003's amendment, on the
+wire. Every automatic send into a seat — a seat's own words through
+`mogeung-send`, a declared wake, a declared watchdog — is judged by the
+policy engine against three facts (the team's pause switch, the chain of hops
+since a human last sent, the automatic deliveries in the last hour), then
+typed or **held**, and either way logged as a `SendEntry` the `Sends` event
+carries. The counters are read off that log, so a restarted daemon counts
+what it counted before. A seat's message arrives on `POST /api/seat/send`
+with the seat's own token, the recipient as `?to=` and the text as the body,
+and is resolved **within the sender's team and nowhere else** (the evening
+amendment of 2026-10-09): a name outside it is a `404` with the team's seats
+listed, itself a `409`, a seat not running a `409`, and the answer is one line
+the generated command prints and turns into an exit code — `200` delivered,
+`202` held, anything else refused. A held send rides on the recipient's row as
+`Session.held_send` (how many, why the oldest, since when), which ranks the
+row as needing you ([attention-ranking.md](attention-ranking.md)); `SendRelease`
+types it and starts the chain again, `SendDrop` never does, and both are
+judged like your own send. `TeamPause` is the one writer of `paused`:
+`TeamSave` keeps what the daemon holds, so a form left open cannot un-pause a
+team on its way through. Your own `SendToSession` into a seat is logged beside
+the automatic ones as `human`, and resets the chain; into any other session it
+is what it always was, and no ledger exists for it.
 
 ## Skills and memory
 
@@ -592,7 +619,8 @@ this machine's loopback authority. A follow to a daemon that sends no
 ```
 GET  /api/health                         # liveness, and whether it still sees everything; carries `daemon`
 POST /api/seat/hook                      # a seat's hook event, with the seat's own bearer token; loopback only (R-P5)
-POST /api/seat/status                    # a seat's status-line reading; answers with the line to show
+POST /api/seat/status                    # a seat's status-line reading; answers with the line to show, counters included
+POST /api/seat/send?to=<seat>            # a seat's words to a seat of its team, plain text; 200 delivered, 202 held, else refused (R-P6)
 GET  /api/queue
 GET  /api/sessions
 GET  /api/sessions/{id}

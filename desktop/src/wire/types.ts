@@ -186,6 +186,12 @@ export interface Session {
    */
   seat?: SeatTag;
   /**
+   * A send the team's policy is holding for this seat — the fourth hop, the
+   * cap, the pause — which ranks the row as needing you until released or
+   * dropped in the Teams window. `R-P6`. Never set on an observed session.
+   */
+  held_send?: HeldSend;
+  /**
    * The machine this session runs on, when it is not the daemon's own.
    * `R-I21`, feature 0047. Set only on a session the daemon **mirrors** from
    * one it follows; its id is then `@<machine>:<id>`, and the daemon forwards
@@ -1172,6 +1178,50 @@ export interface SeatLaunch {
   signals: SeatSignals;
 }
 
+/** What the policy holds for a seat: how many, why the oldest, since when. */
+export interface HeldSend {
+  count: number;
+  why: string;
+  /** RFC 3339. */
+  since: string;
+}
+
+// -- Sends. `R-P6`. ADR-0003's amendment, fence 4, as the wire carries it.
+
+/** Who caused a send: you, a declared wake, a declared watchdog, a seat. */
+export type SendKind = "human" | "wake" | "watchdog" | "agent";
+export type SendStatus = "delivered" | "held" | "released" | "dropped" | "refused" | "failed";
+/** One line of a team's send log: what, to whom, why, when, and what became of it. */
+export interface SendEntry {
+  id: string;
+  team_id: string;
+  /** Unix seconds. */
+  at: number;
+  kind: SendKind;
+  /** The seat whose doing it was; absent for yours and a watchdog's. */
+  from?: string;
+  to: string;
+  text: string;
+  why: string;
+  status: SendStatus;
+  /** Its place in the chain when it counted as a hop; 0 otherwise. */
+  hop: number;
+  /** The hold's or refusal's reason, or tmux's complaint. */
+  note?: string;
+}
+/** One team's counters against its budgets, and its log, oldest first. */
+export interface TeamSends {
+  team_id: string;
+  team: string;
+  chain: number;
+  hop_budget: number;
+  this_hour: number;
+  hourly_cap: number;
+  paused: boolean;
+  held: number;
+  log: SendEntry[];
+}
+
 export interface Note {
   id: string;
   /** Markdown. Empty is legal and means a plain bookmark. */
@@ -1394,6 +1444,11 @@ export type ClientMsg =
   | { cmd: "team_boot"; id: string }
   | { cmd: "team_stop"; id: string }
   | { cmd: "seat_worktree_remove"; team_id: string; seat: string }
+  /** The pause switch, judged like a save; release and drop a held send,
+   *  judged like your own send. `R-P6`. */
+  | { cmd: "team_pause"; id: string; paused: boolean }
+  | { cmd: "send_release"; team_id: string; id: string }
+  | { cmd: "send_drop"; team_id: string; id: string }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *
@@ -1620,6 +1675,8 @@ export type ServerMsg =
   | { ev: "teams"; teams: Team[]; allowed?: boolean }
   /** Every seat the daemon has started and not stopped. `R-P4`. */
   | { ev: "seats"; launches: SeatLaunch[] }
+  /** Every team's counters and send log, after every change. `R-P6`. */
+  | { ev: "sends"; teams: TeamSends[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
   | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }

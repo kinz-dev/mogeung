@@ -48,6 +48,7 @@ import type {
   Task,
   Team,
   SeatLaunch,
+  TeamSends,
   PromptCluster,
   FailureCluster,
   RecurringFailure,
@@ -698,6 +699,8 @@ export interface AppState {
   teamsAllowed: boolean;
   /** Every seat the daemon has started and not stopped. `R-P4`. */
   seatLaunches: SeatLaunch[];
+  /** Every team's counters and send log. `R-P6`. Replaced whole on `sends`. */
+  teamSends: TeamSends[];
   /**
    * The daemons this one follows, and where each stands. `R-I21`.
    *
@@ -1206,6 +1209,7 @@ export const useStore = create<AppState>((set, get) => ({
   teams: [],
   teamsAllowed: true,
   seatLaunches: [],
+  teamSends: [],
   peers: null,
   foldedGroups: [],
   noteOpenId: null,
@@ -1925,6 +1929,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "seats":
         set({ seatLaunches: msg.launches });
+        break;
+      case "sends":
+        set({ teamSends: msg.teams });
         break;
       case "peers":
         set({ peers: msg.peers });

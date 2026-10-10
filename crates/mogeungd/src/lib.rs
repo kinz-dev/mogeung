@@ -19,6 +19,7 @@ pub mod lan;
 pub mod llmproxy;
 pub mod health;
 pub mod hooks;
+pub mod policy;
 pub mod machine;
 pub mod model;
 pub mod notes;

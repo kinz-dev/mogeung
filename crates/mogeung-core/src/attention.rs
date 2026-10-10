@@ -172,6 +172,23 @@ pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> Atten
                     waiting_since(s),
                 )
             }
+            // A send the team's policy is holding for this seat — the fourth
+            // hop, the cap, the pause — needs you whatever the seat is doing:
+            // the message waits until you release or drop it. `R-P6`,
+            // ADR-0003's amendment, fence 4. After an approval, because a
+            // seat blocked on a prompt cannot take the message anyway.
+            _ if s.held_send.is_some() => {
+                let h = s.held_send.as_ref().expect("checked above");
+                (
+                    AttentionReason::AwaitingInput,
+                    if h.count > 1 {
+                        format!("{} sends held for it — {}", h.count, h.why)
+                    } else {
+                        format!("a send held for it — {}", h.why)
+                    },
+                    Some(h.since),
+                )
+            }
             Some(LiveStatus::Idle) => (
                 AttentionReason::AwaitingInput,
                 "waiting for you".to_string(),
@@ -307,6 +324,7 @@ mod tests {
             tmux_target: None,
             provisional: false,
             seat: None,
+            held_send: None,
             origin: None,
             limit_hit_at: None,
             limit_resets: None,

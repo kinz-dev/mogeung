@@ -44,6 +44,18 @@
 //! `settings.json` of a home of its own, and nothing otherwise; a Codex seat
 //! nothing. The launch record says which kind the seat turned out to be, and
 //! the row shows it.
+//!
+//! # A way to its teammates (`R-P6`)
+//!
+//! With a receiver and `curl`, every seat — hooked or plain — is also handed
+//! `mogeung-send` on its `PATH`, under its own files, and a paragraph at the
+//! end of its guidance naming its team, its teammates and the command. The
+//! command posts to the receiver with the seat's token (so a plain seat
+//! carries a token too, since `R-P6`); the daemon judges the message
+//! against the team's policy and types it into the teammate's pane, or holds
+//! it for you. A Codex seat in the team's checkout with no home of its own
+//! gets the command and not the paragraph: there is nowhere to write it that
+//! is not the user's.
 
 use anyhow::{anyhow, bail, Context, Result};
 use mogeung_core::session::SessionSource;
@@ -99,6 +111,55 @@ pub fn guidance_text(team: &Team, seat: &Seat) -> String {
         out.push_str(&format!("# Seat {}\n\n{seat_g}\n", seat.name));
     }
     out
+}
+
+/// What a seat is told about its team and the command it was handed —
+/// appended after the two layers of guidance, only when the command works
+/// here (a receiver and `curl`). `R-P6`. Declared text, like everything the
+/// seat is started with; the file it lands in is under `~/.mogeung`.
+pub fn team_tools_text(team: &Team, seat: &Seat) -> String {
+    let others: Vec<String> = team
+        .seats
+        .iter()
+        .filter(|s| s.name != seat.name)
+        .map(|s| format!("`{}` ({})", s.name, s.cli.label()))
+        .collect();
+    let others = if others.is_empty() {
+        "none yet — you are the only seat".to_string()
+    } else {
+        others.join(", ")
+    };
+    format!(
+        "# Your team (mogeung)\n\n\
+         You are seat `{seat}` of team `{team}`, started by mogeung. The other seats: {others}.\n\n\
+         To tell a teammate something, run in your shell:\n\n    {cmd} <seat> \"<message>\"\n\n\
+         The message is typed into that seat's terminal once, as a person would. The reply says whether it was \
+         delivered or held for a human: the team allows {hops} agent-to-agent hop{hs} in a row before a person \
+         must weigh in, and {cap} automatic sends an hour. Exit code 0 is delivered, 2 is held, 1 is refused. \
+         A seat talks only to seats of its own team; there is no other way to reach one, and a held message is \
+         not lost — a person releases or drops it.\n",
+        seat = seat.name,
+        team = team.name,
+        cmd = crate::hooks::SEND_COMMAND,
+        hops = team.policy.hop_budget,
+        hs = if team.policy.hop_budget == 1 { "" } else { "s" },
+        cap = team.policy.hourly_cap,
+    )
+}
+
+/// Write `bin/mogeung-send` under `files`, executable, and answer the
+/// directory to put first on the seat's `PATH`.
+fn write_send_command(files: &Path) -> Result<PathBuf> {
+    let bin = files.join("bin");
+    std::fs::create_dir_all(&bin)?;
+    let path = bin.join(crate::hooks::SEND_COMMAND);
+    std::fs::write(&path, crate::hooks::send_script())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(bin)
 }
 
 pub fn claude_mode(m: PermissionMode) -> &'static str {
@@ -258,7 +319,20 @@ pub fn compose(
     receiver: Option<&Receiver>,
 ) -> Result<Composed> {
     std::fs::create_dir_all(files)?;
-    let guidance = guidance_text(team, seat);
+    // A receiver that can be posted to from a shell: Claude's and Qwen's
+    // hooks are commands, and the command is `curl` — as is `mogeung-send`.
+    let posting = receiver.filter(|r| r.curl);
+    // `R-P6`: the seat is told about its team and the command, unless the
+    // only place that text could go is the user's (a Codex seat in the
+    // checkout, no home of its own) — then it gets the command and no word.
+    let can_be_told = !(seat.cli == SessionSource::Codex && !seat.own_home && seat.works_in == Workplace::Checkout);
+    let mut guidance = guidance_text(team, seat);
+    if posting.is_some() && can_be_told {
+        if !guidance.is_empty() {
+            guidance.push('\n');
+        }
+        guidance.push_str(&team_tools_text(team, seat));
+    }
     let guidance_path = files.join("guidance.md");
     std::fs::write(&guidance_path, &guidance)?;
     let home = files.join("home");
@@ -270,9 +344,15 @@ pub fn compose(
     let mut env = Vec::new();
     let mut wrote = None;
     let mut signals = SignalKind::Plain;
-    // A receiver that can be posted to from a shell: Claude's and Qwen's
-    // hooks are commands, and the command is `curl`.
-    let posting = receiver.filter(|r| r.curl);
+    // `R-P6`: every seat that can run `curl` gets the way to its teammates,
+    // whatever its hooks: the command on its `PATH` and the two variables
+    // the command reads. Pushed first so the hook arms below need not know.
+    if let Some(r) = posting {
+        let bin = write_send_command(files)?;
+        let path = std::env::var("PATH").unwrap_or_default();
+        env.push(("PATH".into(), format!("{}:{path}", bin.to_string_lossy())));
+        env.extend(r.env());
+    }
     let argv = match seat.cli {
         SessionSource::ClaudeCode => {
             let mut a = vec![
@@ -430,6 +510,10 @@ pub fn compose(
             a
         }
     };
+    // One value per variable: the way back may have been pushed by the
+    // command above and by a hook arm; the first stands.
+    let mut seen = std::collections::HashSet::new();
+    env.retain(|(k, _)| seen.insert(k.clone()));
     Ok(Composed { argv, env, wrote, signals })
 }
 
@@ -608,10 +692,13 @@ pub fn start(
         worktree: seat.works_in == Workplace::Worktree,
         files_dir: files.to_string_lossy().into_owned(),
         started: chrono::Utc::now().timestamp(),
-        // A plain seat keeps no token: there is nothing for one to match.
-        token: match composed.signals {
-            SignalKind::Hooked => receiver.map(|r| r.token).unwrap_or_default(),
-            SignalKind::Plain => String::new(),
+        // The token is kept whenever the seat was handed the way back — by
+        // its hooks, or since `R-P6` by `mogeung-send`, which every seat
+        // with `curl` gets; a seat handed neither keeps none, so there is
+        // nothing for a stray request to match.
+        token: match (composed.signals, receiver.as_ref().is_some_and(|r| r.curl)) {
+            (SignalKind::Hooked, _) | (_, true) => receiver.map(|r| r.token).unwrap_or_default(),
+            (SignalKind::Plain, false) => String::new(),
         },
         signals: SeatSignals {
             kind: composed.signals,
@@ -884,7 +971,7 @@ mod tests {
         let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins(), Some(&receiver(false))).unwrap();
         assert_eq!(c.signals, SignalKind::Plain);
         assert!(!c.argv.iter().any(|x| x == "--settings"));
-        assert!(c.env.is_empty());
+        assert!(c.env.is_empty(), "without curl there is no hook and no send command: {:?}", c.env);
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -898,7 +985,11 @@ mod tests {
         let c = compose(&t, &s, &d.join("files"), &d, Some("q1"), &bins(), Some(&receiver(true))).unwrap();
         assert_eq!(c.signals, SignalKind::Plain);
         assert!(!d.join("files/hook.sh").exists());
-        assert!(c.env.is_empty());
+        // Plain, yet reachable the other way (`R-P6`): the send command and
+        // its two variables, and nothing of a hook's.
+        assert!(c.env.iter().any(|(k, _)| k == "PATH"));
+        assert!(c.env.iter().any(|(k, _)| k == crate::hooks::TOKEN_ENV));
+        assert!(!c.env.iter().any(|(k, _)| k == "QWEN_HOME"));
 
         s.own_home = true;
         std::fs::create_dir_all(d.join("files/home")).unwrap();
@@ -916,7 +1007,8 @@ mod tests {
 
     /// An opencode seat is hooked by a plugin file named in its inline
     /// config, with or without `curl`; a Codex seat is plain whatever is
-    /// offered, and is handed no token.
+    /// offered, and since `R-P6` is handed the token all the same — for
+    /// `mogeung-send`, which a plain seat uses as a hooked one does.
     #[test]
     fn an_opencode_seat_is_hooked_by_a_plugin_and_a_codex_seat_is_plain() {
         let d = scratch("opencode-hooked");
@@ -935,7 +1027,59 @@ mod tests {
         let s = Seat::new("builder", SessionSource::Codex);
         let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), Some(&receiver(true))).unwrap();
         assert_eq!(c.signals, SignalKind::Plain);
-        assert!(!c.env.iter().any(|(k, _)| k == crate::hooks::TOKEN_ENV));
+        assert!(c.env.iter().any(|(k, _)| k == crate::hooks::TOKEN_ENV), "the token rides with the send command");
+        assert_eq!(c.env.iter().filter(|(k, _)| k == crate::hooks::TOKEN_ENV).count(), 1, "once");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// `R-P6`. With a receiver and `curl`, a seat is handed `mogeung-send`
+    /// first on its `PATH`, under its own files, and its guidance ends with
+    /// the paragraph naming its team, its teammates and the command — after
+    /// the two layers, never merged into them. A Codex seat in the checkout
+    /// with no home of its own gets the command and no paragraph, because
+    /// the only place for one would be the user's.
+    #[test]
+    fn every_seat_with_curl_is_handed_the_send_command_and_told_its_team() {
+        let d = scratch("send-command");
+        let mut t = team();
+        t.seats = vec![Seat::new("planner", SessionSource::ClaudeCode), Seat::new("builder", SessionSource::Codex)];
+        let s = &t.seats[0];
+        let c = compose(&t, s, &d.join("files"), &d, Some("abc"), &bins(), Some(&receiver(true))).unwrap();
+        let bin = d.join("files/bin");
+        let cmd = bin.join(crate::hooks::SEND_COMMAND);
+        assert!(cmd.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&cmd).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let path = &c.env.iter().find(|(k, _)| k == "PATH").expect("PATH").1;
+        assert!(path.starts_with(&format!("{}:", bin.to_string_lossy())), "{path}");
+        let guidance = std::fs::read_to_string(d.join("files/guidance.md")).unwrap();
+        let team_at = guidance.find("# Team Port OpenRig").expect("the team layer");
+        let tools_at = guidance.find("# Your team (mogeung)").expect("the tools paragraph");
+        assert!(team_at < tools_at, "after the layers");
+        assert!(guidance.contains("`builder` (codex)"), "{guidance}");
+        assert!(guidance.contains("mogeung-send <seat>"));
+        assert!(guidance.contains("3 agent-to-agent hops"));
+        assert!(guidance.contains("60 automatic sends an hour"));
+        // The two layers themselves are untouched.
+        assert_eq!(guidance_text(&t, s).find("# Your team"), None);
+
+        // No receiver: no command, no paragraph, nothing on PATH.
+        let c = compose(&t, s, &d.join("files2"), &d, Some("abc"), &bins(), None).unwrap();
+        assert!(!c.env.iter().any(|(k, _)| k == "PATH"));
+        assert!(!std::fs::read_to_string(d.join("files2/guidance.md")).unwrap().contains("# Your team"));
+
+        // Codex in the checkout, no home of its own, no guidance: the command
+        // and nothing written anywhere but under its files.
+        let mut codex = Seat::new("builder", SessionSource::Codex);
+        codex.works_in = Workplace::Checkout;
+        t.guidance = String::new();
+        let c = compose(&t, &codex, &d.join("files3"), &d, None, &bins(), Some(&receiver(true))).unwrap();
+        assert!(c.env.iter().any(|(k, _)| k == "PATH"));
+        assert!(c.wrote.is_none());
+        assert!(!d.join("AGENTS.md").exists());
         std::fs::remove_dir_all(&d).ok();
     }
 }

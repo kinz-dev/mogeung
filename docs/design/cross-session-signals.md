@@ -166,9 +166,25 @@ loopback receiver with a token of its own, and the tag on its row says
 says `plain`, so its silence is read as what it is. What arrives is
 classified the way transcript lines are and lands on the launch record's
 `signals` — the last event and its line, the context fill, the model — for
-the Teams window today and the policy engine (`R-P6`) next; it does not
-rank a row yet. `hooks.rs` has the tables and the fences;
+the Teams window and the policy engine. `hooks.rs` has the tables and the fences;
 [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051) the routes.
+
+And since `R-P6` a seat may be **sent to** — the one path from an agent's
+output to an agent's input that ADR-0003's amendment admits, and only for a
+seat. Three things cause a send: a seat's own words through `mogeung-send`, a
+command the launcher puts first on its `PATH`, which posts to the daemon's
+receiver with the seat's token and names a seat of its own team; a wake the
+team's policy declares on a seat's `Stop` or `Exit`, read from its hook, from
+a plain seat's registry going busy to idle, or from its pane going; and a
+watchdog on a seat silent long enough. Each is judged by `policy.rs` against
+the team's pause switch, hop budget and hourly cap, then typed through
+**one function**, `AppState::type_into`, which takes a launch record and no
+other address — an observed session cannot be named to it, which is fence 1
+at the type level — and below it `send::send`'s three tmux invocations are
+still the only code that reaches a pane. A send the policy holds lands on the
+recipient's row as `held_send` and ranks it as needing you; the Teams window
+releases or drops it. Your own send into a seat is what it always was, logged
+beside the automatic ones, and it starts the chain again.
 
 ### Handing a folder to the desktop (`R-J34`)
 

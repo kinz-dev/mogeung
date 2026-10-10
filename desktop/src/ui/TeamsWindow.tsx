@@ -26,13 +26,33 @@
  * machine, on a daemon started without `--allow-run` (ADR-0025's amendment,
  * clause 4). Boot and Stop are drawn and disabled: they are `R-P4`'s, and a
  * control you can see but not press says what is missing better than a gap.
+ *
+ * **Sends, live** (`R-P6`). Below the policy a saved team shows what the
+ * policy is doing now — the chain against the hop budget, the hour against
+ * the cap — with the pause switch, which acts at once through `team_pause`
+ * rather than through Save (so a form left open cannot un-pause a team on
+ * its way through), every send the policy is holding with *release* and
+ * *drop* beside it, and the log of what was sent, to whom, why and what
+ * became of it. Fence 4 of ADR-0003's amendment, on screen.
  */
 
 import { useEffect, useState } from "react";
-import { Eraser, FolderOpen, Play, Plus, Save, Square, Trash2, X } from "lucide-react";
+import { Ban, Check, Eraser, FolderOpen, Pause, Play, Plus, Save, Square, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import { chooseFolder } from "@/lib/tauri";
-import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, signalsLine, teamSummary } from "@/lib/teams";
+import {
+  countersLine,
+  firstProblem,
+  freeSeatName,
+  newSeat,
+  newTeam,
+  permissionFor,
+  seatSignals,
+  sendLine,
+  sendsFor,
+  signalsLine,
+  teamSummary,
+} from "@/lib/teams";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Checkbox, Dim, IconButton, Input, Mono, Segmented } from "@/ui/primitives";
 import { SourceMark } from "@/ui/SourceMark";
@@ -119,6 +139,7 @@ export function TeamsWindow() {
   const teams = useStore((s) => s.teams);
   const allowed = useStore((s) => s.teamsAllowed);
   const launches = useStore((s) => s.seatLaunches);
+  const allSends = useStore((s) => s.teamSends);
   const send = useStore((s) => s.send);
   // What is being edited, and what it was when it arrived. `base` is `null`
   // for a team that does not exist yet; the two differ when there is
@@ -350,12 +371,6 @@ export function TeamsWindow() {
                 <NumberField label="hop budget" value={draft.policy.hop_budget} onChange={(n) => patchPolicy({ hop_budget: n })} title="agent-to-agent deliveries in a row with no human between; 0 = every message through you" />
                 <NumberField label="sends per hour" value={draft.policy.hourly_cap} onChange={(n) => patchPolicy({ hourly_cap: n })} title="automatic sends an hour, across the team" />
                 <Checkbox
-                  checked={draft.paused}
-                  onChange={(v) => patch({ paused: v })}
-                  label="paused"
-                  title="no automatic send while set; typing in a pane always works"
-                />
-                <Checkbox
                   checked={draft.policy.readiness_press}
                   onChange={(v) => patchPolicy({ readiness_press: v })}
                   label="readiness press"
@@ -437,6 +452,83 @@ export function TeamsWindow() {
                 </Button>
               </div>
             </div>
+
+            {/* Sends, live. `R-P6`. What the policy is doing now for a
+                saved team: the counters, the pause switch (acts at once),
+                what is held with release and drop, and the log. */}
+            {draft.id !== "" &&
+              (() => {
+                const mine = allSends.find((t) => t.team_id === draft.id);
+                const now = Date.now() / 1000;
+                const held = mine ? mine.log.filter((e) => e.status === "held") : [];
+                const recent = mine ? mine.log.filter((e) => e.status !== "held").slice(-12).reverse() : [];
+                const paused = mine?.paused ?? draft.paused;
+                return (
+                  <div className="rounded border border-[var(--line)] p-2" data-testid="sends">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Dim className="text-2xs">
+                        sends · live · {mine ? countersLine(mine) : "nothing yet"}
+                      </Dim>
+                      <span className="ml-auto">
+                        <Button
+                          size="sm"
+                          variant={paused ? "solid" : "outline"}
+                          disabled={!allowed}
+                          title={
+                            !allowed
+                              ? (refusal ?? "")
+                              : paused
+                                ? "resume: automatic sends are judged and delivered again"
+                                : "pause: no automatic send while set — held, not lost; typing in a pane always works"
+                          }
+                          onClick={() => send({ cmd: "team_pause", id: draft.id, paused: !paused })}
+                        >
+                          {paused ? <Play size={12} /> : <Pause size={12} />} {paused ? "Resume sends" : "Pause sends"}
+                        </Button>
+                      </span>
+                    </div>
+                    {held.length > 0 && (
+                      <div className="mt-1" data-testid="held-sends">
+                        <Dim className="block text-2xs text-[var(--amber)]">held for you · the seat it is for ranks as needing you</Dim>
+                        {held.map((e) => (
+                          <div key={e.id} className="mt-0.5 flex flex-wrap items-center gap-1 text-2xs">
+                            <span className="min-w-0 flex-1 truncate" title={`${e.text}\n\n${e.why}${e.note ? ` — ${e.note}` : ""}`}>
+                              {sendLine(e, now)}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!allowed}
+                              title="type it into the seat now — your act, so the chain starts again after it"
+                              onClick={() => send({ cmd: "send_release", team_id: draft.id, id: e.id })}
+                            >
+                              <Check size={12} /> release
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={!allowed}
+                              title="never deliver it"
+                              onClick={() => send({ cmd: "send_drop", team_id: draft.id, id: e.id })}
+                            >
+                              <Ban size={12} /> drop
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {recent.length > 0 && (
+                      <div className="mt-1" data-testid="send-log">
+                        <Dim className="block text-2xs">log · newest first</Dim>
+                        {recent.map((e) => (
+                          <Dim key={e.id} className="block truncate text-2xs" title={`${e.text}\n\n${e.why}${e.note ? ` — ${e.note}` : ""}`}>
+                            {sendLine(e, now)}
+                          </Dim>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
             {/* Seats, per seat. */}
             <div className="rounded border border-[var(--line)] p-2">
@@ -549,6 +641,16 @@ export function TeamsWindow() {
                           <Dim className="text-2xs" title={running.signals.last_detail ?? undefined}>
                             {signalsLine(running.signals, Date.now() / 1000)}
                           </Dim>
+                          {/* Its own send log (`R-P6`): the last few sends to
+                              or from this seat, newest first. */}
+                          {sendsFor(allSends.find((t) => t.team_id === draft.id)?.log ?? [], seat.name)
+                            .slice(-3)
+                            .reverse()
+                            .map((e) => (
+                              <Dim key={e.id} className="block truncate text-2xs" title={e.text}>
+                                {sendLine(e, Date.now() / 1000)}
+                              </Dim>
+                            ))}
                         </div>
                       );
                     }

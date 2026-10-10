@@ -5,7 +5,7 @@
 //! matters far less than being able to change `Run` without a migration.
 
 use anyhow::Result;
-use mogeung_core::team::{SeatLaunch, Team};
+use mogeung_core::team::{SeatLaunch, SendEntry, Team};
 use mogeung_core::wire::Note;
 use mogeung_core::{Session, TranscriptEvent};
 use rusqlite::{params, Connection};
@@ -222,6 +222,19 @@ impl Store {
                 json    TEXT NOT NULL,
                 PRIMARY KEY (team_id, seat)
             );
+
+            -- A team's send log. `R-P6`, ADR-0003's amendment fence 4: every
+            -- automatic send visible, and the counters — the chain, the
+            -- hour — derived from this log rather than kept beside it, so a
+            -- restarted daemon counts what it counted before.
+            CREATE TABLE IF NOT EXISTS sends (
+                team_id TEXT NOT NULL,
+                id      TEXT NOT NULL,
+                at      INTEGER NOT NULL,
+                json    TEXT NOT NULL,
+                PRIMARY KEY (team_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS sends_team_at ON sends(team_id, at);
             "#,
         )?;
         Ok(Store {
@@ -526,6 +539,51 @@ impl Store {
         c.execute(
             "DELETE FROM seat_launches WHERE team_id = ?1 AND seat = ?2",
             params![team_id, seat],
+        )?;
+        Ok(())
+    }
+
+    /// Every send on record, oldest first. `R-P6`. A row that fails to
+    /// deserialise is skipped with a warning.
+    pub fn load_sends(&self) -> Result<Vec<SendEntry>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT team_id, id, json FROM sends ORDER BY at, id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (team, id, json) = r?;
+            match serde_json::from_str::<SendEntry>(&json) {
+                Ok(e) => out.push(e),
+                Err(e) => tracing::warn!("skipping send {team}/{id}: {e}"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert or update one entry — a held send that is released keeps its
+    /// id and changes its status.
+    pub fn save_send(&self, e: &SendEntry) -> Result<()> {
+        let json = serde_json::to_string(e)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO sends (team_id, id, at, json) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(team_id, id) DO UPDATE SET at = ?3, json = ?4",
+            params![e.team_id, e.id, e.at, json],
+        )?;
+        Ok(())
+    }
+
+    /// Keep the newest `keep` entries of a team, and every held one whatever
+    /// its age: a held send is a question for you, and a question is not
+    /// pruned.
+    pub fn prune_sends(&self, team_id: &str, keep: usize) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "DELETE FROM sends WHERE team_id = ?1 AND json NOT LIKE '%\"status\":\"held\"%' AND id NOT IN \
+             (SELECT id FROM sends WHERE team_id = ?1 ORDER BY at DESC, id DESC LIMIT ?2)",
+            params![team_id, keep as i64],
         )?;
         Ok(())
     }

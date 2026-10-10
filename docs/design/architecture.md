@@ -8,6 +8,7 @@ covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/seat.rs
   - crates/mogeungd/src/hooks.rs
+  - crates/mogeungd/src/policy.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -295,6 +296,31 @@ are never kept. The token is persisted with the record so a restarted daemon
 still hears a seat it re-adopts, and stripped before the record crosses the
 wire.
 
+**And a seat is sent to** (`R-P6`, since 2026-10-10): `policy.rs` is fence 4
+of ADR-0003's amendment — *every automatic send is visible, budgeted and
+stoppable* — as a ledger per team and a judge over it. The ledger is the send
+log; the counters (the chain of hops since a human last sent, the automatic
+deliveries in the last hour) are read off it, so there is no second state to
+keep right and a restart counts what it counted before. The judge answers
+*deliver* or *hold* from the team's pause switch, the hop budget and the
+hourly cap, and holds when it cannot read the definition at all — a daemon
+that cannot reach its own policy behaves as if paused. **One function types
+into a seat**, `AppState::type_into`, and it takes a launch record and no
+other kind of address: there is no value an observed session could be, which
+is fence 1 at the type level; `send.rs`'s three tmux invocations are still
+the only code below it that reaches a pane, and a test seam over them is the
+only thing a test replaces. Three things reach the judge: a seat's own words,
+through `mogeung-send` — a generated command first on every seat's `PATH`
+under its files, posting to `POST /api/seat/send` with the seat's token, the
+recipient resolved within the sender's team only; a declared wake, fired by a
+`Stop` or `SessionEnd` hook (`hooks::seat_event`), by a plain seat's registry
+going busy to idle, or by its pane going; and a declared watchdog, on the
+scan's tick once per silence. A held send lands on the recipient's row as
+`held_send` and ranks it as needing you; the Teams window shows the counters,
+the pause switch (which acts at once and is the one writer of `paused`), what
+is held with *release* and *drop*, and the log. The status line a Claude seat
+shows carries the counters too.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
@@ -395,7 +421,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
-| `team.rs` (both) · `seat.rs` · `hooks.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |
