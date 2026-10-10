@@ -12,6 +12,7 @@ covers:
   - crates/mogeungd/src/write.rs
   - crates/mogeungd/src/handover.rs
   - crates/mogeungd/src/screen.rs
+  - crates/mogeungd/src/rig.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -386,6 +387,13 @@ per screen as a logged automatic send. A gate ranks the row with *(screen)*
 in the detail, after the registry's facts; the mode's seat pane shows the
 shape, when it was read and the lines it was read from.
 
+**And a team crosses a file boundary** (`R-P12`, since 2026-10-10): `rig.rs`
+is the door. Out, the definition whole as JSON where you say or beside the
+mirror; in, a draft and never a save — mogeung's own file as a new team, or an
+OpenRig `rig.yaml` read as other people's configuration, members to seats by
+runtime, guidance followed beside the rig, edges as text, the rest listed as
+not carried. The window shows the draft with the notes and you press Save.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
@@ -486,7 +494,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
-| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` · `handover.rs` · `screen.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree; the handover's prompt and reading; the pane read into a closed set of shapes | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` · `handover.rs` · `screen.rs` · `rig.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree; the handover's prompt and reading; the pane read into a closed set of shapes; a definition out as a file and a file in as a draft | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

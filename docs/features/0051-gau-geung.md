@@ -310,6 +310,13 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    the registry's facts; the press, once per screen, behind
    `readiness_press` (still off by default — the week of captures starts
    with the first real boot). **`R-P12`** and **`R-P13`** after the rest.
+   **`R-P12` built 2026-10-10** (⏳): `rig.rs` — the definition out as JSON
+   where you say or beside the mirror; a file in as a draft, never a save —
+   mogeung's own as a new team, an OpenRig `rig.yaml` mapped member by
+   member with guidance followed beside the rig, edges as text and the rest
+   listed as not carried; `TeamExport` / `TeamImport` judged like a save;
+   the Teams window's *Import…* and *Export…*, the draft with its notes.
+   `R-P13` stays deferred, to be reviewed again.
 
 ### Files touched
 
@@ -445,6 +452,17 @@ screen), `GauGeungMode.tsx` (the screen box on the seat pane). Docs:
 `attention-ranking.md`, `cross-session-signals.md`, `architecture.md`,
 `data-model.md`, `health-and-canary.md`, `the-window.md`,
 `wire-protocol.md`, `assumptions.md` (`A54`).
+
+`R-P12`, built: `crates/mogeungd/src/rig.rs` (`export_json`, `export_name`,
+`format_of`, `import_json`, `runtime_cli`, `seat_name`, `import_rig`,
+`import_file`), `state.rs` (`export_team`, `import_team_file`), `api.rs`
+(`TeamExport`, `TeamImport`), `mogeung-core/src/wire.rs` (the two verbs,
+`TeamExported`, `TeamDraft`), `federation.rs`; `serde_yaml` added to the
+daemon; tests in `rig.rs`, `tests/team_file.rs` through the real router, the
+gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
+`lib/tauri.ts` (`chooseFile`, a `.json` filter on `chooseSavePath`),
+`TeamsWindow.tsx` (*Import…*, *Export…*, the draft's notes). Docs:
+`wire-protocol.md`, `architecture.md`, `the-window.md`, `data-model.md`.
 
 ### Risks and unknowns
 
@@ -672,3 +690,20 @@ screen), `GauGeungMode.tsx` (the screen box on the seat pane). Docs:
   place in the classifier, not by a comparison: a seat the registry already
   calls idle with an open tool is `APPROVE` on evidence before the screen
   is looked at.
+- 2026-10-10, `R-P12`. An import is a **draft** and never a save, which
+  decided three things at once: the daemon validates at Save as for any
+  team, so a file can be as wrong as it likes and the window says so before
+  anything is stored; a mogeung file comes in with its id dropped, so a
+  definition carried from another machine is a new team here and not a
+  silent overwrite of one that shares an id; and a rig's edges become text
+  in the team's guidance rather than wakes, because a `delegates_to` edge
+  says who works with whom and not what is typed when — inventing the send
+  would be inventing policy the file does not state. The OpenRig mapping is
+  ADR-0026's posture: their format read as theirs, honest where a field has
+  a home here (runtime → CLI, `agent_ref` → the agent's guidance markdown,
+  summary and culture → the team's guidance) and a note where it does not
+  (`cwd`, profiles, skills, plugins, startup actions, bundles). The export
+  is whole, id and pause included, because a copy of what the daemon holds
+  should show all of it, and it is never read back on its own. Nothing here
+  has been tried on a rig the owner uses; the demo rig and a focused one
+  were the corpus.

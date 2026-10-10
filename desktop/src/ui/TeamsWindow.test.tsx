@@ -8,12 +8,18 @@
  * does nothing is the failure this family of windows is worst at.
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useStore } from "@/store";
 import type { ClientMsg, Team } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
 import { TeamsWindow } from "./TeamsWindow";
+
+vi.mock("@/lib/tauri", () => ({
+  chooseFolder: vi.fn(async () => null),
+  chooseFile: vi.fn(async () => "/home/you/rigs/demo/rig.yaml"),
+  chooseSavePath: vi.fn(async () => "/home/you/exports/port-openrig.json"),
+}));
 
 const sent: ClientMsg[] = [];
 
@@ -180,6 +186,36 @@ describe("the Teams window", () => {
     expect(screen.getByTestId("seat-1-status").textContent).toContain("stopped");
     fireEvent.click(screen.getByText("remove worktree"));
     expect(sent).toContainEqual({ cmd: "seat_worktree_remove", team_id: "t1", seat: "builder" });
+  });
+
+  /** `R-P12`. A file in is a draft with notes, never a save; a file out is
+   *  the saved definition, where you choose. */
+  it("imports a file as a draft to review and exports the saved definition", async () => {
+    render(<TeamsWindow />);
+    arrives([team()]);
+    fireEvent.click(screen.getByText("Import…"));
+    await act(async () => {});
+    expect(sent).toContainEqual({ cmd: "team_import", path: "/home/you/rigs/demo/rig.yaml" });
+    // The daemon answers with a draft; it becomes the editor's, unsaved.
+    act(() =>
+      useStore.setState({
+        teamDraft: {
+          team: { ...newTeam(), name: "demo-rig", seats: [newSeat("lead"), newSeat("qa", "codex")] },
+          notes: ["skipped, not an agent CLI: `dev.ui` (runtime `terminal`)", "set the repository"],
+        },
+      }),
+    );
+    expect(screen.getByLabelText("team name")).toHaveValue("demo-rig");
+    expect(screen.getByLabelText("seat 2 name")).toHaveValue("qa");
+    expect(screen.getByTestId("import-notes").textContent).toContain("skipped, not an agent CLI");
+    expect(useStore.getState().teamDraft).toBeNull();
+    expect(sent.filter((m) => m.cmd === "team_save")).toHaveLength(0);
+    expect(screen.getByText("not saved yet")).toBeInTheDocument();
+    // Export is for a saved team, and goes where the picker said.
+    fireEvent.click(screen.getByText("port-openrig"));
+    fireEvent.click(screen.getByText("Export…"));
+    await act(async () => {});
+    expect(sent).toContainEqual({ cmd: "team_export", id: "t1", path: "/home/you/exports/port-openrig.json" });
   });
 
   /** `R-P6`. Fence 4 on screen: the counters, the switch that acts at once,

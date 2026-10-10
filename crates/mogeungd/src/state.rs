@@ -11,7 +11,7 @@ use crate::notify::{NotifyConfig, Notifier};
 use crate::store::Store;
 use crate::usage::UsageScanner;
 use crate::watcher::{self, Tailer};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use chrono::Utc;
 use mogeung_core::attention::{rank, AttentionConfig, AttentionItem};
 use mogeung_core::health::Health;
@@ -5216,6 +5216,34 @@ impl AppState {
             tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
         }
         Ok((launches, predecessor))
+    }
+
+    /// The definition out as a file. `R-P12`. At `path` when given — an
+    /// absolute path the user chose — else beside the mirror.
+    pub fn export_team(&self, id: &str, path: Option<&str>) -> Result<PathBuf> {
+        let team = self.team_by_id(id).ok_or_else(|| anyhow!("no team with id {id}"))?;
+        let json = crate::rig::export_json(&team)?;
+        let target = match path.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let p = PathBuf::from(p);
+                if !p.is_absolute() {
+                    return Err(anyhow!("an export takes an absolute path, not {}", p.display()));
+                }
+                p
+            }
+            None => {
+                let dir = self.teams_dir();
+                std::fs::create_dir_all(&dir)?;
+                dir.join(crate::rig::export_name(&team))
+            }
+        };
+        std::fs::write(&target, json).with_context(|| format!("writing {}", target.display()))?;
+        Ok(target)
+    }
+
+    /// A file in, as a draft. `R-P12`. Nothing is stored.
+    pub fn import_team_file(&self, path: &str) -> Result<crate::rig::Imported> {
+        crate::rig::import_file(Path::new(path))
     }
 
     /// The pause switch, on the definition so it survives a restart.

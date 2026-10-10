@@ -719,6 +719,9 @@ export interface AppState {
   seatLaunches: SeatLaunch[];
   /** Every team's counters and send log. `R-P6`. Replaced whole on `sends`. */
   teamSends: TeamSends[];
+  /** A team that came in from a file, for the Teams window to show as an
+   *  unsaved draft with the import's notes. `R-P12`. Taken by the window. */
+  teamDraft: { team: Team; notes: string[] } | null;
   /**
    * The daemons this one follows, and where each stands. `R-I21`.
    *
@@ -1234,6 +1237,7 @@ export const useStore = create<AppState>((set, get) => ({
   teamsAllowed: true,
   seatLaunches: [],
   teamSends: [],
+  teamDraft: null,
   peers: null,
   foldedGroups: [],
   noteOpenId: null,
@@ -1959,6 +1963,12 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "sends":
         set({ teamSends: msg.teams });
+        break;
+      case "team_draft":
+        set({ teamDraft: { team: msg.team, notes: msg.notes }, showTeams: true });
+        break;
+      case "team_exported":
+        get().pushNotice(`team exported — ${msg.path}`);
         break;
       case "peers":
         set({ peers: msg.peers });

@@ -215,6 +215,14 @@ async fn pause_is_judged_like_a_save_and_a_release_like_a_send() {
     let url = lan_bound_daemon("sends-local", true).await;
     let why = ask(&url, ClientMsg::TeamPause { id: "x".into(), paused: true }, error_text).await;
     assert!(why.contains("no team with id"), "{why}");
+    // `R-P12`: a file out and a file in are judged like a save too.
+    let lan = lan_bound_daemon("files-lan", false).await;
+    for cmd in [ClientMsg::TeamExport { id: "x".into(), path: None }, ClientMsg::TeamImport { path: "/x.json".into() }] {
+        let why = ask(&lan, cmd, error_text).await;
+        assert!(why.contains("--allow-run"), "{why}");
+    }
+    let why = ask(&url, ClientMsg::TeamExport { id: "x".into(), path: None }, error_text).await;
+    assert!(why.contains("no team with id"), "{why}");
     let why = ask(&url, ClientMsg::SendRelease { team_id: "x".into(), id: "y".into() }, error_text).await;
     assert!(why.contains("no held send"), "{why}");
 }

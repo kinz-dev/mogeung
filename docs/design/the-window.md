@@ -124,6 +124,15 @@ because a hook's fact outranks it. The window never answers a gate: the
 excerpt is beside *Attach terminal*, and the one press the policy may make is
 the daemon's.
 
+**A team in and out of a file** (`R-P12`): the Teams window's *Import…* asks
+for a file — the shell's picker, a typed path in a browser tab — and sends
+`team_import`; the daemon's `team_draft` becomes the editor's draft, unsaved,
+with the import's notes shown above the verdict row until you press Save or
+start another. *Export…* on a saved team asks where (`chooseSavePath` with a
+`.json` filter) and sends `team_export`; with no picker the daemon writes
+beside the mirror, and either way a notice names the path. `teamDraft` in the
+store is a hand-off the window takes and clears, not state it keeps.
+
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept
 in the log; an `info` shows as a toast and is not counted. `capNotices` keeps

@@ -38,6 +38,7 @@ socket2 = "0.6"
 # a watch socket per peer and a relay per window and peer. Was a dev
 # dependency for the end-to-end tests until then.
 tokio-tungstenite = "0.30"
+serde_yaml = "0.9.34"
 
 [dev-dependencies]
 futures-util = "0.3"

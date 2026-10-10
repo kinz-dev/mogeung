@@ -406,6 +406,19 @@ pub enum ClientMsg {
     SendRelease { team_id: String, id: String },
     /// Drop a held send: never delivered. Judged like `SendRelease`.
     SendDrop { team_id: String, id: String },
+    /// The definition out as a file: its own JSON, whole, at `path` or
+    /// beside the markdown mirror under `~/.mogeung/teams/`. `R-P12`. Judged
+    /// like `TeamSave` — it writes a file where you say.
+    TeamExport {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// A file in — mogeung's own JSON, or an OpenRig `rig.yaml` read as
+    /// other people's configuration — answered as a `TeamDraft` for the
+    /// window to show and you to save, never stored by itself. `R-P12`.
+    /// Judged like `TeamSave`.
+    TeamImport { path: String },
     /// Stop one seat and start it again, with a handover composed from what
     /// its earlier session and its teammates did, as the team's policy says
     /// (`after_read` holds it for you, `automatic` delivers it, `none` starts
@@ -1552,6 +1565,11 @@ pub enum ServerMsg {
     /// Every seat the daemon has started and not stopped. `R-P4`. The whole
     /// set, after a boot or a stop, and in answer to `TeamList`.
     Seats { launches: Vec<crate::team::SeatLaunch> },
+    /// A team's definition was written as a file. `R-P12`. To the asker.
+    TeamExported { team_id: String, path: String },
+    /// A file came in as a draft for review: the team, unsaved, and what the
+    /// import had to say about it. `R-P12`. To the asker.
+    TeamDraft { team: crate::team::Team, notes: Vec<String> },
     /// Every team's counters and send log. `R-P6`, fence 4's *visible*: the
     /// chain, the hour, the pause, what is held, and the log of what was
     /// sent, to whom, why and what became of it. The whole set, after every

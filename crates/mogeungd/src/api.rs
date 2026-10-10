@@ -2592,6 +2592,27 @@ async fn handle(
                 err(e);
             }
         }
+        // A definition out as a file, and a file in as a draft. `R-P12`.
+        // Judged like a save: an export writes where you say, an import
+        // reads a file you named. The draft is the asker's to review.
+        ClientMsg::TeamExport { id, path } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.export_team(&id, path.as_deref()) {
+                Ok(p) => send_reply(reply, ServerMsg::TeamExported { team_id: id, path: p.to_string_lossy().into_owned() }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::TeamImport { path } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.import_team_file(&path) {
+                Ok(imported) => send_reply(reply, ServerMsg::TeamDraft { team: imported.team, notes: imported.notes }),
+                Err(e) => err(e),
+            }
+        }
         // Stop one seat and start it again, then the handover its policy
         // says, composed in the background with the earlier session as its
         // predecessor. `R-P10`. Judged like a boot.

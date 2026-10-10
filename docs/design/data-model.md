@@ -158,7 +158,10 @@ warning rather than refusing to start.
   a one-way mirror — `~/.mogeung/notes/*.md` for a note, `~/.mogeung/teams/*.md`
   for a team ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
   clause 8) — never read back. A team's mirror says what each seat will be
-  started with, the inherited mode marked as the team's, and the daemon
+  started with, the inherited mode marked as the team's; since `R-P12` an
+  export may put the same definition beside it as `<id>-<slug>.json`, whole
+  and also never read back on its own — importing a file is the explicit
+  act, and it answers a draft rather than writing the store; and the daemon
   stamps `created` and `updated` and mints the id, whatever a client sent. `session_id` and `seq`
   on a note are tags, not a location, so a note outlives the session being
   forgotten. `note_tasks` and `task_events` are the opposite case on purpose:

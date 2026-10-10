@@ -37,9 +37,9 @@
  */
 
 import { useEffect, useState } from "react";
-import { Ban, Check, Eraser, FolderOpen, Pause, Play, Plus, Save, Square, Trash2, X } from "lucide-react";
+import { Ban, Check, Download, Eraser, FolderOpen, Pause, Play, Plus, Save, Square, Trash2, Upload, X } from "lucide-react";
 import { useStore } from "@/store";
-import { chooseFolder } from "@/lib/tauri";
+import { chooseFile, chooseFolder, chooseSavePath } from "@/lib/tauri";
 import {
   countersLine,
   firstProblem,
@@ -147,6 +147,21 @@ export function TeamsWindow() {
   const [draft, setDraft] = useState<Team | null>(null);
   const [base, setBase] = useState<Team | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // What an import had to say about the draft it made (`R-P12`); shown
+  // until the draft is saved or replaced.
+  const [importNotes, setImportNotes] = useState<string[]>([]);
+  const incoming = useStore((s) => s.teamDraft);
+
+  // A file came in: it becomes the draft, unsaved, with its notes. Taken
+  // from the store so a second import replaces the first.
+  useEffect(() => {
+    if (!incoming) return;
+    setDraft(structuredClone(incoming.team));
+    setBase(null);
+    setConfirmDelete(false);
+    setImportNotes(incoming.notes);
+    useStore.setState({ teamDraft: null });
+  }, [incoming]);
 
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(base);
 
@@ -190,6 +205,21 @@ export function TeamsWindow() {
     setDraft(newTeam());
     setBase(null);
     setConfirmDelete(false);
+    setImportNotes([]);
+  };
+  const importFile = () => {
+    void chooseFile("A team definition to import — mogeung's .json, or an OpenRig rig.yaml", ["json", "yaml", "yml"]).then((path) => {
+      if (path) send({ cmd: "team_import", path });
+    });
+  };
+  const exportFile = (t: Team) => {
+    const slug = t.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "team";
+    void chooseSavePath(`${slug}.json`, "json").then((picked) => {
+      // Declined: nothing. No picker (a browser tab): the daemon writes
+      // beside the mirror and says where.
+      if (picked === null) return;
+      send(picked ? { cmd: "team_export", id: t.id, path: picked } : { cmd: "team_export", id: t.id });
+    });
   };
   const patch = (p: Partial<Team>) => setDraft((d) => (d ? { ...d, ...p } : d));
   const patchPolicy = (p: Partial<Team["policy"]>) => setDraft((d) => (d ? { ...d, policy: { ...d.policy, ...p } } : d));
@@ -218,6 +248,7 @@ export function TeamsWindow() {
 
   const save = () => {
     if (!draft || saveWhy) return;
+    setImportNotes([]);
     send({ cmd: "team_save", team: draft });
     if (draft.id === "") {
       // The daemon mints the id and answers with the set, newest first; the
@@ -252,6 +283,12 @@ export function TeamsWindow() {
         <div className="flex w-44 shrink-0 flex-col gap-1 border-r border-[var(--line)] pr-2">
           <Button size="sm" variant="outline" onClick={startNew} title="a new team, saved when you press Save">
             <Plus size={12} /> New team
+          </Button>
+          {/* A file in. `R-P12`: mogeung's own JSON, or an OpenRig rig.yaml
+              read as other people's configuration; it arrives as a draft
+              with notes, and nothing is stored until Save. */}
+          <Button size="sm" variant="outline" onClick={importFile} disabled={!allowed} title={allowed ? "import a team definition — mogeung's .json, or an OpenRig rig.yaml; it arrives as a draft to review" : (refusal ?? "")}>
+            <Upload size={12} /> Import…
           </Button>
           {teams.length === 0 && draft === null && (
             <Dim className="mt-2 text-2xs">No teams yet. A team is a named set of seats with one policy.</Dim>
@@ -675,6 +712,17 @@ export function TeamsWindow() {
               ))}
             </div>
 
+            {importNotes.length > 0 && (
+              <div className="rounded border border-[var(--amber)] p-2" data-testid="import-notes">
+                <Dim className="block text-2xs text-[var(--amber)]">imported as a draft — review, then Save</Dim>
+                {importNotes.map((n, i) => (
+                  <Dim key={i} className="block text-2xs">
+                    · {n}
+                  </Dim>
+                ))}
+              </div>
+            )}
+
             {/* The verdict row. */}
             <div className="mt-auto flex items-center gap-2 border-t border-[var(--line)] pt-2">
               {saveWhy ? (
@@ -683,6 +731,11 @@ export function TeamsWindow() {
                 <Dim className="text-2xs">{dirty ? "unsaved changes" : draft.id ? "saved" : ""}</Dim>
               )}
               <span className="ml-auto flex items-center gap-1">
+                {draft.id !== "" && (
+                  <Button size="sm" variant="ghost" onClick={() => exportFile(draft)} disabled={!allowed || dirty} title={!allowed ? (refusal ?? "") : dirty ? "save first — the export is what the daemon holds" : "write the saved definition as a .json file, where you choose"}>
+                    <Download size={12} /> Export…
+                  </Button>
+                )}
                 {draft.id !== "" && (
                   <Button size="sm" variant={confirmDelete ? "solid" : "ghost"} onClick={remove} disabled={!allowed} title={allowed ? "delete this team's definition; its mirror file goes with it" : refusal ?? undefined}>
                     <Trash2 size={12} /> {confirmDelete ? "Really delete" : "Delete"}

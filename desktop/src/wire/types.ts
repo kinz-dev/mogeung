@@ -1508,6 +1508,11 @@ export type ClientMsg =
   | { cmd: "send_drop"; team_id: string; id: string }
   /** Stop one seat and start it again, with a handover as the policy says. `R-P10`. */
   | { cmd: "seat_restart"; team_id: string; seat: string }
+  /** The definition out as a file (at `path`, else beside the mirror), and a
+   *  file in as a draft — mogeung's JSON or an OpenRig rig.yaml. `R-P12`.
+   *  Judged like `team_save`. */
+  | { cmd: "team_export"; id: string; path?: string }
+  | { cmd: "team_import"; path: string }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *
@@ -1741,6 +1746,9 @@ export type ServerMsg =
   | { ev: "seats"; launches: SeatLaunch[] }
   /** Every team's counters and send log, after every change. `R-P6`. */
   | { ev: "sends"; teams: TeamSends[] }
+  /** A definition was written as a file; a file came in as a draft with notes. `R-P12`. To the asker. */
+  | { ev: "team_exported"; team_id: string; path: string }
+  | { ev: "team_draft"; team: Team; notes: string[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
   | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }

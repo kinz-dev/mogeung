@@ -103,7 +103,7 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // (fence 5), and that is the daemon the window is on. `R-P6`.
         TeamPause { .. } | SendRelease { .. } | SendDrop { .. } => Hop::Here,
         // A seat's worktree is on the daemon that made it. `R-P9`.
-        FileWrite { .. } | SeatRestart { .. } => Hop::Here,
+        FileWrite { .. } | SeatRestart { .. } | TeamExport { .. } | TeamImport { .. } => Hop::Here,
         ScratchList
         | ScratchCreate { .. }
         | ScratchRead { .. }
@@ -187,7 +187,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         // About that machine's desktop; never asked across a hop.
         IntellijProbe { .. } => Relay::Theirs,
         GitFetched { .. } => Relay::Pass,
-        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Sends { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
+        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Sends { .. } | TeamExported { .. } | TeamDraft { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
         ModelChunk { .. } | ModelReply { .. } => Relay::Theirs,
         ReadingGuideReady { .. } | SentToSession { .. } => Relay::Pass,
         SemanticResults { .. } | FailureClusters { .. } | ChatHistory { .. } | ChatConversation { .. } | Config { .. } => {
