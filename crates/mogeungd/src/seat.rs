@@ -32,10 +32,22 @@
 //! as the seat left it. A Codex seat in the team's *checkout* with guidance
 //! and no home of its own is refused, in words: there is nowhere to put it
 //! that is not the user's.
+//!
+//! # Signals (`R-P5`)
+//!
+//! When the daemon has a receiver to name — it is serving, so it has an
+//! address — a seat is also handed the way back: a token of its own and the
+//! receiver's URL in its environment, and whatever its CLI accepts at launch
+//! to run a hook (`hooks.rs` has the table). A Claude Code seat gets a
+//! `--settings` document with the hooks and the status line; an opencode
+//! seat a plugin file named in its inline config; a Qwen seat hooks in the
+//! `settings.json` of a home of its own, and nothing otherwise; a Codex seat
+//! nothing. The launch record says which kind the seat turned out to be, and
+//! the row shows it.
 
 use anyhow::{anyhow, bail, Context, Result};
 use mogeung_core::session::SessionSource;
-use mogeung_core::team::{PermissionMode, Seat, SeatLaunch, Team, Workplace};
+use mogeung_core::team::{PermissionMode, Seat, SeatLaunch, SeatSignals, SignalKind, Team, Workplace};
 use std::path::{Path, PathBuf};
 
 /// Where a seat's generated files live: `~/.mogeung/seats/<team id>/<seat>/`.
@@ -191,6 +203,46 @@ pub struct Composed {
     /// The worktree file a marked block was written into, if one was —
     /// Codex's `AGENTS.md` — so `stop` can take it back.
     pub wrote: Option<PathBuf>,
+    /// Whether this seat's hooks reach the daemon. `R-P5`.
+    pub signals: SignalKind,
+}
+
+/// The way back to the daemon, handed to a seat whose CLI can carry hooks.
+/// `R-P5`. `None` to `compose` means no receiver — a daemon that is not
+/// serving, which only a test is — and every seat is then plain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Receiver {
+    /// `http://127.0.0.1:<port>`, the daemon's own bind on loopback.
+    pub url: String,
+    /// This seat's token, minted by the caller.
+    pub token: String,
+    /// Whether `curl` is on this machine: the hook script posts with it, so
+    /// without it a Claude or Qwen seat is plain and says so. The opencode
+    /// plugin posts from inside the CLI and needs nothing.
+    pub curl: bool,
+}
+
+impl Receiver {
+    /// The two variables every hook reads.
+    fn env(&self) -> Vec<(String, String)> {
+        vec![
+            (crate::hooks::URL_ENV.into(), self.url.clone()),
+            (crate::hooks::TOKEN_ENV.into(), self.token.clone()),
+        ]
+    }
+}
+
+/// Write the hook script under `files`, executable. One script per seat so
+/// the generated files of one seat never name another's.
+fn write_hook_script(files: &Path) -> Result<PathBuf> {
+    let path = files.join("hook.sh");
+    std::fs::write(&path, crate::hooks::hook_script())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(path)
 }
 
 /// Compose the command, writing the generated files it names. Pure but for
@@ -203,6 +255,7 @@ pub fn compose(
     dir: &Path,
     session_id: Option<&str>,
     bins: &Binaries,
+    receiver: Option<&Receiver>,
 ) -> Result<Composed> {
     std::fs::create_dir_all(files)?;
     let guidance = guidance_text(team, seat);
@@ -216,6 +269,10 @@ pub fn compose(
     let label = format!("{}/{}", team.name, seat.name);
     let mut env = Vec::new();
     let mut wrote = None;
+    let mut signals = SignalKind::Plain;
+    // A receiver that can be posted to from a shell: Claude's and Qwen's
+    // hooks are commands, and the command is `curl`.
+    let posting = receiver.filter(|r| r.curl);
     let argv = match seat.cli {
         SessionSource::ClaudeCode => {
             let mut a = vec![
@@ -238,6 +295,18 @@ pub fn compose(
             if seat.own_home {
                 env.push(("CLAUDE_CONFIG_DIR".into(), home.to_string_lossy().into_owned()));
             }
+            // `R-P5`: the hooks and the status line, by `--settings` — a key
+            // there overrides the user's for this session only (`A51`), and
+            // the document carries nothing but those two keys.
+            if let Some(r) = posting {
+                let script = write_hook_script(files)?;
+                let settings = files.join("settings.json");
+                std::fs::write(&settings, serde_json::to_string_pretty(&crate::hooks::claude_settings(&script))?)?;
+                a.push("--settings".into());
+                a.push(settings.to_string_lossy().into_owned());
+                env.extend(r.env());
+                signals = SignalKind::Hooked;
+            }
             a
         }
         SessionSource::QwenCode => {
@@ -258,6 +327,21 @@ pub fn compose(
             }
             if seat.own_home {
                 env.push(("QWEN_HOME".into(), home.to_string_lossy().into_owned()));
+                // `R-P5`: Qwen's hooks read settings files only (ADR-0043's
+                // table), so only a home of mogeung's own can carry them —
+                // clause 5 — and there they go into its `settings.json`,
+                // which keeps every other key it had.
+                if let Some(r) = posting {
+                    let script = write_hook_script(files)?;
+                    let settings = home.join("settings.json");
+                    let existing = std::fs::read_to_string(&settings).ok();
+                    std::fs::write(
+                        &settings,
+                        serde_json::to_string_pretty(&crate::hooks::qwen_settings(existing.as_deref(), &script))?,
+                    )?;
+                    env.extend(r.env());
+                    signals = SignalKind::Hooked;
+                }
             }
             a
         }
@@ -319,6 +403,20 @@ pub fn compose(
                 }
                 PermissionMode::BypassPermissions => a.push("--auto".into()),
             }
+            // `R-P5`: a plugin file under `~/.mogeung`, named in the inline
+            // config by file URL — the form opencode's own documentation
+            // gives — which sees this session's bus and posts from inside
+            // the CLI, so no `curl` is needed.
+            if let Some(r) = receiver {
+                let plugin = files.join("mogeung-plugin.js");
+                std::fs::write(&plugin, crate::hooks::opencode_plugin())?;
+                config.insert(
+                    "plugin".into(),
+                    serde_json::json!([format!("file://{}", plugin.to_string_lossy())]),
+                );
+                env.extend(r.env());
+                signals = SignalKind::Hooked;
+            }
             if !config.is_empty() {
                 env.push((
                     "OPENCODE_CONFIG_CONTENT".into(),
@@ -332,7 +430,13 @@ pub fn compose(
             a
         }
     };
-    Ok(Composed { argv, env, wrote })
+    Ok(Composed { argv, env, wrote, signals })
+}
+
+/// Is `curl` here? The hook script posts with it. Resolved once per boot.
+fn has_curl() -> bool {
+    let found = crate::env::which("curl");
+    found != "curl" || Path::new("/usr/bin/curl").is_file()
 }
 
 /// The worktree for a seat: found from an earlier boot, or made. A stop
@@ -445,7 +549,16 @@ fn unique_tmux_name(base: &str) -> String {
 
 /// Start one seat. Refusals come before anything is made: no repository, no
 /// CLI, a mode the CLI lacks. Then the worktree, the files, the process.
-pub fn start(team: &Team, seat: &Seat, seats_root: &Path, bins: &Binaries) -> Result<SeatLaunch> {
+///
+/// `receiver_url` is the daemon's own loopback address when it is serving;
+/// with it a token is minted and the seat is handed the way back (`R-P5`).
+pub fn start(
+    team: &Team,
+    seat: &Seat,
+    seats_root: &Path,
+    bins: &Binaries,
+    receiver_url: Option<&str>,
+) -> Result<SeatLaunch> {
     if team.repo.trim().is_empty() {
         bail!("the team names no repository");
     }
@@ -474,7 +587,12 @@ pub fn start(team: &Team, seat: &Seat, seats_root: &Path, bins: &Binaries) -> Re
         SessionSource::ClaudeCode | SessionSource::QwenCode => Some(uuid::Uuid::new_v4().to_string()),
         SessionSource::Codex | SessionSource::OpenCode => None,
     };
-    let composed = compose(team, seat, &files, &dir, session_id.as_deref(), bins)?;
+    let receiver = receiver_url.map(|url| Receiver {
+        url: url.to_string(),
+        token: crate::hooks::mint_token(),
+        curl: has_curl(),
+    });
+    let composed = compose(team, seat, &files, &dir, session_id.as_deref(), bins, receiver.as_ref())?;
     let name = unique_tmux_name(&tmux_session_name(team, seat));
     let (pane_id, tmux_target) = start_in_tmux(&name, &dir, &composed.env, &composed.argv)?;
     Ok(SeatLaunch {
@@ -490,6 +608,15 @@ pub fn start(team: &Team, seat: &Seat, seats_root: &Path, bins: &Binaries) -> Re
         worktree: seat.works_in == Workplace::Worktree,
         files_dir: files.to_string_lossy().into_owned(),
         started: chrono::Utc::now().timestamp(),
+        // A plain seat keeps no token: there is nothing for one to match.
+        token: match composed.signals {
+            SignalKind::Hooked => receiver.map(|r| r.token).unwrap_or_default(),
+            SignalKind::Plain => String::new(),
+        },
+        signals: SeatSignals {
+            kind: composed.signals,
+            ..Default::default()
+        },
     })
 }
 
@@ -606,7 +733,7 @@ mod tests {
         let mut s = Seat::new("reviewer", SessionSource::ClaudeCode);
         s.model = Some("haiku".into());
         s.permission = Some(PermissionMode::Plan);
-        let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins(), None).unwrap();
         let a = c.argv.join(" ");
         assert!(a.starts_with("/bin/claude --session-id abc --name Port OpenRig/reviewer --permission-mode plan"), "{a}");
         assert!(a.contains("--append-system-prompt-file"), "{a}");
@@ -614,7 +741,7 @@ mod tests {
         assert!(c.env.is_empty(), "no home of its own unless asked");
         assert!(d.join("files/guidance.md").is_file());
         s.own_home = true;
-        let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins(), None).unwrap();
         assert_eq!(c.env[0].0, "CLAUDE_CONFIG_DIR");
         std::fs::remove_dir_all(&d).ok();
     }
@@ -624,7 +751,7 @@ mod tests {
         let d = scratch("qwen");
         let t = team();
         let s = Seat::new("tester", SessionSource::QwenCode);
-        let c = compose(&t, &s, &d.join("files"), &d, Some("q1"), &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, Some("q1"), &bins(), None).unwrap();
         assert_eq!(&c.argv[..5], &["/bin/qwen", "--session-id", "q1", "--approval-mode", "auto-edit"]);
         assert!(c.argv.iter().any(|x| x.contains("Read the spec.")));
         std::fs::remove_dir_all(&d).ok();
@@ -636,12 +763,12 @@ mod tests {
         let t = team();
         let mut s = Seat::new("builder", SessionSource::Codex);
         s.permission = Some(PermissionMode::Plan);
-        let why = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap_err().to_string();
+        let why = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap_err().to_string();
         assert!(why.contains("no plan mode"), "{why}");
 
         s.permission = Some(PermissionMode::BypassPermissions);
         std::fs::write(d.join("AGENTS.md"), "# Repo rules\n\nBe kind.\n").unwrap();
-        let c = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap();
         assert_eq!(&c.argv[..5], &["/bin/codex", "-a", "never", "-s", "workspace-write"]);
         assert!(!c.argv.iter().any(|x| x.contains("dangerously")), "{:?}", c.argv);
         let agents = std::fs::read_to_string(d.join("AGENTS.md")).unwrap();
@@ -654,11 +781,11 @@ mod tests {
         // In the checkout, with nowhere of mogeung's to put it: refused.
         s.works_in = Workplace::Checkout;
         s.permission = None;
-        let why = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap_err().to_string();
+        let why = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap_err().to_string();
         assert!(why.contains("checkout"), "{why}");
         // With a home of its own, the home's AGENTS.md is the place.
         s.own_home = true;
-        let c = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap();
         assert!(c.env.iter().any(|(k, _)| k == "CODEX_HOME"));
         assert!(d.join("files/home/AGENTS.md").is_file());
         std::fs::remove_dir_all(&d).ok();
@@ -669,16 +796,16 @@ mod tests {
         let d = scratch("opencode");
         let mut t = team();
         let mut s = Seat::new("tester", SessionSource::OpenCode);
-        let c = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap();
         assert_eq!(c.argv, vec!["/bin/opencode".to_string()]);
         let cfg = &c.env.iter().find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT").unwrap().1;
         assert!(cfg.contains("\"instructions\"") && cfg.contains("\"edit\":\"allow\""), "{cfg}");
         t.permission = PermissionMode::BypassPermissions;
         s.permission = Some(PermissionMode::Plan);
-        let c = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap();
         assert_eq!(&c.argv[1..], &["--agent", "plan"]);
         s.permission = None;
-        let c = compose(&t, &s, &d.join("files"), &d, None, &bins()).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap();
         assert_eq!(&c.argv[1..], &["--auto"]);
         std::fs::remove_dir_all(&d).ok();
     }
@@ -711,5 +838,104 @@ mod tests {
         let e = argv.iter().position(|x| x == "-e").unwrap();
         assert_eq!(argv[e + 1], "CLAUDE_CONFIG_DIR=/h");
         assert_eq!(argv[argv.len() - 3..], ["/bin/claude", "--name", "t/s"]);
+    }
+
+    fn receiver(curl: bool) -> Receiver {
+        Receiver {
+            url: "http://127.0.0.1:7777".into(),
+            token: "t0k3n".into(),
+            curl,
+        }
+    }
+
+    /// `R-P5`. With a receiver, a Claude seat is handed `--settings` naming
+    /// the generated document, the script beside it, and the two variables;
+    /// the document carries the hooks and the status line and nothing else.
+    /// Without `curl` the seat is plain and the flag is not given — a
+    /// settings document whose hooks cannot post is worse than none.
+    #[test]
+    fn a_claude_seat_with_a_receiver_is_hooked_by_settings_and_without_curl_is_plain() {
+        let d = scratch("claude-hooked");
+        let t = team();
+        let s = Seat::new("reviewer", SessionSource::ClaudeCode);
+        let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins(), Some(&receiver(true))).unwrap();
+        assert_eq!(c.signals, SignalKind::Hooked);
+        let i = c.argv.iter().position(|x| x == "--settings").expect("--settings");
+        let settings = PathBuf::from(&c.argv[i + 1]);
+        assert_eq!(settings, d.join("files/settings.json"));
+        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert!(doc["hooks"]["Stop"].is_array());
+        assert!(doc["statusLine"]["command"].as_str().unwrap().ends_with("hook.sh status"));
+        assert_eq!(doc.as_object().unwrap().len(), 2, "hooks and the status line, nothing else");
+        let script = d.join("files/hook.sh");
+        assert!(script.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&script).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        assert!(c.env.contains(&(crate::hooks::URL_ENV.to_string(), "http://127.0.0.1:7777".to_string())));
+        assert!(c.env.contains(&(crate::hooks::TOKEN_ENV.to_string(), "t0k3n".to_string())));
+        // Nothing of this is under the user's home: every path is under `files`.
+        for p in [&settings, &script] {
+            assert!(p.starts_with(d.join("files")), "{}", p.display());
+        }
+
+        let c = compose(&t, &s, &d.join("files"), &d, Some("abc"), &bins(), Some(&receiver(false))).unwrap();
+        assert_eq!(c.signals, SignalKind::Plain);
+        assert!(!c.argv.iter().any(|x| x == "--settings"));
+        assert!(c.env.is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A Qwen seat is hooked only in a home of its own (ADR-0043 clause 5),
+    /// where its `settings.json` keeps what it had and gains `hooks`.
+    #[test]
+    fn a_qwen_seat_is_hooked_only_in_a_home_of_its_own() {
+        let d = scratch("qwen-hooked");
+        let t = team();
+        let mut s = Seat::new("tester", SessionSource::QwenCode);
+        let c = compose(&t, &s, &d.join("files"), &d, Some("q1"), &bins(), Some(&receiver(true))).unwrap();
+        assert_eq!(c.signals, SignalKind::Plain);
+        assert!(!d.join("files/hook.sh").exists());
+        assert!(c.env.is_empty());
+
+        s.own_home = true;
+        std::fs::create_dir_all(d.join("files/home")).unwrap();
+        std::fs::write(d.join("files/home/settings.json"), r#"{"theme":"dark"}"#).unwrap();
+        let c = compose(&t, &s, &d.join("files"), &d, Some("q1"), &bins(), Some(&receiver(true))).unwrap();
+        assert_eq!(c.signals, SignalKind::Hooked);
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("files/home/settings.json")).unwrap()).unwrap();
+        assert_eq!(doc["theme"], "dark");
+        assert!(doc["hooks"]["Notification"].is_array());
+        assert!(c.env.iter().any(|(k, _)| k == "QWEN_HOME"));
+        assert!(c.env.iter().any(|(k, _)| k == crate::hooks::TOKEN_ENV));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// An opencode seat is hooked by a plugin file named in its inline
+    /// config, with or without `curl`; a Codex seat is plain whatever is
+    /// offered, and is handed no token.
+    #[test]
+    fn an_opencode_seat_is_hooked_by_a_plugin_and_a_codex_seat_is_plain() {
+        let d = scratch("opencode-hooked");
+        let t = team();
+        let s = Seat::new("tester", SessionSource::OpenCode);
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), Some(&receiver(false))).unwrap();
+        assert_eq!(c.signals, SignalKind::Hooked);
+        let cfg = &c.env.iter().find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT").unwrap().1;
+        let cfg: serde_json::Value = serde_json::from_str(cfg).unwrap();
+        let plugin = cfg["plugin"][0].as_str().unwrap();
+        assert!(plugin.starts_with("file:///"), "{plugin}");
+        assert!(plugin.ends_with("/files/mogeung-plugin.js"), "{plugin}");
+        assert!(d.join("files/mogeung-plugin.js").is_file());
+        assert!(c.env.iter().any(|(k, _)| k == crate::hooks::TOKEN_ENV));
+
+        let s = Seat::new("builder", SessionSource::Codex);
+        let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), Some(&receiver(true))).unwrap();
+        assert_eq!(c.signals, SignalKind::Plain);
+        assert!(!c.env.iter().any(|(k, _)| k == crate::hooks::TOKEN_ENV));
+        std::fs::remove_dir_all(&d).ok();
     }
 }

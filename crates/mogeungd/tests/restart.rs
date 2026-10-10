@@ -307,11 +307,30 @@ async fn a_seat_is_re_adopted_from_its_launch_record() {
                 worktree: false,
                 files_dir: home.join("files").to_string_lossy().into_owned(),
                 started: 1_700_000_000,
+                token: "re-adopted-token".into(),
+                signals: mogeung_core::team::SeatSignals {
+                    kind: mogeung_core::team::SignalKind::Hooked,
+                    ..Default::default()
+                },
             })
             .unwrap();
     }
     let state = boot(&home).await;
     assert_eq!(state.launches.read().await.len(), 1, "the record came back with the daemon");
+    // `R-P5`: the token came back with it, so the seat's hooks are still
+    // heard by the daemon that re-adopted it — and the wire never sees it.
+    let heard = state
+        .seat_signal(
+            "re-adopted-token",
+            mogeungd::hooks::Route::Hook,
+            serde_json::json!({ "hook_event_name": "Stop", "session_id": "x" }),
+        )
+        .await;
+    assert!(heard.is_some(), "the re-adopted seat's token was not matched");
+    assert_eq!(state.launches.read().await[0].signals.events, 1);
+    let mogeung_core::ServerMsg::Seats { launches } = state.seats_msg().await else { panic!("not seats") };
+    assert!(launches[0].token.is_empty(), "the token must not cross the wire");
+    assert_eq!(launches[0].signals.last_event.as_deref(), Some("Stop"));
     let snap = state.snapshot(false).await;
     let mogeung_core::ServerMsg::Snapshot { sessions, .. } = snap else { panic!("not a snapshot") };
     let row = sessions.iter().find(|s| s.id == "seat:t1:builder").expect("the seat's row, from its record");

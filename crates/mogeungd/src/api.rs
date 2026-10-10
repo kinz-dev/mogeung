@@ -24,8 +24,8 @@ use std::sync::Arc;
 /// constant-time; a miss is a plain 401, never a hang. No token configured
 /// means the historical open-on-loopback behaviour, unchanged.
 pub fn router_with_token(state: Arc<AppState>, token: Option<String>) -> Router {
-    let r = router(state);
-    match token.filter(|t| !t.is_empty()) {
+    let r = router(state.clone());
+    let r = match token.filter(|t| !t.is_empty()) {
         None => r,
         Some(t) => r.layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
@@ -43,6 +43,68 @@ pub fn router_with_token(state: Arc<AppState>, token: Option<String>) -> Router 
                 }
             },
         )),
+    };
+    // Merged **after** the layer, on purpose: a seat's hooks carry the
+    // seat's own token and nothing else, and the shared token is a window's
+    // key, not a process's. `R-P5`, `hooks.rs`.
+    r.merge(seat_router(state))
+}
+
+/// The seat's own two routes: loopback only, one seat's token, a bounded
+/// body. `R-P5`, ADR-0043 clause 3. Outside every other gate by design —
+/// see `router_with_token`.
+fn seat_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route(crate::hooks::HOOK_PATH, axum::routing::post(seat_hook))
+        .route(crate::hooks::STATUS_PATH, axum::routing::post(seat_status))
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
+        .with_state(state)
+}
+
+async fn seat_hook(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    seat_post(peer, state, headers, body, crate::hooks::Route::Hook).await
+}
+
+async fn seat_status(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    seat_post(peer, state, headers, body, crate::hooks::Route::Status).await
+}
+
+/// Admit, match, read. The order is the fence: the peer is judged before
+/// the token is compared, and the token before the body is parsed, so an
+/// address that is not loopback learns nothing — not even whether its token
+/// was one.
+async fn seat_post(
+    peer: Option<std::net::SocketAddr>,
+    state: Arc<AppState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    route: crate::hooks::Route,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    if !crate::hooks::admit(peer) {
+        return (StatusCode::FORBIDDEN, "a seat's hooks are heard on loopback only").into_response();
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    // A body that is not JSON still reaches the seat's record, as unread:
+    // `classify` answers `Malformed` for anything that is not an object.
+    let json = serde_json::from_slice::<serde_json::Value>(&body).unwrap_or(serde_json::Value::Null);
+    match state.seat_signal(bearer, route, json).await {
+        None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
+        Some(text) => (StatusCode::OK, text).into_response(),
     }
 }
 

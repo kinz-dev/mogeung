@@ -148,6 +148,10 @@ pub struct AppState {
     /// records, loaded from the store so a restarted daemon re-adopts its
     /// seats. `R-P4`, ADR-0025's amendment clause 3.
     pub launches: tokio::sync::RwLock<Vec<mogeung_core::team::SeatLaunch>>,
+    /// The address this daemon serves on, set once by `server::run` so the
+    /// launcher can name the receiver a seat's hooks post to. `R-P5`. Unset
+    /// — a test, an embedding — means no receiver, and every seat is plain.
+    pub listen_addr: std::sync::OnceLock<std::net::SocketAddr>,
     /// The daemons this one follows, and what it mirrors from them. `R-I18`,
     /// feature 0047. **Not in `sessions`**: see `federation.rs` for why.
     pub federation: crate::federation::Federation,
@@ -745,6 +749,7 @@ impl AppState {
             teams_dir: std::sync::OnceLock::new(),
             seats_dir: std::sync::OnceLock::new(),
             launches: tokio::sync::RwLock::new(launches),
+            listen_addr: std::sync::OnceLock::new(),
             federation: crate::federation::Federation::default(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
@@ -4302,10 +4307,96 @@ impl AppState {
             .unwrap_or_else(crate::seat::seats_root)
     }
 
+    /// Every launch record as a client may see it: the token stripped
+    /// (`R-P5`) — it is the seat's key to this daemon, and a window, local or
+    /// on the LAN, has no business holding it.
     pub async fn seats_msg(&self) -> ServerMsg {
         ServerMsg::Seats {
-            launches: self.launches.read().await.clone(),
+            launches: self.launches.read().await.iter().map(|l| l.for_the_wire()).collect(),
         }
+    }
+
+    /// Where a seat's hooks post: this daemon, on loopback. `R-P5`.
+    ///
+    /// `None` when there is no address yet (a test) or when the bind reaches
+    /// loopback by no route — one specific interface that is not loopback —
+    /// because the receiver admits loopback peers only, and a URL the hooks
+    /// could reach but the receiver would refuse is worse than a plain seat
+    /// that says so.
+    pub fn receiver_url(&self) -> Option<String> {
+        use std::net::IpAddr;
+        let addr = self.listen_addr.get()?;
+        let host = match addr.ip() {
+            IpAddr::V4(v) if v.is_unspecified() || v.is_loopback() => "127.0.0.1".to_string(),
+            IpAddr::V6(v) if v.is_unspecified() || v.is_loopback() => "[::1]".to_string(),
+            _ => return None,
+        };
+        Some(format!("http://{host}:{}", addr.port()))
+    }
+
+    /// One body from a seat's hook or status line, already admitted from
+    /// loopback. `R-P5`. `None` when no seat holds `token`; otherwise the
+    /// text the caller answers with — the status line's, or nothing.
+    ///
+    /// What changes on the record is broadcast as `Seats`, coalesced: an
+    /// event always, a status reading only when the fill or the model moved,
+    /// because the status line fires on every repaint.
+    pub async fn seat_signal(
+        &self,
+        token: &str,
+        route: crate::hooks::Route,
+        body: serde_json::Value,
+    ) -> Option<String> {
+        use crate::hooks::Received;
+        let now = Utc::now().timestamp();
+        let mut unknown: Option<String> = None;
+        let (reply, changed_launches) = {
+            let mut launches = self.launches.write().await;
+            let i = launches.iter().position(|l| crate::hooks::token_matches(token, &l.token))?;
+            let l = &mut launches[i];
+            let mut changed = true;
+            let reply = match crate::hooks::classify(l.cli, route, &body) {
+                Received::Event { name, detail, .. } => {
+                    l.signals.events += 1;
+                    l.signals.last_event = Some(name);
+                    l.signals.last_event_at = Some(now);
+                    l.signals.last_detail = detail;
+                    crate::hooks::append_capture(std::path::Path::new(&l.files_dir), &body);
+                    String::new()
+                }
+                Received::Status { context_used, model, .. } => {
+                    changed = l.signals.context_used != context_used || l.signals.model != model;
+                    l.signals.context_used = context_used;
+                    l.signals.model = model;
+                    crate::hooks::status_text(l)
+                }
+                Received::Ignored { .. } => {
+                    changed = false;
+                    String::new()
+                }
+                Received::Unknown { name } => {
+                    l.signals.unread += 1;
+                    unknown = Some(name);
+                    String::new()
+                }
+                Received::Malformed => {
+                    l.signals.unread += 1;
+                    String::new()
+                }
+            };
+            let snapshot = changed.then(|| launches.iter().map(|l| l.for_the_wire()).collect::<Vec<_>>());
+            (reply, snapshot)
+        };
+        if let Some(name) = unknown {
+            // The canary's own list, with a prefix so a hook name can never
+            // be mistaken for a transcript type. `R-A1`'s discipline.
+            self.health.lock().await.record_unknown(&format!("hook:{name}"));
+            tracing::warn!("a seat posted a hook event nobody has classified: {name}");
+        }
+        if let Some(launches) = changed_launches {
+            self.broadcast(ServerMsg::Seats { launches });
+        }
+        Some(reply)
     }
 
     /// Start every seat of a team that is not already running. One record
@@ -4333,11 +4424,12 @@ impl AppState {
             .collect();
         let seats_dir = self.seats_dir();
         let bins = crate::seat::Binaries::installed();
+        let receiver = self.receiver_url();
         for seat in &team.seats {
             if running.contains(&seat.name) {
                 continue;
             }
-            let launch = crate::seat::start(&team, seat, &seats_dir, &bins)
+            let launch = crate::seat::start(&team, seat, &seats_dir, &bins, receiver.as_deref())
                 .map_err(|e| anyhow!("seat `{}`: {e:#}", seat.name))?;
             self.store.save_launch(&launch)?;
             self.launches.write().await.push(launch);
@@ -6585,6 +6677,8 @@ mod terminal_tests {
             worktree: true,
             files_dir: "/f".into(),
             started: 1_700_000_000,
+            token: String::new(),
+            signals: Default::default(),
         }
     }
 

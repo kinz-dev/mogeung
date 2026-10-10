@@ -234,10 +234,14 @@ pub fn signals_for(seat: &Seat) -> &'static str {
     use mogeung_core::session::SessionSource::*;
     match (seat.cli, seat.own_home) {
         (ClaudeCode, _) => "hooks via --settings, a status line, the screen — none touch your home",
-        (OpenCode, _) => "hooks via a plugin in a directory mogeung owns, the screen",
-        (Codex, true) | (QwenCode, true) => "hooks in the seat's own home, the screen",
-        (Codex, false) | (QwenCode, false) => {
-            "the screen only — hooks need a home of this seat's own (ADR-0043 clause 5)"
+        (OpenCode, _) => "hooks via a plugin file mogeung owns, named in its inline config; the screen",
+        (QwenCode, true) => "hooks in the seat's own home, the screen",
+        (QwenCode, false) => "the screen only — hooks need a home of this seat's own (ADR-0043 clause 5)",
+        // `R-P5` built Claude's, Qwen's and opencode's; Codex's hooks live in
+        // `config.toml` beside trust hashes, and writing them into a home of
+        // mogeung's own is a format nobody here has read yet.
+        (Codex, _) => {
+            "the screen only — Codex's hooks live in its config with trust hashes, not yet written even in a home of its own"
         }
     }
 }
@@ -377,10 +381,17 @@ mod tests {
 
     #[test]
     fn the_signals_a_seat_gets_follow_the_cli_and_the_home() {
-        let mut s = Seat::new("b", SessionSource::Codex);
+        let mut s = Seat::new("b", SessionSource::QwenCode);
         assert!(signals_for(&s).contains("screen only"));
         s.own_home = true;
         assert!(signals_for(&s).contains("own home"));
         assert!(signals_for(&Seat::new("p", SessionSource::ClaudeCode)).contains("--settings"));
+        assert!(signals_for(&Seat::new("o", SessionSource::OpenCode)).contains("plugin"));
+        // `R-P5`: a Codex seat is plain whatever its home, and the sentence
+        // says why rather than promising hooks nobody has written.
+        let mut c = Seat::new("c", SessionSource::Codex);
+        assert!(signals_for(&c).contains("screen only"));
+        c.own_home = true;
+        assert!(signals_for(&c).contains("screen only") && signals_for(&c).contains("not yet"));
     }
 }

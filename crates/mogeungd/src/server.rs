@@ -216,6 +216,10 @@ where
     // refusal that has already done work is a refusal that leaves a mess.
     let posture = admit(&addr, opts.token.as_deref())?;
     let state = prepare(&opts).await?;
+    // Where a seat's hooks post (`R-P5`): this address, read once here like
+    // every gate below it, so the launcher names the receiver the server
+    // actually has.
+    let _ = state.listen_addr.set(addr);
     // The write guard reads the same decision the refusal above was made
     // from, rather than deciding again from the same inputs. Two places that
     // both compute "is this safe" are two places that can come to disagree,

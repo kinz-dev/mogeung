@@ -304,6 +304,68 @@ pub struct SeatTag {
     /// The team's name, for the row; the id is the key.
     pub team: String,
     pub seat: String,
+    /// Which kind of seat this is: one whose hooks reach the daemon, or one
+    /// known from its transcript and its screen only. `R-P5`. The row says
+    /// so, because the two are watched by different means.
+    #[serde(default)]
+    pub signals: SignalKind,
+}
+
+/// Whether a seat's own process talks to the daemon. `R-P5`, ADR-0043
+/// clause 3: a Claude Code seat carries hooks and a status line through
+/// `--settings`, an opencode seat a plugin, a Qwen seat hooks only in a home
+/// of its own, and a Codex seat none — so a seat is one of two kinds, and
+/// the kind is a fact about the CLI it runs, settled at launch.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalKind {
+    /// Its hooks post to the daemon's receiver, with a token of its own.
+    Hooked,
+    /// Nothing but its transcript and its screen: no hook reaches the daemon.
+    #[default]
+    Plain,
+}
+
+impl SignalKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            SignalKind::Hooked => "hooked",
+            SignalKind::Plain => "plain",
+        }
+    }
+}
+
+/// What a seat's hooks have told the daemon so far. `R-P5`. Live state on
+/// the launch record, replaced as events arrive; the receiver keeps the raw
+/// payloads beside the seat's generated files, never here.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct SeatSignals {
+    pub kind: SignalKind,
+    /// Hook calls the receiver accepted and read. A status line call is not
+    /// one: it is a reading, not an event.
+    #[serde(default)]
+    pub events: u64,
+    /// The last event's name — Claude Code's and Qwen Code's
+    /// `hook_event_name`, opencode's `event.type` — and when it arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<i64>,
+    /// One line of what the last event said, where it said anything: a
+    /// notification's message, a permission's title, an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_detail: Option<String>,
+    /// From the status line, where the CLI has one: how much of the context
+    /// window is used, in whole percent, and the model it reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_used: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Calls the receiver refused or could not read: an event name nobody
+    /// has classified, a body that is not JSON. Counted apart from `events`
+    /// so a seat whose hooks are all unknown reads as silent, not busy.
+    #[serde(default)]
+    pub unread: u64,
 }
 
 /// A seat the daemon started: the launch record. `R-P4`.
@@ -338,6 +400,16 @@ pub struct SeatLaunch {
     pub files_dir: String,
     /// Unix seconds.
     pub started: i64,
+    /// The receiver's token for this seat, minted at launch and handed to
+    /// the seat's process in its environment. `R-P5`, ADR-0043 clause 3.
+    /// Persisted with the record so a restarted daemon still hears a seat it
+    /// re-adopts; **stripped before the record crosses the wire** — see
+    /// `AppState::seats_msg`. Empty on a record from before `R-P5`.
+    #[serde(default)]
+    pub token: String,
+    /// What the seat's hooks have said. Live; the kind is settled at launch.
+    #[serde(default)]
+    pub signals: SeatSignals,
 }
 
 impl SeatLaunch {
@@ -356,6 +428,15 @@ impl SeatLaunch {
             team_id: self.team_id.clone(),
             team: self.team.clone(),
             seat: self.seat.clone(),
+            signals: self.signals.kind,
+        }
+    }
+
+    /// The record as a client may see it: the same, with the token gone.
+    pub fn for_the_wire(&self) -> SeatLaunch {
+        SeatLaunch {
+            token: String::new(),
+            ..self.clone()
         }
     }
 }
@@ -379,11 +460,30 @@ mod tests {
             worktree: true,
             files_dir: "/f".into(),
             started: 1,
+            token: "secret".into(),
+            signals: SeatSignals { kind: SignalKind::Hooked, ..Default::default() },
         };
         assert_eq!(l.row_id(), "seat:t1:builder");
         l.session_id = Some("abc".into());
         assert_eq!(l.row_id(), "abc");
         assert_eq!(l.tag().seat, "builder");
+        assert_eq!(l.tag().signals, SignalKind::Hooked);
+        // `R-P5`: the token is the seat's, and the wire never carries it.
+        let wire = l.for_the_wire();
+        assert!(wire.token.is_empty());
+        assert_eq!(wire.seat, "builder");
+        assert!(!serde_json::to_string(&wire).unwrap().contains("secret"));
+    }
+
+    /// A record from before `R-P5` reads back as a plain seat with no token:
+    /// the absence is the default, so no migration.
+    #[test]
+    fn an_old_launch_record_reads_as_a_plain_seat() {
+        let json = r#"{"team_id":"t","team":"port","seat":"s","cli":"codex","pane_id":"%1","tmux_target":"x:0.0","tmux_session":"x","dir":"/w","started":1}"#;
+        let l: SeatLaunch = serde_json::from_str(json).unwrap();
+        assert_eq!(l.signals.kind, SignalKind::Plain);
+        assert!(l.token.is_empty());
+        assert_eq!(l.tag().signals, SignalKind::Plain);
     }
 
     #[test]

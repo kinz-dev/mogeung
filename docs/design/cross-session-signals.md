@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-10-09
+updated: 2026-10-10
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -157,6 +157,18 @@ seat row stands down; a seat whose pane has gone stays as a dead row until
 the team is stopped, so a seat that died is seen rather than silently
 missing ([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)'s
 amendment; [architecture.md](architecture.md#the-daemon-may-own-a-process)).
+
+And a seat may **tell** the daemon things (`R-P5`), where every found pane
+is only read: a Claude Code or opencode seat, and a Qwen seat in a home of
+mogeung's own, posts its hook events and its status line to the daemon's
+loopback receiver with a token of its own, and the tag on its row says
+`hooked`; a Codex seat, or a Qwen seat in the user's home, carries none and
+says `plain`, so its silence is read as what it is. What arrives is
+classified the way transcript lines are and lands on the launch record's
+`signals` — the last event and its line, the context fill, the model — for
+the Teams window today and the policy engine (`R-P6`) next; it does not
+rank a row yet. `hooks.rs` has the tables and the fences;
+[wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051) the routes.
 
 ### Handing a folder to the desktop (`R-J34`)
 

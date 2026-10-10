@@ -1,7 +1,7 @@
 ---
 title: The read boundary
 status: active
-updated: 2026-10-09
+updated: 2026-10-10
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/workspace.rs
@@ -103,8 +103,11 @@ at.
 - **The doc inventory** (`R-H1`) answers for watched repositories only; the
   daemon refuses a path no session lives in.
 - **A seat's files** (`R-P4`, feature 0051) live under `~/.mogeung/seats/`
-  — a guidance file, and a home of its own when asked — and are the daemon's
-  to write. The one write into a *worktree* is a marked block in a Codex
+  — a guidance file, a home of its own when asked, and since `R-P5` the
+  hook script, the Claude `settings.json`, the opencode plugin and the
+  `signals.jsonl` of what its hooks posted — and are the daemon's to write.
+  A Qwen seat's hooks go into the `settings.json` of *that* home, which is
+  mogeung's, never the user's. The one write into a *worktree* is a marked block in a Codex
   seat's `AGENTS.md`, only in a worktree the daemon made and taken back at
   stop ([ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)'s amendment);
   a seat in the team's checkout gets no write at all, and a Codex seat that

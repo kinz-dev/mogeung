@@ -164,11 +164,14 @@ describe("the Teams window", () => {
             worktree: true,
             files_dir: "/f",
             started: 1,
+            signals: { kind: "hooked", events: 3, last_event: "Stop", last_event_at: Date.now() / 1000 - 90, context_used: 12, unread: 0 },
           },
         ],
       }),
     );
     expect(screen.getByTestId("seat-0-status").textContent).toContain("running in geung-port-openrig-planner");
+    // `R-P5`: what its hooks have said, under where it runs.
+    expect(screen.getByTestId("seat-0-status").textContent).toContain("hooked — 3 events, last Stop 1m ago · context 12%");
     expect(screen.getByText("Stop team").closest("button")).not.toBeDisabled();
     fireEvent.click(screen.getByText("Stop team"));
     expect(sent).toContainEqual({ cmd: "team_stop", id: "t1" });

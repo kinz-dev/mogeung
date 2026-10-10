@@ -7,7 +7,7 @@
  * daemon will say about them, so a form can show it before a click fails.
  */
 
-import type { PermissionMode, Policy, Seat, SessionSource, Team } from "@/wire/types";
+import type { PermissionMode, Policy, Seat, SeatSignals, SessionSource, Team } from "@/wire/types";
 import { PERMISSION_LABEL } from "@/wire/types";
 
 /** The policy a new team starts with: the owner's numbers (three hops,
@@ -62,13 +62,49 @@ export function seatSignals(seat: Seat): string {
     case "claude_code":
       return "hooks via --settings, a status line, the screen — none touch your home";
     case "opencode":
-      return "hooks via a plugin in a directory mogeung owns, the screen";
-    case "codex":
+      return "hooks via a plugin file mogeung owns, named in its inline config; the screen";
     case "qwen_code":
       return seat.own_home
         ? "hooks in the seat's own home, the screen"
         : "the screen only — hooks need a home of this seat's own (ADR-0043 clause 5)";
+    case "codex":
+      return "the screen only — Codex's hooks live in its config with trust hashes, not yet written even in a home of its own";
   }
+}
+
+/** `now` and `at` in unix seconds. Coarse on purpose: a seat's last word is
+ *  read at a glance, not timed. */
+function ago(at: number, now: number): string {
+  const s = Math.max(0, Math.floor(now - at));
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/**
+ * One line for what a running seat's hooks have said — `R-P5`. A plain seat
+ * says it is plain, so a silence on its line is not read as a hooked seat's;
+ * a hooked seat says how many events, the last one and when, the context
+ * fill and the model where a status line gave them, and how many calls
+ * were not read.
+ */
+export function signalsLine(s: SeatSignals, now: number): string {
+  if (s.kind === "plain") return "plain — known from its transcript and its screen only";
+  const parts: string[] = [];
+  if (s.events === 0) {
+    parts.push("hooked — no event yet");
+  } else {
+    const last = s.last_event
+      ? `, last ${s.last_event}${s.last_event_at !== undefined ? ` ${ago(s.last_event_at, now)}` : ""}`
+      : "";
+    parts.push(`hooked — ${s.events} event${s.events === 1 ? "" : "s"}${last}`);
+  }
+  if (s.context_used !== undefined) parts.push(`context ${s.context_used}%`);
+  if (s.model) parts.push(s.model);
+  if (s.unread > 0) parts.push(`${s.unread} unread`);
+  return parts.join(" · ");
 }
 
 /** What the daemon would refuse, in its words, or `null`. The daemon's

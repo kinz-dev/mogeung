@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-09
+updated: 2026-10-10
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -81,6 +81,7 @@ whether the value survives a restart or is re-derived on the first scan.
 | `artifacts` (`R-J115`) | pages this session published on claude.ai, newest first; `url` worked out by the daemon from the UUID's base58 form | yes; skipped when empty |
 | `provisional` (`R-J75`) | a pane row, rebuilt every scan | never |
 | `origin` (`R-I21`) | the machine a mirrored session runs on: `machine_id`, `host`, `ssh_target`, `stale` | never |
+| `seat` (`R-P4`, `R-P5`) | the seat this session is, when the daemon started it: `team_id`, `team`, `seat`, and `signals` — `hooked` when its hooks reach the daemon, `plain` when it is known from its transcript and screen only | yes; re-tagged every scan from the launch records |
 
 **`alive` and `live_status` are never trusted from storage**; both are
 re-derived from the OS on the first scan. **`pid` is kept and is not a
@@ -115,7 +116,11 @@ SQLite at `~/.mogeung/mogeung.db`:
   migration
 - `seat_launches(team_id, seat, json)` — which panes are seats: the launch
   record a restarted daemon re-adopts from (`R-P4`). Derived, not the user's
-  writing, so not mirrored; a stop deletes the row
+  writing, so not mirrored; a stop deletes the row. Since `R-P5` the blob
+  carries the seat's receiver `token` — persisted so a re-adopted seat is
+  still heard, stripped before the record is served — and its `signals`
+  (kind, count, last event, context fill, model), which are live state
+  rewritten in memory as hooks arrive and saved only as the record is
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)

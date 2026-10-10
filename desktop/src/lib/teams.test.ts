@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, teamSummary, validSeatName } from "./teams";
+import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, signalsLine, teamSummary, validSeatName } from "./teams";
 
 describe("team helpers", () => {
   it("starts a team with the owner's numbers", () => {
@@ -48,8 +48,31 @@ describe("team helpers", () => {
     expect(permissionFor(t, plain)).toBe("accept_edits");
     expect(permissionFor(t, { ...plain, permission: "plan" })).toBe("plan");
     expect(seatSignals(plain)).toContain("screen only");
-    expect(seatSignals({ ...plain, own_home: true })).toContain("own home");
+    // `R-P5`: Codex stays plain even in a home of its own, and says why;
+    // Qwen's hooks need the home and get them there.
+    expect(seatSignals({ ...plain, own_home: true })).toContain("screen only");
+    expect(seatSignals({ ...newSeat("q", "qwen_code"), own_home: true })).toContain("own home");
+    expect(seatSignals(newSeat("q", "qwen_code"))).toContain("screen only");
     expect(seatSignals(newSeat("c"))).toContain("--settings");
+    expect(seatSignals(newSeat("o", "opencode"))).toContain("plugin");
     expect(teamSummary({ ...t, seats: [plain], paused: true })).toBe("1 seat · paused");
+  });
+
+  /** `R-P5`. The line under a running seat: a plain seat says so, so its
+   *  silence is never read as a hooked seat's; a hooked seat counts. */
+  it("says what a running seat's hooks have said, or that it is plain", () => {
+    const now = 1_000_000;
+    expect(signalsLine({ kind: "plain", events: 0, unread: 0 }, now)).toMatch(/^plain — /);
+    expect(signalsLine({ kind: "hooked", events: 0, unread: 0 }, now)).toBe("hooked — no event yet");
+    expect(
+      signalsLine({ kind: "hooked", events: 1, last_event: "SessionStart", last_event_at: now - 5, unread: 0 }, now),
+    ).toBe("hooked — 1 event, last SessionStart just now");
+    expect(
+      signalsLine(
+        { kind: "hooked", events: 12, last_event: "Stop", last_event_at: now - 125, context_used: 43, model: "Haiku 4.5", unread: 2 },
+        now,
+      ),
+    ).toBe("hooked — 12 events, last Stop 2m ago · context 43% · Haiku 4.5 · 2 unread");
+    expect(signalsLine({ kind: "hooked", events: 3, last_event: "Stop", last_event_at: now - 7200, unread: 0 }, now)).toContain("2h ago");
   });
 });

@@ -32,7 +32,7 @@ import { useEffect, useState } from "react";
 import { Eraser, FolderOpen, Play, Plus, Save, Square, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import { chooseFolder } from "@/lib/tauri";
-import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, teamSummary } from "@/lib/teams";
+import { firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, signalsLine, teamSummary } from "@/lib/teams";
 import { Dialog } from "@/ui/Dialog";
 import { Button, Checkbox, Dim, IconButton, Input, Mono, Segmented } from "@/ui/primitives";
 import { SourceMark } from "@/ui/SourceMark";
@@ -541,6 +541,13 @@ export function TeamsWindow() {
                         <div className="mt-1" data-testid={`seat-${i}-status`}>
                           <Dim className="text-2xs">
                             running in <Mono>{running.tmux_session}</Mono> · {running.dir}
+                          </Dim>
+                          {/* What its hooks have said (`R-P5`): the kind, the
+                              count, the last word and the context fill — or
+                              that this is a plain seat, so silence here means
+                              nothing. */}
+                          <Dim className="text-2xs" title={running.signals.last_detail ?? undefined}>
+                            {signalsLine(running.signals, Date.now() / 1000)}
                           </Dim>
                         </div>
                       );

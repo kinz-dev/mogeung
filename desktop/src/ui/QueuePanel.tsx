@@ -349,8 +349,21 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
               you started by hand.
             */}
             {session?.seat && (
-              <Chip color="var(--blue)" title={`a seat of team ${session.seat.team} — started by mogeung in Gau Geung mode`} className="shrink-0">
+              <Chip
+                color="var(--blue)"
+                title={
+                  `a seat of team ${session.seat.team} — started by mogeung in Gau Geung mode; ` +
+                  (session.seat.signals === "hooked"
+                    ? "hooked: its hooks reach the daemon (R-P5)"
+                    : "plain: known from its transcript and its screen only — its CLI carries no hook here (ADR-0043 clause 3)")
+                }
+                className="shrink-0"
+              >
                 {session.seat.team}/{session.seat.seat}
+                {/* Which kind of seat, on the row (`R-P5`): the two are
+                    watched by different means, and a plain seat's silence
+                    is not a hooked seat's. */}
+                <span className="opacity-70"> · {session.seat.signals === "hooked" ? "hooked" : "plain"}</span>
               </Chip>
             )}
             {session?.provisional && (

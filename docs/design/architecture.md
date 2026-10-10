@@ -1,12 +1,13 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-09
+updated: 2026-10-10
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/seat.rs
+  - crates/mogeungd/src/hooks.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -271,6 +272,29 @@ amendment). A stop ends the processes and forgets the records; the worktrees
 stay, and removing one is a separate verb that refuses a dirty tree. Boot,
 stop and remove are judged like a run start.
 
+**And a seat talks back** (`R-P5`, since 2026-10-10): `hooks.rs` is the first
+surface in mogeung that an agent's **own process** reaches — ADR-0043 clause
+3, and the *new daemon surface* that ADR names. When the server is up it
+records its bind in `AppState::listen_addr`, and the launcher hands every
+seat whose CLI can carry a hook the way back: a token minted per seat and the
+receiver's loopback URL in the seat's environment, then whatever the CLI
+accepts at launch — a `--settings` document with hooks and a status line for
+Claude Code, a plugin file named in the inline config for opencode, `hooks`
+in the `settings.json` of a home of mogeung's own for Qwen Code, and nothing
+for Codex, whose hooks live in its config beside trust hashes. Every file is
+under `~/.mogeung/seats/<team>/<seat>/`. The receiver (`POST /api/seat/hook`,
+`/api/seat/status`) is merged **outside** the shared-token layer and admits a
+loopback peer with one seat's token and no other; what arrives is data —
+classified against `CLAUDE_HANDLED` / `OPENCODE_HANDLED` the way transcript
+lines are, an unknown name raised through the Health canary as `hook:<name>`
+— and becomes the launch record's `signals`: the kind (*hooked* or *plain*,
+on the row's tag), the count, the last event and its line, the context fill
+and the model from the status line. Hook bodies are kept beside the seat's
+files as `signals.jsonl`, capped, for the week of captures; status readings
+are never kept. The token is persisted with the record so a restarted daemon
+still hears a seat it re-adopts, and stripped before the record crosses the
+wire.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
@@ -371,7 +395,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
-| `team.rs` (both) · `seat.rs` | team and seat definitions, their mirror; the seat launcher and its records | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

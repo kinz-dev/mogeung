@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-09
+updated: 2026-10-10
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -15,6 +15,7 @@ covers:
   - crates/mogeung-core/src/team.rs
   - crates/mogeungd/src/team.rs
   - crates/mogeungd/src/seat.rs
+  - crates/mogeungd/src/hooks.rs
 ---
 
 # Wire protocol
@@ -110,6 +111,7 @@ everyone else is judged by the bind and the flag:
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
 | `send_allowed` | `SendToSession` | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
+| a seat's own token (`hooks.rs`) | `POST /api/seat/hook`, `POST /api/seat/status` — the one surface an agent's **own process** talks to (`R-P5`) | refused, loopback only, and the shared token is not accepted there: it is a window's key, not a process's ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md) clause 3) |
 
 The write guard is one function listing its family, so omitting a new verb is
 a visible gap in a list of thirteen rather than a missing line in a
@@ -366,7 +368,7 @@ amendment.
 | Event | Carries | Relay |
 |---|---|---|
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
-| `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory — after a boot or stop and with every `TeamList` answer | theirs |
+| `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
 and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
@@ -401,6 +403,26 @@ team's by the launcher; the two are never merged in a definition. Policy —
 `hop_budget` (3), `hourly_cap` (60), `handover`, `readiness_press`, `wakes`,
 `watchdogs` — is per team, and every automatic send it can make is declared
 text in it, readable before it fires (ADR-0003's amendment, fence 3).
+
+**A seat's own voice** (`R-P5`, `hooks.rs`). Two REST routes, `POST
+/api/seat/hook` and `POST /api/seat/status`, are the one surface an agent's
+own process talks to ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+clause 3). They sit **outside** the shared-token layer and behind three
+fences of their own: a loopback peer, a bearer token that names one seat —
+minted at launch, carried in the seat's environment, persisted with the
+launch record so a re-adopted seat is still heard, compared in constant time
+and never sent to a client — and a body that is JSON with an event name the
+receiver has classified. The order is the fence: peer before token, token
+before body, so an address that is not loopback learns nothing. An event the
+tables know (`CLAUDE_HANDLED`, `OPENCODE_HANDLED`) is counted and becomes the
+record's last word; a name on the ignored list is a decision already taken;
+a name on neither is counted as `unread` and raised through Health as
+`hook:<name>`, the canary's own list — `R-A1`'s discipline, one surface over.
+The status route answers with the seat's status-line text and counts nothing:
+it fires on every repaint, so it is never kept and is broadcast only when the
+fill or the model moved. `Session.seat` carries `signals: hooked | plain` so
+the row says which kind of seat it is, because a plain seat's silence is not
+a hooked seat's.
 
 ## Skills and memory
 
@@ -569,6 +591,8 @@ this machine's loopback authority. A follow to a daemon that sends no
 
 ```
 GET  /api/health                         # liveness, and whether it still sees everything; carries `daemon`
+POST /api/seat/hook                      # a seat's hook event, with the seat's own bearer token; loopback only (R-P5)
+POST /api/seat/status                    # a seat's status-line reading; answers with the line to show
 GET  /api/queue
 GET  /api/sessions
 GET  /api/sessions/{id}

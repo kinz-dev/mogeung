@@ -998,11 +998,16 @@ mod tests {
             worktree: true,
             files_dir: "/f".into(),
             started: 7,
+            // `R-P5`: the token is persisted with the record, so a restarted
+            // daemon still hears the seat it re-adopts.
+            token: "s3cret".into(),
+            signals: Default::default(),
         };
         s.save_launch(&l).unwrap();
         s.save_launch(&l).unwrap();
         let back = s.load_launches().unwrap();
         assert_eq!(back, vec![l.clone()]);
+        assert_eq!(back[0].token, "s3cret");
         s.delete_launch("t1", "builder").unwrap();
         assert!(s.load_launches().unwrap().is_empty());
     }

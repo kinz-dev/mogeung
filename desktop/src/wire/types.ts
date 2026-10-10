@@ -1121,13 +1121,41 @@ export interface Team {
   updated: number;
 }
 
-/** Which team, which seat. */
+/**
+ * Which kind of seat: one whose hooks reach the daemon (`hooked`), or one
+ * known from its transcript and its screen only (`plain`). `R-P5`, ADR-0043
+ * clause 3 — a fact about the CLI it runs, settled at launch.
+ */
+export type SignalKind = "hooked" | "plain";
+
+/** What a seat's hooks have told the daemon so far. `R-P5`. */
+export interface SeatSignals {
+  kind: SignalKind;
+  /** Hook calls accepted and read; a status reading is not one. */
+  events: number;
+  last_event?: string;
+  /** Unix seconds. */
+  last_event_at?: number;
+  last_detail?: string;
+  /** Whole percent of the context window, from the status line. */
+  context_used?: number;
+  model?: string;
+  /** Calls refused or unreadable: an unclassified name, a body that is not JSON. */
+  unread: number;
+}
+
+/** Which team, which seat — and which kind. */
 export interface SeatTag {
   team_id: string;
   team: string;
   seat: string;
+  signals: SignalKind;
 }
-/** A seat the daemon started and has not stopped: the launch record. `R-P4`. */
+/**
+ * A seat the daemon started and has not stopped: the launch record. `R-P4`.
+ * The daemon strips the seat's receiver token before this crosses the wire
+ * (`R-P5`); a window never holds it.
+ */
 export interface SeatLaunch {
   team_id: string;
   team: string;
@@ -1141,6 +1169,7 @@ export interface SeatLaunch {
   worktree: boolean;
   files_dir: string;
   started: number;
+  signals: SeatSignals;
 }
 
 export interface Note {

@@ -1,7 +1,7 @@
 ---
 title: Attention ranking
 status: active
-updated: 2026-10-08
+updated: 2026-10-10
 covers:
   - crates/mogeung-core/src/attention.rs
 ---
@@ -178,3 +178,10 @@ recently on 2026-10-07, and each refusal is deliberate rather than pending:
   the real session takes the pane. `R-J75` names that as its cost; this
   document names it as what ranking on evidence rather than on a flag has to
   do.
+- **`seat`** (`R-P4`, `R-P5`): which team a session belongs to and whether
+  its hooks reach the daemon are facts about the row, not reasons to look. A
+  seat ranks on the same queue as every session you started by hand, from the
+  same evidence; what its hooks said lands on the launch record, not here.
+  `R-P6`'s policy engine reads those signals for its wakes and watchdogs, and
+  a seat it holds for you will rank as `WAITING` by the same rule everything
+  else does — the reason, not the tag.

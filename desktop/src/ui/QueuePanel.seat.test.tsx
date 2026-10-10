@@ -61,7 +61,7 @@ const SEAT = {
   verify_runs: [],
   claims: [],
   last_event_at: new Date().toISOString(),
-  seat: { team_id: "t1", team: "port", seat: "builder" },
+  seat: { team_id: "t1", team: "port", seat: "builder", signals: "plain" },
 } as unknown as Session;
 
 async function board() {
@@ -98,5 +98,8 @@ describe("a seat's queue row", () => {
     const row = await board();
     expect(row.textContent).toContain("port/builder");
     expect(row.textContent).not.toContain("not started writing");
+    // `R-P5`: and which kind of seat it is — a plain seat's silence is not
+    // a hooked seat's, so the row says.
+    expect(row.textContent).toContain("plain");
   });
 });
