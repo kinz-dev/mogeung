@@ -370,12 +370,13 @@ amendment.
 | `TeamPause` | `id`, `paused` — the switch, on the definition; the only verb that writes `paused` (`R-P6`) | `Teams` and `Sends`, broadcast | here |
 | `SendRelease` | `team_id`, `id` — type a held send now; your act, so the chain starts again | `Sends`, broadcast; the seat rows at once | here |
 | `SendDrop` | `team_id`, `id` — never deliver it | `Sends`, broadcast; the seat rows at once | here |
+| `SeatRestart` | `team_id`, `seat` — stop one seat and start it again; a handover follows as the policy says (`R-P10`) | `Seats`, broadcast; the seat rows at once; a `Sends` when the handover is composed | here |
 
 | Event | Carries | Relay |
 |---|---|---|
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
 | `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
-| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
+| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>* — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
 and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
@@ -452,7 +453,15 @@ judged like your own send. `TeamPause` is the one writer of `paused`:
 `TeamSave` keeps what the daemon holds, so a form left open cannot un-pause a
 team on its way through. Your own `SendToSession` into a seat is logged beside
 the automatic ones as `human`, and resets the chain; into any other session it
-is what it always was, and no ledger exists for it.
+is what it always was, and no ledger exists for it. One kind of entry is not
+declared text: a `handover` (`R-P10`), composed by the model the daemon is
+configured with on a seat's start into a team with history or on
+`SeatRestart`, from the team's guidance, the teammates' transcripts and diffs
+and the send log — all framed as data — and logged *composed by <model> @
+<host>*. Under *after you read it* it arrives held and the seat's row ranks
+until you release it whole or drop it; under *automatic* it goes through the
+judge as a hop; with no endpoint configured, or a host the config does not
+consent to, the entry is a refusal that says the seat started without one.
 
 **The one write into a worktree** (`R-P9`, `write.rs`). ADR-0019 refused an
 editor for the concurrent writer it could not see; its 2026-10-09 amendment

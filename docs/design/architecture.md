@@ -10,6 +10,7 @@ covers:
   - crates/mogeungd/src/hooks.rs
   - crates/mogeungd/src/policy.rs
   - crates/mogeungd/src/write.rs
+  - crates/mogeungd/src/handover.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -351,6 +352,24 @@ directory is a worktree the daemon made; `FileWrite` is the verb, behind the
 write guard and the runs gate. [read-boundary.md](read-boundary.md#the-one-write-r-p9)
 has the fences in order.
 
+**And a seat is handed over to** (`R-P10`, since 2026-10-10): the one
+automatic send that is not declared text, under ADR-0003's later amendment.
+`handover.rs` is the prompt and the reading of the answer; `state.rs`
+gathers the evidence from what the daemon already holds — the team's two
+layers of guidance, the teammates' last turns from the store and their
+diffs, the send log, and on a restart the seat's own earlier session — asks
+the model through the one seam (ADR-0031: consent to a remote host is the
+seam's to judge, and with no endpoint the seat starts without a handover and
+the log says so), and hands the text to the policy engine as a `Handover`
+send: held on the seat's row under *after you read it*, judged and typed as
+a hop under *automatic*, nothing under *none*. Every line of evidence is
+framed as data another agent wrote, and the prompt says so before any of it
+appears. The trigger is a boot that joins a team with history, or
+`SeatRestart`, which stops one seat and starts it again with its earlier
+session as predecessor; composition runs in the background, so a boot is
+answered by rows. The entry is logged *composed by <model> @ <host>* and the
+text is kept whole.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
@@ -451,7 +470,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
-| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` · `handover.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree; the handover's prompt and reading | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

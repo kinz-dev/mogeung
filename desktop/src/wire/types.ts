@@ -1192,7 +1192,7 @@ export interface HeldSend {
 // -- Sends. `R-P6`. ADR-0003's amendment, fence 4, as the wire carries it.
 
 /** Who caused a send: you, a declared wake, a declared watchdog, a seat. */
-export type SendKind = "human" | "wake" | "watchdog" | "agent";
+export type SendKind = "human" | "wake" | "watchdog" | "agent" | "handover";
 export type SendStatus = "delivered" | "held" | "released" | "dropped" | "refused" | "failed";
 /** One line of a team's send log: what, to whom, why, when, and what became of it. */
 export interface SendEntry {
@@ -1211,6 +1211,8 @@ export interface SendEntry {
   hop: number;
   /** The hold's or refusal's reason, or tmux's complaint. */
   note?: string;
+  /** For a handover: `<model> @ <host>` — logged as the model's. `R-P10`. */
+  composed_by?: string;
 }
 /** One team's counters against its budgets, and its log, oldest first. */
 export interface TeamSends {
@@ -1457,6 +1459,8 @@ export type ClientMsg =
   | { cmd: "team_pause"; id: string; paused: boolean }
   | { cmd: "send_release"; team_id: string; id: string }
   | { cmd: "send_drop"; team_id: string; id: string }
+  /** Stop one seat and start it again, with a handover as the policy says. `R-P10`. */
+  | { cmd: "seat_restart"; team_id: string; seat: string }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *

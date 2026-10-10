@@ -406,6 +406,11 @@ pub enum ClientMsg {
     SendRelease { team_id: String, id: String },
     /// Drop a held send: never delivered. Judged like `SendRelease`.
     SendDrop { team_id: String, id: String },
+    /// Stop one seat and start it again, with a handover composed from what
+    /// its earlier session and its teammates did, as the team's policy says
+    /// (`after_read` holds it for you, `automatic` delivers it, `none` starts
+    /// it cold and the row says so). `R-P10`. Judged like `TeamBoot`.
+    SeatRestart { team_id: String, seat: String },
 
     // -- Scratch files. `R-L5`, ADR-0035.
     //

@@ -93,6 +93,8 @@ describe("team helpers", () => {
     expect(sendLine(you, now)).toMatch(/^you → planner/);
     const dog = { ...agent, id: "s5", kind: "watchdog" as const, from: undefined, to: "builder", hop: 0 };
     expect(sendLine(dog, now)).toMatch(/^watchdog → builder/);
+    const hand = { ...agent, id: "s6", kind: "handover" as const, from: undefined, to: "builder", hop: 1, composed_by: "qwen3 @ localhost" };
+    expect(sendLine(hand, now)).toMatch(/^handover \(qwen3 @ localhost\) → builder/);
     expect(sendsFor([agent, held, wake, dog], "builder").map((e) => e.id)).toEqual(["s1", "s2", "s3", "s5"]);
     expect(sendsFor([agent, held, wake, dog], "planner").map((e) => e.id)).toEqual(["s1", "s2", "s3"]);
   });

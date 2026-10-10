@@ -309,6 +309,7 @@ pub fn entry(
         status: SendStatus::Refused,
         hop: 0,
         note: None,
+        composed_by: None,
     }
 }
 

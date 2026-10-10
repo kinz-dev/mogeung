@@ -35,7 +35,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps } from "dockview";
-import { Anchor, Ban, Check, Copy, Pause, Play, SquareTerminal, Users, X } from "lucide-react";
+import { Anchor, Ban, Check, Copy, Pause, Play, RotateCcw, SquareTerminal, Users, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Button, Chip, Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
@@ -432,6 +432,8 @@ export function SeatDetail() {
   const queue = useStore((s) => s.queue);
   const sends = useStore((s) => s.teamSends);
   const select = useStore((s) => s.select);
+  const allowed = useStore((s) => s.teamsAllowed);
+  const send = useStore((s) => s.send);
   const parsed = key ? parseSeatKey(key) : null;
   const team = parsed ? teams.find((t) => t.id === parsed.teamId) : undefined;
   const view = useMemo(() => {
@@ -441,7 +443,11 @@ export function SeatDetail() {
   if (!team || !parsed || !view) {
     return <Empty hint="pick a seat in the pulse, the graph or the table — this pane follows the pick">no seat picked</Empty>;
   }
-  const log = sendsFor(sends.find((t) => t.team_id === team.id)?.log ?? [], view.seat.name).slice(-20).reverse();
+  const teamLog = sends.find((t) => t.team_id === team.id)?.log ?? [];
+  const log = sendsFor(teamLog, view.seat.name).slice(-20).reverse();
+  // The last handover for this seat, whole. `R-P10`: shown in full, never a
+  // summary of itself, with who composed it; held ones wait for you here.
+  const handover = [...teamLog].reverse().find((e) => e.kind === "handover" && e.to === view.seat.name);
   const tone = badgeColor(view.item?.reason);
   const l = view.launch;
   return (
@@ -483,7 +489,47 @@ export function SeatDetail() {
         >
           <Anchor size={12} /> Select underneath
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!allowed || !l}
+          title={
+            l
+              ? `stop this seat and start it again; a handover is composed from its earlier session and its teammates as the team's policy says (${team.policy.handover.replace("_", " ")})`
+              : "not running"
+          }
+          onClick={() => send({ cmd: "seat_restart", team_id: team.id, seat: view.seat.name })}
+        >
+          <RotateCcw size={12} /> Restart with handover
+        </Button>
       </div>
+      {handover && (
+        <div className="rounded border border-[var(--line)] p-1.5" data-testid="handover">
+          <div className="flex flex-wrap items-center gap-1">
+            <Dim className="text-2xs uppercase tracking-wide">handover · {handover.why}</Dim>
+            <Chip color={handover.status === "held" ? "var(--amber)" : "var(--dim)"}>{handover.status}</Chip>
+            {handover.composed_by && <Dim className="text-2xs">composed by {handover.composed_by}</Dim>}
+            <Dim className="ml-auto text-2xs">{agoShort(handover.at, now())} ago</Dim>
+          </div>
+          {handover.status === "refused" ? (
+            <Dim className="mt-1 block text-2xs">{handover.note}</Dim>
+          ) : (
+            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-[var(--bg)] p-1.5 font-mono text-2xs text-[var(--text)]">
+              {handover.text}
+            </pre>
+          )}
+          {handover.status === "held" && (
+            <div className="mt-1 flex items-center gap-1">
+              <Button size="sm" variant="solid" disabled={!allowed} title="type it into the seat now, whole" onClick={() => send({ cmd: "send_release", team_id: team.id, id: handover.id })}>
+                <Check size={12} /> Deliver
+              </Button>
+              <Button size="sm" disabled={!allowed} title="never deliver it — the seat starts without one" onClick={() => send({ cmd: "send_drop", team_id: team.id, id: handover.id })}>
+                <Ban size={12} /> Discard
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
       <div>
         <Dim className="block text-2xs uppercase tracking-wide">send log · this seat</Dim>
         {log.length === 0 && <Dim className="text-2xs">nothing sent to or from it yet</Dim>}

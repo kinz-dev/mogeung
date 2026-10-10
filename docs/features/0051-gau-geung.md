@@ -287,7 +287,16 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
 6. **`R-P10`, the handover.** A meta-prompt in `mogeungd`, composed through
    the existing model endpoint under ADR-0031's consent, triggered by the
    policy engine's seat events, sent through the same path as any automatic
-   send.
+   send. **Built 2026-10-10** (⏳): `handover.rs` — the prompt from the two
+   layers of guidance, the teammates' turns and diffs, the send log and a
+   restart's predecessor, every line framed as data; the answer kept whole
+   and logged *composed by <model> @ <host>*; a `Handover` send kind that
+   is a hop — held under *after you read it*, judged and typed under
+   *automatic*, nothing under *none*; a refusal entry with no endpoint. The
+   triggers are a boot into a team with history and `SeatRestart`, composed
+   in the background. The mode's seat pane shows the last one whole with
+   Deliver and Discard and offers the restart. Never composed by a real
+   model over a real team yet.
 7. **`R-P11`, the screen.** The capture type minted by the launcher and
    accepted nowhere else, the per-CLI shape matchers with a `screens` fixture
    corpus, the `screen` field on the seat row, the ranking hook with
@@ -401,6 +410,19 @@ guard and the runs gate; `FileContent.hash`; the REST reader's `hash`),
 (the editable branch, the draft, the save, the refusal banner),
 `FilePane.write.test.tsx`. Docs: `read-boundary.md`, `wire-protocol.md`,
 `architecture.md`, `the-window.md`, `assumptions.md` (`A24`).
+
+`R-P10`, built: `crates/mogeungd/src/handover.rs` (`Reason`, `Evidence`,
+`Input`, the budgets, `prompt`, `read_answer`, `composed_by`,
+`turns_from_events`, `send_line`), `state.rs` (`evidence_for`,
+`compose_handover`, `handover_for`, `handovers_after_boot`, `restart_seat`),
+`api.rs` (the boot spawns the handovers; `SeatRestart`),
+`mogeung-core/src/team.rs` (`SendKind::Handover`, `SendEntry.composed_by`),
+`wire.rs` (`SeatRestart`), `federation.rs`, `policy.rs`; tests in
+`handover.rs`, `tests/seat_handover.rs` against a fake streaming endpoint
+that records the prompt, the gate test. The window's `types.ts`,
+`lib/teams.ts` (`sendBy`), `GauGeungMode.tsx` (the handover whole, Deliver
+and Discard, Restart with handover). Docs: `architecture.md`,
+`wire-protocol.md`, `model-and-proxy.md`.
 
 ### Risks and unknowns
 
@@ -588,3 +610,23 @@ guard and the runs gate; `FileContent.hash`; the REST reader's `hash`),
   read: the session's seat tag, then the launch record's `worktree` flag —
   an observed session has no record and a checkout seat's says no. Nothing
   here has saved over a real seat yet.
+- 2026-10-10, `R-P10`. The handover is the first model answer that goes
+  into an agent's input, and the prompt is built for that: every transcript
+  line is quoted as data another agent wrote, and the model is told so
+  before any evidence appears — a teammate's transcript can say anything,
+  and a handover that obeyed it would launder an agent's words into the
+  daemon's. The budget is the reading guide's lesson again: so many turns
+  per seat, so many characters per turn, a cap on the whole, and the cut
+  falls on evidence, never on the directions. Three of the amendment's
+  conditions fell out as plain code: *shown in full* is a text kept whole
+  (a wrapping fence removed, a cap, never a summary); *logged as the
+  model's* is `composed_by` on the entry; *counts as a hop when it carries
+  what another seat said or did* became *always a hop*, the conservative
+  reading, because the prompt always carries the teammates. *Baton passed*
+  is not a trigger: an agent's own message already carries its words, and a
+  composed note on every hop would double every send. The trigger that is
+  built is a boot into a team with history — a cold boot has nothing to
+  hand over and says nothing — and `SeatRestart`, which reads the earlier
+  session's evidence before it ends it. One test deadlocked on its own
+  mutex, not the daemon's: a `&guard[0]` in a `let` keeps the guard for the
+  block. No real model has composed one over a real team yet.

@@ -479,16 +479,24 @@ pub enum SendKind {
     /// A seat's own words to a seat of its team, verbatim, through the
     /// command mogeung handed it (fence 3: *delivered verbatim*).
     Agent,
+    /// A handover the daemon had a model compose for a seat on its start or
+    /// restart — the one automatic send that is not declared text. `R-P10`,
+    /// ADR-0003's later amendment of 2026-10-09. The entry says who composed
+    /// it, and a policy of *after you read it* holds it for you first.
+    Handover,
 }
 
 impl SendKind {
     /// Does this delivery count as a hop — one agent's doing reaching
     /// another agent's input with no human between? A seat's message is; so
     /// is a wake, which is one seat's event typed into another, and the
-    /// shape a loop with nobody watching takes. A watchdog is not: a nudge
-    /// to a silent seat is caused by nothing another agent did.
+    /// shape a loop with nobody watching takes. A handover is read as one too
+    /// — it carries what other seats said and did, which is the amendment's
+    /// own condition, and the conservative reading is the budget's. A
+    /// watchdog is not: a nudge to a silent seat is caused by nothing another
+    /// agent did.
     pub fn is_hop(self) -> bool {
-        matches!(self, SendKind::Wake | SendKind::Agent)
+        matches!(self, SendKind::Wake | SendKind::Agent | SendKind::Handover)
     }
 
     /// Counted against the team's hourly cap: everything a human did not do.
@@ -502,6 +510,7 @@ impl SendKind {
             SendKind::Wake => "wake",
             SendKind::Watchdog => "watchdog",
             SendKind::Agent => "seat",
+            SendKind::Handover => "handover",
         }
     }
 }
@@ -570,6 +579,10 @@ pub struct SendEntry {
     /// The hold's reason, the refusal's, or tmux's complaint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// For a handover: *<model> @ <host>* — logged as the model's, fence 3
+    /// of the later amendment. `R-P10`. Absent on every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed_by: Option<String>,
 }
 
 /// One team's counters and its log, as a client sees them. `R-P6`. Built by
@@ -644,6 +657,8 @@ mod tests {
     fn a_wake_and_a_seats_message_are_hops_and_a_watchdog_is_not() {
         assert!(SendKind::Agent.is_hop());
         assert!(SendKind::Wake.is_hop());
+        assert!(SendKind::Handover.is_hop(), "it carries what other seats said and did");
+        assert!(SendKind::Handover.is_automatic());
         assert!(!SendKind::Watchdog.is_hop());
         assert!(!SendKind::Human.is_hop());
         assert!(SendKind::Watchdog.is_automatic());

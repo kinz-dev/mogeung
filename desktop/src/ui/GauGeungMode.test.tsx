@@ -202,6 +202,46 @@ describe("the Gau Geung mode", () => {
     expect((await screen.findByTestId("seat-detail")).textContent).toContain("builder");
   });
 
+  /** `R-P10`. A held handover is shown whole with its composer, and the two
+   *  buttons are the daemon's release and drop; restart asks the daemon. */
+  it("shows the seat's last handover whole, delivers or discards it, and offers a restart", async () => {
+    board();
+    act(() =>
+      useStore.setState({
+        gauSeat: "t1/builder",
+        teamSends: [
+          sends({
+            log: [
+              {
+                id: "h1",
+                team_id: "t1",
+                at: Date.now() / 1000 - 30,
+                kind: "handover",
+                to: "builder",
+                text: "# Handover\n\nThe planner wrote docs/plan.md.",
+                why: "handover on start",
+                status: "held",
+                hop: 0,
+                note: "composed by fake-1 @ localhost — read it, then release it to the seat",
+                composed_by: "fake-1 @ localhost",
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    const h = await screen.findByTestId("handover");
+    expect(h.textContent).toContain("handover · handover on start");
+    expect(h.textContent).toContain("composed by fake-1 @ localhost");
+    expect(h.textContent).toContain("The planner wrote docs/plan.md.");
+    fireEvent.click(screen.getByText("Deliver"));
+    expect(sent).toContainEqual({ cmd: "send_release", team_id: "t1", id: "h1" });
+    fireEvent.click(screen.getByText("Discard"));
+    expect(sent).toContainEqual({ cmd: "send_drop", team_id: "t1", id: "h1" });
+    fireEvent.click(screen.getByText("Restart with handover"));
+    expect(sent).toContainEqual({ cmd: "seat_restart", team_id: "t1", seat: "builder" });
+  });
+
   it("leaves on Escape without touching the selection underneath", async () => {
     board();
     useStore.setState({ selected: "elsewhere" });

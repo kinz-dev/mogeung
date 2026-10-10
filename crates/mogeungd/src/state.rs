@@ -4864,6 +4864,213 @@ impl AppState {
         Ok(())
     }
 
+    // -- Handovers. `R-P10`, ADR-0003's later amendment of 2026-10-09. -------
+
+    /// What one seat has done, as the handover's evidence: its row's last
+    /// turns from the store, its diff, its last activity. Read from what the
+    /// daemon already holds — ADR-0031 clause 1 — and nothing is fetched.
+    async fn evidence_for(&self, l: &mogeung_core::team::SeatLaunch) -> crate::handover::Evidence {
+        let session = {
+            let sessions = self.sessions.read().await;
+            let tagged: Vec<&Session> = sessions
+                .values()
+                .filter(|s| s.seat.as_ref().is_some_and(|t| t.team_id == l.team_id && t.seat == l.seat))
+                .collect();
+            tagged
+                .iter()
+                .find(|s| s.alive)
+                .or(tagged.first())
+                .map(|s| (*s).clone())
+                .or_else(|| l.session_id.as_ref().and_then(|id| sessions.get(id)).cloned())
+        };
+        let mut e = crate::handover::Evidence {
+            seat: l.seat.clone(),
+            cli: l.cli.label().to_string(),
+            ..Default::default()
+        };
+        if let Some(s) = session {
+            let events = self.store.load_recent_events(&s.id, 0, 60).unwrap_or_default();
+            e.turns = crate::handover::turns_from_events(&events);
+            e.last_activity = s.last_activity.clone();
+            if let Some(c) = self.changes.read().await.get(&s.id) {
+                if !c.files.is_empty() {
+                    e.diff = Some((c.files.len(), c.insertions, c.deletions));
+                }
+            }
+        }
+        e
+    }
+
+    /// Compose a handover for `seat` of `team`, from the team's guidance, the
+    /// predecessor's and the teammates' evidence, and the send log. `None`
+    /// when no model endpoint is configured (ADR-0031 clause 6); `Err` when
+    /// the endpoint refused or failed — consent to a host not granted, say.
+    pub async fn compose_handover(
+        &self,
+        team: &mogeung_core::team::Team,
+        seat: &str,
+        reason: crate::handover::Reason,
+        predecessor: Option<crate::handover::Evidence>,
+    ) -> Result<Option<(String, String)>, String> {
+        let settings = self.model.settings();
+        if !settings.configured() {
+            return Ok(None);
+        }
+        let launches = self.launches.read().await.clone();
+        let mut teammates = Vec::new();
+        for l in launches.iter().filter(|l| l.team_id == team.id && l.seat != seat) {
+            teammates.push(self.evidence_for(l).await);
+        }
+        let sends = {
+            let p = self.policy.lock().await;
+            p.team(&team.id)
+                .map(|l| {
+                    let n = l.log.len().saturating_sub(crate::handover::SENDS_SHOWN);
+                    l.log[n..].iter().map(crate::handover::send_line).collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let input = crate::handover::Input {
+            team: team.name.clone(),
+            team_guidance: team.guidance.clone(),
+            seat: seat.to_string(),
+            seat_guidance: team.seat(seat).map(|s| s.guidance.clone()).unwrap_or_default(),
+            reason: Some(reason),
+            predecessor,
+            teammates,
+            sends,
+        };
+        let prompt = crate::handover::prompt(&input);
+        // The daemon's own ask, for itself: not a LAN client (clause 4), and
+        // consent to a remote host is still the seam's to judge (clause 3).
+        let answer = self.model.chat_as(&[mogeung_core::model::ChatTurn::user(prompt)], true).await?;
+        let text = crate::handover::read_answer(&answer.text);
+        if text.is_empty() {
+            return Err("the model answered with nothing".into());
+        }
+        let host = settings.host();
+        Ok(Some((text, crate::handover::composed_by(&answer.model, host.as_deref()))))
+    }
+
+    /// Compose and send, or hold, a handover for a seat as the team's policy
+    /// says. `None` policy: nothing. No endpoint, or a refusal: a `Refused`
+    /// entry so the row says the seat started without one. Otherwise the
+    /// entry is a `Handover` send — held under *after you read it*, judged
+    /// and delivered under *automatic*.
+    pub async fn handover_for(
+        &self,
+        team_id: &str,
+        seat: &str,
+        reason: crate::handover::Reason,
+        predecessor: Option<crate::handover::Evidence>,
+    ) {
+        use mogeung_core::team::{Handover, SendKind, SendStatus};
+        let Some(team) = self.team_by_id(team_id) else { return };
+        if team.policy.handover == Handover::None {
+            return;
+        }
+        let now = Utc::now().timestamp();
+        let why = format!("handover on {}", reason.label());
+        let mut e = crate::policy::entry(team_id, SendKind::Handover, None, seat, "", &why, now);
+        match self.compose_handover(&team, seat, reason, predecessor).await {
+            Ok(None) => {
+                e.status = SendStatus::Refused;
+                e.note = Some("no model endpoint is configured — the seat started without a handover (ADR-0031 clause 6)".into());
+                self.record_send(e).await;
+            }
+            Err(err) => {
+                e.status = SendStatus::Refused;
+                e.note = Some(format!("not composed — {err}"));
+                self.record_send(e).await;
+            }
+            Ok(Some((text, by))) => {
+                e.text = text;
+                e.composed_by = Some(by.clone());
+                let target = self.launches.read().await.iter().find(|l| l.team_id == team_id && l.seat == seat).cloned();
+                let Some(target) = target else {
+                    e.status = SendStatus::Refused;
+                    e.note = Some(format!("seat `{seat}` is not running"));
+                    self.record_send(e).await;
+                    return;
+                };
+                match team.policy.handover {
+                    Handover::AfterRead => {
+                        e.status = SendStatus::Held;
+                        e.note = Some(format!("composed by {by} — read it, then release it to the seat"));
+                        self.record_send(e).await;
+                        self.refresh_seat_rows().await;
+                    }
+                    Handover::Automatic => {
+                        self.deliver(Some(&team), &target, e).await;
+                    }
+                    Handover::None => {}
+                }
+            }
+        }
+    }
+
+    /// After a boot: a handover for every seat that joined a team with
+    /// history — some other seat has turns or a diff. A cold boot has nothing
+    /// to hand over and says nothing.
+    pub async fn handovers_after_boot(&self, team_id: &str, started: &[String]) {
+        if started.is_empty() {
+            return;
+        }
+        let launches = self.launches.read().await.clone();
+        for seat in started {
+            let mut history = false;
+            for l in launches.iter().filter(|l| l.team_id == team_id && &l.seat != seat) {
+                let e = self.evidence_for(l).await;
+                if !e.turns.is_empty() || e.diff.is_some() {
+                    history = true;
+                    break;
+                }
+            }
+            if history {
+                self.handover_for(team_id, seat, crate::handover::Reason::Start, None).await;
+            }
+        }
+    }
+
+    /// Stop one seat and start it again. The earlier session's evidence is
+    /// read first, so the handover that follows can say where it stopped.
+    /// Answers the predecessor's evidence for the caller to hand to
+    /// `handover_for` once the launch is on record.
+    pub async fn restart_seat(
+        &self,
+        team_id: &str,
+        seat: &str,
+    ) -> Result<(Vec<mogeung_core::team::SeatLaunch>, crate::handover::Evidence)> {
+        let team = self.team_by_id(team_id).ok_or_else(|| anyhow!("no team with id {team_id}"))?;
+        crate::team::validate(&team)?;
+        let def = team.seat(seat).ok_or_else(|| anyhow!("no seat `{seat}` in team `{}`", team.name))?.clone();
+        let old = self
+            .launches
+            .read()
+            .await
+            .iter()
+            .find(|l| l.team_id == team_id && l.seat == seat)
+            .cloned()
+            .ok_or_else(|| anyhow!("seat `{seat}` is not running — boot the team instead"))?;
+        let predecessor = self.evidence_for(&old).await;
+        crate::seat::stop(&old);
+        self.store.delete_launch(team_id, seat)?;
+        self.launches.write().await.retain(|l| !(l.team_id == team_id && l.seat == seat));
+        let seats_dir = self.seats_dir();
+        let bins = crate::seat::Binaries::installed();
+        let receiver = self.receiver_url();
+        let launch = crate::seat::start(&team, &def, &seats_dir, &bins, receiver.as_deref())
+            .map_err(|e| anyhow!("seat `{seat}`: {e:#}"))?;
+        self.store.save_launch(&launch)?;
+        self.policy.lock().await.team_mut(team_id).booted(seat);
+        self.launches.write().await.push(launch);
+        let launches = self.launches.read().await.clone();
+        if let Err(e) = crate::seat::layout_team(&team, &launches) {
+            tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
+        }
+        Ok((launches, predecessor))
+    }
+
     /// The pause switch, on the definition so it survives a restart.
     pub async fn set_paused(&self, id: &str, paused: bool) -> Result<Vec<mogeung_core::team::Team>> {
         let mut team = self.team_by_id(id).ok_or_else(|| anyhow!("no team with id {id}"))?;

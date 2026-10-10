@@ -13,6 +13,7 @@ pub mod federation;
 pub mod env;
 pub mod git;
 pub mod guide;
+pub mod handover;
 pub mod insight;
 pub mod kit;
 pub mod lan;

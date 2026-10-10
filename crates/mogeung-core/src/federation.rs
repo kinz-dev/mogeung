@@ -103,7 +103,7 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // (fence 5), and that is the daemon the window is on. `R-P6`.
         TeamPause { .. } | SendRelease { .. } | SendDrop { .. } => Hop::Here,
         // A seat's worktree is on the daemon that made it. `R-P9`.
-        FileWrite { .. } => Hop::Here,
+        FileWrite { .. } | SeatRestart { .. } => Hop::Here,
         ScratchList
         | ScratchCreate { .. }
         | ScratchRead { .. }

@@ -2566,12 +2566,50 @@ async fn handle(
             if !(state.runs.allowed() || from_this_machine) {
                 return err(anyhow::anyhow!(team_refusal()));
             }
+            let before: std::collections::HashSet<String> =
+                state.launches.read().await.iter().filter(|l| l.team_id == id).map(|l| l.seat.clone()).collect();
             let outcome = state.boot_team(&id).await;
             state.broadcast(state.seats_msg().await);
             state.refresh_provisional().await;
             state.publish_queue().await;
+            // A handover for every seat that joined a team with history,
+            // composed in the background: a model's answer is seconds, and
+            // the boot is answered by rows, not by a wait. `R-P10`.
+            let started: Vec<String> = state
+                .launches
+                .read()
+                .await
+                .iter()
+                .filter(|l| l.team_id == id && !before.contains(&l.seat))
+                .map(|l| l.seat.clone())
+                .collect();
+            if !started.is_empty() {
+                let st = state.clone();
+                let team_id = id.clone();
+                tokio::spawn(async move { st.handovers_after_boot(&team_id, &started).await });
+            }
             if let Err(e) = outcome {
                 err(e);
+            }
+        }
+        // Stop one seat and start it again, then the handover its policy
+        // says, composed in the background with the earlier session as its
+        // predecessor. `R-P10`. Judged like a boot.
+        ClientMsg::SeatRestart { team_id, seat } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.restart_seat(&team_id, &seat).await {
+                Ok((_, predecessor)) => {
+                    state.broadcast(state.seats_msg().await);
+                    state.refresh_provisional().await;
+                    state.publish_queue().await;
+                    let st = state.clone();
+                    tokio::spawn(async move {
+                        st.handover_for(&team_id, &seat, crate::handover::Reason::Restart, Some(predecessor)).await;
+                    });
+                }
+                Err(e) => err(e),
             }
         }
         ClientMsg::TeamStop { id } => {

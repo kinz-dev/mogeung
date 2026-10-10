@@ -245,6 +245,8 @@ async fn without_a_peer_address_boot_stop_and_remove_are_judged_by_the_bind() {
         ClientMsg::TeamBoot { id: "x".into() },
         ClientMsg::TeamStop { id: "x".into() },
         ClientMsg::SeatWorktreeRemove { team_id: "x".into(), seat: "s".into() },
+        // `R-P10`: a restart is a boot of one seat, judged the same way.
+        ClientMsg::SeatRestart { team_id: "x".into(), seat: "s".into() },
     ] {
         let why = ask(&url, cmd, error_text).await;
         assert!(why.contains("--allow-run"), "{why}");
