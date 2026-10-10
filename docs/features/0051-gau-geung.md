@@ -261,6 +261,13 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
 4. **`R-P7` and `R-P8`, the component and the layout.** After the design
    session. Wireframes first, as an artifact; then the component in
    `desktop/src/`, on the chord or as a home per the session's decision.
+   **`R-P7` built 2026-10-10** (⏳): `ui/GauGeungMode.tsx` on the bare
+   `Alt+g` — a mode over the window with a tile tree of its own (a board, a
+   seat pane that follows the pick, a terminal pane per seat you attach),
+   the five lanes read off the send log, the graph and the table of the
+   same seats, the policy strip with the switch and the held sends, tabs for
+   one team or all; `lib/teamMode.ts` is the arithmetic. The Agent pane
+   moved to `Alt+e`. Not yet used on a real team.
 5. **`R-P9`, writes.** `WriteFile` on the wire with team, path, content and
    base hash; the refusal rules in the daemon; Monaco's `readOnly` flipped
    only for a team worktree in Gau Geung mode, with the pane header saying so.
@@ -348,6 +355,17 @@ panel: counters, the pause switch, held with release and drop, the log; a
 seat's own last sends). Docs: `architecture.md`, `wire-protocol.md`,
 `data-model.md`, `cross-session-signals.md`, `attention-ranking.md`,
 `read-boundary.md`.
+
+`R-P7`, built: `desktop/src/lib/teamMode.ts` (the lanes — `laneFor` reads
+*parked* and *blocked* off the send log — `seatViews`, `sessionOf`,
+`sourceOf`, `edges`, `ring`, the pane ids and the layout key, `teamTab`),
+`ui/GauGeungMode.tsx` (the mode: header with team tabs and counters, the
+second dockview, `TeamBoard` — `Pulse`, `Graph`, `Table`, `PolicyStrip` —
+`SeatDetail`, `SeatTerminal`, `attachSeatTerminal`), `store/index.ts`
+(`showGauGeung`, `gauTeam`, `gauSeat`), `lib/keymap.ts` (`gaugeung` on
+`Alt+g` / `Alt+KeyG`; the Agent pane to `Alt+e`), `App.tsx`, `TopBar.tsx`
+(the Network button); tests `lib/teamMode.test.ts`,
+`ui/GauGeungMode.test.tsx` through the real dockview. Docs: `the-window.md`.
 
 ### Risks and unknowns
 
@@ -490,3 +508,21 @@ seat's own last sends). Docs: `architecture.md`, `wire-protocol.md`,
   routes, the judge, the command and the rows are tested with a recording
   sender, and the first hooked boot that runs `mogeung-send` is the
   dogfooding ⏳ waits on.
+- 2026-10-10, `R-P7`. The lanes were the one piece of the wireframes that
+  needed a definition rather than a drawing: OpenRig's *parked with baton*
+  and *blocked on agents* are both idle seats, and on mogeung's queue both
+  rank `WAITING`. The send log is what tells them apart — a seat idle after
+  a message *arrived* holds the baton and has not passed it on; one idle
+  after *sending* waits on the seat it told — so `laneFor` reads the last
+  delivery involving the seat and the lane is a fact rather than a mood. A
+  watchdog's nudge has no seat at its tail and moves nobody between lanes.
+  The mode holds a second dockview rather than panes in the centre, as the
+  terminal panel does, because the decision was *a pane in the mode's own
+  tile tree*; the board and the seat pane are always present, a terminal
+  pane per seat arrives on *Attach terminal* and is a `tmux attach` of its
+  own, and the arrangement is saved per machine. The bare `Alt+g` had been
+  kept for the mode since `R-P3` and was still the Agent pane's; the pane
+  moved to `Alt+e`, its third chord, and the Mac keeps `⌘G`. Nothing in the
+  mode is asked of the daemon: it is a reading of the store, and the only
+  verbs it sends are the Teams window's three. Not yet opened over a real
+  team.

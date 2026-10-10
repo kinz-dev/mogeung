@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-09
+updated: 2026-10-10
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/store/index.ts
@@ -12,6 +12,7 @@ covers:
   - desktop/src/lib/federation.ts
   - desktop/src/lib/dial.ts
   - desktop/src/lib/tmux.ts
+  - desktop/src/lib/teamMode.ts
   - desktop/src/lib/gitActions.ts
   - desktop/src/lib/popout.ts
   - desktop/src-tauri/src/lib.rs
@@ -66,12 +67,40 @@ and `seatLaunches` are replaced wholesale on every `teams` and `seats`
 message, as `notes` is; `teamsAllowed` is kept only from the answer to
 `team_list`, because a broadcast carries no gate. The Teams window
 (`ui/TeamsWindow.tsx`, the top bar's Users button, `Alt+Shift+g` — spelled
-`Alt+Shift+KeyG` in `MAC_KEYS`, with `Alt+g` kept for the mode `R-P7` builds)
-edits a draft and sends it whole; the daemon validates, stamps and mints, and
-`lib/teams.ts` mirrors its rules so Save is grey with the daemon's words
-before a click. A seat's row on the queue carries a `team/seat` chip from the
-`seat` tag the daemon puts on it, so a seat never passes for a session you
-started by hand.
+`Alt+Shift+KeyG` in `MAC_KEYS`) edits a draft and sends it whole; the daemon
+validates, stamps and mints, and `lib/teams.ts` mirrors its rules so Save is
+grey with the daemon's words before a click. A seat's row on the queue
+carries a `team/seat` chip from the `seat` tag the daemon puts on it, so a
+seat never passes for a session you started by hand. `teamSends` is the
+third cache of the family (`R-P6`): every team's counters and send log,
+replaced whole on `sends`, shown in the Teams window and in the mode.
+
+**Gau Geung, the team mode** (`R-P7`, `ui/GauGeungMode.tsx`, `lib/teamMode.ts`)
+is the wall's shape with a tile tree inside: a mode on the bare `Alt+g`
+(`Alt+KeyG` on a Mac, where `⌥g` composes `©`), `Esc` leaves, the layout
+underneath is untouched, and nothing is fetched — teams, launches, sessions,
+the queue and the send logs are read as the store already holds them. It
+took the chord from the Agent pane, which moved to `Alt+e` (the Mac keeps
+`⌘G`). Inside is a second dockview, as the terminal panel is: a **board**,
+a **seat pane** that follows the pick until you hold it, and a **terminal
+pane per seat** you attach, each a `tmux attach` of its own like the Agent
+pane; the arrangement is saved per machine under `mogeung.teamLayout:`, and
+the daemon's grouped tmux layout (`R-P8`) is for a terminal and is not
+mirrored. The board shows OpenRig's **five lanes** for seats in a team —
+needs you, parked with baton, blocked on agents, now, just finished — each
+card carrying mogeung's badge inside, and `lib/teamMode.ts` reads the two
+idle lanes off the send log: a seat idle after a message arrived holds the
+baton, one idle after sending waits on the seat it told; both rank
+`WAITING` on the queue, and the lane is what the mode knows that the queue
+does not. Below it the **topology** is a graph and a table of the same
+seats, together and with no toggle: an edge is the last send between two
+seats, held edges drawn as waiting for you with the hop on them; a row names
+its state and its **source** — `(hook)`, `(plugin)`, `(transcript)`, and
+`(screen)` once `R-P11` reads a pane — its context fill where a status line
+gave one and *unknown · no hooks* where none did, its tokens, and its sends.
+The policy strip carries the counters, the pause switch and every held send
+with release and drop, through the same verbs the Teams window sends. Tabs
+show one team or all of them; each team keeps its own counters and switch.
 
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept

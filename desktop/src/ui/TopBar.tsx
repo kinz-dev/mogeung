@@ -9,7 +9,7 @@
  * nowhere you can see while using it.
  */
 
-import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun, Users } from "lucide-react";
+import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, Network, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { maskToken } from "@/lib/connections";
 import { useChord } from "@/lib/keymap";
@@ -30,6 +30,7 @@ export function TopBar() {
   // every one of them named a chord this window is not listening for.
   const paletteChord = useChord("palette");
   const terminalChord = useChord("terminal.toggle");
+  const gauChord = useChord("gaugeung");
   const rescanChord = useChord("rescan");
   const healthChord = useChord("health");
   const keymapChord = useChord("keymap");
@@ -45,6 +46,7 @@ export function TopBar() {
   // never updates, so the button's lit state was permanently whatever it was
   // when the bar first mounted.
   const showTerminal = useStore((s) => s.showTerminal);
+  const showGauGeung = useStore((s) => s.showGauGeung);
   const rescanning = useStore((s) => s.rescanning);
   const daemonStatus = useStore((s) => s.daemonStatus);
   const bell = bellState(prefs.notify, daemonStatus?.mode === "hosting");
@@ -144,6 +146,15 @@ export function TopBar() {
           onClick={() => useStore.setState({ showTeams: true })}
         >
           <Users size={13} />
+        </IconButton>
+        {/* The mode itself. `R-P7`: the five lanes, the topology, a seat's
+            pane and its terminals, over the window on a chord. */}
+        <IconButton
+          title={`Gau Geung — the team mode${gauChord ? `  (${gauChord})` : ""}`}
+          active={showGauGeung}
+          onClick={() => useStore.setState({ showGauGeung: !showGauGeung })}
+        >
+          <Network size={13} />
         </IconButton>
         <IconButton
           title={

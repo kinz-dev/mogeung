@@ -211,12 +211,15 @@ export const ACTIONS: Action[] = [
   // sits at the far right — a rightmost thing wearing the highest digit.
   dockTool("changes", "Changes", ["Alt+2"]),
   dockTool("transcript", "Transcript", ["Alt+3"]),
-  // `Alt+G` (a-**g**-ent) since 2026-08-28. It was `Alt+A` for as long as
-  // there have been panes, and giving that up is a real cost — a trained
-  // chord that now means something else is worse than one that never worked.
-  // It moved because `Alt+A` was asked for by name for the chat panel, and of
-  // the two, the one with a free adjacent letter is this one.
-  pane("agent", "Agent", ["Alt+g"]),
+  // `Alt+E` since 2026-10-10, and this is the pane's third chord. It was
+  // `Alt+A` until the chat panel asked for that by name (2026-08-28), then
+  // `Alt+G` (a-**g**-ent) until the Gau Geung mode took the bare `g` —
+  // decided with `R-P3`, when the Teams window went to `Alt+Shift+g` to
+  // keep it free. A trained chord that now means something else is a real
+  // cost, paid once more here; `e` is free on both platforms and sits beside
+  // `w`, the wall, which is the other chord that opens a view of everything.
+  // The Mac keeps `⌘G`, which was never contested.
+  pane("agent", "Agent", ["Alt+e"]),
   {
     id: "pane.code",
     label: "Focus the newest open file",
@@ -795,6 +798,18 @@ export const ACTIONS: Action[] = [
     run: () => useStore.setState({ showConfig: true }),
   },
   {
+    id: "gaugeung",
+    label: "Gau Geung — the team mode",
+    group: "Windows",
+    // The bare `Alt+g`, kept for this since `R-P3`. One key both ways and
+    // `Esc`, like the wall (`R-B50`): a mode on a chord, never a home.
+    keys: ["Alt+g"],
+    run: () => {
+      const { showGauGeung } = useStore.getState();
+      useStore.setState({ showGauGeung: !showGauGeung });
+    },
+  },
+  {
     id: "teams",
     label: "Teams",
     group: "Windows",
@@ -968,6 +983,8 @@ export const MAC_KEYS: Record<string, string[]> = {
   // Spelled by physical key, as every Option chord must be on a Mac:
   // `⌥⇧g` composes `˝`, and a chord matched against that never fires. `R-P3`.
   teams: ["Alt+Shift+KeyG"],
+  // `⌥g` composes `©`; spelled by physical key like the wall's `Alt+KeyW`. `R-P7`.
+  gaugeung: ["Alt+KeyG"],
 
   // Letters where `⌘` is free.
   "rail.files": ["Meta+f"],

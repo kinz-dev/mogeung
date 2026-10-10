@@ -976,6 +976,12 @@ export interface AppState {
   showLaunch: boolean;
   /** The Teams window: definitions, edited here first (`R-P3`). */
   showTeams: boolean;
+  /** Gau Geung, the team mode, on a chord (`R-P7`). A boolean like the wall's. */
+  showGauGeung: boolean;
+  /** Which team the mode shows: a team id, or `null` for all of them. */
+  gauTeam: string | null;
+  /** The seat the mode's seat pane follows: `team_id/seat`, or none. */
+  gauSeat: string | null;
   showTerminal: boolean;
   /** The global-search overlay. `R-F13`, the ask-and-go half. */
   searchOpen: boolean;
@@ -1271,6 +1277,9 @@ export const useStore = create<AppState>((set, get) => ({
   ambient: false,
   showLaunch: false,
   showTeams: false,
+  showGauGeung: false,
+  gauTeam: null,
+  gauSeat: null,
   showTerminal: false,
   searchOpen: false,
   machineId: null,

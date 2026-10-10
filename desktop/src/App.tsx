@@ -47,6 +47,7 @@ import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
+import { GauGeungMode } from "@/ui/GauGeungMode";
 import { FileDrop } from "@/ui/FileDrop";
 import { GitOpsPopup } from "@/ui/GitOpsPopup";
 import { BranchesPopup } from "@/ui/BranchesPopup";
@@ -403,6 +404,8 @@ export default function App() {
         <LabelWindow />
         <SearchOverlay />
         <WallOverlay />
+        {/* Gau Geung, the team mode, on `Alt+g`. `R-P7`. */}
+        <GauGeungMode />
         {/* A file dragged in from a file manager opens in the Code pane. `R-J94`. */}
         <FileDrop />
         {/* IntelliJ's two git popups, on `Alt+\`` and `7`. `R-D31`, `R-D32`. */}
