@@ -399,6 +399,12 @@ pub struct SeatLaunch {
     pub tmux_target: String,
     /// The tmux session the daemon made for this seat alone.
     pub tmux_session: String,
+    /// The team's own tmux session — `geung-<team>` — laid out by the daemon
+    /// for `tmux attach` from a terminal: one window of every seat at once,
+    /// tiled, and one window per seat linked in. `R-P8`. Empty on a record
+    /// from before, or where the layout could not be made.
+    #[serde(default)]
+    pub team_session: String,
     /// Where it runs: the worktree the daemon made, or the team's checkout.
     pub dir: String,
     /// `dir` is a worktree the daemon made and may remove when clean.
@@ -601,6 +607,7 @@ mod tests {
             pane_id: "%7".into(),
             tmux_target: "geung-port-builder:0.0".into(),
             tmux_session: "geung-port-builder".into(),
+            team_session: "geung-port".into(),
             dir: "/w".into(),
             worktree: true,
             files_dir: "/f".into(),

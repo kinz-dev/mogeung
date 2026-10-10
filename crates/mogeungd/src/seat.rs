@@ -78,6 +78,12 @@ pub fn tmux_session_name(team: &Team, seat: &Seat) -> String {
     format!("geung-{}-{}", slug(team), seat.name)
 }
 
+/// `geung-<team>`: the team's own tmux session, the grouped layout a
+/// terminal attaches to. `R-P8`. Distinct from every seat's `geung-<team>-<seat>`.
+pub fn team_session_name(team: &Team) -> String {
+    format!("geung-{}", slug(team))
+}
+
 /// `geung/<team>/<seat>`: the branch a seat's worktree is cut on.
 pub fn worktree_branch(team: &Team, seat: &Seat) -> String {
     format!("geung/{}/{}", slug(team), seat.name)
@@ -559,7 +565,7 @@ fn ensure_worktree(repo: &Path, team: &Team, seat: &Seat) -> Result<PathBuf> {
 /// The argv for the tmux start, pure so a test can pin its shape. `-P -F`
 /// prints the pane id and the target so the record is exact from birth; `-e`
 /// sets the seat's own environment without touching the server's.
-pub fn tmux_argv(name: &str, dir: &Path, env: &[(String, String)], argv: &[String]) -> Vec<String> {
+pub fn tmux_argv(name: &str, window: &str, dir: &Path, env: &[(String, String)], argv: &[String]) -> Vec<String> {
     let mut cmd = vec![
         "new-session".to_string(),
         "-d".into(),
@@ -568,6 +574,10 @@ pub fn tmux_argv(name: &str, dir: &Path, env: &[(String, String)], argv: &[Strin
         "#{pane_id} #{session_name}:#{window_index}.#{pane_index}".into(),
         "-s".into(),
         name.to_string(),
+        // The window is named for the seat, so the team session it is linked
+        // into (`R-P8`) lists seats by name in its status line.
+        "-n".into(),
+        window.to_string(),
         "-c".into(),
         dir.to_string_lossy().into_owned(),
     ];
@@ -579,8 +589,8 @@ pub fn tmux_argv(name: &str, dir: &Path, env: &[(String, String)], argv: &[Strin
     cmd
 }
 
-fn start_in_tmux(name: &str, dir: &Path, env: &[(String, String)], argv: &[String]) -> Result<(String, String)> {
-    let cmd = tmux_argv(name, dir, env, argv);
+fn start_in_tmux(name: &str, window: &str, dir: &Path, env: &[(String, String)], argv: &[String]) -> Result<(String, String)> {
+    let cmd = tmux_argv(name, window, dir, env, argv);
     let out = match crate::env::command("tmux").args(&cmd).output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             bail!("a seat needs tmux, and tmux is not installed (ADR-0011: no tmux, no seats)")
@@ -678,7 +688,7 @@ pub fn start(
     });
     let composed = compose(team, seat, &files, &dir, session_id.as_deref(), bins, receiver.as_ref())?;
     let name = unique_tmux_name(&tmux_session_name(team, seat));
-    let (pane_id, tmux_target) = start_in_tmux(&name, &dir, &composed.env, &composed.argv)?;
+    let (pane_id, tmux_target) = start_in_tmux(&name, &seat.name, &dir, &composed.env, &composed.argv)?;
     Ok(SeatLaunch {
         team_id: team.id.clone(),
         team: team.name.clone(),
@@ -688,6 +698,8 @@ pub fn start(
         pane_id,
         tmux_target,
         tmux_session: name,
+        // Named now, made after every seat is up: see `layout_team`.
+        team_session: team_session_name(team),
         dir: dir.to_string_lossy().into_owned(),
         worktree: seat.works_in == Workplace::Worktree,
         files_dir: files.to_string_lossy().into_owned(),
@@ -724,6 +736,102 @@ pub fn stop(launch: &SeatLaunch) {
             }
         }
     }
+}
+
+// -- The team's tmux session. `R-P8`. --------------------------------------
+//
+// *"ideally I want it to have a special grouped layout"* (2026-10-09), for a
+// terminal: `tmux attach -t geung-<team>` is the TUI client this feature has
+// instead of one of its own. The window does not mirror it — it attaches to
+// each seat's pane on its own and arranges its own grid (`R-P7`) — and the
+// two pictures differ on purpose.
+//
+// Every seat keeps its own session (`R-P4`): the scan, the send path and the
+// window all key on the seat's pane, and a pane belongs to one window, so
+// nothing is moved. The team session is built *around* them: a window named
+// `all` whose panes are nested tmux clients, one attached to each seat's
+// session and tiled, so every seat is on screen at once and keys typed into
+// a pane reach its seat; then each seat's own window linked in by name, so
+// one seat can be given the whole screen with a window switch. Its status
+// line is on, which lists the seats. Killing the team session detaches the
+// nested clients and unlinks the windows — tmux closes only windows linked
+// nowhere else — so the seats are untouched by it, in either direction.
+
+/// The nested client one pane of the `all` window runs: a tmux inside tmux,
+/// which works once the inner one is told it is not already inside (`TMUX`
+/// unset). The seat's session keeps its own status line off.
+pub fn nested_attach(seat_session: &str) -> String {
+    format!("env -u TMUX tmux -u attach-session -t '={seat_session}'")
+}
+
+/// The tmux calls that build the team session from the seats' sessions,
+/// pure so a test can pin them on a machine with no tmux. `seats` is
+/// `(seat name, seat session)` in the definition's order.
+pub fn team_layout_argv(team_session: &str, seats: &[(String, String)]) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    let target = format!("={team_session}");
+    let all = format!("={team_session}:all");
+    let Some((_, first)) = seats.first() else { return out };
+    out.push(vec![
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        team_session.into(),
+        "-n".into(),
+        "all".into(),
+        "-x".into(),
+        "220".into(),
+        "-y".into(),
+        "60".into(),
+        nested_attach(first),
+    ]);
+    for (_, session) in seats.iter().skip(1) {
+        out.push(vec!["split-window".into(), "-d".into(), "-t".into(), all.clone(), nested_attach(session)]);
+    }
+    out.push(vec!["select-layout".into(), "-t".into(), all.clone(), "tiled".into()]);
+    for (_, session) in seats {
+        out.push(vec!["link-window".into(), "-d".into(), "-s".into(), format!("={session}:0"), "-t".into(), format!("{target}:")]);
+    }
+    // Bare, not `=`-prefixed: `set-option` takes a session name and refuses
+    // the exact-match spelling with *no such session*, found on tmux 3.6.
+    out.push(vec!["set-option".into(), "-t".into(), team_session.into(), "status".into(), "on".into()]);
+    out.push(vec!["select-window".into(), "-t".into(), all]);
+    out
+}
+
+/// Build, or rebuild, the team's session around its running seats. Answers
+/// the session's name; a tmux that refuses is a warning, not a failed boot,
+/// because the seats are up and the window reaches them without this.
+pub fn layout_team(team: &Team, launches: &[SeatLaunch]) -> Result<String> {
+    let name = team_session_name(team);
+    let seats: Vec<(String, String)> = team
+        .seats
+        .iter()
+        .filter_map(|s| launches.iter().find(|l| l.team_id == team.id && l.seat == s.name))
+        .map(|l| (l.seat.clone(), l.tmux_session.clone()))
+        .collect();
+    unlayout_team(&name);
+    if seats.is_empty() {
+        bail!("no seat of `{}` is running, so there is nothing to lay out", team.name);
+    }
+    for args in team_layout_argv(&name, &seats) {
+        let out = crate::env::command("tmux").args(&args).output()?;
+        if !out.status.success() {
+            let why = String::from_utf8_lossy(&out.stderr);
+            let first = why.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message");
+            bail!("tmux would not lay out the team session ({}) — {first}", args.join(" "));
+        }
+    }
+    Ok(name)
+}
+
+/// Take the team session down. The seats' own sessions are untouched: a
+/// window linked elsewhere survives `kill-session`, and a nested client
+/// merely detaches.
+pub fn unlayout_team(team_session: &str) {
+    let _ = crate::env::command("tmux")
+        .args(["kill-session", "-t", &format!("={team_session}")])
+        .output();
 }
 
 /// Remove a stopped seat's worktree, only when it is clean. The branch stays:
@@ -916,15 +1024,45 @@ mod tests {
     fn the_tmux_start_names_the_pane_and_carries_the_environment() {
         let argv = tmux_argv(
             "geung-t-s",
+            "s",
             Path::new("/w"),
             &[("CLAUDE_CONFIG_DIR".into(), "/h".into())],
             &["/bin/claude".into(), "--name".into(), "t/s".into()],
         );
         assert_eq!(&argv[..3], &["new-session", "-d", "-P"]);
+        // The window is named for the seat (`R-P8`), by adjacency.
+        assert!(argv.windows(2).any(|w| w[0] == "-n" && w[1] == "s"));
         assert!(argv.contains(&"#{pane_id} #{session_name}:#{window_index}.#{pane_index}".to_string()));
         let e = argv.iter().position(|x| x == "-e").unwrap();
         assert_eq!(argv[e + 1], "CLAUDE_CONFIG_DIR=/h");
         assert_eq!(argv[argv.len() - 3..], ["/bin/claude", "--name", "t/s"]);
+    }
+
+    /// `R-P8`. The team session is built around the seats, never from them:
+    /// a tiled window of nested clients, then every seat's window linked in,
+    /// the status line on. Nothing here moves a pane.
+    #[test]
+    fn the_team_session_is_tiled_nested_clients_and_linked_windows() {
+        let mut t = team();
+        t.name = "Port OpenRig".into();
+        assert_eq!(team_session_name(&t), "geung-port-openrig");
+        let seats = vec![
+            ("planner".to_string(), "geung-port-openrig-planner".to_string()),
+            ("builder".to_string(), "geung-port-openrig-builder".to_string()),
+        ];
+        let calls = team_layout_argv("geung-port-openrig", &seats);
+        let flat: Vec<String> = calls.iter().map(|c| c.join(" ")).collect();
+        assert!(flat[0].starts_with("new-session -d -s geung-port-openrig -n all"), "{}", flat[0]);
+        assert!(flat[0].ends_with(&nested_attach("geung-port-openrig-planner")), "{}", flat[0]);
+        assert_eq!(flat[1], format!("split-window -d -t =geung-port-openrig:all {}", nested_attach("geung-port-openrig-builder")));
+        assert_eq!(flat[2], "select-layout -t =geung-port-openrig:all tiled");
+        assert_eq!(flat[3], "link-window -d -s =geung-port-openrig-planner:0 -t =geung-port-openrig:");
+        assert_eq!(flat[4], "link-window -d -s =geung-port-openrig-builder:0 -t =geung-port-openrig:");
+        assert_eq!(flat[5], "set-option -t geung-port-openrig status on", "no `=` on a set-option target");
+        assert_eq!(flat[6], "select-window -t =geung-port-openrig:all");
+        assert!(!flat.iter().any(|c| c.contains("join-pane") || c.contains("move-pane")), "a pane is never moved");
+        assert!(nested_attach("x").starts_with("env -u TMUX tmux"), "a tmux inside tmux must forget it is inside");
+        assert!(team_layout_argv("geung-x", &[]).is_empty());
     }
 
     fn receiver(curl: bool) -> Receiver {

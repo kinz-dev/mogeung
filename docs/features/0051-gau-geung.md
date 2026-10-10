@@ -267,7 +267,12 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    the five lanes read off the send log, the graph and the table of the
    same seats, the policy strip with the switch and the held sends, tabs for
    one team or all; `lib/teamMode.ts` is the arithmetic. The Agent pane
-   moved to `Alt+e`. Not yet used on a real team.
+   moved to `Alt+e`. Not yet used on a real team. **`R-P8` built the same
+   day** (⏳): `seat::layout_team` builds `geung-<team>` around the seats'
+   own sessions after a boot — a tiled window of nested clients, every
+   seat's window linked in, the status line on — and a stop takes it down
+   first; pinned against a real tmux with `sleep` for seats. The mode
+   offers the attach command to copy.
 5. **`R-P9`, writes.** `WriteFile` on the wire with team, path, content and
    base hash; the refusal rules in the daemon; Monaco's `readOnly` flipped
    only for a team worktree in Gau Geung mode, with the pane header saying so.
@@ -366,6 +371,15 @@ second dockview, `TeamBoard` — `Pulse`, `Graph`, `Table`, `PolicyStrip` —
 `Alt+g` / `Alt+KeyG`; the Agent pane to `Alt+e`), `App.tsx`, `TopBar.tsx`
 (the Network button); tests `lib/teamMode.test.ts`,
 `ui/GauGeungMode.test.tsx` through the real dockview. Docs: `the-window.md`.
+
+`R-P8`, built: `crates/mogeungd/src/seat.rs` (`team_session_name`,
+`nested_attach`, `team_layout_argv`, `layout_team`, `unlayout_team`; the
+seat's window named for it in `tmux_argv`), `state.rs` (`boot_team` lays
+out, `stop_team` takes down first), `mogeung-core/src/team.rs`
+(`SeatLaunch.team_session`); tests in `seat.rs` and `tests/team_tmux.rs`
+(a real tmux, skipped where there is none). The window's `types.ts`,
+`GauGeungMode.tsx` (the attach command to copy). Docs: `architecture.md`,
+`data-model.md`, `the-window.md`.
 
 ### Risks and unknowns
 
@@ -526,3 +540,17 @@ second dockview, `TeamBoard` — `Pulse`, `Graph`, `Table`, `PolicyStrip` —
   mode is asked of the daemon: it is a reading of the store, and the only
   verbs it sends are the Teams window's three. Not yet opened over a real
   team.
+- 2026-10-10, `R-P8`. A pane belongs to one window, so a tiled window of
+  the seats could not be made from their panes without taking them out of
+  the sessions the scan, the send path and the window all key on. The team
+  session is built *around* them instead: nested tmux clients, one per
+  seat, tiled in a window named `all` — a tmux inside tmux works once the
+  inner one is told it is not inside (`env -u TMUX`) — and every seat's
+  window linked in by name for the full-screen case. The property worth a
+  real server in the tests is the one `kill-session` has: it closes only
+  windows linked nowhere else, so taking the team session down leaves every
+  seat standing, and a stop does it first so the nested clients let go
+  before the seats end. One thing tmux 3.6 taught on the way: `set-option
+  -t` takes a bare session name and answers *no such session* to the
+  `=name` exact-match spelling every other target accepts. Not yet attached
+  to from a terminal over a real team.

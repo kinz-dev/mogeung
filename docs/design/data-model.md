@@ -121,7 +121,9 @@ SQLite at `~/.mogeung/mogeung.db`:
   carries the seat's receiver `token` — persisted so a re-adopted seat is
   still heard, stripped before the record is served — and its `signals`
   (kind, count, last event, context fill, model), which are live state
-  rewritten in memory as hooks arrive and saved only as the record is
+  rewritten in memory as hooks arrive and saved only as the record is; since
+  `R-P8` `team_session`, the name of the team's own tmux session for a
+  terminal
 - `sends(team_id, id, at, json)` — a team's send log (`R-P6`): every
   automatic send and every one of yours into a seat, as a `SendEntry` blob —
   who, whom, the text, why, what became of it, the hop it took. **The

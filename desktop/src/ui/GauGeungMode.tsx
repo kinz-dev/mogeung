@@ -35,7 +35,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps } from "dockview";
-import { Anchor, Ban, Check, Pause, Play, SquareTerminal, Users, X } from "lucide-react";
+import { Anchor, Ban, Check, Copy, Pause, Play, SquareTerminal, Users, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Button, Chip, Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
@@ -43,6 +43,7 @@ import { PaneScope } from "@/lib/paneScope";
 import { cn } from "@/lib/cn";
 import { interactive } from "@/ui/styles";
 import { compact, shortDir } from "@/lib/format";
+import { copyPath } from "@/lib/clipboard";
 import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
 import { countersLine, sendLine, sendsFor, signalsLine } from "@/lib/teams";
 import {
@@ -575,6 +576,9 @@ function ModeHeader({ onClose }: { onClose: () => void }) {
     [teams, launches, sessions, queue, sends],
   );
   const current = which ? sends.find((t) => t.team_id === which) : undefined;
+  // The team's tmux session, for a terminal (`R-P8`): the daemon's grouped
+  // layout, which this window does not mirror. Named on any of its seats.
+  const teamSession = which ? launches.find((l) => l.team_id === which && l.team_session)?.team_session : undefined;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border)] px-3 py-1.5">
       <span className="text-sm font-semibold tracking-wider text-[var(--text-strong)] uppercase">Gau Geung</span>
@@ -598,6 +602,16 @@ function ModeHeader({ onClose }: { onClose: () => void }) {
       ))}
       {current && <Mono className="text-2xs text-[var(--dim)]">{countersLine(current)}</Mono>}
       <span className="ml-auto flex items-center gap-1">
+        {teamSession && (
+          <Button
+            size="sm"
+            variant="outline"
+            title="copy the command that attaches a terminal to the team's own tmux session — every seat tiled in one window, and a window per seat (R-P8)"
+            onClick={() => void copyPath(`tmux attach -t ${teamSession}`, "the attach command")}
+          >
+            <Copy size={12} /> tmux attach -t {teamSession}
+          </Button>
+        )}
         <IconButton title="the Teams window — define, boot and stop a team (Alt+Shift+g)" onClick={() => useStore.setState({ showTeams: true })}>
           <Users size={13} />
         </IconButton>

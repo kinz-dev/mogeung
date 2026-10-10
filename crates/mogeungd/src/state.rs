@@ -4846,7 +4846,13 @@ impl AppState {
             self.policy.lock().await.team_mut(&team.id).booted(&seat.name);
             self.launches.write().await.push(launch);
         }
-        Ok(self.launches.read().await.clone())
+        // The team's own session, around the seats, for a terminal. `R-P8`.
+        // A tmux that refuses it is a warning: the seats are up.
+        let launches = self.launches.read().await.clone();
+        if let Err(e) = crate::seat::layout_team(&team, &launches) {
+            tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
+        }
+        Ok(launches)
     }
 
     /// End every seat's process and forget the records. The worktrees stay.
@@ -4855,6 +4861,11 @@ impl AppState {
             self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
         if mine.is_empty() {
             return Err(anyhow!("no seat of this team is running"));
+        }
+        // The team session first, so its nested clients let go before the
+        // seats they are attached to are ended. `R-P8`.
+        if let Some(name) = mine.iter().map(|l| l.team_session.as_str()).find(|n| !n.is_empty()) {
+            crate::seat::unlayout_team(name);
         }
         for l in &mine {
             crate::seat::stop(l);
@@ -7093,6 +7104,7 @@ mod terminal_tests {
             pane_id: "%40".into(),
             tmux_target: "geung-port-builder:0.0".into(),
             tmux_session: "geung-port-builder".into(),
+            team_session: String::new(),
             dir: "/tmp".into(),
             worktree: true,
             files_dir: "/f".into(),

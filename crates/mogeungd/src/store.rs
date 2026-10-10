@@ -1052,6 +1052,7 @@ mod tests {
             pane_id: "%9".into(),
             tmux_target: "geung-port-builder:0.0".into(),
             tmux_session: "geung-port-builder".into(),
+            team_session: String::new(),
             dir: "/w".into(),
             worktree: true,
             files_dir: "/f".into(),

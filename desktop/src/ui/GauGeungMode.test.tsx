@@ -43,6 +43,7 @@ const launch = (seat: string, over: Partial<SeatLaunch> = {}): SeatLaunch => ({
   pane_id: `%${seat}`,
   tmux_target: `geung-port-${seat}:0.0`,
   tmux_session: `geung-port-${seat}`,
+  team_session: "geung-port",
   dir: `/w/${seat}`,
   worktree: true,
   files_dir: "/f",
@@ -173,6 +174,9 @@ describe("the Gau Geung mode", () => {
     expect(sent).toContainEqual({ cmd: "send_drop", team_id: "t1", id: "s2" });
     // The tab carries the team's state.
     expect(screen.getByTestId("tab-t1").textContent).toBe("port · 2/2 · 1 needs you");
+    // And, for one team, the attach command for a terminal (`R-P8`).
+    fireEvent.click(screen.getByTestId("tab-t1"));
+    expect(screen.getByText("tmux attach -t geung-port")).toBeInTheDocument();
     act(() => useStore.setState({ teamSends: [sends({ paused: true })] }));
     expect(screen.getByText("Resume sends")).toBeInTheDocument();
     expect(screen.getByTestId("tab-t1").textContent).toContain("paused");

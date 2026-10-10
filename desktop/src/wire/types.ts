@@ -1171,6 +1171,9 @@ export interface SeatLaunch {
   pane_id: string;
   tmux_target: string;
   tmux_session: string;
+  /** The team's own tmux session for a terminal — `tmux attach -t <this>`.
+   *  `R-P8`. Empty where the daemon could not lay it out. */
+  team_session: string;
   dir: string;
   worktree: boolean;
   files_dir: string;

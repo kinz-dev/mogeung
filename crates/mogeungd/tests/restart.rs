@@ -303,6 +303,7 @@ async fn a_seat_is_re_adopted_from_its_launch_record() {
                 pane_id: "%999999".into(),
                 tmux_target: "geung-port-builder:0.0".into(),
                 tmux_session: "geung-port-builder".into(),
+                team_session: String::new(),
                 dir: home.to_string_lossy().into_owned(),
                 worktree: false,
                 files_dir: home.join("files").to_string_lossy().into_owned(),

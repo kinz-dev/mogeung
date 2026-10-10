@@ -160,6 +160,7 @@ describe("the Teams window", () => {
             pane_id: "%3",
             tmux_target: "geung-port-openrig-planner:0.0",
             tmux_session: "geung-port-openrig-planner",
+            team_session: "geung-port-openrig",
             dir: "/home/you/.mogeung/worktrees/mogeung/port-openrig-planner",
             worktree: true,
             files_dir: "/f",

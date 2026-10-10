@@ -45,6 +45,7 @@ async fn daemon(tag: &str) -> Daemon {
             pane_id: "%999998".into(),
             tmux_target: "geung-port-builder:0.0".into(),
             tmux_session: "geung-port-builder".into(),
+            team_session: String::new(),
             dir: dir.to_string_lossy().into_owned(),
             worktree: false,
             files_dir: files.to_string_lossy().into_owned(),

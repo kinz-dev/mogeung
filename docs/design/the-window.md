@@ -86,7 +86,8 @@ a **seat pane** that follows the pick until you hold it, and a **terminal
 pane per seat** you attach, each a `tmux attach` of its own like the Agent
 pane; the arrangement is saved per machine under `mogeung.teamLayout:`, and
 the daemon's grouped tmux layout (`R-P8`) is for a terminal and is not
-mirrored. The board shows OpenRig's **five lanes** for seats in a team —
+mirrored — the header offers `tmux attach -t geung-<team>` to copy, read off
+the launch record's `team_session`. The board shows OpenRig's **five lanes** for seats in a team —
 needs you, parked with baton, blocked on agents, now, just finished — each
 card carrying mogeung's badge inside, and `lib/teamMode.ts` reads the two
 idle lanes off the send log: a seat idle after a message arrived holds the

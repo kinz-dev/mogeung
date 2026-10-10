@@ -321,6 +321,25 @@ the pause switch (which acts at once and is the one writer of `paused`), what
 is held with *release* and *drop*, and the log. The status line a Claude seat
 shows carries the counters too.
 
+**And the team has a session for a terminal** (`R-P8`, since 2026-10-10):
+*"ideally I want it to have a special grouped layout"* — so `tmux attach -t
+geung-<team>` is the TUI client this feature has instead of one of its own.
+Every seat keeps its own session (`R-P4`), because the scan, the send path
+and the window all key on the seat's pane and a pane belongs to one window;
+`seat::layout_team` builds the team's session **around** them after a boot:
+a window named `all` whose panes are nested tmux clients, one attached to
+each seat's session (`env -u TMUX tmux attach`, so the inner tmux forgets it
+is inside) and tiled, so every seat is on screen at once and keys typed into
+a pane reach its seat; then every seat's own window linked in by name
+(`link-window`), so one seat can take the whole screen with a window switch;
+the status line on, which lists the seats. A stop kills the team session
+first, and the seats stand: tmux closes only windows linked nowhere else,
+and a nested client merely detaches — pinned by `tests/team_tmux.rs` against
+a real server, with `sleep` for seats. The window does not mirror this
+layout; it attaches per pane and arranges its own grid, and the mode offers
+the attach command to copy. The launch record carries the session's name as
+`team_session`.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
