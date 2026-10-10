@@ -102,6 +102,8 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // A team's sends are judged by the daemon that owns its seats
         // (fence 5), and that is the daemon the window is on. `R-P6`.
         TeamPause { .. } | SendRelease { .. } | SendDrop { .. } => Hop::Here,
+        // A seat's worktree is on the daemon that made it. `R-P9`.
+        FileWrite { .. } => Hop::Here,
         ScratchList
         | ScratchCreate { .. }
         | ScratchRead { .. }
@@ -171,6 +173,8 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         BlastRadius { .. }
         | DirListing { .. }
         | FileContent { .. }
+        | FileWritten { .. }
+        | FileWriteRefused { .. }
         | Workspace { .. }
         | TreeListing { .. }
         | ContentMatches { .. }

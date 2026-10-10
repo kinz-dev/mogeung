@@ -219,6 +219,25 @@ async fn pause_is_judged_like_a_save_and_a_release_like_a_send() {
     assert!(why.contains("no held send"), "{why}");
 }
 
+/// `R-P9`: the one write into a worktree is judged like the seat verbs and
+/// sits behind the write guard; past both, the lookup refuses in words.
+#[tokio::test]
+async fn a_worktree_write_is_judged_like_a_seat_verb_and_the_write_guard() {
+    let write = || ClientMsg::FileWrite {
+        session_id: "x".into(),
+        path: "a.rs".into(),
+        content: String::new(),
+        base_hash: String::new(),
+        force: false,
+    };
+    let url = lan_bound_daemon("write-lan", false).await;
+    let why = ask(&url, write(), error_text).await;
+    assert!(why.contains("token") || why.contains("--allow-run"), "{why}");
+    let url = lan_bound_daemon("write-local", true).await;
+    let why = ask(&url, write(), error_text).await;
+    assert!(why.contains("not one this daemon knows"), "{why}");
+}
+
 #[tokio::test]
 async fn without_a_peer_address_boot_stop_and_remove_are_judged_by_the_bind() {
     let url = lan_bound_daemon("boot-unknown", false).await;

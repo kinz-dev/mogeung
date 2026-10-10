@@ -5,6 +5,7 @@ updated: 2026-10-10
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/workspace.rs
+  - crates/mogeungd/src/write.rs
 ---
 
 # The read boundary
@@ -13,9 +14,12 @@ What an open socket may read out of this machine, and the one rule under all of
 it: **a path is served only from a root somebody authorised, and the daemon
 proves containment on the filesystem, not on the string.** The daemon binds
 loopback with no token, so an unauthenticated port must not become "read any
-file by asking politely". There is no write path to a worktree at all; the
-roadmap's *an editor — explicitly not* is a property of the protocol
-([ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)).
+file by asking politely". There is one write path into a worktree, and it is
+narrower than any read: a seat's worktree, through `FileWrite`, under the
+fences below (`R-P9`); everywhere else the roadmap's *an editor — explicitly
+not* is still a property of the protocol
+([ADR-0019](../decisions/0019-a-viewer-not-an-editor.md), narrowed by its
+2026-10-09 amendment to every worktree that is not a team's).
 
 ## A session's own root
 
@@ -115,6 +119,26 @@ at.
   would need one there is refused in words. Nothing is written under the
   user's own agent homes, ever
   ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)).
+
+## The one write (`R-P9`)
+
+`FileWrite` is the only verb that changes a file in a worktree, and its root
+is not the session's workspace: it is the **directory on the seat's launch
+record**, and only when that record says the daemon made it with `git
+worktree add`. The session must carry a seat's tag to be looked up at all, so
+a session you started by hand has no root here and is refused before the path
+is read; a seat working in the team's own checkout has a record that says so
+and is refused the same way (ADR-0019's amendment, fence 1; ADR-0043 clause
+2). The path is then resolved by `write::resolve_for_write`: relative only,
+no `..`, the parent canonicalised and required to be under the canonical
+worktree — a file that does not exist yet is resolved by its directory, which
+must — and nothing under `.git`, because a worktree's `.git` is a file
+pointing into the repository. Past containment the write is judged (fence 3):
+the file's current hash must be the `base_hash` the save was made from, else
+it is refused with the current text; no seat may be mid-turn in the worktree,
+else it is refused until the save says `force`. Judged per connection like
+the seat verbs, and behind the write guard with the git writes
+([wire-protocol.md](wire-protocol.md#the-one-write-into-a-worktree-r-p9-writers)).
 
 ## Two spellings of one path
 

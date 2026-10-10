@@ -270,6 +270,17 @@ export type PaneId =
   | "git"
   | "insight";
 
+/** Why a save was refused, as the daemon said it. `R-P9`, fence 3. */
+export interface WriteRefusal {
+  why: string;
+  /** What is on disk now, when the file moved under you. */
+  current: string | null;
+  /** Its hash — the base a save after a reload would carry. */
+  hash: string;
+  /** The seat mid-turn, when that was the reason; a second save with `force` is the *anyway*. */
+  busy: string | null;
+}
+
 /** One open file in the Code pane. Client-side view state. */
 export interface FileTab {
   path: string;
@@ -278,6 +289,13 @@ export interface FileTab {
   pinned: boolean;
   content: string | null;
   truncated: boolean;
+  /** sha256 of the file as the daemon served it — what a save carries back
+   *  as `base_hash`. `R-P9`. Empty until the body arrives. */
+  hash: string;
+  /** Bumped when a save lands, so the pane can clear *unsaved*. */
+  saved: number;
+  /** The last refusal, until the next save or reload. */
+  refusal: WriteRefusal | null;
   gotoLine: number | null;
   /**
    * The body we are holding is known to be out of date. `R-J38`.
@@ -2212,7 +2230,7 @@ export const useStore = create<AppState>((set, get) => ({
           const st = s.explorer[msg.session_id] ?? emptyExplorer();
           const open = st.open.map((t) =>
             t.rev === null && t.path === msg.path
-              ? { ...t, content: msg.content, truncated: msg.truncated, reload: false }
+              ? { ...t, content: msg.content, truncated: msg.truncated, hash: msg.hash ?? "", reload: false }
               : t,
           );
           // The search panel's preview is a second consumer of the same
@@ -2230,6 +2248,27 @@ export const useStore = create<AppState>((set, get) => ({
             explorer: { ...s.explorer, [msg.session_id]: { ...st, open, pendingFiles } },
             search,
           };
+        });
+        break;
+      // The save's two answers. `R-P9`. The body itself follows as a
+      // `file_content` broadcast, so only the bookkeeping is here.
+      case "file_written":
+        set((s) => {
+          const st = s.explorer[msg.session_id];
+          if (!st) return s;
+          const open = st.open.map((t) =>
+            t.rev === null && t.path === msg.path ? { ...t, hash: msg.hash, saved: t.saved + 1, refusal: null } : t,
+          );
+          return { explorer: { ...s.explorer, [msg.session_id]: { ...st, open } } };
+        });
+        break;
+      case "file_write_refused":
+        set((s) => {
+          const st = s.explorer[msg.session_id];
+          if (!st) return s;
+          const refusal: WriteRefusal = { why: msg.why, current: msg.current ?? null, hash: msg.hash, busy: msg.busy ?? null };
+          const open = st.open.map((t) => (t.rev === null && t.path === msg.path ? { ...t, refusal } : t));
+          return { explorer: { ...s.explorer, [msg.session_id]: { ...st, open } } };
         });
         break;
       case "git_file_at_rev_content":

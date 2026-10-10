@@ -103,6 +103,19 @@ The policy strip carries the counters, the pause switch and every held send
 with release and drop, through the same verbs the Teams window sends. Tabs
 show one team or all of them; each team keeps its own counters and switch.
 
+**The one editable file pane** (`R-P9`): a file of a seat's worktree — the
+session carries a seat's tag and `seatLaunches` says its directory is a
+worktree the daemon made — opens writable, with the header saying so, and
+nothing else does: a hand-started session, a seat in the team's checkout, a
+revision tab and a file cut short by the cap keep the viewer and its
+message. `file_content` carries the daemon's `hash`; the pane pins the hash
+the draft **began** from on the first keystroke and sends it with
+`file_write`, so `R-J38`'s reloads can arrive while you type without putting
+theirs over yours or quietly moving the base. A refusal lands on the tab:
+*moved* shows how many lines theirs and yours differ on and offers to reload
+theirs; *busy* names the seat and offers *save anyway*, the one override.
+`Ctrl+S` is the editor's own chord, as the scratch pane's is.
+
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept
 in the log; an `info` shows as a toast and is not counted. `capNotices` keeps

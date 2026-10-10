@@ -3759,7 +3759,7 @@ impl AppState {
 
     /// One worktree file, capped rather than unbounded — the R-A5 rule applied
     /// to worktrees. Returns the text and whether it was cut short.
-    pub async fn read_file(&self, id: &str, rel: &str) -> Result<(String, bool)> {
+    pub async fn read_file(&self, id: &str, rel: &str) -> Result<(String, bool, String)> {
         /// Past this a "file viewer" is really a memory test for the renderer.
         const CAP: usize = 256 * 1024;
         let path = self.resolve_for(id, rel).await?;
@@ -3771,7 +3771,74 @@ impl AppState {
         }
         let truncated = bytes.len() > CAP;
         let head = &bytes[..bytes.len().min(CAP)];
-        Ok((String::from_utf8_lossy(head).into_owned(), truncated))
+        // The hash is of the whole file (`R-P9`), so a save based on a cut
+        // body still fails the comparison it should.
+        Ok((String::from_utf8_lossy(head).into_owned(), truncated, crate::write::hash_bytes(&bytes)))
+    }
+
+    /// A human's save into a seat's worktree. `R-P9`, ADR-0019's amendment.
+    ///
+    /// The session must be a seat's row whose launch record says its
+    /// directory is a worktree the daemon made — fence 1, and the reason an
+    /// observed session, or a seat in the team's checkout, is refused before
+    /// the path is looked at. Then fence 3: the file must still be the one
+    /// the save was based on, and no seat may be mid-turn in the worktree
+    /// unless `force`. `Ok(Err(refusal))` is a refusal the window shows;
+    /// `Err` is a path or disk problem.
+    pub async fn write_seat_file(
+        &self,
+        id: &str,
+        rel: &str,
+        content: &str,
+        base_hash: &str,
+        force: bool,
+    ) -> Result<std::result::Result<String, (crate::write::Refusal, Option<String>, String)>> {
+        let session = self.get(id).await.ok_or_else(|| anyhow!("that session is not one this daemon knows"))?;
+        let tag = session.seat.clone().ok_or_else(|| {
+            anyhow!("that session is not a seat — mogeung writes only in a worktree it made for a team (ADR-0019's amendment)")
+        })?;
+        let launch = self
+            .launches
+            .read()
+            .await
+            .iter()
+            .find(|l| l.team_id == tag.team_id && l.seat == tag.seat)
+            .cloned()
+            .ok_or_else(|| anyhow!("seat `{}` is not running", tag.seat))?;
+        if !launch.worktree {
+            return Err(anyhow!(
+                "seat `{}` works in the team's own checkout, and nothing of mogeung's is written there",
+                tag.seat
+            ));
+        }
+        let root = Path::new(&launch.dir);
+        let path = crate::write::resolve_for_write(root, rel)?;
+        let on_disk = std::fs::read(&path).ok();
+        let on_disk_hash = on_disk.as_deref().map(crate::write::hash_bytes);
+        // The seat whose worktree this is, mid-turn: the daemon knows the
+        // writers, which is what makes this write admissible at all.
+        let busy = {
+            let sessions = self.sessions.read().await;
+            let provisional = self.provisional.read().await;
+            sessions
+                .values()
+                .chain(provisional.iter())
+                .any(|s| {
+                    s.alive
+                        && s.live_status == Some(mogeung_core::session::LiveStatus::Busy)
+                        && s.seat.as_ref().is_some_and(|t| t.team_id == tag.team_id && t.seat == tag.seat)
+                })
+                .then(|| tag.seat.clone())
+        };
+        if let Some(r) = crate::write::judge(on_disk_hash.as_deref(), base_hash, busy.as_deref(), force) {
+            let current = match &r {
+                crate::write::Refusal::Moved => on_disk.map(|b| String::from_utf8_lossy(&b).into_owned()),
+                crate::write::Refusal::Busy { .. } => None,
+            };
+            return Ok(Err((r, current, on_disk_hash.unwrap_or_default())));
+        }
+        crate::write::write_atomic(&path, content)?;
+        Ok(Ok(crate::write::hash_bytes(content.as_bytes())))
     }
 
     /// Every file of the worktree in one flat list, for go-to-file. `R-B25`.

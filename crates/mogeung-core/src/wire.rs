@@ -131,6 +131,23 @@ pub enum ClientMsg {
     ListDir { session_id: SessionId, path: String },
     /// Read one file of the session's worktree, same path rules as `ListDir`.
     FetchFile { session_id: SessionId, path: String },
+    /// Save a file in a **team's worktree** — the one write verb into a
+    /// worktree the protocol has, `R-P9`, ADR-0019's 2026-10-09 amendment.
+    /// The session is a seat's row; its launch record says whether `dir` is
+    /// a worktree the daemon made, and nothing else may be written.
+    /// `base_hash` is the `hash` the `FileContent` carried (empty for a file
+    /// that did not exist); a file that moved is refused with the current
+    /// text, a seat mid-turn in the worktree is refused unless `force`.
+    /// Judged like the seat verbs, and behind the write guard.
+    FileWrite {
+        session_id: SessionId,
+        path: String,
+        content: String,
+        #[serde(default)]
+        base_hash: String,
+        #[serde(default)]
+        force: bool,
+    },
     /// Every file path under the session root in one answer, for go-to-file.
     /// Capped and gitignore-aware; still read-only (`R-B25`).
     ListTree { session_id: SessionId },
@@ -1325,6 +1342,29 @@ pub enum ServerMsg {
         path: String,
         content: String,
         truncated: bool,
+        /// sha256 of the whole file on disk, as served. `R-P9`: what a save
+        /// carries back as `base_hash`. Empty from a daemon older than this.
+        #[serde(default)]
+        hash: String,
+    },
+    /// A save landed. `R-P9`. To the asker; the new `FileContent` follows
+    /// as a broadcast so every pane on the file agrees.
+    FileWritten { session_id: SessionId, path: String, hash: String },
+    /// A save was refused. `R-P9`, fence 3: `moved` when the file on disk is
+    /// not the one the save was based on — `current` is what is there now,
+    /// `hash` its hash, so the window shows the difference and reloads;
+    /// `busy` names the seat mid-turn, and a second save with `force` is
+    /// the *unless you say so*.
+    FileWriteRefused {
+        session_id: SessionId,
+        path: String,
+        why: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
+        #[serde(default)]
+        hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        busy: Option<String>,
     },
     /// A session's workspace: its own root, the folders added to it, and the
     /// ones that have since gone away. `R-J40`.

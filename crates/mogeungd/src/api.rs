@@ -820,10 +820,11 @@ async fn get_file(
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     match state.read_file(&id, &q.path).await {
-        Ok((content, truncated)) => Json(serde_json::json!({
+        Ok((content, truncated, hash)) => Json(serde_json::json!({
             "path": q.path,
             "content": content,
             "truncated": truncated,
+            "hash": hash,
         })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -1464,6 +1465,9 @@ fn is_write(cmd: &ClientMsg) -> bool {
             // able to extend the read surface of the daemon it is watching.
             | ClientMsg::AddWorkspaceDir { .. }
             | ClientMsg::RemoveWorkspaceDir { .. }
+            // The one write into a worktree (`R-P9`, ADR-0019's amendment):
+            // a repository write by the plainest definition.
+            | ClientMsg::FileWrite { .. }
     )
 }
 
@@ -2183,12 +2187,53 @@ async fn handle(
         }
         ClientMsg::FetchFile { session_id, path } => {
             match state.read_file(&session_id, &path).await {
-                Ok((content, truncated)) => state.broadcast(ServerMsg::FileContent {
+                Ok((content, truncated, hash)) => state.broadcast(ServerMsg::FileContent {
                     session_id,
                     path,
                     content,
                     truncated,
+                    hash,
                 }),
+                Err(e) => err(e),
+            }
+        }
+        // The one write into a worktree. `R-P9`, ADR-0019's amendment: a
+        // seat's worktree only, judged like the seat verbs (fence 4) and
+        // behind the write guard above like every other write. The answer
+        // goes to the asker; the new body is broadcast so a second pane on
+        // the same file agrees.
+        ClientMsg::FileWrite { session_id, path, content, base_hash, force } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.write_seat_file(&session_id, &path, &content, &base_hash, force).await {
+                Ok(Ok(hash)) => {
+                    send_reply(
+                        reply,
+                        ServerMsg::FileWritten { session_id: session_id.clone(), path: path.clone(), hash: hash.clone() },
+                    );
+                    state.broadcast(ServerMsg::FileContent {
+                        session_id,
+                        path,
+                        content,
+                        truncated: false,
+                        hash,
+                    });
+                }
+                Ok(Err((why, current, hash))) => send_reply(
+                    reply,
+                    ServerMsg::FileWriteRefused {
+                        session_id,
+                        path,
+                        busy: match &why {
+                            crate::write::Refusal::Busy { seat } => Some(seat.clone()),
+                            crate::write::Refusal::Moved => None,
+                        },
+                        why: why.sentence(),
+                        current,
+                        hash,
+                    },
+                ),
                 Err(e) => err(e),
             }
         }
@@ -2926,6 +2971,15 @@ mod write_guard_tests {
             // (ADR-0014), and an open socket must not be able to make this
             // daemon talk to someone else's server.
             ClientMsg::GitFetch { session_id: id(), repo: None },
+            // The one write into a worktree (`R-P9`): a repository write by
+            // the plainest definition, and the newest line in this list.
+            ClientMsg::FileWrite {
+                session_id: id(),
+                path: "a.rs".into(),
+                content: String::new(),
+                base_hash: String::new(),
+                force: false,
+            },
         ] {
             assert!(is_write(&cmd), "{cmd:?} changes the repository");
         }

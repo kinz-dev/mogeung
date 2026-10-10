@@ -106,8 +106,8 @@ everyone else is judged by the bind and the flag:
 
 | Gate | Covers | Beyond loopback |
 |---|---|---|
-| the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir` | needs the token |
-| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete`, `TeamBoot`, `TeamStop`, `SeatWorktreeRemove`, since `R-P6` `TeamPause` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
+| the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir`, and since `R-P9` `FileWrite` | needs the token |
+| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete`, `TeamBoot`, `TeamStop`, `SeatWorktreeRemove`, since `R-P6` `TeamPause`, since `R-P9` `FileWrite` (which passes the write guard too) | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
 | `send_allowed` | `SendToSession`, and since `R-P6` `SendRelease` and `SendDrop` — releasing a held send types into a seat | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
@@ -168,6 +168,7 @@ joined with `R-J124`; a `ConfigSave` wakes the pricing task.
 | `RemoveWorkspaceDir` | `session_id`, `path` | `Workspace`; passes the write guard | write |
 | `ListDir` | `session_id`, `path` (relative, or absolute inside the workspace) | `DirListing` | read |
 | `FetchFile` | `session_id`, `path` | `FileContent` | read |
+| `FileWrite` | `session_id` (a seat's row), `path`, `content`, `base_hash` (the `hash` the file came with; empty for a new file), `force` — **the one write into a worktree** (`R-P9`, [ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)'s amendment): a worktree the daemon made for that seat, and nothing else | `FileWritten` to the asker and the new `FileContent` broadcast; `FileWriteRefused` to the asker; passes the write guard and the runs gate | here |
 | `ListTree` | `session_id` | `TreeListing`, capped at 20k | read |
 | `SearchContent` | `session_id`, `query` (literal, smart-cased) | `ContentMatches`, capped at 500 | read |
 
@@ -175,7 +176,9 @@ joined with `R-J124`; a `ConfigSave` wakes the pricing task.
 |---|---|---|
 | `Workspace` | the session's root, `dirs` added, `missing`, `hints` offered, `repos` that are checkouts (the session's own first) | pass |
 | `DirListing` | one directory, dirs then files, `.git` never | pass |
-| `FileContent` | one file, `truncated` past 256 KiB; binary refused | pass |
+| `FileContent` | one file, `truncated` past 256 KiB; binary refused; since `R-P9` `hash`, sha256 of the whole file as served, which a save carries back | pass |
+| `FileWritten` | `session_id`, `path`, the new `hash` — a save landed (`R-P9`) | theirs |
+| `FileWriteRefused` | `why` in a sentence; `current` and `hash` when the file moved under you, so the window shows the distance and reloads; `busy` naming the seat mid-turn, when a second save with `force` is the *unless you say so* (`R-P9`, fence 3) | theirs |
 | `TreeListing` | every path, gitignore respected, `truncated` | pass |
 | `ContentMatches` | the matches, echoing `query` | pass |
 
@@ -450,6 +453,26 @@ judged like your own send. `TeamPause` is the one writer of `paused`:
 team on its way through. Your own `SendToSession` into a seat is logged beside
 the automatic ones as `human`, and resets the chain; into any other session it
 is what it always was, and no ledger exists for it.
+
+**The one write into a worktree** (`R-P9`, `write.rs`). ADR-0019 refused an
+editor for the concurrent writer it could not see; its 2026-10-09 amendment
+admits one write where the daemon knows the writers — a worktree it made for
+a seat — and `FileWrite` is that write and no other. Fence 1 is resolved
+before the path is looked at: the session must carry a seat's tag, the
+seat's launch record must say its directory is a worktree the daemon made,
+and a session you started by hand or a seat in the team's own checkout is
+refused in words. Then the path is canonicalised under that one root (`..`,
+an absolute path and anything under `.git` refused), and fence 3 is judged:
+the file on disk must hash to the `base_hash` the save carries — the
+`FileContent` it was opened from — or the save is refused with the current
+text and **no override**, you reload and edit again; and no seat may be
+mid-turn in that worktree, read from the registry, or the save is refused
+until it says `force`. The write is a rename, so a seat reading the file sees
+one version or the other. The window's file pane is editable in exactly this
+case and says so; it keeps the draft on screen through `R-J38`'s reloads and
+sends the hash the draft **began** from, so an agent's write between your
+first keystroke and your save is the daemon's refusal rather than a quiet
+overwrite.
 
 ## Skills and memory
 

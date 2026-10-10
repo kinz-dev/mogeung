@@ -9,6 +9,7 @@ covers:
   - crates/mogeungd/src/seat.rs
   - crates/mogeungd/src/hooks.rs
   - crates/mogeungd/src/policy.rs
+  - crates/mogeungd/src/write.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -340,6 +341,16 @@ layout; it attaches per pane and arranges its own grid, and the mode offers
 the attach command to copy. The launch record carries the session's name as
 `team_session`.
 
+**And a human writes in a seat's worktree** (`R-P9`, since 2026-10-10):
+`write.rs` is the narrow part of ADR-0019's amendment — the hash a
+`FileContent` carries, the judge over *moved* and *busy*, containment for a
+path that may not exist yet, and a rename for the write itself.
+`AppState::write_seat_file` resolves the seat from the session's tag and
+refuses before the path is looked at unless the launch record says the
+directory is a worktree the daemon made; `FileWrite` is the verb, behind the
+write guard and the runs gate. [read-boundary.md](read-boundary.md#the-one-write-r-p9)
+has the fences in order.
+
 ### The PATH a launcher does not give (`R-J87`)
 
 A bundle launched from the Dock, Finder or Spotlight gets the launchd `PATH`
@@ -440,7 +451,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
-| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

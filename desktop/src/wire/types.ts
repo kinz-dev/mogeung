@@ -1449,6 +1449,11 @@ export type ClientMsg =
   | { cmd: "seat_worktree_remove"; team_id: string; seat: string }
   /** The pause switch, judged like a save; release and drop a held send,
    *  judged like your own send. `R-P6`. */
+  /** Save a file in a seat's worktree — the one write into a worktree,
+   *  `R-P9`, ADR-0019's amendment. `base_hash` is the `hash` the file came
+   *  with; a moved file is refused with the current text, a busy seat until
+   *  `force`. Judged like the seat verbs, behind the write guard. */
+  | { cmd: "file_write"; session_id: SessionId; path: string; content: string; base_hash: string; force: boolean }
   | { cmd: "team_pause"; id: string; paused: boolean }
   | { cmd: "send_release"; team_id: string; id: string }
   | { cmd: "send_drop"; team_id: string; id: string }
@@ -1594,7 +1599,12 @@ export type ServerMsg =
   | { ev: "review_debt"; debt: ReviewDebt }
   | { ev: "blast_radius"; radius: BlastRadius }
   | { ev: "dir_listing"; session_id: SessionId; path: string; entries: DirEntry[] }
-  | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean }
+  | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean; hash?: string }
+  /** A save landed; the new `file_content` follows as a broadcast. `R-P9`. */
+  | { ev: "file_written"; session_id: SessionId; path: string; hash: string }
+  /** A save was refused: `current` and `hash` when the file moved, `busy`
+   *  naming the seat mid-turn. `R-P9`, fence 3. */
+  | { ev: "file_write_refused"; session_id: SessionId; path: string; why: string; current?: string; hash: string; busy?: string }
   /** A session's own root, the folders added to it, and any that have gone
    *  away — answered on request and after every add or remove. `R-J40`. */
   | {

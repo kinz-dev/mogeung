@@ -276,6 +276,14 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
 5. **`R-P9`, writes.** `WriteFile` on the wire with team, path, content and
    base hash; the refusal rules in the daemon; Monaco's `readOnly` flipped
    only for a team worktree in Gau Geung mode, with the pane header saying so.
+   **Built 2026-10-10** (⏳): `FileWrite` carries the session (a seat's row),
+   the path, the content, the `base_hash` a `FileContent` now carries, and
+   `force`; `write.rs` judges *moved* (no override) and *busy* (until
+   `force`), resolves the path under the seat's worktree only, and writes
+   by rename; the file pane is editable for exactly that case, keeps its
+   draft through reloads, sends the hash the draft began from, and shows a
+   refusal with the distance and the one override. Not yet saved over a
+   real seat.
 6. **`R-P10`, the handover.** A meta-prompt in `mogeungd`, composed through
    the existing model endpoint under ADR-0031's consent, triggered by the
    policy engine's seat events, sent through the same path as any automatic
@@ -380,6 +388,19 @@ out, `stop_team` takes down first), `mogeung-core/src/team.rs`
 (a real tmux, skipped where there is none). The window's `types.ts`,
 `GauGeungMode.tsx` (the attach command to copy). Docs: `architecture.md`,
 `data-model.md`, `the-window.md`.
+
+`R-P9`, built: `crates/mogeungd/src/write.rs` (`hash_bytes`, `Refusal`,
+`judge`, `resolve_for_write`, `write_atomic`), `state.rs` (`read_file`
+answers the hash; `write_seat_file`), `api.rs` (`FileWrite` behind the write
+guard and the runs gate; `FileContent.hash`; the REST reader's `hash`),
+`mogeung-core/src/wire.rs` (`FileWrite`, `FileWritten`, `FileWriteRefused`,
+`FileContent.hash`), `federation.rs`; tests in `write.rs`, the guard's list,
+`tests/seat_write.rs` through the real router, a gate test. The window's
+`types.ts`, `store/index.ts` (`FileTab.hash`/`saved`/`refusal`,
+`WriteRefusal`, the two events), `lib/explorer.ts`, `panes/FilePane.tsx`
+(the editable branch, the draft, the save, the refusal banner),
+`FilePane.write.test.tsx`. Docs: `read-boundary.md`, `wire-protocol.md`,
+`architecture.md`, `the-window.md`, `assumptions.md` (`A24`).
 
 ### Risks and unknowns
 
@@ -554,3 +575,16 @@ out, `stop_team` takes down first), `mogeung-core/src/team.rs`
   -t` takes a bare session name and answers *no such session* to the
   `=name` exact-match spelling every other target accepts. Not yet attached
   to from a terminal over a real team.
+- 2026-10-10, `R-P9`. Two things the plan's one line hid. The hash is the
+  **daemon's**: `FileContent` carries sha256 of the whole file as served,
+  so the window needs no hash function and a save against a body the viewer
+  cut short still fails the comparison it should. And the base is pinned in
+  the pane on the **first keystroke**, not read from the store at save time:
+  `R-J38`'s reloads fire exactly when an agent writes the file you are
+  editing, and a pane that followed the store's new hash would then save
+  over the agent with the daemon's blessing. So the draft stays on screen
+  through a reload and the save carries the hash it began from, and the
+  daemon's refusal is what you see. Fence 1 is a lookup before the path is
+  read: the session's seat tag, then the launch record's `worktree` flag —
+  an observed session has no record and a checkout seat's says no. Nothing
+  here has saved over a real seat yet.
