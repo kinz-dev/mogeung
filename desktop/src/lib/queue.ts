@@ -268,6 +268,34 @@ function header(
  * none, this is `R-B6`'s grouping unchanged, keys and all.
  */
 export function groupQueue(rows: VisibleRow[], g: Grouping): QueueLine[] {
+  // Seats first, under their team (`R-J131`): a seat is a session mogeung
+  // started itself, and the two must not pass for each other on the one list
+  // — so the seats leave the machine and folder groups for a section of
+  // their own, whatever the toggles say, folded by the same keys as the rest.
+  // Teams in rank order, seats within a team in rank order, as every group.
+  const seats = rows.filter((r) => r.session.seat);
+  const out: QueueLine[] = [];
+  if (seats.length > 0) {
+    const all = header(TEAM_KEY, "Team", 0, seats, g.collapsed);
+    out.push(all);
+    if (!(all.kind === "header" && all.collapsed)) {
+      for (const [teamId, inTeam] of bucket(seats, (r) => r.session.seat!.team_id)) {
+        const h = header(`${TEAM_KEY}${teamId}`, inTeam[0].session.seat!.team, 1, inTeam, g.collapsed);
+        out.push(h);
+        if (!(h.kind === "header" && h.collapsed)) for (const r of inTeam) out.push({ kind: "row", ...r });
+      }
+    }
+    rows = rows.filter((r) => !r.session.seat);
+  }
+  out.push(...groupOwn(rows, g));
+  return out;
+}
+
+/** The fold key of the seats' section; a team's is this and its id. `R-J131`. */
+export const TEAM_KEY = "team:";
+
+/** The sessions you started yourself, by machine and folder as the toggles say. */
+function groupOwn(rows: VisibleRow[], g: Grouping): QueueLine[] {
   const machines = g.byMachine && rows.some((r) => r.session.origin);
   const repoLines = (items: VisibleRow[], prefix: string, depth: 0 | 1): QueueLine[] => {
     if (!g.byRepo) return items.map((r) => ({ kind: "row", ...r }) as QueueLine);

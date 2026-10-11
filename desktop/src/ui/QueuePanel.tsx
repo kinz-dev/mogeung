@@ -8,14 +8,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Monitor, Network, Pin, Tag, TerminalSquare } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Monitor, Network, Pin, Tag, TerminalSquare, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } from "@/ui/primitives";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
-import { groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
+import { TEAM_KEY, groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
 import { revealSession } from "@/lib/panes";
@@ -785,6 +785,10 @@ export function QueuePanel() {
                         )}
                         {r.key.startsWith("machine:") && (
                           <Monitor size={11} className="shrink-0 text-[var(--dim)]" />
+                        )}
+                        {/* The seats' section and each team under it. `R-J131`. */}
+                        {r.key.startsWith(TEAM_KEY) && (
+                          <Users size={11} className="shrink-0 text-[var(--dim)]" />
                         )}
                         <span className="truncate text-xs font-semibold text-[var(--text-strong)]">
                           {r.label}

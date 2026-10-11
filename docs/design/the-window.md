@@ -184,7 +184,12 @@ layout being reset. The Attention list is virtualised, and its rows are keyed
 by what they are — a heading's fold key, a session's id — for the virtualizer
 as well as for React: a measured height remembered by index stays with the
 index when the list regroups, and the row that moves there is never measured
-again (`R-J129`).
+again (`R-J129`). Seats — the sessions mogeung started itself, tagged `seat` on
+the wire — sit first, under one *Team* heading with a heading per team beneath
+it, whatever the machine and folder toggles say (`R-J131`, `groupQueue` in
+`lib/queue.ts`): the keystone ADR's line between owned and observed is drawn
+on the list itself, the section folds like any other by key, and your own
+sessions keep their groups below it.
 
 **The wall** (`R-B50`) is neither: an overlay on a chord, every live session a
 tile keyed by id so it never moves, no state but a boolean, fetching nothing.
