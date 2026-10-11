@@ -16,7 +16,7 @@ import { useChord } from "@/lib/keymap";
 import { showDialog } from "@/lib/dialogWindow";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
-import { showPane } from "@/lib/panes";
+import { showPane, toggleTeamBoard } from "@/lib/panes";
 import { toggleTerminal } from "@/lib/shellDock";
 import { WindowControls } from "@/ui/WindowControls";
 import { ConnectionSwitcher } from "@/ui/ConnectionSwitcher";
@@ -47,7 +47,7 @@ export function TopBar() {
   // never updates, so the button's lit state was permanently whatever it was
   // when the bar first mounted.
   const showTerminal = useStore((s) => s.showTerminal);
-  const showGauGeung = useStore((s) => s.showGauGeung);
+  const teamBoardOpen = useStore((s) => s.teamBoardOpen);
   const rescanning = useStore((s) => s.rescanning);
   const daemonStatus = useStore((s) => s.daemonStatus);
   const bell = bellState(prefs.notify, daemonStatus?.mode === "hosting");
@@ -149,12 +149,13 @@ export function TopBar() {
         >
           <Users size={13} />
         </IconButton>
-        {/* The mode itself. `R-P7`: the five lanes, the topology, a seat's
-            pane and its terminals, over the window on a chord. */}
+        {/* The team board. `R-P7`: the five lanes, the topology, a seat's
+            pane and its terminals — a pane in the tile tree since `R-J132`,
+            lit while it is open. */}
         <IconButton
-          title={`Gau Geung — the team mode${gauChord ? `  (${gauChord})` : ""}`}
-          active={showGauGeung}
-          onClick={() => useStore.setState({ showGauGeung: !showGauGeung })}
+          title={`Gau Geung — the team board${gauChord ? `  (${gauChord})` : ""}`}
+          active={teamBoardOpen}
+          onClick={() => toggleTeamBoard()}
         >
           <Network size={13} />
         </IconButton>

@@ -1002,8 +1002,12 @@ export interface AppState {
   showLaunch: boolean;
   /** The Teams window: definitions, edited here first (`R-P3`). */
   showTeams: boolean;
-  /** Gau Geung, the team mode, on a chord (`R-P7`). A boolean like the wall's. */
-  showGauGeung: boolean;
+  /**
+   * Whether the team board is a pane in the tile tree right now (`R-J132`).
+   * Kept by the dock's add and remove events, read by the top bar's button;
+   * never the thing that opens it — `toggleTeamBoard` is.
+   */
+  teamBoardOpen: boolean;
   /** Which team the mode shows: a team id, or `null` for all of them. */
   gauTeam: string | null;
   /** The seat the mode's seat pane follows: `team_id/seat`, or none. */
@@ -1305,7 +1309,7 @@ export const useStore = create<AppState>((set, get) => ({
   ambient: false,
   showLaunch: false,
   showTeams: false,
-  showGauGeung: false,
+  teamBoardOpen: false,
   gauTeam: null,
   gauSeat: null,
   showTerminal: false,

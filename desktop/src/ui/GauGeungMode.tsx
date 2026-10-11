@@ -1,13 +1,20 @@
 /**
- * Gau Geung: the team mode, on a chord. `R-P7`, feature 0051.
+ * Gau Geung: the team board, the seat pane and a seat's terminal, as panes
+ * of the main tile tree. `R-P7`, feature 0051; panes since `R-J132`.
  *
  * Every design question was decided on 2026-10-09 from the wireframes, and
- * this is those answers as a component:
+ * one of them was reversed by the first use on 2026-10-11:
  *
- * - **A mode on a chord, never a home.** `Alt+g` opens it over the window,
- *   `Esc` closes it, and the tile tree underneath keeps its layout — the
- *   wall's shape (`R-B50`), for the wall's reason: the queue is the thesis
- *   (`A1`), and a view you can leave up argues with it.
+ * - **Panes, not a mode.** `R-P7` opened a mode over the whole window on
+ *   `Alt+g`, with a tile tree of its own and `Esc` to leave — the wall's
+ *   shape, for the wall's reason. The first real team showed what that costs:
+ *   the Attention list, the rail and `Alt+a`'s chat were all underneath it,
+ *   and the mode's panels could be arranged among themselves but never with
+ *   anything else. *"The whole UI should be free like a normal UI."* So the
+ *   board and the seat pane are panes in the main tile tree now, a seat's
+ *   terminal is a pane beside them, and `Alt+g` raises the board or closes
+ *   it when it is in front. They dock, split, tab and pop out as every other
+ *   pane does, the layout is the one layout, and nothing is underneath.
  * - **Five lanes for seats in a team.** OpenRig's pulse — needs you, parked
  *   with baton, blocked on agents, now, just finished — for seats only, each
  *   card carrying mogeung's badge inside. A session outside a team keeps its
@@ -17,29 +24,27 @@
  *   — the last send between two seats, a held edge a message waiting for you
  *   — beside a table of the same seats with context, tokens and a state that
  *   names its source. No toggle.
- * - **Seat detail is a pane in the mode's own tile tree.** The mode holds a
- *   second dockview, as the terminal panel does (`R-B56`): a board, a seat
- *   pane that follows the selection, and a terminal pane per seat you attach,
- *   each attached on its own like the Agent pane. The arrangement is yours and
- *   saved per machine; the daemon's grouped tmux layout (`R-P8`) is for a
- *   terminal and is not mirrored here.
- * - **Two teams at once.** Tabs pick one team or all of them; each team keeps
- *   its own counters and its own pause switch, and a seat addresses only its
- *   own team.
+ * - **The seat pane follows the pick.** A pick on the board opens the seat
+ *   pane beside it when it is not there and raises it when it is a background
+ *   tab; a terminal pane per seat arrives on *Attach terminal*, keyed by the
+ *   seat so a second attach raises the first (`lib/panes.ts`).
+ * - **Two teams at once.** Tabs on the board pick one team or all of them;
+ *   each team keeps its own counters and its own pause switch, and a seat
+ *   addresses only its own team.
  *
  * Nothing here is fetched. Teams, launches, sessions, the queue and the send
- * logs are what the store already holds; the mode is a different reading of
+ * logs are what the store already holds; the board is a different reading of
  * them. The only verbs it sends are the ones the Teams window already does —
- * pause, release, drop — and the one the Agent pane does: an attach.
+ * pause, release, drop, restart — and `team_list` when the board mounts.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps } from "dockview";
-import { Anchor, Ban, Check, Copy, Pause, Play, RotateCcw, SquareTerminal, Users, X } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { Anchor, Ban, Check, Copy, Pause, Play, RotateCcw, SquareTerminal, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Button, Chip, Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
-import { PaneScope } from "@/lib/paneScope";
+import { usePaneId } from "@/lib/paneScope";
+import { attachSeatTerminal, showSeatPane } from "@/lib/panes";
 import { cn } from "@/lib/cn";
 import { interactive } from "@/ui/styles";
 import { compact, shortDir } from "@/lib/format";
@@ -47,27 +52,8 @@ import { copyPath } from "@/lib/clipboard";
 import { showDialog } from "@/lib/dialogWindow";
 import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
 import { countersLine, sendLine, sendsFor, signalsLine } from "@/lib/teams";
-import {
-  BOARD_PANE,
-  LANES,
-  agoShort,
-  edges,
-  parseSeatKey,
-  ring,
-  seatKey,
-  seatPaneId,
-  seatViews,
-  teamLayoutKey,
-  teamTab,
-  termOfPane,
-  termPaneId,
-  type Lane,
-  type SeatView,
-} from "@/lib/teamMode";
+import { LANES, agoShort, edges, parseSeatKey, ring, seatKey, seatViews, teamTab, termOfPane, type Lane, type SeatView } from "@/lib/teamMode";
 import { SCREEN_LABEL, isScreenGate, needsHuman, sourceLabel, type AttentionReason, type Team, type TeamSends } from "@/wire/types";
-
-/** The attribute the keymap reads to leave bare keys to a terminal in here. */
-export const TEAM_TILES_ATTR = "data-team-tiles";
 
 const now = () => Date.now() / 1000;
 
@@ -372,7 +358,10 @@ function TeamSection({ team }: { team: Team }) {
   const sends = useStore((s) => s.teamSends.find((t) => t.team_id === team.id));
   const allowed = useStore((s) => s.teamsAllowed);
   const selected = useStore((s) => s.gauSeat);
-  const pick = (v: SeatView) => useStore.setState({ gauSeat: seatKey(v.team.id, v.seat.name) });
+  const pick = (v: SeatView) => {
+    useStore.setState({ gauSeat: seatKey(v.team.id, v.seat.name) });
+    showSeatPane();
+  };
   return (
     <div className="flex flex-col gap-2 rounded border border-[var(--line)] p-2" data-testid={`team-${team.id}`}>
       <div className="flex items-center gap-2">
@@ -393,37 +382,32 @@ export function TeamBoard() {
   const teams = useTeams();
   const which = useStore((s) => s.gauTeam);
   const shown = which ? teams.filter((t) => t.id === which) : teams;
-  if (teams.length === 0) {
-    return (
-      <Empty hint="define one in the Teams window (Alt+Shift+g), then boot it — its seats appear here, in the five lanes">
-        no teams yet
-      </Empty>
-    );
-  }
+  // Ask for the teams, the seats and the sends when the board comes up: a
+  // reconnect is a new daemon's worth of them, and the board must not open
+  // on a stale set.
+  const send = useStore((s) => s.send);
+  useEffect(() => {
+    send({ cmd: "team_list" });
+  }, [send]);
   return (
-    <div className="flex h-full flex-col gap-2 overflow-y-auto p-2">
-      {shown.map((t) => (
-        <TeamSection key={t.id} team={t} />
-      ))}
+    <div className="flex h-full min-h-0 flex-col" data-testid="team-board">
+      <BoardHeader />
+      {teams.length === 0 ? (
+        <Empty hint="define one in the Teams window (Alt+Shift+g), then boot it — its seats appear here, in the five lanes">
+          no teams yet
+        </Empty>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+          {shown.map((t) => (
+            <TeamSection key={t.id} team={t} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 // -- The seat pane. -----------------------------------------------------------
-
-/** Open, or raise, the terminal pane for a seat, beside whatever is in front. */
-let modeDock: DockviewApi | null = null;
-export function attachSeatTerminal(key: string, title: string): void {
-  if (!modeDock) return;
-  const id = termPaneId(key);
-  const existing = modeDock.getPanel(id);
-  if (existing) {
-    existing.api.setActive();
-    return;
-  }
-  const active = modeDock.activeGroup;
-  modeDock.addPanel({ id, component: "term", title, position: active ? { referenceGroup: active, direction: "right" } : undefined });
-}
 
 export function SeatDetail() {
   const key = useStore((s) => s.gauSeat);
@@ -499,7 +483,7 @@ export function SeatDetail() {
           size="sm"
           variant="outline"
           disabled={!view.session?.tmux_target && !l}
-          title="a terminal pane in this mode, attached to the seat's own tmux pane — typing goes to the seat"
+          title="a terminal pane beside this one, attached to the seat's own tmux pane — typing goes to the seat"
           onClick={() => attachSeatTerminal(key!, `${team.name}/${view.seat.name}`)}
         >
           <SquareTerminal size={12} /> Attach terminal
@@ -508,10 +492,10 @@ export function SeatDetail() {
           size="sm"
           variant="outline"
           disabled={!view.session}
-          title="select this seat's session in the window underneath — its transcript, diff and the Agent pane"
+          title="select this seat's session — the transcript, the diff and the Agent pane follow it"
           onClick={() => view.session && select(view.session.id)}
         >
-          <Anchor size={12} /> Select underneath
+          <Anchor size={12} /> Select session
         </Button>
         <Button
           size="sm"
@@ -583,54 +567,48 @@ export function SeatDetail() {
 
 // -- A seat's terminal pane. --------------------------------------------------
 
-function SeatTerminal(props: IDockviewPanelProps) {
-  const key = termOfPane(props.api.id);
+/**
+ * One seat's terminal: a `tmux attach` of its own, like an Agent pane. The
+ * seat is in the pane's id (`seat-term:<team>/<seat>`), so a layout restored
+ * next week names it still; a seat that is gone says so in the pane rather
+ * than vanishing, because a tab that vanishes is one you have to recall.
+ */
+export function SeatTerminal() {
+  const id = usePaneId() ?? "";
+  const key = termOfPane(id);
   const parsed = key ? parseSeatKey(key) : null;
   const launch = useStore((s) => (parsed ? s.seatLaunches.find((l) => l.team_id === parsed.teamId && l.seat === parsed.seat) : undefined));
   const daemon = useStore((s) => s.daemon);
   const machineId = useStore((s) => s.machineId);
   const reach = useMemo(() => reachFor(daemon, machineId), [daemon, machineId]);
   const command = useMemo(() => (launch && reach ? spawnAs(reach, attachArgs(launch.tmux_target)) : null), [launch, reach]);
-  const [visible, setVisible] = useState(props.api.isVisible);
-  useEffect(() => {
-    const d = props.api.onDidVisibilityChange((e) => setVisible(e.isVisible));
-    return () => d.dispose();
-  }, [props.api]);
   return (
-    <PaneScope id={props.api.id} visible={visible}>
-      <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
-        <div className="min-h-0 flex-1">
-          <TerminalView
-            id={`${props.api.id}`}
-            command={command}
-            refusal={
-              !launch ? (
-                <div className="max-w-md space-y-2">
-                  <div className="text-sm font-semibold text-[var(--text-strong)]">This seat is not running.</div>
-                  <p className="text-xs text-[var(--dim)]">Its team was stopped, or the daemon forgot it. Boot the team in the Teams window and attach again.</p>
-                </div>
-              ) : !reach ? (
-                <div className="max-w-md space-y-2">
-                  <div className="text-sm font-semibold text-[var(--text-strong)]">That daemon is on another machine, and has not been told how to reach it.</div>
-                </div>
-              ) : null
-            }
-          />
-        </div>
+    <div className="flex h-full min-h-0 flex-col bg-[var(--bg-panel)]">
+      <div className="min-h-0 flex-1">
+        <TerminalView
+          id={id}
+          command={command}
+          refusal={
+            !launch ? (
+              <div className="max-w-md space-y-2">
+                <div className="text-sm font-semibold text-[var(--text-strong)]">This seat is not running.</div>
+                <p className="text-xs text-[var(--dim)]">Its team was stopped, or the daemon forgot it. Boot the team in the Teams window and attach again.</p>
+              </div>
+            ) : !reach ? (
+              <div className="max-w-md space-y-2">
+                <div className="text-sm font-semibold text-[var(--text-strong)]">That daemon is on another machine, and has not been told how to reach it.</div>
+              </div>
+            ) : null
+          }
+        />
       </div>
-    </PaneScope>
+    </div>
   );
 }
 
-const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
-  board: () => <TeamBoard />,
-  seat: () => <SeatDetail />,
-  term: SeatTerminal,
-};
+// -- The board's header: the teams, their counters, the ways out. -------------
 
-// -- The mode. ----------------------------------------------------------------
-
-function ModeHeader({ onClose }: { onClose: () => void }) {
+function BoardHeader() {
   const teams = useTeams();
   const which = useStore((s) => s.gauTeam);
   const launches = useStore((s) => s.seatLaunches);
@@ -685,100 +663,7 @@ function ModeHeader({ onClose }: { onClose: () => void }) {
         <IconButton title="the Teams window — define, boot and stop a team (Alt+Shift+g)" onClick={() => showDialog("teams")}>
           <Users size={13} />
         </IconButton>
-        <Dim className="text-2xs">Esc to leave · the window underneath is untouched</Dim>
-        <IconButton title="leave the mode (Esc)" onClick={onClose}>
-          <X size={13} />
-        </IconButton>
       </span>
-    </div>
-  );
-}
-
-export function GauGeungMode() {
-  const open = useStore((s) => s.showGauGeung);
-  const machineId = useStore((s) => s.machineId);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const close = () => useStore.setState({ showGauGeung: false });
-
-  useEffect(() => {
-    if (!open) return;
-    rootRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
-
-  // Ask for the teams, the seats and the sends on open: a reconnect is a
-  // new daemon's worth of them, and the mode must not open on a stale set.
-  const send = useStore((s) => s.send);
-  useEffect(() => {
-    if (open) send({ cmd: "team_list" });
-  }, [open, send]);
-
-  const onReady = (e: DockviewReadyEvent) => {
-    const api = e.api;
-    modeDock = api;
-    let restored = false;
-    try {
-      const saved = localStorage.getItem(teamLayoutKey(machineId));
-      if (saved) {
-        api.fromJSON(JSON.parse(saved));
-        restored = true;
-      }
-    } catch {
-      api.clear();
-    }
-    // A terminal pane names a seat that may have gone; it is kept, and says
-    // so when shown. The board and the seat pane are always present.
-    if (!api.getPanel(BOARD_PANE)) {
-      api.addPanel({ id: BOARD_PANE, component: "board", title: "Team board" });
-    }
-    if (!api.getPanel("seat")) {
-      api.addPanel({ id: "seat", component: "seat", title: "Seat", position: { referenceGroup: api.getPanel(BOARD_PANE)!.group, direction: "right" } });
-    }
-    if (!restored) {
-      // The board gets the room: the seat pane is a column beside it.
-      const seatGroup = api.getPanel("seat")?.group;
-      if (seatGroup) seatGroup.api.setSize({ width: 380 });
-    }
-    const save = api.onDidLayoutChange(() => {
-      try {
-        localStorage.setItem(teamLayoutKey(machineId), JSON.stringify(api.toJSON()));
-      } catch {
-        /* a full or absent storage loses nothing but the arrangement */
-      }
-    });
-    api.onDidActivePanelChange(() => {
-      const active = api.activePanel;
-      if (active && seatPaneId("") !== active.id) {
-        /* nothing: selection follows the picks, not the tabs */
-      }
-    });
-    return () => {
-      save.dispose();
-      modeDock = null;
-    };
-  };
-
-  if (!open) return null;
-  return (
-    <div
-      ref={rootRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-label="Gau Geung"
-      className="absolute inset-0 z-40 flex flex-col bg-[var(--bg)] outline-none"
-      {...{ [TEAM_TILES_ATTR]: "" }}
-    >
-      <ModeHeader onClose={close} />
-      <div className="min-h-0 flex-1">
-        <DockviewReact components={components} onReady={onReady} disableFloatingGroups className="dockview-theme-mogeung h-full" />
-      </div>
     </div>
   );
 }

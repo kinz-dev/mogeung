@@ -99,7 +99,7 @@
     <a href="#define">Define a team</a>
     <a href="#boot">Boot and stop</a>
     <div class="group">Live</div>
-    <a href="#mode">The mode</a>
+    <a href="#mode">The board</a>
     <a href="#lanes">The five lanes</a>
     <a href="#seatpane">A seat's pane</a>
     <a href="#terminals">Terminals</a>
@@ -188,8 +188,8 @@
     <p><strong>Stop team</strong> ends every seat's process and forgets the records. The worktrees stay. <strong>remove worktree</strong> is a separate click on a stopped seat, and it refuses a dirty tree and tells you what is in it; the branch stays either way.</p>
     <p>A hooked seat's status line shows what the daemon knows: <code>port/reviewer · a seat of mogeung's · hops 1/3 · 4/60 this hour</code>.</p>
 
-    <h2 id="mode">The mode</h2>
-    <p><kbd>Alt</kbd>+<kbd>G</kbd> (<kbd>⌥</kbd><kbd>G</kbd> on a Mac), or the network button in the top bar, opens Gau Geung over the window. <kbd>Esc</kbd> leaves. The layout underneath is untouched, and nothing is fetched: the mode is a different reading of what the window already holds. Across the top, a tab per team and one for all of them, with each team's counters and whether it is paused. Inside is a tile tree of its own: a <strong>board</strong>, a <strong>seat pane</strong> that follows whatever you pick, and a <strong>terminal pane</strong> for every seat you attach. Drag, split and tab them as you like; the arrangement is saved per machine.</p>
+    <h2 id="mode">The board</h2>
+    <p><kbd>Alt</kbd>+<kbd>G</kbd> (<kbd>⌥</kbd><kbd>G</kbd> on a Mac), or the network button in the top bar, opens the <strong>team board</strong> as a pane in the main tile tree, beside whatever you have open; pressed again while the board is in front, it closes it. The Attention list, the rail and <kbd>Alt</kbd>+<kbd>A</kbd>'s chat stay where they are. Nothing is fetched: the board is a different reading of what the window already holds. Across its top, a tab per team and one for all of them, with each team's counters and whether it is paused. Picking a seat opens the <strong>seat pane</strong> beside the board; <strong>Attach terminal</strong> adds a <strong>terminal pane</strong> for that seat. All three are ordinary panes: drag, split, tab and pop them out as you do any other, and they are saved with the rest of your layout.</p>
     <p>The board shows, per team: the pulse, the topology, and the policy strip.</p>
 
     <h2 id="lanes">The five lanes</h2>
@@ -290,7 +290,7 @@ echo "done" | mogeung-send planner</code></pre>
     <h2 id="keys">Keys</h2>
     <div class="tablewrap"><table>
       <tr><th>key</th><th>does</th></tr>
-      <tr><td><kbd>Alt</kbd>+<kbd>G</kbd> · <kbd>⌥</kbd><kbd>G</kbd></td><td>open or close the mode; <kbd>Esc</kbd> closes</td></tr>
+      <tr><td><kbd>Alt</kbd>+<kbd>G</kbd> · <kbd>⌥</kbd><kbd>G</kbd></td><td>raise the team board, or close it when it is in front</td></tr>
       <tr><td><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> · <kbd>⌥</kbd><kbd>⇧</kbd><kbd>G</kbd></td><td>the Teams window: define, boot, stop, import, export</td></tr>
       <tr><td><kbd>Alt</kbd>+<kbd>E</kbd> · <kbd>⌘</kbd><kbd>G</kbd></td><td>the Agent pane (moved from <kbd>Alt</kbd>+<kbd>G</kbd> when the mode took it)</td></tr>
       <tr><td><kbd>Alt</kbd>+<kbd>W</kbd></td><td>the wall, every live session as a tile</td></tr>

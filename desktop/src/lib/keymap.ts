@@ -21,7 +21,7 @@ import { cursorIn, markFor, setMnemonic, MNEMONICS } from "@/lib/marks";
 import { editorIn } from "@/lib/editors";
 import { openFile } from "@/lib/explorer";
 import { exportText } from "@/lib/tauri";
-import { addAgentPane, focusPane, movePane, parseFilePaneId, resetLayout, showFilePane } from "@/lib/panes";
+import { addAgentPane, focusPane, movePane, parseFilePaneId, resetLayout, showFilePane, toggleTeamBoard } from "@/lib/panes";
 import { closeFile } from "@/lib/explorer";
 import { fullPath } from "@/ui/PaneChrome";
 import { writeClipboard } from "@/lib/clipboard";
@@ -800,15 +800,13 @@ export const ACTIONS: Action[] = [
   },
   {
     id: "gaugeung",
-    label: "Gau Geung — the team mode",
+    label: "Gau Geung — the team board",
     group: "Windows",
-    // The bare `Alt+g`, kept for this since `R-P3`. One key both ways and
-    // `Esc`, like the wall (`R-B50`): a mode on a chord, never a home.
+    // The bare `Alt+g`, kept for this since `R-P3`. It opened a mode over the
+    // window until `R-J132`; the board is a pane in the tile tree now, and
+    // the chord raises it, or closes it when it is the pane in front.
     keys: ["Alt+g"],
-    run: () => {
-      const { showGauGeung } = useStore.getState();
-      useStore.setState({ showGauGeung: !showGauGeung });
-    },
+    run: () => toggleTeamBoard(),
   },
   {
     id: "teams",

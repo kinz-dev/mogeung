@@ -78,24 +78,37 @@ seat never passes for a session you started by hand. `teamSends` is the
 third cache of the family (`R-P6`): every team's counters and send log,
 replaced whole on `sends`, shown in the Teams window and in the mode.
 
-**Gau Geung, the team mode** (`R-P7`, `ui/GauGeungMode.tsx`, `lib/teamMode.ts`)
-is the wall's shape with a tile tree inside: a mode on the bare `Alt+g`
-(`Alt+KeyG` on a Mac, where `⌥g` composes `©`), `Esc` leaves, the layout
-underneath is untouched, and nothing is fetched — teams, launches, sessions,
-the queue and the send logs are read as the store already holds them. It
-took the chord from the Agent pane, which moved to `Alt+e` (the Mac keeps
-`⌘G`). Inside is a second dockview, as the terminal panel is: a **board**,
-a **seat pane** that follows the pick until you hold it, and a **terminal
-pane per seat** you attach, each a `tmux attach` of its own like the Agent
-pane; the arrangement is saved per machine under `mogeung.teamLayout:`, and
-the daemon's grouped tmux layout (`R-P8`) is for a terminal and is not
-mirrored — the header offers `tmux attach -t geung-<team>` to copy, read off
-the launch record's `team_session`. The board shows OpenRig's **five lanes** for seats in a team —
+**Gau Geung, the team board** (`R-P7`, `ui/GauGeungMode.tsx`, `lib/teamMode.ts`;
+panes since `R-J132`) is three kinds of pane in the main tile tree: the
+**board** (`team-board`, one), the **seat pane** (`team-seat`, one, following
+the pick), and a **terminal pane per seat** you attach
+(`seat-term:<team>/<seat>`, a `tmux attach` of its own like the Agent pane,
+scaled by its font). The bare `Alt+g` (`Alt+KeyG` on a Mac, where `⌥g`
+composes `©`) raises the board, or closes it when it is the pane in front;
+the top bar's button does the same and is lit from the dock's own add and
+remove events (`teamBoardOpen`), so a board closed from its tab reads as
+closed. It took the chord from the Agent pane, which moved to `Alt+e` (the
+Mac keeps `⌘G`). `R-P7` had built this as a mode over the whole window with
+a second dockview and `Esc` to leave, the wall's shape; the first real team
+(2026-10-11) showed the Attention list, the rail and `Alt+a`'s chat all
+underneath it and its panels unable to dock with anything else, and the
+owner asked for *"a normal UI"* — so the second dockview, its per-machine
+layout and the overlay went, and the three panes dock, split, tab and pop
+out as every other pane does, in the one saved layout. A pick on the board
+opens the seat pane beside it when it is not there and raises it when it is a
+background tab (`showSeatPane`); an attach adds the terminal pane beside
+whatever is in front, keyed by the seat so a second attach raises the first
+(`attachSeatTerminal`). Nothing is fetched beyond `team_list` when the board
+mounts — teams, launches, sessions, the queue and the send logs are read as
+the store already holds them. The daemon's grouped tmux layout (`R-P8`) is
+for a terminal and is not mirrored — the board's header offers
+`tmux attach -t geung-<team>` to copy, read off the launch record's
+`team_session`. The board shows OpenRig's **five lanes** for seats in a team —
 needs you, parked with baton, blocked on agents, now, just finished — each
 card carrying mogeung's badge inside, and `lib/teamMode.ts` reads the two
 idle lanes off the send log: a seat idle after a message arrived holds the
 baton, one idle after sending waits on the seat it told; both rank
-`WAITING` on the queue, and the lane is what the mode knows that the queue
+`WAITING` on the queue, and the lane is what the board knows that the queue
 does not. Below it the **topology** is a graph and a table of the same
 seats, together and with no toggle: an edge is the last send between two
 seats, held edges drawn as waiting for you with the hop on them; a row names

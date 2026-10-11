@@ -1,4 +1,5 @@
 import type { DockviewApi, DockviewGroupPanel } from "dockview";
+import { BOARD_PANE, SEAT_PANE, TERM_KIND, termPaneId } from "@/lib/teamMode";
 import { useStore } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { pickNeighbour, type Box, type Direction } from "@/lib/spatial";
@@ -564,6 +565,71 @@ export function landIn(group: DockviewGroupPanel): void {
  * Holds go too. A layout reset that left three panes moored to sessions you
  * cannot see would be a reset that did not reset.
  */
+/**
+ * The team board, on `Alt+g` and the top bar's button. `R-J132`.
+ *
+ * A toggle, as the mode's chord was: the board comes up where the pane
+ * tree puts a new pane and is raised when it is already there; pressed
+ * while the board is the active pane, it closes. The flag the top bar lights
+ * is kept by the dock's own add and remove events (see `App.tsx`), not set
+ * here, so a board closed from its tab reads as closed too.
+ */
+export function toggleTeamBoard(): void {
+  if (!dock) return;
+  const existing = dock.getPanel(BOARD_PANE);
+  if (existing && dock.activePanel?.id === BOARD_PANE) {
+    existing.api.close();
+    return;
+  }
+  focusPane(dock, BOARD_PANE, "Team board");
+}
+
+export function showTeamBoard(): void {
+  focusPane(dock, BOARD_PANE, "Team board");
+}
+
+/**
+ * The seat pane, beside the board. Opened by a pick when it is not there,
+ * raised when it is a background tab, and left alone when it is already
+ * showing — a pick is made on the board, and stealing the focus from under
+ * the click would make the next pick a two-step.
+ */
+export function showSeatPane(): void {
+  if (!dock) return;
+  const existing = dock.getPanel(SEAT_PANE);
+  if (existing) {
+    if (!existing.api.isVisible) existing.api.setActive();
+    return;
+  }
+  const board = dock.getPanel(BOARD_PANE);
+  dock.addPanel({
+    id: SEAT_PANE,
+    component: SEAT_PANE,
+    title: "Seat",
+    ...(board ? { position: { referenceGroup: board.group, direction: "right" } } : {}),
+  });
+  // The board keeps the room; the seat pane is a column beside it.
+  const group = dock.getPanel(SEAT_PANE)?.group;
+  if (board && group && group !== board.group) group.api.setSize({ width: 380 });
+}
+
+/**
+ * A terminal pane for one seat, beside whatever is in front: a `tmux attach`
+ * of its own, like an Agent pane, keyed by the seat so a second attach
+ * raises the first.
+ */
+export function attachSeatTerminal(key: string, title: string): void {
+  if (!dock) return;
+  const id = termPaneId(key);
+  const existing = dock.getPanel(id);
+  if (existing) {
+    existing.api.setActive();
+    return;
+  }
+  const active = dock.activeGroup;
+  dock.addPanel({ id, component: TERM_KIND, title, position: active ? { referenceGroup: active, direction: "right" } : undefined });
+}
+
 export function resetLayout(): void {
   if (!dock) return;
   useStore.getState().setScoped({ paneHold: {} });

@@ -267,7 +267,11 @@ In the order the rows are numbered, and nothing past `R-P2` before `A51` and
    the five lanes read off the send log, the graph and the table of the
    same seats, the policy strip with the switch and the held sends, tabs for
    one team or all; `lib/teamMode.ts` is the arithmetic. The Agent pane
-   moved to `Alt+e`. Not yet used on a real team. **`R-P8` built the same
+   moved to `Alt+e`. **Reshaped 2026-10-11 by the first use (`R-J132`)**:
+   the mode over the window became three kinds of pane in the main tile
+   tree — the board, the seat pane, a terminal per seat — so the Attention
+   list, the rail and `Alt+a` stay in view and everything docks with
+   everything; `Alt+g` raises the board or closes it. **`R-P8` built the same
    day** (⏳): `seat::layout_team` builds `geung-<team>` around the seats'
    own sessions after a boot — a tiled window of nested clients, every
    seat's window linked in, the status line on — and a stop takes it down
@@ -395,13 +399,15 @@ seat's own last sends). Docs: `architecture.md`, `wire-protocol.md`,
 `R-P7`, built: `desktop/src/lib/teamMode.ts` (the lanes — `laneFor` reads
 *parked* and *blocked* off the send log — `seatViews`, `sessionOf`,
 `sourceOf`, `edges`, `ring`, the pane ids and the layout key, `teamTab`),
-`ui/GauGeungMode.tsx` (the mode: header with team tabs and counters, the
-second dockview, `TeamBoard` — `Pulse`, `Graph`, `Table`, `PolicyStrip` —
-`SeatDetail`, `SeatTerminal`, `attachSeatTerminal`), `store/index.ts`
-(`showGauGeung`, `gauTeam`, `gauSeat`), `lib/keymap.ts` (`gaugeung` on
-`Alt+g` / `Alt+KeyG`; the Agent pane to `Alt+e`), `App.tsx`, `TopBar.tsx`
-(the Network button); tests `lib/teamMode.test.ts`,
-`ui/GauGeungMode.test.tsx` through the real dockview. Docs: `the-window.md`.
+`ui/GauGeungMode.tsx` (the panes: `TeamBoard` — its header with team tabs
+and counters, `Pulse`, `Graph`, `Table`, `PolicyStrip` — `SeatDetail`,
+`SeatTerminal`), `lib/panes.ts` (`toggleTeamBoard`, `showSeatPane`,
+`attachSeatTerminal`, since `R-J132`), `store/index.ts` (`teamBoardOpen`,
+`gauTeam`, `gauSeat`), `lib/keymap.ts` (`gaugeung` on `Alt+g` / `Alt+KeyG`;
+the Agent pane to `Alt+e`), `App.tsx` (the three pane kinds registered,
+`teamBoardOpen` kept from the dock's events), `TopBar.tsx` (the Network
+button); tests `lib/teamMode.test.ts`, `ui/GauGeungMode.test.tsx`, the last
+case through the real main dock. Docs: `the-window.md`.
 
 `R-P8`, built: `crates/mogeungd/src/seat.rs` (`team_session_name`,
 `nested_attach`, `team_layout_argv`, `layout_team`, `unlayout_team`; the
@@ -720,3 +726,20 @@ gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
   The window also says beforehand what Boot would start, and is grey with
   *every seat is running* when nothing would. On the same first look, the
   Attention list gained its *Team* section (`R-J131`, pillar J).
+- 2026-10-11, `R-J132` (pillar J), reversing one line of `R-P7`'s design. *A
+  mode on a chord, never a home* was the wall's reason applied here: the
+  queue is the thesis, and a view you can leave up argues with it. The first
+  real team argued back. With the mode open the Attention list, the rail and
+  `Alt+a`'s chat were all underneath it, so the one view built to watch a
+  team hid the one list the product is about; and its panels could be
+  arranged among themselves but never beside a file, a diff or an Agent
+  pane. *"Gao geung mode should allow resize, move, dockable panel. The whole
+  UI should be free like a normal UI."* So the board, the seat pane and a
+  seat's terminal are panes of the main tile tree, in the one saved layout,
+  and the second dockview, its per-machine layout key and the overlay went.
+  What stayed: the chord, now a raise-or-close of one pane; the tabs for one
+  team or all; the five lanes, the topology and the policy strip unchanged;
+  a seat's terminal as its own pane; nothing fetched but `team_list` when the
+  board mounts. The thesis holds a different way — the board is a pane
+  among the panes that describe the queue's selection, not a mode above
+  them.

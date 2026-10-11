@@ -1,27 +1,62 @@
 /**
- * Gau Geung, the team mode. `R-P7`.
+ * Gau Geung, the team board. `R-P7`; panes in the main tile tree since `R-J132`.
  *
- * Pinned: it is a mode — nothing until opened, `Esc` leaves, and the window
- * underneath is not touched; the five lanes hold the team's seats with
- * mogeung's badge inside each card; the topology table names every seat's
- * state and its source; the pause switch and a held send's release and drop
- * go to the daemon as the Teams window's do; picking a seat fills the seat
- * pane; and the tabs show one team or all of them.
- *
- * Rendered through the real dockview, as the terminal panel's tests are,
- * because the tile tree is the design decision (a pane, not a drawer).
+ * Pinned: the board asks for the teams when it mounts; the five lanes hold
+ * the team's seats with mogeung's badge inside each card; the topology table
+ * names every seat's state and its source; the pause switch and a held send's
+ * release and drop go to the daemon as the Teams window's do; picking a seat
+ * fills the seat pane; the tabs show one team or all of them; and — the
+ * `R-J132` half — the board, the seat pane and a seat's terminal are panes of
+ * the **main** dock, so `Alt+g` raises or closes the board, a pick opens the
+ * seat pane beside it, and an attach adds a terminal pane, with the Attention
+ * list and the rail still on screen and the selection untouched.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useStore } from "@/store";
 import type { AttentionItem, ClientMsg, SeatLaunch, Session, Team, TeamSends } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
-import { GauGeungMode } from "./GauGeungMode";
+import { getDock, toggleTeamBoard } from "@/lib/panes";
+import { BOARD_PANE, SEAT_PANE } from "@/lib/teamMode";
+import { SeatDetail, TeamBoard } from "./GauGeungMode";
 
 vi.mock("@/ui/Terminal", () => ({
   TerminalView: ({ id }: { id: string }) => <div data-testid={`terminal-${id}`} />,
 }));
+
+class FakeSocket {
+  static OPEN = 1;
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: ((e: CloseEvent) => void) | null = null;
+  constructor(public url: string) {}
+  send() {}
+  close() {}
+}
+
+beforeAll(() => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  // The same stubs the queue tests explain: dockview and the virtualised
+  // list measure the DOM, and in jsdom nothing has a size.
+  class SizedResizeObserver {
+    constructor(private cb: ResizeObserverCallback) {}
+    observe(el: Element) {
+      this.cb([{ target: el, contentRect: { width: 1200, height: 800 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", SizedResizeObserver);
+  for (const prop of ["offsetHeight", "clientHeight"]) {
+    Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get: () => 800 });
+  }
+  for (const prop of ["offsetWidth", "clientWidth"]) {
+    Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get: () => 1200 });
+  }
+});
 
 const sent: ClientMsg[] = [];
 
@@ -55,6 +90,15 @@ const launch = (seat: string, over: Partial<SeatLaunch> = {}): SeatLaunch => ({
 const session = (id: string, seat: string, over: Partial<Session> = {}): Session =>
   ({
     id,
+    title: null,
+    name: null,
+    cwd: `/w/${seat}`,
+    repo_root: `/w/${seat}`,
+    open_tools: [],
+    touched_files: [],
+    collisions: [],
+    verify_runs: [],
+    claims: [],
     alive: true,
     live_status: "busy",
     last_event_at: new Date().toISOString(),
@@ -87,9 +131,8 @@ const sends = (over: Partial<TeamSends> = {}): TeamSends => ({
   ...over,
 });
 
-function board() {
+function seed() {
   useStore.setState({
-    showGauGeung: true,
     gauTeam: null,
     gauSeat: null,
     teams: [team()],
@@ -104,7 +147,17 @@ function board() {
     selected: null,
     send: (m) => void sent.push(m),
   });
-  render(<GauGeungMode />);
+}
+
+/** The board on its own, as the dock renders it in a pane. */
+function board() {
+  seed();
+  render(
+    <>
+      <TeamBoard />
+      <SeatDetail />
+    </>,
+  );
 }
 
 beforeEach(() => {
@@ -112,16 +165,17 @@ beforeEach(() => {
   sent.length = 0;
 });
 
-describe("the Gau Geung mode", () => {
-  it("shows nothing until opened, and asks for the teams when it opens", () => {
-    useStore.setState({ showGauGeung: false, send: (m) => void sent.push(m) });
-    render(<GauGeungMode />);
-    expect(screen.queryByRole("dialog", { name: "Gau Geung" })).toBeNull();
-    expect(sent).toEqual([]);
-    cleanup();
+afterEach(() => {
+  cleanup();
+  useStore.setState({ sessions: {}, queue: [], teams: [], seatLaunches: [], teamSends: [], gauSeat: null, gauTeam: null, selected: null });
+  localStorage.clear();
+});
+
+describe("the Gau Geung board", () => {
+  it("asks for the teams when it mounts", () => {
     board();
-    expect(screen.getByRole("dialog", { name: "Gau Geung" })).toBeInTheDocument();
     expect(sent).toContainEqual({ cmd: "team_list" });
+    expect(screen.getByTestId("team-board")).toBeInTheDocument();
   });
 
   it("puts the seats in the five lanes with mogeung's badge inside each card", async () => {
@@ -182,7 +236,7 @@ describe("the Gau Geung mode", () => {
     expect(screen.getByTestId("tab-t1").textContent).toContain("paused");
   });
 
-  it("fills the seat pane with the picked seat, and attaches its terminal as a pane", async () => {
+  it("fills the seat pane with the picked seat", async () => {
     board();
     await screen.findByTestId("pulse");
     expect(screen.getByText("no seat picked")).toBeInTheDocument();
@@ -207,8 +261,6 @@ describe("the Gau Geung mode", () => {
     expect(sc.textContent).toContain("shape: permission menu");
     expect(sc.textContent).toContain("Do you want to proceed?");
     expect(sc.textContent).toContain("never answered by mogeung");
-    fireEvent.click(screen.getByText("Attach terminal"));
-    expect(await screen.findByTestId("terminal-term:t1/planner")).toBeInTheDocument();
     // The row picks too, and the pane follows.
     fireEvent.click(screen.getByTestId("row-builder"));
     expect(useStore.getState().gauSeat).toBe("t1/builder");
@@ -255,13 +307,47 @@ describe("the Gau Geung mode", () => {
     expect(sent).toContainEqual({ cmd: "seat_restart", team_id: "t1", seat: "builder" });
   });
 
-  it("leaves on Escape without touching the selection underneath", async () => {
-    board();
-    useStore.setState({ selected: "elsewhere" });
+  /** `R-J132`. The board is a pane of the main dock, raised or closed by the
+   *  chord's action; a pick opens the seat pane beside it; an attach adds a
+   *  terminal pane; the Attention list stays, and so does the selection. */
+  it("lives in the main tile tree: the chord raises or closes it, a pick opens the seat pane, an attach adds a terminal", async () => {
+    seed();
+    useStore.setState({ selected: "elsewhere", firstSnapshot: true });
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const dock = getDock()!;
+    expect(dock).toBeTruthy();
+    expect(dock.getPanel(BOARD_PANE)).toBeUndefined();
+    expect(useStore.getState().teamBoardOpen).toBe(false);
+
+    act(() => toggleTeamBoard());
+    expect(dock.getPanel(BOARD_PANE)).toBeDefined();
+    expect(useStore.getState().teamBoardOpen).toBe(true);
     await screen.findByTestId("pulse");
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(useStore.getState().showGauGeung).toBe(false);
+    // Beside it, not under it: the Attention list is still on screen.
+    expect(screen.getByRole("listbox", { name: "Attention" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("card-planner"));
+    expect(dock.getPanel(SEAT_PANE)).toBeDefined();
+    expect((await screen.findByTestId("seat-detail")).textContent).toContain("planner");
     expect(useStore.getState().selected).toBe("elsewhere");
+
+    fireEvent.click(screen.getByText("Attach terminal"));
+    expect(dock.getPanel("seat-term:t1/planner")).toBeDefined();
+    expect(await screen.findByTestId("terminal-seat-term:t1/planner")).toBeInTheDocument();
+    // A second attach raises the one pane rather than adding another.
+    fireEvent.click(screen.getByText("Attach terminal"));
+    expect(dock.panels.filter((p) => p.id.startsWith("seat-term:"))).toHaveLength(1);
+
+    // The terminal is in front: the chord raises the board, then closes it.
+    act(() => toggleTeamBoard());
+    expect(dock.activePanel?.id).toBe(BOARD_PANE);
+    expect(useStore.getState().teamBoardOpen).toBe(true);
+    act(() => toggleTeamBoard());
+    expect(dock.getPanel(BOARD_PANE)).toBeUndefined();
+    expect(useStore.getState().teamBoardOpen).toBe(false);
+    // The seat pane and the terminal are panes of their own and stay.
+    expect(dock.getPanel(SEAT_PANE)).toBeDefined();
   });
 
   it("shows one team or all of them from the tabs", async () => {

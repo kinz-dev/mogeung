@@ -47,7 +47,8 @@ import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
-import { GauGeungMode } from "@/ui/GauGeungMode";
+import { SeatDetail, SeatTerminal, TeamBoard } from "@/ui/GauGeungMode";
+import { BOARD_PANE, SEAT_PANE, TERM_KIND } from "@/lib/teamMode";
 import { FileDrop } from "@/ui/FileDrop";
 import { GitOpsPopup } from "@/ui/GitOpsPopup";
 import { BranchesPopup } from "@/ui/BranchesPopup";
@@ -168,6 +169,13 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // One file of one commit, out of the Git tool window. `R-D30`. Its id
   // names a sha, so it is stripped on restore with the `file:` panes.
   diff: pane("diff", DiffPane),
+  // Gau Geung, as panes since `R-J132`: the team board and the seat pane are
+  // one each, and a seat's terminal is one per seat, keyed by it in the id
+  // (`seat-term:<team>/<seat>`). A terminal is scaled by its font, as the
+  // Agent pane is; the board and the seat pane take the CSS zoom.
+  [BOARD_PANE]: pane(BOARD_PANE, TeamBoard),
+  [SEAT_PANE]: pane(SEAT_PANE, SeatDetail),
+  [TERM_KIND]: pane(TERM_KIND, SeatTerminal, { scale: false }),
 };
 
 const LAYOUT_KEY = "mogeung.layout";
@@ -323,6 +331,17 @@ export default function App() {
     // lost a pane some other way.
     dropOrphanHolds(event.api);
 
+    // Whether the team board is up, for the top bar's button (`R-J132`):
+    // read off the dock's own events, so a board closed from its tab, or
+    // restored with the layout, reads right without anyone setting a flag.
+    useStore.setState({ teamBoardOpen: !!event.api.getPanel(BOARD_PANE) });
+    event.api.onDidAddPanel((p) => {
+      if (p.id === BOARD_PANE) useStore.setState({ teamBoardOpen: true });
+    });
+    event.api.onDidRemovePanel((p) => {
+      if (p.id === BOARD_PANE) useStore.setState({ teamBoardOpen: false });
+    });
+
     // Clicking into an Agent pane makes its session the current one.
     //
     // Asked for 2026-08-06 with three panes open: everything *else* in the
@@ -408,8 +427,6 @@ export default function App() {
         <LabelWindow />
         <SearchOverlay />
         <WallOverlay />
-        {/* Gau Geung, the team mode, on `Alt+g`. `R-P7`. */}
-        <GauGeungMode />
         {/* A file dragged in from a file manager opens in the Code pane. `R-J94`. */}
         <FileDrop />
         {/* IntelliJ's two git popups, on `Alt+\`` and `7`. `R-D31`, `R-D32`. */}

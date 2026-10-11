@@ -70,25 +70,23 @@ export function parseSeatKey(key: string): { teamId: string; seat: string } | nu
 
 // -- The mode's own tile tree: pane ids. --------------------------------------
 
-export const BOARD_PANE = "board";
-const SEAT_PREFIX = "seat:";
-const TERM_PREFIX = "term:";
+/**
+ * The mode's panes in the **main** tile tree, since `R-J132`: the board and
+ * the seat pane are one each, a terminal pane is one per seat. Their ids are
+ * what the saved layout stores, and `paneKind` reads the part before the
+ * colon as the component to render — so a terminal pane's kind is
+ * `seat-term` and its identity the seat key after it.
+ */
+export const BOARD_PANE = "team-board";
+export const SEAT_PANE = "team-seat";
+export const TERM_KIND = "seat-term";
+const TERM_PREFIX = `${TERM_KIND}:`;
 
-export function seatPaneId(key: string): string {
-  return `${SEAT_PREFIX}${key}`;
-}
 export function termPaneId(key: string): string {
   return `${TERM_PREFIX}${key}`;
 }
-export function seatOfPane(id: string): string | null {
-  return id.startsWith(SEAT_PREFIX) ? id.slice(SEAT_PREFIX.length) : null;
-}
 export function termOfPane(id: string): string | null {
   return id.startsWith(TERM_PREFIX) ? id.slice(TERM_PREFIX.length) : null;
-}
-/** Where a machine's arrangement of the mode is kept, beside the shells'. */
-export function teamLayoutKey(machineId: string | null | undefined): string {
-  return `mogeung.teamLayout:${machineId ?? "unknown"}`;
 }
 
 /**
