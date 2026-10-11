@@ -1,10 +1,11 @@
 /**
- * A dialog in a window of its own. `R-J128`.
+ * A dialog in a window of its own. `R-J128`, and `R-J130` after a first look.
  *
  * Asked 2026-10-11: *"make the new 'New Session' or 'Teams' a real popup
  * dialog that can move around out of the current mogeung application. (But
  * make it a modal popup, only allow one copy)"*. Pinned here, against a fake
- * of what the shell's `window.open` hands back:
+ * of what the shell's `window.open` hands back and of what the shell then
+ * announces about it:
  *
  * - **Where the panel is drawn.** In the window of its own, with the styles
  *   and the theme carried across, and not here — here is a backdrop that
@@ -18,19 +19,30 @@
  *   window — and hands back the size it was left at.
  * - **A window closed from outside** — a browser's own button — closes the
  *   dialog too, so the flag and the window never disagree.
- * - **The zoom keys inside it** step the dialogs' own zoom, applied to that
- *   window's webview, and leave the main window's alone.
+ * - **The zoom keys inside it** step the dialogs' own zoom, a CSS zoom on
+ *   that page, and leave the main window's alone.
  * - **A refusal** keeps the dialog here, as it always was.
  *
- * Every one of these fails against the old `Dialog`, which knew one window.
+ * And after the first look (`R-J130`), the empty window that was left behind:
+ *
+ * - **Closed before its page loads**, the window is still closed through the
+ *   shell, by the label the shell announced — never with the page's own
+ *   `close()`, which leaves an OS window standing.
+ * - **A StrictMode re-run** keeps the one window rather than closing it and
+ *   opening another, which is what `tauri dev` did on every open.
+ * - **A page that never loads** leaves the dialog here and closes the window
+ *   that would have held it.
+ *
+ * Every one of these fails against the old `Dialog`, which knew one window;
+ * the last three fail against the first cut of this one.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { Dialog } from "./Dialog";
 import { onPopoutCloseRequest } from "@/lib/popout";
-import { openDialogWindows, showDialog } from "@/lib/dialogWindow";
+import { listenForDialogWindows, openDialogWindows, showDialog, tuning } from "@/lib/dialogWindow";
 import { useStore } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
 
@@ -41,15 +53,13 @@ vi.mock("@tauri-apps/api/core", () => ({
   }),
 }));
 
-const zoomed: { label: string; factor: number }[] = [];
-vi.mock("@tauri-apps/api/webview", () => ({
-  Webview: {
-    getByLabel: vi.fn(async (label: string) => ({
-      setZoom: async (factor: number) => {
-        zoomed.push({ label, factor });
-      },
-    })),
-  },
+/** What the shell says to the main window, by event name. */
+const heard = new Map<string, (e: { payload: unknown }) => void>();
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, cb: (e: { payload: unknown }) => void) => {
+    heard.set(name, cb);
+    return () => heard.delete(name);
+  }),
 }));
 
 const raised: string[] = [];
@@ -64,13 +74,18 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
   },
 }));
 
-type Fake = Window & { closed: boolean; innerWidth: number; innerHeight: number; focus: ReturnType<typeof vi.fn> };
+type Fake = Window & { closed: boolean; innerWidth: number; innerHeight: number; focus: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
 
 let handed: Fake[] = [];
 let labels = 0;
 
-/** What the shell's `window.open` hands back: a document that loads shortly, and its label. */
-function shellWindow(): Fake {
+/**
+ * What the shell's `window.open` hands back: a window that loads shortly
+ * (unless told not to), told its label by the page — and, the way `popout.rs`
+ * does, announced to the opener with the URL that was asked for.
+ */
+function shellWindow(url: string, { loads = true } = {}): Fake {
+  const label = `popout-${++labels}`;
   const target = Object.assign(new EventTarget(), {
     document: document.implementation.createHTMLDocument("popout"),
     close: vi.fn(),
@@ -78,14 +93,15 @@ function shellWindow(): Fake {
     closed: false,
     innerWidth: 900,
     innerHeight: 650,
-    __MOGEUNG_WINDOW_LABEL__: `popout-${++labels}`,
+    __MOGEUNG_WINDOW_LABEL__: label,
   }) as unknown as Fake;
-  setTimeout(() => target.dispatchEvent(new Event("load")));
+  setTimeout(() => heard.get("popout:opened")?.({ payload: { label, url } }));
+  if (loads) setTimeout(() => target.dispatchEvent(new Event("load")), 2);
   handed.push(target);
   return target;
 }
 
-const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 5))));
+const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 10))));
 
 const SIZE = { width: 1000, height: 700 };
 
@@ -108,19 +124,23 @@ function Host({ onClosed, onResized }: { onClosed: () => void; onResized?: (s: {
   );
 }
 
-beforeEach(() => {
+const zoomOf = (w: Fake) => (w.document.documentElement.style as unknown as { zoom: string }).zoom;
+
+beforeEach(async () => {
   handed = [];
   labels = 0;
   shellCalls.length = 0;
-  zoomed.length = 0;
   raised.length = 0;
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
   useStore.setState({ prefs: defaultPrefs(), showTeams: false, showLaunch: false });
-  vi.spyOn(window, "open").mockImplementation(() => shellWindow());
+  vi.spyOn(window, "open").mockImplementation((url) => shellWindow(String(url)));
+  await listenForDialogWindows();
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // A dialog lets its window go a tick after leaving; give it the tick.
+  await settle();
   vi.restoreAllMocks();
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   document.documentElement.setAttribute("data-theme", "dark");
@@ -137,7 +157,8 @@ describe("a dialog in a window of its own", () => {
     document.head.appendChild(probe);
 
     render(<Host onClosed={() => {}} />);
-    expect(window.open).toHaveBeenCalledWith("/popout.html", "mogeung-teams", "width=1000,height=700");
+    // The URL says which dialog asked, so the shell's announcement can be told from a pop-out's.
+    expect(window.open).toHaveBeenCalledWith("/popout.html?dialog=teams", "mogeung-teams", "width=1000,height=700");
     await settle();
 
     const popup = handed[0];
@@ -173,6 +194,7 @@ describe("a dialog in a window of its own", () => {
     expect(useStore.getState().showTeams).toBe(true);
 
     cleanup();
+    await settle();
     expect(openDialogWindows()).toEqual([]);
     useStore.setState({ showTeams: false });
     showDialog("teams");
@@ -187,6 +209,7 @@ describe("a dialog in a window of its own", () => {
     await settle();
     act(() => void handed[0].dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(closed).toHaveBeenCalledTimes(1);
+    await settle();
 
     const again = vi.fn();
     render(<Host onClosed={again} />);
@@ -207,9 +230,11 @@ describe("a dialog in a window of its own", () => {
     act(() => onPopoutCloseRequest({ groups: [] }, "popout-1"));
     expect(closed).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/window of its own/)).toBeNull();
-    expect(resized).toHaveBeenCalledWith({ width: 1280, height: 820 });
     await settle();
+    expect(resized).toHaveBeenCalledWith({ width: 1280, height: 820 });
     expect(shellCalls).toEqual([{ cmd: "popout_close", args: { label: "popout-1" } }]);
+    // Through the shell, never the page: see the module notes for what that leaves.
+    expect(popup.close).not.toHaveBeenCalled();
   });
 
   it("closes when the window is closed from outside", async () => {
@@ -225,19 +250,21 @@ describe("a dialog in a window of its own", () => {
     useStore.getState().setPrefs({ appZoom: 1.21 });
     render(<Host onClosed={() => {}} />);
     await settle();
-    // Opens at the main window's zoom, having none of its own yet.
-    expect(zoomed).toEqual([{ label: "popout-1", factor: 1.21 }]);
+    // Opens at the main window's zoom, having none of its own yet — as the page's own zoom.
+    expect(zoomOf(handed[0])).toBe("1.21");
 
     act(() => void handed[0].dispatchEvent(new KeyboardEvent("keydown", { key: "=", ctrlKey: true })));
     await settle();
     const { prefs } = useStore.getState();
     expect(prefs.dialogZoom).toBeCloseTo(1.331, 3);
     expect(prefs.appZoom).toBe(1.21);
-    expect(zoomed[1]).toEqual({ label: "popout-1", factor: prefs.dialogZoom });
+    expect(zoomOf(handed[0])).toBe(String(prefs.dialogZoom));
+    expect((document.documentElement.style as unknown as { zoom: string }).zoom).toBeFalsy();
 
     act(() => void handed[0].dispatchEvent(new KeyboardEvent("keydown", { key: "0", ctrlKey: true })));
     await settle();
     expect(useStore.getState().prefs.dialogZoom).toBe(1);
+    expect(zoomOf(handed[0])).toBe("1");
   });
 
   it("stays here when no window can be opened", () => {
@@ -246,5 +273,53 @@ describe("a dialog in a window of its own", () => {
     expect(screen.getByRole("dialog", { name: "Teams" })).toBeInTheDocument();
     expect(screen.getByText("inside")).toBeInTheDocument();
     expect(screen.queryByText(/window of its own/)).toBeNull();
+  });
+});
+
+describe("the window that was left behind (R-J130)", () => {
+  it("closed before its page loads, is still closed through the shell by the label it announced", async () => {
+    vi.spyOn(window, "open").mockImplementation((url) => shellWindow(String(url), { loads: false }));
+    render(<Host onClosed={() => {}} />);
+    // Gone before `load` — and before the shell has even announced the label.
+    cleanup();
+    await settle();
+    expect(shellCalls).toEqual([{ cmd: "popout_close", args: { label: "popout-1" } }]);
+    expect(handed[0].close).not.toHaveBeenCalled();
+    expect(openDialogWindows()).toEqual([]);
+  });
+
+  it("keeps the one window across a StrictMode re-run", async () => {
+    render(
+      <StrictMode>
+        <Host onClosed={() => {}} />
+      </StrictMode>,
+    );
+    await settle();
+    expect(window.open).toHaveBeenCalledTimes(1);
+    expect(shellCalls).toEqual([]);
+    expect(within(handed[0].document.body).queryByText("inside")).not.toBeNull();
+    expect(screen.getByText(/is open in a window of its own/)).toBeInTheDocument();
+
+    cleanup();
+    await settle();
+    expect(shellCalls).toEqual([{ cmd: "popout_close", args: { label: "popout-1" } }]);
+  });
+
+  it("stays here when the page never loads, and closes the window that would have held it", async () => {
+    const was = tuning.loadTimeoutMs;
+    tuning.loadTimeoutMs = 30;
+    try {
+      vi.spyOn(window, "open").mockImplementation((url) => shellWindow(String(url), { loads: false }));
+      render(<Host onClosed={() => {}} />);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(screen.getByRole("dialog", { name: "Teams" })).toBeInTheDocument());
+      expect(screen.getByText("inside")).toBeInTheDocument();
+      await settle();
+      expect(shellCalls).toEqual([{ cmd: "popout_close", args: { label: "popout-1" } }]);
+      expect(handed[0].close).not.toHaveBeenCalled();
+      expect(openDialogWindows()).toEqual([]);
+    } finally {
+      tuning.loadTimeoutMs = was;
+    }
   });
 });

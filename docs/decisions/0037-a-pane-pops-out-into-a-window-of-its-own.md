@@ -255,3 +255,28 @@ routing is reused as it stands; a label with a tenant simply answers it first.
 **Not yet seen in the shipped app**: the sizing `window_features` gives a
 dialog window, the zoom by label, and the close routing for a window that
 holds no group. The client's half is pinned by `Dialog.detached.test.tsx`.
+
+## Amendment — 2026-10-11, later the same day: the opener is told the label
+
+**What changed.** `popout.rs` now announces every window it opens to the
+main window, as `popout:opened` with the label and the URL that was asked
+for. The amendment above left the label with the *page* — an initialization
+script, read by the opener once the page had loaded — and a dialog closed
+before that moment had no label to close by, so it fell back to the page's
+own `window.close()`, which the 2026-09-25 amendment already records as
+leaving an OS window standing, empty. `tauri dev` did it on every open,
+because StrictMode mounts, unmounts and mounts a dialog once. With the
+label announced at creation, `lib/dialogWindow.ts` closes through
+`popout_close` in every case, including a page that never loads. The
+dialogs' zoom is a CSS `zoom` on their page's root rather than the webview's
+by label: nothing of the shell is needed for it, and the reason the main
+window refuses a CSS zoom — the terminal's hit-testing — is not in a dialog.
+
+**What it replaces.** Nothing of the Decision, and nothing of the
+amendments: the page is still told its label, dockview's pop-outs still
+close as the 2026-09-25 amendment says, and the announcement is one more
+sentence the shell speaks, which a pop-out's opener may ignore.
+
+**Still not seen in the shipped app**: the announcement's arrival before a
+close, and `window_features` sizing. The client's half is pinned by
+`Dialog.detached.test.tsx`.

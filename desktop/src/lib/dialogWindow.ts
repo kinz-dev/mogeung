@@ -1,5 +1,5 @@
 /**
- * A dialog in a window of its own. `R-J128`.
+ * A dialog in a window of its own. `R-J128`, and `R-J130` after a first look.
  *
  * Asked 2026-10-11: *"make the new 'New Session' or 'Teams' a real popup
  * dialog that can move around out of the current mogeung application. (But
@@ -11,9 +11,11 @@
  * only its panel is portalled into a document the main window opened with
  * `window.open`, which the shell turns into a real `popout-*` OS window with
  * the system's own title bar ([ADR-0037](../../../docs/decisions/0037-a-pane-pops-out-into-a-window-of-its-own.md),
- * `popout.rs`). So it moves, resizes and zooms on its own, and it costs no
- * second socket and no relay of the teams, the sends or the sessions across a
+ * `popout.rs`). So it moves and resizes on its own, and it costs no second
+ * socket and no relay of the teams, the sends or the sessions across a
  * channel, which is what the arcade's page-of-its-own would have cost here.
+ * It is not a dockview pop-out and cannot be docked back: there is nothing
+ * to dock, the panel is the dialog.
  *
  * **Modal, and one copy.** While the window is open the main window shows a
  * backdrop that names it and brings it forward on a click; the one boolean
@@ -23,9 +25,26 @@
  * registered with `popout.ts`, so the OS window and the dialog's state never
  * disagree about whether it is open.
  *
+ * **Every close goes through the shell, by label** (`R-J130`). The first cut
+ * learnt a window's label from the page once it had loaded, and closed with
+ * the page's own `window.close()` when it had not — which on this shell
+ * destroys the webview and leaves the OS window standing, empty (`popout.rs`
+ * says why). A dialog closed before its page loaded left exactly that, and
+ * `tauri dev` does it on every open: StrictMode mounts, unmounts and mounts
+ * each dialog once. So the shell now announces every window it opens, as
+ * `popout:opened` with the label and the URL asked for; the URL carries which
+ * dialog asked (`?dialog=teams`), and a close waits for the label rather than
+ * falling back to the page. `Dialog` defers its close by a tick as well, so a
+ * StrictMode re-run takes the window over instead of closing and reopening
+ * it. A page that never loads is closed the same way, and the dialog stays
+ * in this window.
+ *
  * **Its own zoom**, because the ask began with the font. The window opens at
  * the main window's zoom and `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it step a
- * zoom the dialogs share, remembered apart from the main window's.
+ * zoom the dialogs share, remembered apart from the main window's. It is a
+ * CSS `zoom` on the page's root — the one `lib/zoom.ts` refuses for the main
+ * window because of the terminal's hit-testing, which no dialog has — so it
+ * needs nothing of the shell and works in a browser's popup too.
  *
  * A browser tab has a real `window.open` and gets a real popup; where there is
  * none — a popup blocker, or jsdom — the dialog stays in this window, as it
@@ -40,8 +59,11 @@ import { useStore } from "@/store";
 /** The same empty, same-origin page a dockview popout opens into. */
 export const PAGE = "/popout.html";
 
-/** How long to wait for the page before giving up and staying in this window. */
-const LOAD_TIMEOUT_MS = 5000;
+/**
+ * How long to wait for the page, and for the shell to say which window it
+ * opened. Tunable so a test can make the wait short.
+ */
+export const tuning = { loadTimeoutMs: 5000, labelTimeoutMs: 5000 };
 
 /** How often an open window is checked for having been closed from outside. */
 const CLOSED_POLL_MS = 400;
@@ -67,13 +89,83 @@ export type DialogHandle = {
   /** Bring the window forward. */
   raise: () => void;
   /**
-   * Close the window. Answers the size it was left at, in logical pixels, or
-   * null when that could not be read — a window already gone.
+   * Let go of the window. It closes when the last holder has let go, and
+   * answers the size it was left at then, in CSS pixels — null when it is
+   * still held by another mount, or already gone.
    */
   close: () => Size | null;
 };
 
-const open = new Map<DialogName, DialogHandle>();
+type Handle = DialogHandle & { uses: number };
+
+const open = new Map<DialogName, Handle>();
+
+// --- which window the shell opened ------------------------------------------------
+
+/** The page a dialog asks for, marked so the shell's announcement can be matched to it. */
+function pageFor(name: DialogName): string {
+  return `${PAGE}?dialog=${name}`;
+}
+
+function nameIn(url: string): DialogName | null {
+  const m = /[?&]dialog=(teams|launch)(?:[&#]|$)/.exec(url);
+  return m ? (m[1] as DialogName) : null;
+}
+
+/** Announced before anyone asked, by the dialog whose page it is. */
+const announced = new Map<DialogName, string>();
+/** Asked before the shell announced. */
+const waiting = new Map<DialogName, (label: string) => void>();
+let listening = false;
+
+/**
+ * Hear the shell say which window each `window.open` became. Registered at
+ * startup, once: an announcement made before anyone listens is lost.
+ */
+export async function listenForDialogWindows(): Promise<void> {
+  if (listening || !isTauri()) return;
+  listening = true;
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<{ label?: unknown; url?: unknown }>("popout:opened", (e) => {
+      const label = e.payload?.label;
+      const url = e.payload?.url;
+      if (typeof label !== "string" || typeof url !== "string") return;
+      const name = nameIn(url);
+      if (!name) return;
+      const waiter = waiting.get(name);
+      if (waiter) {
+        waiting.delete(name);
+        waiter(label);
+      } else announced.set(name, label);
+    });
+  } catch (e) {
+    listening = false;
+    console.error("could not listen for the shell's windows:", e);
+  }
+}
+
+/** The shell's announcement for `name`: already made, or the next one. Null when it never comes. */
+function announcedLabel(name: DialogName): Promise<string | null> {
+  const known = announced.get(name);
+  if (known !== undefined) {
+    announced.delete(name);
+    return Promise.resolve(known);
+  }
+  return new Promise((resolve) => {
+    const take = (label: string) => {
+      clearTimeout(timer);
+      resolve(label);
+    };
+    const timer = setTimeout(() => {
+      if (waiting.get(name) === take) waiting.delete(name);
+      resolve(null);
+    }, tuning.labelTimeoutMs);
+    waiting.set(name, take);
+  });
+}
+
+// --- opening -------------------------------------------------------------------
 
 /**
  * Open the window for `name`, sized `size`, or hand back the one already open
@@ -86,19 +178,34 @@ const open = new Map<DialogName, DialogHandle>();
 export function openDialogWindow(name: DialogName, title: string, size: Size, onCloseRequest: () => void): DialogHandle | null {
   const existing = open.get(name);
   if (existing) {
+    existing.uses++;
     existing.raise();
     return existing;
   }
   let win: Window | null = null;
   try {
-    win = window.open(PAGE, `mogeung-${name}`, `width=${Math.round(size.width)},height=${Math.round(size.height)}`);
+    win = window.open(pageFor(name), `mogeung-${name}`, `width=${Math.round(size.width)},height=${Math.round(size.height)}`);
   } catch {
     win = null;
   }
   if (!win) return null;
   const target = win;
 
-  let label: string | null = null;
+  // The label, from whichever says it first: the shell's announcement, or
+  // the page once it has loaded. Null in a browser, and in a shell that
+  // never said.
+  let settleLabel!: (label: string | null) => void;
+  const labelReady = new Promise<string | null>((resolve) => {
+    let done = false;
+    settleLabel = (label) => {
+      if (done) return;
+      done = true;
+      resolve(label);
+    };
+  });
+  if (isTauri()) void announcedLabel(name).then((label) => settleLabel(label));
+  else settleLabel(null);
+
   let release: (() => void) | null = null;
   let poll: ReturnType<typeof setInterval> | null = null;
   let unkey: (() => void) | null = null;
@@ -109,6 +216,15 @@ export function openDialogWindow(name: DialogName, title: string, size: Size, on
     onCloseRequest();
   };
 
+  // The shell's close button, routed back as `popout:close`: the dialog
+  // leaves the store, and its unmount closes the window. Claimed as soon as
+  // the label is known, so a window closed before its page loaded still
+  // reaches the dialog.
+  void labelReady.then((label) => {
+    if (closed || !label) return;
+    release = claimWindow(label, closedFromOutside);
+  });
+
   const ready = new Promise<DialogWindow | null>((resolve) => {
     let settled = false;
     const settle = (value: DialogWindow | null) => {
@@ -117,7 +233,12 @@ export function openDialogWindow(name: DialogName, title: string, size: Size, on
       clearTimeout(timer);
       resolve(value);
     };
-    const timer = setTimeout(() => settle(null), LOAD_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      // Never arrived: the dialog stays in this window, and the window that
+      // would have held it is closed rather than left blank.
+      settle(null);
+      reallyClose();
+    }, tuning.loadTimeoutMs);
     const onLoad = () => {
       if (closed) return settle(null);
       try {
@@ -128,8 +249,8 @@ export function openDialogWindow(name: DialogName, title: string, size: Size, on
         const mount = doc.createElement("div");
         mount.style.height = "100%";
         doc.body.appendChild(mount);
-        label = labelOf(target);
-        if (label) release = claimWindow(label, closedFromOutside);
+        const fromPage = labelOf(target);
+        if (fromPage) settleLabel(fromPage);
         // Closed by a browser's own button: the page is unloaded. The shell's
         // button never gets this far (`popout.rs` holds it and asks), and a
         // window destroyed without asking is caught by the poll.
@@ -144,47 +265,71 @@ export function openDialogWindow(name: DialogName, title: string, size: Size, on
           if (gone) closedFromOutside();
         }, CLOSED_POLL_MS);
         unkey = bindZoomKeys(target);
-        void applyZoom(label, dialogZoom());
-        settle({ win: target, mount, label });
+        applyZoom(target, dialogZoom());
+        settle({ win: target, mount, label: fromPage });
       } catch {
         settle(null);
+        reallyClose();
       }
     };
     if (isLoaded(target)) onLoad();
     else target.addEventListener("load", onLoad, { once: true });
   });
 
-  const handle: DialogHandle = {
+  /** The size the window is at, in CSS pixels — what `window.open` is asked for next time. */
+  const measure = (): Size | null => {
+    try {
+      if (target.closed || !(target.innerWidth > 0) || !(target.innerHeight > 0)) return null;
+      return { width: Math.round(target.innerWidth), height: Math.round(target.innerHeight) };
+    } catch {
+      return null;
+    }
+  };
+
+  const reallyClose = () => {
+    if (closed) return;
+    closed = true;
+    open.delete(name);
+    if (poll) clearInterval(poll);
+    release?.();
+    unkey?.();
+    forgetPopout(target);
+    try {
+      target.removeEventListener("pagehide", closedFromOutside);
+    } catch {
+      // Gone already.
+    }
+    void labelReady.then((label) => {
+      if (label) return closeShellWindow(label);
+      // No shell to ask, or one that never said which window this was: the
+      // page's own close. In a browser that closes the popup; in the shell
+      // it is the last resort, and the module notes say what it costs.
+      try {
+        target.close();
+      } catch {
+        // Already gone, which is what was wanted.
+      }
+    });
+  };
+
+  const handle: Handle = {
+    uses: 1,
     ready,
-    raise: () => raiseWindow(target, label),
+    raise: () => {
+      try {
+        target.focus();
+      } catch {
+        // Gone; nothing to raise.
+      }
+      void labelReady.then((label) => raiseShellWindow(label));
+    },
     close: () => {
       if (closed) return null;
-      closed = true;
-      open.delete(name);
-      if (poll) clearInterval(poll);
-      release?.();
-      unkey?.();
-      forgetPopout(target);
-      let left: Size | null = null;
-      try {
-        target.removeEventListener("pagehide", closedFromOutside);
-        if (!target.closed && target.innerWidth > 0 && target.innerHeight > 0) {
-          // The viewport is in CSS pixels, which the window's zoom has divided;
-          // what `window.open` is asked for next time is the logical size.
-          const zoom = dialogZoom();
-          left = { width: Math.round(target.innerWidth * zoom), height: Math.round(target.innerHeight * zoom) };
-        }
-      } catch {
-        left = null;
-      }
-      if (label) void closeShellWindow(label);
-      else {
-        try {
-          target.close();
-        } catch {
-          // Already gone, which is what was wanted.
-        }
-      }
+      // Still held by another mount — a StrictMode re-run, or a dialog
+      // reopened within the tick its close was deferred by.
+      if (--handle.uses > 0) return null;
+      const left = measure();
+      reallyClose();
       return left;
     },
   };
@@ -247,12 +392,7 @@ export function copyStyles(from: Document, to: Document): void {
  * in the shell — the document never lost focus as far as it knows (see
  * `lib/tauri.ts`) — so the shell's window is asked by label as well.
  */
-function raiseWindow(win: Window, label: string | null): void {
-  try {
-    win.focus();
-  } catch {
-    // Gone; nothing to raise.
-  }
+function raiseShellWindow(label: string | null): void {
   if (!label || !isTauri()) return;
   void (async () => {
     try {
@@ -284,23 +424,21 @@ export function nudgeDialogZoom(direction: 1 | -1 | 0): void {
   useStore.getState().setPrefs({ dialogZoom: next });
   for (const handle of open.values()) {
     void handle.ready.then((d) => {
-      if (d) void applyZoom(d.label, next);
+      if (d) applyZoom(d.win, next);
     });
   }
 }
 
 /**
- * Zoom the shell's webview for `label`. In a browser tab there is no shell and
- * the browser's own zoom keys work on the popup, so nothing is done.
+ * Zoom the page: a CSS `zoom` on its root, so tooltips and menus portalled
+ * to its body scale with it. The window's own `innerWidth` is untouched by
+ * it, which is why `measure` reads the size back without arithmetic.
  */
-async function applyZoom(label: string | null, factor: number): Promise<void> {
-  if (!label || !isTauri()) return;
+function applyZoom(win: Window, factor: number): void {
   try {
-    const { Webview } = await import("@tauri-apps/api/webview");
-    const wv = await Webview.getByLabel(label);
-    await wv?.setZoom(factor);
-  } catch (e) {
-    console.error("could not zoom the dialog's window:", e);
+    (win.document.documentElement.style as unknown as { zoom: string }).zoom = String(factor);
+  } catch {
+    // Gone, or not ours to style.
   }
 }
 

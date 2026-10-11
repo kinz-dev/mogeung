@@ -63,6 +63,7 @@ import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
 import { closePanesFor, dropOrphanHolds, filePanes, setDock, diffPanes } from "@/lib/panes";
 import { listenForPopoutCloses, retheme, watchPopouts } from "@/lib/popout";
+import { listenForDialogWindows } from "@/lib/dialogWindow";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
@@ -274,6 +275,9 @@ export default function App() {
     // close button sends its group home first (`R-J108`, `popout.rs`).
     watchPopouts(event.api);
     void listenForPopoutCloses(event.api);
+    // And which window each `window.open` became, for the dialogs in windows
+    // of their own (`R-J130`).
+    void listenForDialogWindows();
 
     // When a session ends, its Agent pane goes with it — anchored or not.
     // Registered here rather than imported by the store, so the dependency

@@ -51,7 +51,13 @@
 //! Every window this module opens is told its own label, as
 //! `window.__MOGEUNG_WINDOW_LABEL__`, by an initialization script — which is
 //! how the client, holding only the popout's `Window`, knows which shell
-//! window to close.
+//! window to close. **And the opener is told too** (`R-J130`): the label and
+//! the URL asked for go to the main window as `popout:opened` the moment the
+//! window exists, so a page that is closed before it loaded — or never loads
+//! — can still be closed by label rather than with the `window.close()` the
+//! first point above says leaves a window standing. The dialogs in windows
+//! of their own (`R-J128`, `lib/dialogWindow.ts`) mark their URL so they can
+//! tell the announcement apart from a dockview popout's.
 //!
 //! # Why these windows keep their decorations
 //!
@@ -163,6 +169,14 @@ pub fn build_main(app: &tauri::AppHandle) -> tauri::Result<()> {
 
             match builder.build() {
                 Ok(window) => {
+                    // Which window this became, to the page that asked. The
+                    // result is ignored on purpose: a main window that is
+                    // gone has no dialog to close.
+                    let _ = handle.emit_to(
+                        "main",
+                        "popout:opened",
+                        serde_json::json!({ "label": label, "url": url.as_str() }),
+                    );
                     // The close button sends the group home first; see the
                     // module notes.
                     let events = handle.clone();

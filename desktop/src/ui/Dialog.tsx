@@ -16,6 +16,8 @@
  * and this window keeps a backdrop that names it and brings it forward on a
  * click — modal still, from either side. Escape in either window closes it.
  * Where no window can be opened the dialog stays here, exactly as before.
+ * The window is let go a tick after the dialog leaves, not at once, so a
+ * StrictMode re-run keeps it rather than opening another (`R-J130`).
  */
 
 /** What Tab can land on. Disabled controls are skipped. */
@@ -27,7 +29,7 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { openDialogWindow, type DialogHandle, type DialogName, type DialogWindow, type Size } from "@/lib/dialogWindow";
-import { IconButton } from "@/ui/primitives";
+import { Dim, IconButton } from "@/ui/primitives";
 import { surface } from "@/ui/styles";
 
 /** Where the panel lives: still being asked for, this window, or one of its own. */
@@ -107,8 +109,16 @@ export function Dialog({
     return () => {
       live = false;
       handleRef.current = null;
-      const left = handle.close();
-      if (left) detachedRef.current?.onResized?.(left);
+      // A tick later, not now. StrictMode runs this cleanup and the effect
+      // again on a mount that is not ending, and a close here opened a second
+      // window on every `tauri dev` open — and left the first standing empty,
+      // closed before its page could say which window it was (`R-J130`).
+      // Deferred, the re-run finds the window still open and takes it over;
+      // a real unmount closes it a tick later, which nobody can see.
+      setTimeout(() => {
+        const left = handle.close();
+        if (left) detachedRef.current?.onResized?.(left);
+      }, 0);
     };
   }, []);
 
@@ -189,7 +199,9 @@ export function Dialog({
           : undefined
       }
       className={cn(
-        own ? "h-full w-full bg-[var(--bg-raised)] text-[var(--text)]" : surface.dialog,
+        // In a window of its own the panel is the page: the page's own
+        // background, so the sections drawn on it read as cards.
+        own ? "h-full w-full bg-[var(--bg)] text-[var(--text)]" : surface.dialog,
         "flex flex-col overflow-hidden outline-none",
         !own &&
           (resizable
@@ -197,15 +209,29 @@ export function Dialog({
             : cn("max-h-[76vh] w-full", wide ? "max-w-3xl" : "max-w-xl")),
       )}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2">
-        <span className="text-base font-semibold text-[var(--text-strong)]">{title}</span>
-        {subtitle && <span className="truncate text-xs text-[var(--dim)]">{subtitle}</span>}
-        <div className="ml-auto">
+      {own ? (
+        // Room for the subtitle to be read, not truncated — a window has it.
+        <div className="flex shrink-0 items-start gap-3 border-b border-[var(--border)] bg-[var(--bg-panel)] px-4 py-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="text-lg font-semibold text-[var(--text-strong)]">{title}</div>
+            {subtitle && <div className="mt-0.5 text-xs leading-snug text-[var(--dim)]">{subtitle}</div>}
+          </div>
+          <Dim className="mt-1.5 shrink-0 text-2xs whitespace-nowrap">Ctrl+= / Ctrl+- zoom · Esc closes</Dim>
           <IconButton title="close  (Esc)" onClick={onClose}>
             <X size={13} />
           </IconButton>
         </div>
-      </div>
+      ) : (
+        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+          <span className="text-base font-semibold text-[var(--text-strong)]">{title}</span>
+          {subtitle && <span className="truncate text-xs text-[var(--dim)]">{subtitle}</span>}
+          <div className="ml-auto">
+            <IconButton title="close  (Esc)" onClick={onClose}>
+              <X size={13} />
+            </IconButton>
+          </div>
+        </div>
+      )}
       <div className={cn("min-h-0 flex-1", own ? "overflow-auto" : resizable ? "overflow-hidden" : "overflow-y-auto")}>
         {children}
       </div>

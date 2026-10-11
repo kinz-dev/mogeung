@@ -436,8 +436,10 @@ export const defaultPrefs = (): Prefs => ({
   notify: false,
   zoom: {},
   appZoom: 1,
-  launchSize: { width: 720, height: 680 },
-  teamsSize: { width: 1120, height: 760 },
+  // Tall enough for the whole form at first open (`R-J130`); what you resize
+  // to is what is remembered.
+  launchSize: { width: 720, height: 780 },
+  teamsSize: { width: 1180, height: 840 },
   dialogZoom: null,
   keymap: {},
   terminalFontPx: 13,

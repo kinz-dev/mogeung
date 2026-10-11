@@ -5,6 +5,7 @@ updated: 2026-10-11
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
+  - desktop/src/ui/Form.tsx
   - desktop/src/ui/QueuePanel.tsx
   - desktop/src/store/index.ts
   - desktop/src/store/prefs.ts
@@ -303,11 +304,37 @@ window that is open rather than setting a flag already set. A dialog window
 is *claimed* under its label, so the shell's `popout:close` closes the dialog
 first and the dialog then destroys the window through `popout_close`; a
 window closed without asking is noticed by a poll on `closed`. Each window
-opens at the size it was last left at (`launchSize`, `teamsSize`, logical
+opens at the size it was last left at (`launchSize`, `teamsSize`, CSS
 pixels) and has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
-step `dialogZoom`, applied to that webview by label, starting from the main
-window's zoom and remembered apart from it. Where `window.open` is refused
-the dialog stays inline, as every other dialog still is.
+step `dialogZoom`, a CSS `zoom` on that page's root, starting from the main
+window's zoom and remembered apart from it — the page's own zoom, which the
+main window refuses for the terminal's sake, costs a dialog nothing and asks
+nothing of the shell. Where `window.open` is refused the dialog stays inline,
+as every other dialog still is.
+
+**Every close goes through the shell** (`R-J130`). A page's own
+`window.close()` destroys the webview on this shell and leaves the OS window
+standing, and the first cut fell back to it whenever a dialog closed before
+its page had said its label — which `tauri dev` did on every open, because
+StrictMode mounts, unmounts and mounts a dialog once. So `popout.rs` now
+announces every window it opens to the main window as `popout:opened`, with
+the label and the URL asked for; a dialog marks its URL (`?dialog=teams`),
+`lib/dialogWindow.ts` waits for that label and closes by it, a page that never
+loads is closed the same way while the dialog stays inline, and `Dialog` lets
+the window go a tick after it leaves so a StrictMode re-run takes it over
+instead of opening another. The window is not a dockview pop-out and cannot
+be docked back: the panel is the dialog, and there is nothing to dock.
+
+**The two forms** (`R-J130`, `ui/Form.tsx`) are sections in colours: a
+`Section` is a card with a header strip, an icon and a title in its own
+colour and a bar of it down the left edge; a `Field` puts its label in one
+column so a section's controls start on one edge; a `Callout` is the tinted
+sentence not to skim. New session is agent, where and how, in blue, green and
+purple, with the one verb in a footer that stays while the lists scroll;
+Teams is team, policy, sends and seats, in blue, purple, green and teal, the
+list of teams down the left with the chosen one marked, and the verdict — what
+is wrong, unsaved, or saved — in a footer of its own. The two layers keep
+their order: the team's guidance and mode come before any seat's.
 
 ## Client state, split by what it is about (`R-I11`, ADR-0023)
 
