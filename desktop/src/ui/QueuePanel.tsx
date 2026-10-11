@@ -6,7 +6,7 @@
  * the room back a decision rather than a search.
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Monitor, Network, Pin, Tag, TerminalSquare } from "lucide-react";
 import { useStore } from "@/store";
@@ -537,6 +537,21 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   );
 }
 
+/**
+ * What a line *is*, for React and for the virtualizer alike: a heading's fold
+ * key, a session's id. `R-J129`.
+ *
+ * The virtualizer remembers each row's measured height under this key, and
+ * its default is the index — which is where the blank bands and the heading
+ * drawn across a card came from. A row that moves index, because a group
+ * above it folded or a grouping was toggled, is the same element to React, so
+ * it is never measured again; keyed by index it inherited the height of
+ * whatever used to sit there. Keyed by what it is, its height travels with it.
+ */
+function lineKey(line: QueueLine): string {
+  return line.kind === "header" ? line.key : line.session.id;
+}
+
 export function QueuePanel() {
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -581,10 +596,15 @@ export function QueuePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
+  // Memoised on `display` because the virtualizer rebuilds its measurements
+  // whenever this function changes identity, and `display` changes only on a
+  // real regroup or re-rank.
+  const keyAt = useCallback((i: number) => (display[i] ? lineKey(display[i]) : i), [display]);
   const rowVirtualizer = useVirtualizer({
     count: display.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (i) => (display[i]?.kind === "header" ? 24 : 74),
+    getItemKey: keyAt,
     overscan: 8,
   });
 
@@ -731,7 +751,7 @@ export function QueuePanel() {
                 const r = display[v.index];
                 return (
                   <div
-                    key={r.kind === "header" ? r.key : r.session.id}
+                    key={lineKey(r)}
                     ref={rowVirtualizer.measureElement}
                     data-index={v.index}
                     style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start}px)` }}

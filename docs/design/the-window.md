@@ -5,6 +5,7 @@ updated: 2026-10-11
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
+  - desktop/src/ui/QueuePanel.tsx
   - desktop/src/store/index.ts
   - desktop/src/store/prefs.ts
   - desktop/src/lib/keymap.ts
@@ -178,7 +179,11 @@ the window. The terminal panel is its own dockview since `R-B56`: one shell
 per split, tabs behind a hover grip, a colour per shell. Chrome state rides in
 the client's preferences rather than in dockview's serialisation, because the
 surrounding furniture's widths are the user's settings and must survive the
-layout being reset.
+layout being reset. The Attention list is virtualised, and its rows are keyed
+by what they are — a heading's fold key, a session's id — for the virtualizer
+as well as for React: a measured height remembered by index stays with the
+index when the list regroups, and the row that moves there is never measured
+again (`R-J129`).
 
 **The wall** (`R-B50`) is neither: an overlay on a chord, every live session a
 tile keyed by id so it never moves, no state but a boolean, fetching nothing.
