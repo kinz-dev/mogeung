@@ -29,6 +29,7 @@ import { nudgeAppZoom } from "@/lib/zoom";
 import { groupQueue, visibleQueue } from "@/lib/queue";
 import { syncRepo } from "@/lib/gitActions";
 import { onPopoutWindows } from "@/lib/popout";
+import { showDialog } from "@/lib/dialogWindow";
 import { PANE_MOVE_CHORDS, RELEASE_CHORD, keyboardIsHeld, releaseKeyboard } from "@/lib/focus";
 import { cycleShellTab, moveShellFocus, newShell, splitShell, toggleTerminal, typedInShell } from "@/lib/shellDock";
 import type { Direction } from "@/lib/spatial";
@@ -816,8 +817,10 @@ export const ACTIONS: Action[] = [
     // Shift+g, leaving the bare `Alt+g` for the Gau Geung mode itself
     // (`R-P7`): the definitions window is the one you open to set a team up,
     // the mode is the one you live in.
+    // Through `showDialog`, so a second chord finds the window the Teams
+    // dialog is already open in rather than setting a flag already set.
     keys: ["Alt+Shift+g"],
-    run: () => useStore.setState({ showTeams: true }),
+    run: () => showDialog("teams"),
   },
   {
     id: "theme",

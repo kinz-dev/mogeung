@@ -13,6 +13,7 @@ import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, 
 import { useStore } from "@/store";
 import { maskToken } from "@/lib/connections";
 import { useChord } from "@/lib/keymap";
+import { showDialog } from "@/lib/dialogWindow";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
 import { showPane } from "@/lib/panes";
@@ -133,17 +134,18 @@ export function TopBar() {
       <div className="ml-auto flex items-center gap-0.5">
         <IconButton
           title="start a session — opens a terminal on the daemon's machine, and mogeung watches it like any other"
-          onClick={() => useStore.setState({ showLaunch: true })}
+          onClick={() => showDialog("launch")}
         >
           <Rocket size={13} />
         </IconButton>
         {/* Teams. `R-P3`: the definitions, kept by the daemon under
             ~/.mogeung and edited here first. Beside the launcher because it
             is the other way a session comes to exist — a seat the daemon
-            starts from one of these. */}
+            starts from one of these. Both open in windows of their own
+            (`R-J128`), so a second press brings the window forward. */}
         <IconButton
           title="teams — define a team of seats (Gau Geung mode)"
-          onClick={() => useStore.setState({ showTeams: true })}
+          onClick={() => showDialog("teams")}
         >
           <Users size={13} />
         </IconButton>

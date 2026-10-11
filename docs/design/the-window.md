@@ -1,9 +1,10 @@
 ---
 title: The window
 status: active
-updated: 2026-10-10
+updated: 2026-10-11
 covers:
   - desktop/src/wire/client.ts
+  - desktop/src/lib/dialogWindow.ts
   - desktop/src/store/index.ts
   - desktop/src/store/prefs.ts
   - desktop/src/lib/keymap.ts
@@ -281,6 +282,27 @@ Tauri close button never raises the `beforeunload` dockview listens for, so
 OS window once its group has gone; a second close passes through, so a client
 that never answers cannot trap a window. The cost is coupling: one dockview,
 one store, one socket, so a popout cannot outlive the main window.
+
+**Dialogs through the same door** (`R-J128`, ADR-0037's 2026-10-11
+amendment). The New session and Teams dialogs open in OS windows of their own:
+`Dialog` asks `lib/dialogWindow.ts` for a window, which is `window.open` on
+the same empty `popout.html`, and portals its panel into that document once
+it has loaded — the stylesheets copied across as dockview does, the theme
+mirrored, the window titled after the dialog. The React tree, the store and
+the socket stay in the main window, which is why this is not the arcade's
+page-of-its-own: a Teams page with no store would have to be told the teams
+and the sends over a channel. The main window keeps a dimmed backdrop that
+names the window and raises it on a click, Escape in either window closes,
+and the store's one flag per dialog is the one copy — `showDialog` raises the
+window that is open rather than setting a flag already set. A dialog window
+is *claimed* under its label, so the shell's `popout:close` closes the dialog
+first and the dialog then destroys the window through `popout_close`; a
+window closed without asking is noticed by a poll on `closed`. Each window
+opens at the size it was last left at (`launchSize`, `teamsSize`, logical
+pixels) and has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
+step `dialogZoom`, applied to that webview by label, starting from the main
+window's zoom and remembered apart from it. Where `window.open` is refused
+the dialog stays inline, as every other dialog still is.
 
 ## Client state, split by what it is about (`R-I11`, ADR-0023)
 

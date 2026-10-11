@@ -44,6 +44,7 @@ import { cn } from "@/lib/cn";
 import { interactive } from "@/ui/styles";
 import { compact, shortDir } from "@/lib/format";
 import { copyPath } from "@/lib/clipboard";
+import { showDialog } from "@/lib/dialogWindow";
 import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
 import { countersLine, sendLine, sendsFor, signalsLine } from "@/lib/teams";
 import {
@@ -681,7 +682,7 @@ function ModeHeader({ onClose }: { onClose: () => void }) {
             <Copy size={12} /> tmux attach -t {teamSession}
           </Button>
         )}
-        <IconButton title="the Teams window — define, boot and stop a team (Alt+Shift+g)" onClick={() => useStore.setState({ showTeams: true })}>
+        <IconButton title="the Teams window — define, boot and stop a team (Alt+Shift+g)" onClick={() => showDialog("teams")}>
           <Users size={13} />
         </IconButton>
         <Dim className="text-2xs">Esc to leave · the window underneath is untouched</Dim>

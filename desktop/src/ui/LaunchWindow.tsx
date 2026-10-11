@@ -114,6 +114,8 @@ export function LaunchWindow() {
   const headless = useStore((s) => s.prefs.launchHeadless);
   const health = useStore((s) => s.health);
   const setPrefs = useStore((s) => s.setPrefs);
+  // The window of its own this opens in (`R-J128`), the size it was left at.
+  const launchSize = useStore((s) => s.prefs.launchSize);
   const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
 
   // Somewhere you have already worked is nearly always where you want to work
@@ -183,6 +185,7 @@ export function LaunchWindow() {
           : `opens a real interactive ${sourceLabel(chosen.source)} in your terminal`
       }
       onClose={close}
+      detached={{ name: "launch", size: launchSize, onResized: (size) => setPrefs({ launchSize: size }) }}
     >
       <div className="min-w-[30rem]">
         <Dim className="block text-2xs">

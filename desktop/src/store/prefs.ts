@@ -330,6 +330,18 @@ export interface Prefs {
   zoom: Record<string, number>;
   /** The whole window's scale. A Tauri webview has no browser zoom of its own. */
   appZoom: number;
+  /**
+   * The New session and Teams windows open in OS windows of their own since
+   * 2026-10-11 (`R-J128`, *"a real popup dialog that can move around out of
+   * the current mogeung application"*): the size each was last left at, in
+   * logical pixels, and the zoom those windows share. The zoom is `null`
+   * until nudged inside one — the main window's then — because the ask began
+   * with *"the font is too small"*, and a window read at arm's length wants
+   * a scale of its own.
+   */
+  launchSize: { width: number; height: number };
+  teamsSize: { width: number; height: number };
+  dialogZoom: number | null;
 
   /**
    * Rebound keys, by action id. Only what you changed — an action absent here
@@ -424,6 +436,9 @@ export const defaultPrefs = (): Prefs => ({
   notify: false,
   zoom: {},
   appZoom: 1,
+  launchSize: { width: 720, height: 680 },
+  teamsSize: { width: 1120, height: 760 },
+  dialogZoom: null,
   keymap: {},
   terminalFontPx: 13,
   scoped: {},

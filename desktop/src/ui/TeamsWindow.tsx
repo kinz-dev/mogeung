@@ -141,6 +141,9 @@ export function TeamsWindow() {
   const launches = useStore((s) => s.seatLaunches);
   const allSends = useStore((s) => s.teamSends);
   const send = useStore((s) => s.send);
+  // The window of its own this opens in (`R-J128`), the size it was left at.
+  const teamsSize = useStore((s) => s.prefs.teamsSize);
+  const setPrefs = useStore((s) => s.setPrefs);
   // What is being edited, and what it was when it arrived. `base` is `null`
   // for a team that does not exist yet; the two differ when there is
   // something to save.
@@ -277,6 +280,7 @@ export function TeamsWindow() {
       subtitle="a team of seats the daemon starts and owns — kept under ~/.mogeung/teams, mirrored as markdown"
       onClose={close}
       wide
+      detached={{ name: "teams", size: teamsSize, onResized: (size) => setPrefs({ teamsSize: size }) }}
     >
       <div className="flex min-h-[32rem] min-w-[56rem] gap-3">
         {/* The list. Newest first, as the daemon sends them. */}

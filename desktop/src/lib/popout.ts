@@ -186,13 +186,37 @@ export function watchPopouts(api: Pick<DockviewApi, "groups" | "onDidLayoutChang
   return () => subs.forEach((d) => d.dispose());
 }
 
+// --- windows that hold something other than a group ---------------------------
+
+/**
+ * A `popout-*` window this client opened for something that is not a dockview
+ * group — a dialog in a window of its own (`lib/dialogWindow.ts`) — and what to
+ * do when the shell says its close button was pressed. Keyed by the shell's
+ * label, which is the only name the close request carries.
+ */
+const tenants = new Map<string, () => void>();
+
+/** Say what lives in the window labelled `label`. Answers the release. */
+export function claimWindow(label: string, onCloseRequest: () => void): () => void {
+  tenants.set(label, onCloseRequest);
+  return () => {
+    if (tenants.get(label) === onCloseRequest) tenants.delete(label);
+  };
+}
+
 /**
  * What to do when the shell says a popout window's close button was pressed
- * (`popout:close`): send its group home, which then closes the window — or,
- * for a window that holds no group (the arcade's, or one already emptied),
- * close it straight away.
+ * (`popout:close`): tell whatever claimed the window, if something did; else
+ * send its group home, which then closes the window — or, for a window that
+ * holds no group (the arcade's, or one already emptied), close it straight
+ * away.
  */
 export function onPopoutCloseRequest(api: Pick<DockviewApi, "groups">, label: string): void {
+  const tenant = tenants.get(label);
+  if (tenant) {
+    tenant();
+    return;
+  }
   const group = api.groups.find((g) => {
     if (g.api.location.type !== "popout") return false;
     try {
