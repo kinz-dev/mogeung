@@ -143,21 +143,33 @@ pub fn team_tools_text(team: &Team, seat: &Seat) -> String {
          delivered or held for a human: the team allows {hops} agent-to-agent hop{hs} in a row before a person \
          must weigh in, and {cap} automatic sends an hour. Exit code 0 is delivered, 2 is held, 1 is refused. \
          A seat talks only to seats of its own team; there is no other way to reach one, and a held message is \
-         not lost — a person releases or drops it.\n",
+         not lost — a person releases or drops it.\n\n\
+         When mogeung winds the team down it will ask you, in your terminal, for a note of where you got to. Write \
+         it for whoever has this seat next and send it with:\n\n    {note} \"<text>\"   (or on stdin)\n\n\
+         The daemon keeps the note and hands it to the next session's handover. You may leave one at any time; \
+         the latest replaces the last.\n",
         seat = seat.name,
         team = team.name,
         cmd = crate::hooks::SEND_COMMAND,
+        note = crate::hooks::NOTE_COMMAND,
         hops = team.policy.hop_budget,
         hs = if team.policy.hop_budget == 1 { "" } else { "s" },
         cap = team.policy.hourly_cap,
     )
 }
 
-/// Write `bin/mogeung-send` under `files`, executable, and answer the
-/// directory to put first on the seat's `PATH`.
+/// Write `bin/mogeung-send` and `bin/mogeung-note` (`R-P15`) under `files`,
+/// executable, and answer the directory to put first on the seat's `PATH`.
 fn write_send_command(files: &Path) -> Result<PathBuf> {
     let bin = files.join("bin");
     std::fs::create_dir_all(&bin)?;
+    let note = bin.join(crate::hooks::NOTE_COMMAND);
+    std::fs::write(&note, crate::hooks::note_script())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&note, std::fs::Permissions::from_mode(0o700))?;
+    }
     let path = bin.join(crate::hooks::SEND_COMMAND);
     std::fs::write(&path, crate::hooks::send_script())?;
     #[cfg(unix)]

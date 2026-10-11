@@ -1,7 +1,7 @@
 ---
 title: Observe sessions, never spawn them
 status: active
-updated: 2026-10-09
+updated: 2026-10-11
 decided: 2026-07-25
 supersedes: The v0.1 spawning model
 ---
@@ -419,6 +419,39 @@ seats on one board.
 Nothing else moves. The hop count, the cap and the pause stay per team as
 fence 4 already said; fence 1 still makes an observed session unreachable
 from any seat.
+
+## Amendment — 2026-10-11: a wind-down asks a seat for its last words
+
+**Two small paths are added to the 2026-10-09 amendment, both for a seat and
+no other session.** Asked after the first real team had run for an evening:
+*"We need a way to quickly close the whole team, but that should be a
+'graceful' shutdown where it will ask each of the 'seat' to write down what I
+was up to so that next time the 'handover' can resume from there."*
+
+1. **A wind-down is a send of yours with declared words.** `TeamWindDown`
+   types the team's `wind_down` text — policy, declared and read in the
+   Teams window like a wake's — once into every running seat, then stops each
+   seat as its note arrives, as its turn ends, or when the policy's minutes
+   are up. The press is yours, so the send is logged as `wind_down`, counts as
+   neither a hop nor an automatic send, and the chain starts again after it
+   as after any send of yours. The pause switch does not hold it: the switch
+   stops the automatic path, and this is not that path. `TeamStop` stays the
+   stop at once, and during a wind-down it is the wind-down cut short.
+2. **A seat may tell mogeung about itself.** `mogeung-note`, on every seat's
+   `PATH` beside `mogeung-send`, posts a note to `POST /api/seat/note` with
+   the seat's own token — the same three fences as the send route — and the
+   daemon keeps it beside the seat's files as `note.md`, under `~/.mogeung`
+   (ADR-0043), never in a repository or a home. The note goes to the daemon
+   and to no seat; it is not a send and nothing judges it. The next handover
+   for that seat (the amendment above) quotes it as the seat's own last words,
+   framed as data like every other line of evidence; and a team booted after a
+   wind-down hands each seat its own earlier session and note, where before it
+   handed over only its teammates'.
+
+What this does not reopen: fence 1. A session you started by hand has no
+token, no `PATH` entry and no note; a wind-down reaches launch records and
+nothing else. Fence 3 holds too — the wind-down text is declared, and the
+note is read by a model only inside a handover that is already fenced.
 
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an

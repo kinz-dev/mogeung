@@ -204,6 +204,13 @@ pub struct AppState {
     /// Beside `model` and `runs` for the same reason both of those are here:
     /// it owns something outside this process. Health only ever reports.
     pub proxy: crate::llmproxy::Proxy,
+    /// Teams being, or lately, wound down (`R-P15`), by team id: who was
+    /// asked for a note, who has answered, the deadline. In memory only — a
+    /// daemon restarted mid-wind-down has lost the question it typed, and
+    /// the seats it left running are a Boot's or a Stop's to deal with. An
+    /// entry stays once every seat is finished, so the board can say how it
+    /// went, until the team is booted again.
+    pub winding: tokio::sync::Mutex<std::collections::HashMap<String, Winding>>,
     /// Whether the config file may be edited through the wire. `R-J79`.
     ///
     /// Loopback and nothing else — **not** `writes_allowed`, which a tokened
@@ -702,6 +709,29 @@ fn blank_session(
 }
 
 
+/// Where a seat's note lives, beside its files: `~/.mogeung/seats/<team>/<seat>/note.md`.
+/// `R-P15`. The latest replaces the last; the next handover reads it.
+pub const NOTE_FILE: &str = "note.md";
+
+/// The seat's note, cut to the handover's budget, or none.
+fn read_note(files_dir: &str) -> Option<String> {
+    let text = std::fs::read_to_string(Path::new(files_dir).join(NOTE_FILE)).ok()?;
+    let t = text.trim();
+    (!t.is_empty()).then(|| crate::handover::cut(t, crate::handover::NOTE_CHARS))
+}
+
+/// One team's wind-down as the daemon keeps it: what the wire sees, and the
+/// one thing it does not. `R-P15`.
+#[derive(Debug, Clone)]
+pub struct Winding {
+    pub state: mogeung_core::team::WindDown,
+    /// Seats that were mid-turn when asked. The first `Stop` from such a
+    /// seat ends the turn it was in, not the one that reads the question —
+    /// a CLI queues typed text behind the turn in flight — so one `Stop` is
+    /// let pass before the next one counts as the answer.
+    pub skip_stop: std::collections::HashSet<String>,
+}
+
 /// What a boot did, seat by seat. `R-P14`.
 ///
 /// Answered to the asker as `TeamBooted` so the Teams window can close on a
@@ -817,6 +847,7 @@ impl AppState {
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
             proxy: crate::llmproxy::Proxy::new(),
+            winding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             writes_allowed: std::sync::OnceLock::new(),
             config_editable: std::sync::OnceLock::new(),
             send_allowed: std::sync::OnceLock::new(),
@@ -4599,9 +4630,17 @@ impl AppState {
     pub async fn sends_msg(&self) -> ServerMsg {
         let teams = self.store.load_teams().unwrap_or_default();
         let now = Utc::now().timestamp();
+        let winding = self.winding.lock().await.clone();
         let p = self.policy.lock().await;
         ServerMsg::Sends {
-            teams: teams.iter().map(|t| p.summary(t, now)).collect(),
+            teams: teams
+                .iter()
+                .map(|t| {
+                    let mut s = p.summary(t, now);
+                    s.wind_down = winding.get(&t.id).map(|w| w.state.clone());
+                    s
+                })
+                .collect(),
         }
     }
 
@@ -4764,6 +4803,15 @@ impl AppState {
     /// it. Each is judged and typed, or held, through `deliver`.
     pub async fn policy_event(&self, team_id: &str, seat: &str, event: mogeung_core::team::SeatEvent) {
         use mogeung_core::team::{SendKind, SendStatus};
+        // A team being wound down wakes nobody (`R-P15`): the seats are on
+        // their way out, and a seat's `Stop` is its answer to the question —
+        // the turn that read it has ended, note or no note.
+        if self.winding.lock().await.contains_key(team_id) {
+            if event == mogeung_core::team::SeatEvent::Stop {
+                self.wind_down_stop(team_id, seat).await;
+            }
+            return;
+        }
         let Some(team) = self.team_by_id(team_id) else { return };
         let wakes: Vec<mogeung_core::team::Wake> =
             team.policy.wakes.iter().filter(|w| w.on_seat == seat && w.on == event).cloned().collect();
@@ -4964,7 +5012,14 @@ impl AppState {
         for (team_id, seat, ev) in events {
             self.policy_event(&team_id, &seat, ev).await;
         }
+        // `R-P15`: a team on its way out is nudged by nothing, and the seats
+        // still asked past the deadline are stopped anyway.
+        let winding: std::collections::HashSet<String> = self.winding.lock().await.keys().cloned().collect();
+        self.wind_down_tick(now_ts).await;
         for (team, l, i, d) in nudges {
+            if winding.contains(&team.id) {
+                continue;
+            }
             let why = format!(
                 "watchdog {} — silent {} min{}",
                 i + 1,
@@ -5052,6 +5107,7 @@ impl AppState {
         let mut e = crate::handover::Evidence {
             seat: l.seat.clone(),
             cli: l.cli.label().to_string(),
+            note: read_note(&l.files_dir),
             ..Default::default()
         };
         if let Some(s) = session {
@@ -5184,18 +5240,54 @@ impl AppState {
         }
         let launches = self.launches.read().await.clone();
         for seat in started {
-            let mut history = false;
+            // The seat's own past (`R-P15`): the session it had before the
+            // team was stopped, and the note it left then. Without this a
+            // team wound down and booted again handed over everyone's work
+            // but the seat's own.
+            let predecessor = match launches.iter().find(|l| l.team_id == team_id && &l.seat == seat) {
+                Some(l) => self.predecessor_for(l).await,
+                None => None,
+            };
+            let mut history = predecessor.is_some();
             for l in launches.iter().filter(|l| l.team_id == team_id && &l.seat != seat) {
+                if history {
+                    break;
+                }
                 let e = self.evidence_for(l).await;
                 if !e.turns.is_empty() || e.diff.is_some() {
                     history = true;
-                    break;
                 }
             }
             if history {
-                self.handover_for(team_id, seat, crate::handover::Reason::Start, None).await;
+                self.handover_for(team_id, seat, crate::handover::Reason::Start, predecessor).await;
             }
         }
+    }
+
+    /// What a seat did before this launch: its newest dead session's turns
+    /// and the note it left (`R-P15`). `None` when there is nothing — a seat
+    /// never started here, or one that wrote and said nothing.
+    async fn predecessor_for(&self, l: &mogeung_core::team::SeatLaunch) -> Option<crate::handover::Evidence> {
+        let earlier = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| !s.alive && s.seat.as_ref().is_some_and(|t| t.team_id == l.team_id && t.seat == l.seat))
+                .max_by_key(|s| s.last_event_at)
+                .cloned()
+        };
+        let mut e = crate::handover::Evidence {
+            seat: l.seat.clone(),
+            cli: l.cli.label().to_string(),
+            note: read_note(&l.files_dir),
+            ..Default::default()
+        };
+        if let Some(s) = earlier {
+            let events = self.store.load_recent_events(&s.id, 0, 60).unwrap_or_default();
+            e.turns = crate::handover::turns_from_events(&events);
+            e.last_activity = s.last_activity.clone();
+        }
+        (!e.turns.is_empty() || e.note.is_some()).then_some(e)
     }
 
     /// Stop one seat and start it again. The earlier session's evidence is
@@ -5305,6 +5397,10 @@ impl AppState {
         if team.seats.is_empty() {
             return Err(anyhow!("the team `{}` has no seats to boot", team.name));
         }
+        // A boot is a fresh start for the record of how the last wind-down
+        // went (`R-P15`); one still in progress is finished by it, since
+        // every seat it was waiting on is about to be started again.
+        self.winding.lock().await.remove(id);
         let on_record: Vec<mogeung_core::team::SeatLaunch> =
             self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
         let seats_dir = self.seats_dir();
@@ -5362,7 +5458,207 @@ impl AppState {
             self.store.delete_launch(&l.team_id, &l.seat)?;
         }
         self.launches.write().await.retain(|l| l.team_id != id);
+        // Stop now, during a wind-down, is the wind-down cut short: the
+        // seats still asked are stopped without a note, and the record says
+        // so (`R-P15`).
+        if let Some(w) = self.winding.lock().await.get_mut(id) {
+            let now = Utc::now().timestamp();
+            for s in w.state.seats.iter_mut().filter(|s| !s.status.finished()) {
+                s.status = mogeung_core::team::WindDownStatus::Stopped;
+                s.at = now;
+            }
+        }
         Ok(self.launches.read().await.clone())
+    }
+
+    // -- Wind-down. `R-P15`, ADR-0003's amendment of 2026-10-11. -----------
+
+    /// Wind a team down: type the policy's wind-down message into every
+    /// running seat and wait for each to answer. A seat is finished — its
+    /// process ended, its record forgotten — when its note arrives
+    /// (`seat_note`), when its turn ends (`wind_down_stop`), or at the
+    /// deadline (`wind_down_tick`); when the last is finished the team's
+    /// tmux session comes down. The question is your act with declared
+    /// words, so it is logged as a `WindDown` send, neither a hop nor
+    /// counted against the hour, and it is not judged — the pause switch
+    /// stops automatic sends, and this is not one.
+    ///
+    /// Idempotent: a team already being wound down is left to it.
+    pub async fn wind_down_team(&self, id: &str) -> Result<()> {
+        use mogeung_core::team::{SendKind, SendStatus, WindDown, WindDownSeat, WindDownStatus};
+        let team = self.team_by_id(id).ok_or_else(|| anyhow!("no team with id {id}"))?;
+        let mine: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
+        if mine.is_empty() {
+            return Err(anyhow!("no seat of this team is running"));
+        }
+        if self.winding.lock().await.get(id).is_some_and(|w| w.state.seats.iter().any(|s| !s.status.finished())) {
+            return Ok(());
+        }
+        let now = Utc::now().timestamp();
+        let text = team.policy.wind_down.replace("{note}", crate::hooks::NOTE_COMMAND);
+        let busy: std::collections::HashSet<String> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.alive && s.live_status == Some(mogeung_core::session::LiveStatus::Busy))
+                .filter_map(|s| s.seat.as_ref().filter(|t| t.team_id == id).map(|t| t.seat.clone()))
+                .collect()
+        };
+        let mut w = Winding {
+            state: WindDown { started: now, deadline: now + team.policy.wind_down_minutes as i64 * 60, seats: Vec::new() },
+            skip_stop: std::collections::HashSet::new(),
+        };
+        let mut finish_now: Vec<(mogeung_core::team::SeatLaunch, WindDownStatus)> = Vec::new();
+        for l in &mine {
+            if !crate::seat::is_running(l) {
+                w.state.seats.push(WindDownSeat { seat: l.seat.clone(), status: WindDownStatus::Gone, at: now, note: None });
+                finish_now.push((l.clone(), WindDownStatus::Gone));
+                continue;
+            }
+            let mut e = crate::policy::entry(id, SendKind::WindDown, None, &l.seat, &text, "you wound the team down", now);
+            match self.type_into(l, &text, false).await {
+                Ok(()) => {
+                    e.status = SendStatus::Delivered;
+                    if busy.contains(&l.seat) {
+                        w.skip_stop.insert(l.seat.clone());
+                    }
+                    w.state.seats.push(WindDownSeat { seat: l.seat.clone(), status: WindDownStatus::Asked, at: now, note: None });
+                }
+                Err(err) => {
+                    // A pane that would not take the question is a seat that
+                    // cannot answer it: stopped now, and the log says why.
+                    e.status = SendStatus::Failed;
+                    e.note = Some(format!("the pane would not take the message — {err:#}; the seat is stopped without a note"));
+                    w.state.seats.push(WindDownSeat { seat: l.seat.clone(), status: WindDownStatus::Stopped, at: now, note: None });
+                    finish_now.push((l.clone(), WindDownStatus::Stopped));
+                }
+            }
+            self.record_send(e).await;
+        }
+        self.winding.lock().await.insert(id.to_string(), w);
+        for (l, _) in finish_now {
+            self.forget_seat(&l).await;
+        }
+        self.after_wind_down_change(id).await;
+        Ok(())
+    }
+
+    /// A seat's note arrived (`POST /api/seat/note`, the seat's own token):
+    /// kept whole beside the seat's files as `note.md`, where the next
+    /// handover reads it as the seat's own last words; during a wind-down it
+    /// is also the seat's answer, and the seat is finished. The reply is one
+    /// line and a status the generated command turns into an exit code.
+    pub async fn seat_note(&self, token: &str, text: &str) -> Option<(u16, String)> {
+        use mogeung_core::team::WindDownStatus;
+        let launches = self.launches.read().await.clone();
+        let from = crate::hooks::seat_for(&launches, token)?.clone();
+        let text = text.trim();
+        if text.is_empty() {
+            return Some((400, "refused — there is nothing in the note".into()));
+        }
+        if text.len() > crate::policy::MAX_TEXT {
+            return Some((413, format!("refused — the note is over {} KiB", crate::policy::MAX_TEXT / 1024)));
+        }
+        let path = Path::new(&from.files_dir).join(NOTE_FILE);
+        let body = format!(
+            "# Note from seat `{}` of team `{}` — {}\n\n{text}\n",
+            from.seat,
+            from.team,
+            Utc::now().format("%Y-%m-%d %H:%M UTC")
+        );
+        if let Err(e) = std::fs::create_dir_all(&from.files_dir).and_then(|_| std::fs::write(&path, body)) {
+            return Some((500, format!("not kept — {e}")));
+        }
+        let excerpt = crate::handover::cut(text, 2_000);
+        if self.finish_wind_down_seat(&from.team_id, &from.seat, WindDownStatus::Noted, Some(excerpt)).await {
+            Some((200, "kept — thank you; this seat is being stopped".into()))
+        } else {
+            Some((200, "kept — it reaches the next session's handover".into()))
+        }
+    }
+
+    /// A seat's turn ended during a wind-down: its answer, with or without a
+    /// note — unless it was mid-turn when asked, in which case this is the
+    /// turn it was in and the next one counts.
+    async fn wind_down_stop(&self, team_id: &str, seat: &str) {
+        {
+            let mut winding = self.winding.lock().await;
+            if let Some(w) = winding.get_mut(team_id) {
+                if w.skip_stop.remove(seat) {
+                    return;
+                }
+            }
+        }
+        self.finish_wind_down_seat(team_id, seat, mogeung_core::team::WindDownStatus::Stopped, None).await;
+    }
+
+    /// Past the deadline, every seat still asked is stopped anyway.
+    async fn wind_down_tick(&self, now: i64) {
+        let due: Vec<(String, String)> = {
+            let winding = self.winding.lock().await;
+            winding
+                .iter()
+                .filter(|(_, w)| w.state.deadline <= now)
+                .flat_map(|(id, w)| w.state.seats.iter().filter(|s| !s.status.finished()).map(move |s| (id.clone(), s.seat.clone())))
+                .collect()
+        };
+        for (team_id, seat) in due {
+            self.finish_wind_down_seat(&team_id, &seat, mogeung_core::team::WindDownStatus::TimedOut, None).await;
+        }
+    }
+
+    /// Finish one seat of a wind-down: the record says how, the process is
+    /// ended, the launch forgotten. `false` when the seat was not being
+    /// waited on — not winding down, or already finished.
+    async fn finish_wind_down_seat(
+        &self,
+        team_id: &str,
+        seat: &str,
+        status: mogeung_core::team::WindDownStatus,
+        note: Option<String>,
+    ) -> bool {
+        let now = Utc::now().timestamp();
+        {
+            let mut winding = self.winding.lock().await;
+            let Some(w) = winding.get_mut(team_id) else { return false };
+            let Some(entry) = w.state.seats.iter_mut().find(|s| s.seat == seat && !s.status.finished()) else { return false };
+            entry.status = status;
+            entry.at = now;
+            entry.note = note;
+            w.skip_stop.remove(seat);
+        }
+        let launch = self.launches.read().await.iter().find(|l| l.team_id == team_id && l.seat == seat).cloned();
+        if let Some(l) = launch {
+            self.forget_seat(&l).await;
+        }
+        self.after_wind_down_change(team_id).await;
+        true
+    }
+
+    /// End one seat's process and forget its record; the worktree stays.
+    async fn forget_seat(&self, l: &mogeung_core::team::SeatLaunch) {
+        crate::seat::stop(l);
+        if let Err(e) = self.store.delete_launch(&l.team_id, &l.seat) {
+            tracing::warn!("the launch record for {}/{} was not deleted: {e:#}", l.team, l.seat);
+        }
+        self.launches.write().await.retain(|x| !(x.team_id == l.team_id && x.seat == l.seat));
+    }
+
+    /// After anything moved in a wind-down: the team session comes down
+    /// once every seat is finished, and every window hears the new state.
+    async fn after_wind_down_change(&self, team_id: &str) {
+        let done = self.winding.lock().await.get(team_id).is_some_and(|w| w.state.seats.iter().all(|s| s.status.finished()));
+        if done {
+            if let Some(team) = self.team_by_id(team_id) {
+                crate::seat::unlayout_team(&crate::seat::team_session_name(&team));
+                tracing::info!("team {} wound down", team.name);
+            }
+        }
+        self.broadcast(self.seats_msg().await);
+        self.broadcast(self.sends_msg().await);
+        self.refresh_provisional().await;
+        self.publish_queue().await;
     }
 
     /// Remove one stopped seat's worktree, when it is clean.

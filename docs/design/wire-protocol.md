@@ -111,7 +111,7 @@ everyone else is judged by the bind and the flag:
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
 | `send_allowed` | `SendToSession`, and since `R-P6` `SendRelease` and `SendDrop` — releasing a held send types into a seat | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
-| a seat's own token (`hooks.rs`) | `POST /api/seat/hook`, `POST /api/seat/status`, and since `R-P6` `POST /api/seat/send` — the one surface an agent's **own process** talks to (`R-P5`) | refused, loopback only, and the shared token is not accepted there: it is a window's key, not a process's ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md) clause 3) |
+| a seat's own token (`hooks.rs`) | `POST /api/seat/hook`, `POST /api/seat/status`, since `R-P6` `POST /api/seat/send`, and since `R-P15` `POST /api/seat/note` — the one surface an agent's **own process** talks to (`R-P5`) | refused, loopback only, and the shared token is not accepted there: it is a window's key, not a process's ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md) clause 3) |
 
 The write guard is one function listing its family, so omitting a new verb is
 a visible gap in a list of thirteen rather than a missing line in a
@@ -366,6 +366,7 @@ amendment.
 | `TeamDelete` | `id` | `Teams`, broadcast | here |
 | `TeamBoot` | `id` — starts every seat not running; *running* is read off tmux, so a seat whose pane has gone is forgotten and started again (`R-P14`); a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once; then `TeamBooted` to the asker | here |
 | `TeamStop` | `id` — ends every seat's process; the worktrees stay | `Seats`, broadcast | here |
+| `TeamWindDown` | `id` — types the policy's wind-down text into every running seat and stops each as its note arrives, its turn ends, or the deadline passes; the team session comes down with the last seat (`R-P15`); `TeamStop` meanwhile cuts it short | `Seats` and `Sends`, broadcast, at each step | here |
 | `SeatWorktreeRemove` | `team_id`, `seat` — a stopped seat's worktree, only when clean | an `Error` naming what was removed or why not, to the asker | here |
 | `TeamPause` | `id`, `paused` — the switch, on the definition; the only verb that writes `paused` (`R-P6`) | `Teams` and `Sends`, broadcast | here |
 | `SendRelease` | `team_id`, `id` — type a held send now; your act, so the chain starts again | `Sends`, broadcast; the seat rows at once | here |
@@ -381,7 +382,7 @@ amendment.
 | `TeamExported` | `team_id`, the `path` written (`R-P12`) | theirs |
 | `TeamBooted` | what a `TeamBoot` did, seat by seat (`R-P14`): `started` by this boot, `revived` among them had a record but no pane, `skipped` were running and left alone; all three empty is a team already up. After the `Seats` broadcast, so the window closes on an answer and not on rows it cannot tell from the ones already there | theirs |
 | `TeamDraft` | a `team` with no id and no stamps, for the window to show as an unsaved draft, and the import's `notes` — what was and was not carried (`R-P12`) | theirs |
-| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
+| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop; a `wind_down` (`R-P15`) is your press with declared words, neither hop nor automatic — oldest first, the last two hundred; and `wind_down` while a team is being wound down or lately was: `started`, `deadline`, a seat each as `asked` / `noted` / `stopped` / `timed_out` / `gone` with the note's excerpt, kept until the next boot; with every `TeamList` answer and after every change | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
 and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
@@ -676,6 +677,7 @@ GET  /api/health                         # liveness, and whether it still sees e
 POST /api/seat/hook                      # a seat's hook event, with the seat's own bearer token; loopback only (R-P5)
 POST /api/seat/status                    # a seat's status-line reading; answers with the line to show, counters included
 POST /api/seat/send?to=<seat>            # a seat's words to a seat of its team, plain text; 200 delivered, 202 held, else refused (R-P6)
+POST /api/seat/note                      # a seat's note about its own work, plain text; 200 kept beside its files for the next handover (R-P15)
 GET  /api/queue
 GET  /api/sessions
 GET  /api/sessions/{id}

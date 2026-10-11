@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-10-10
+updated: 2026-10-11
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -288,6 +288,12 @@ are opposite kinds of act and both end at a terminal.
   with the follow's *allow changes* consent, and the owning daemon then
   applies the gate to the relay as to any client — over a LAN it is refused
   there, in its words.
+- **A wind-down** (`R-P15`) is this act done for you, for seats only: your
+  press types the team's declared `wind_down` text into every running seat
+  through the same one function (`type_into`, a launch record and no other
+  address), logged as a `wind_down` send that is neither a hop nor automatic.
+  The pause switch does not hold it, the judge does not see it, and nothing
+  of it can reach a session you started by hand.
 
 ## What the signals do not read
 

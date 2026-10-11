@@ -165,6 +165,16 @@ pub struct Policy {
     pub wakes: Vec<Wake>,
     #[serde(default)]
     pub watchdogs: Vec<Watchdog>,
+    /// What every running seat is told when you wind the team down
+    /// (`R-P15`): declared text, typed once into each seat, asking for a
+    /// note of where it got to. `{note}` in it stands for the command that
+    /// takes the note. Your act causes it, so it is neither a hop nor counted
+    /// against the hour.
+    #[serde(default = "default_wind_down")]
+    pub wind_down: String,
+    /// How long a seat has to answer before it is stopped anyway. Minutes.
+    #[serde(default = "default_wind_down_minutes")]
+    pub wind_down_minutes: u32,
 }
 
 fn default_hop_budget() -> u32 {
@@ -173,6 +183,21 @@ fn default_hop_budget() -> u32 {
 
 fn default_hourly_cap() -> u32 {
     60
+}
+
+/// The wind-down message a new team starts with. One message, in words an
+/// agent acts on: what to write, where to send it, and to stop.
+pub const DEFAULT_WIND_DOWN: &str = "mogeung is stopping this team. Finish nothing new. In one message, write a note for \
+whoever picks this seat up next: what you were doing, what is done, what is unfinished and where it stands, the \
+decisions you made, and anything the next session must not redo. Send it with the `{note}` command on your PATH — \
+`{note} \"<text>\"` or on stdin — then stop. You will be stopped once the note is in, or after a few minutes.";
+
+fn default_wind_down() -> String {
+    DEFAULT_WIND_DOWN.to_string()
+}
+
+fn default_wind_down_minutes() -> u32 {
+    3
 }
 
 impl Default for Policy {
@@ -184,6 +209,8 @@ impl Default for Policy {
             readiness_press: false,
             wakes: Vec::new(),
             watchdogs: Vec::new(),
+            wind_down: default_wind_down(),
+            wind_down_minutes: default_wind_down_minutes(),
         }
     }
 }
@@ -563,6 +590,11 @@ pub enum SendKind {
     /// hop — nothing another agent did caused it — and counted against the
     /// hour like every automatic send.
     Press,
+    /// The team's wind-down message, typed into every running seat when you
+    /// wind the team down. `R-P15`, ADR-0003's amendment of 2026-10-11.
+    /// Declared text, but your act: it is neither a hop nor automatic, and
+    /// the chain starts again after it as after any send of yours.
+    WindDown,
 }
 
 impl SendKind {
@@ -578,9 +610,10 @@ impl SendKind {
         matches!(self, SendKind::Wake | SendKind::Agent | SendKind::Handover)
     }
 
-    /// Counted against the team's hourly cap: everything a human did not do.
+    /// Counted against the team's hourly cap: everything a human did not
+    /// do. A wind-down is a human's press with declared words, so it is not.
     pub fn is_automatic(self) -> bool {
-        self != SendKind::Human
+        !matches!(self, SendKind::Human | SendKind::WindDown)
     }
 
     pub fn label(self) -> &'static str {
@@ -591,6 +624,7 @@ impl SendKind {
             SendKind::Agent => "seat",
             SendKind::Handover => "handover",
             SendKind::Press => "press",
+            SendKind::WindDown => "wind down",
         }
     }
 }
@@ -683,6 +717,65 @@ pub struct TeamSends {
     pub held: u32,
     /// Oldest first. The daemon keeps the most recent entries only.
     pub log: Vec<SendEntry>,
+    /// A wind-down in progress (`R-P15`): absent when the team is not being
+    /// wound down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wind_down: Option<WindDown>,
+}
+
+/// A team being wound down: every running seat was asked for a note, and
+/// each is stopped when its note is in, when its turn ends, or at the
+/// deadline. `R-P15`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindDown {
+    /// Unix seconds, when you asked.
+    pub started: i64,
+    /// Unix seconds, when the seats still asked are stopped anyway.
+    pub deadline: i64,
+    pub seats: Vec<WindDownSeat>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindDownSeat {
+    pub seat: String,
+    pub status: WindDownStatus,
+    /// Unix seconds, when the status last changed.
+    pub at: i64,
+    /// The note the seat sent, cut for the wire; the whole is kept beside the
+    /// seat's files for the next handover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindDownStatus {
+    /// The message was typed; the seat has not answered yet.
+    Asked,
+    /// Its note arrived; the seat was stopped.
+    Noted,
+    /// Its turn ended without a note; the seat was stopped.
+    Stopped,
+    /// The deadline passed; the seat was stopped anyway.
+    TimedOut,
+    /// Its pane was already gone when the team was wound down.
+    Gone,
+}
+
+impl WindDownStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            WindDownStatus::Asked => "asked",
+            WindDownStatus::Noted => "noted",
+            WindDownStatus::Stopped => "stopped without a note",
+            WindDownStatus::TimedOut => "timed out",
+            WindDownStatus::Gone => "already gone",
+        }
+    }
+    /// Is this seat done with — stopped, one way or another?
+    pub fn finished(self) -> bool {
+        self != WindDownStatus::Asked
+    }
 }
 
 #[cfg(test)]
@@ -745,6 +838,14 @@ mod tests {
         assert!(ScreenShape::PressEnter.is_gate());
         assert!(!ScreenShape::Prompt.is_gate() && !ScreenShape::Unknown.is_gate());
         assert_eq!(serde_json::to_string(&ScreenShape::PermissionMenu).unwrap(), r#""permission_menu""#);
+        // `R-P15`: a wind-down is your press with declared words — not a hop,
+        // not automatic, so neither the budget nor the cap sees it.
+        assert!(!SendKind::WindDown.is_hop());
+        assert!(!SendKind::WindDown.is_automatic());
+        assert_eq!(SendKind::WindDown.label(), "wind down");
+        let p = Policy::default();
+        assert!(p.wind_down.contains("{note}"), "the default names the command");
+        assert_eq!(p.wind_down_minutes, 3);
         assert!(!SendKind::Human.is_hop());
         assert!(SendKind::Watchdog.is_automatic());
         assert!(!SendKind::Human.is_automatic());

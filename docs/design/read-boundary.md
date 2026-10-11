@@ -1,7 +1,7 @@
 ---
 title: The read boundary
 status: active
-updated: 2026-10-10
+updated: 2026-10-11
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/workspace.rs
@@ -139,6 +139,17 @@ it is refused with the current text; no seat may be mid-turn in the worktree,
 else it is refused until the save says `force`. Judged per connection like
 the seat verbs, and behind the write guard with the git writes
 ([wire-protocol.md](wire-protocol.md#the-one-write-into-a-worktree-r-p9-writers)).
+
+## A seat's note (`R-P15`)
+
+The other thing a seat's words can cause to be written, and it is not in a
+repository: `POST /api/seat/note`, with the seat's own token, lands as
+`note.md` under `~/.mogeung/seats/<team>/<seat>/`, beside the files the
+launcher made. The path is the daemon's, read off the launch record and never
+off the request; the body is bounded like a send's; a token nobody holds is a
+401 that says nothing else. A session you started by hand has no token and
+no path here. The note is read back by the daemon alone, as evidence for the
+next handover, cut to that prompt's budget.
 
 ## Two spellings of one path
 

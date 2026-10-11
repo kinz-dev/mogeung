@@ -350,6 +350,56 @@ describe("the Gau Geung board", () => {
     expect(dock.getPanel(SEAT_PANE)).toBeDefined();
   });
 
+  /** `R-P15`. The quick way down is on the board, per team: Wind down asks
+   *  every seat for its note, Stop now ends them at once; while it runs the
+   *  strip says how far along, and afterwards how it went. */
+  it("winds a team down from the board and shows how it is going", async () => {
+    board();
+    await screen.findByTestId("pulse");
+    fireEvent.click(screen.getByText("Wind down"));
+    expect(sent).toContainEqual({ cmd: "team_wind_down", id: "t1" });
+    fireEvent.click(screen.getByText("Stop now"));
+    expect(sent).toContainEqual({ cmd: "team_stop", id: "t1" });
+    const now = Math.floor(Date.now() / 1000);
+    act(() =>
+      useStore.setState({
+        teamSends: [
+          sends({
+            wind_down: {
+              started: now - 30,
+              deadline: now + 150,
+              seats: [
+                { seat: "planner", status: "asked", at: now - 30 },
+                { seat: "builder", status: "noted", at: now - 5, note: "Parser done; tests next." },
+              ],
+            },
+          }),
+        ],
+      }),
+    );
+    const strip = await screen.findByTestId("wind-down");
+    expect(strip.textContent).toContain("winding down · 1 of 2 answered, 1 with a note · 2:");
+    expect(strip.textContent).toContain("builder · left a note — “Parser done; tests next.”");
+    expect(screen.getByText("Wind down").closest("button")).toBeDisabled();
+    act(() =>
+      useStore.setState({
+        teamSends: [
+          sends({
+            wind_down: {
+              started: now - 200,
+              deadline: now - 20,
+              seats: [
+                { seat: "planner", status: "timed_out", at: now - 20 },
+                { seat: "builder", status: "noted", at: now - 100, note: "Parser done; tests next." },
+              ],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(screen.getByTestId("wind-down").textContent).toContain("wound down — 1 of 2 left a note · planner timed out, builder left a note");
+  });
+
   it("shows one team or all of them from the tabs", async () => {
     board();
     act(() =>

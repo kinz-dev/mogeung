@@ -393,6 +393,12 @@ pub enum ClientMsg {
     /// End every seat's process. The worktrees stay; removing one is the verb
     /// below, which refuses when the worktree is dirty.
     TeamStop { id: String },
+    /// Wind the team down (`R-P15`): type the policy's wind-down message
+    /// into every running seat, stop each as its note arrives, its turn
+    /// ends, or the deadline passes, and take the team session down when the
+    /// last is stopped. `TeamStop` meanwhile cuts it short. Judged like
+    /// `TeamStop`.
+    TeamWindDown { id: String },
     /// Remove one stopped seat's worktree, when it is clean.
     SeatWorktreeRemove { team_id: String, seat: String },
     /// The pause switch. `R-P6`, ADR-0003's amendment fence 4: no automatic

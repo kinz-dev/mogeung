@@ -399,6 +399,24 @@ seat's own last sends). Docs: `architecture.md`, `wire-protocol.md`,
 `R-P7`, built: `desktop/src/lib/teamMode.ts` (the lanes — `laneFor` reads
 *parked* and *blocked* off the send log — `seatViews`, `sessionOf`,
 `sourceOf`, `edges`, `ring`, the pane ids and the layout key, `teamTab`),
+`R-P15`, built: `crates/mogeung-core/src/team.rs` (`Policy.wind_down`,
+`wind_down_minutes`, `DEFAULT_WIND_DOWN`, `SendKind::WindDown`, `WindDown`,
+`WindDownSeat`, `WindDownStatus`, `TeamSends.wind_down`), `wire.rs`
+(`TeamWindDown`), `mogeungd/src/hooks.rs` (`NOTE_PATH`, `NOTE_COMMAND`,
+`note_script`), `seat.rs` (the command written beside `mogeung-send`, the
+guidance's paragraph), `state.rs` (`Winding`, `wind_down_team`, `seat_note`,
+`wind_down_stop`, `wind_down_tick`, `finish_wind_down_seat`, `forget_seat`,
+`read_note`, `predecessor_for`; no wakes or watchdogs for a team winding
+down; `handovers_after_boot` with the seat's own predecessor), `handover.rs`
+(`Evidence.note`), `api.rs` (the route, the verb), `team.rs` (mirror,
+validation); tests `tests/team_wind_down.rs`, unit tests in `hooks.rs`,
+`handover.rs`, `team.rs`. Window: `wire/types.ts`, `lib/teams.ts`
+(`DEFAULT_WIND_DOWN`, `windDownLine`, `WIND_DOWN_LABEL`), `TeamsWindow.tsx`
+(the two policy fields; *Wind down* and *Stop now*), `GauGeungMode.tsx` (the
+two per team on the board, the strip). Docs: ADR-0003's 2026-10-11 amendment,
+`wire-protocol.md`, `architecture.md`, `cross-session-signals.md`,
+`read-boundary.md`, the guide.
+
 `ui/GauGeungMode.tsx` (the panes: `TeamBoard` — its header with team tabs
 and counters, `Pulse`, `Graph`, `Table`, `PolicyStrip` — `SeatDetail`,
 `SeatTerminal`), `lib/panes.ts` (`toggleTeamBoard`, `showSeatPane`,
@@ -726,6 +744,29 @@ gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
   The window also says beforehand what Boot would start, and is grey with
   *every seat is running* when nothing would. On the same first look, the
   Attention list gained its *Team* section (`R-J131`, pillar J).
+- 2026-10-11, `R-P15`, the graceful stop. *"ask each of the seats to write
+  down what I was up to so that next time the handover can resume from
+  there."* Three choices. **The question is policy text**, `wind_down`, with
+  a default that names the command and a `{note}` marker for it, because
+  every other thing a team types on its own is declared text read in the
+  window first, and a stop should be no exception; the owner chose editable
+  over fixed. **The note goes to the daemon, not to a file the seat picks**:
+  `mogeung-note` posts to `/api/seat/note` with the seat's token, as
+  `mogeung-send` does, so a Codex seat under a write sandbox can leave one,
+  nothing is written into a repository or a home (ADR-0043), and the daemon
+  decides where it lives — `note.md` beside the seat's files, the latest
+  replacing the last. **A seat is finished three ways** — note in, turn
+  ended, deadline — and the first `Stop` from a seat that was mid-turn when
+  asked is let pass, because a CLI queues typed text behind the turn in
+  flight and that `Stop` ends the turn that never read the question. Two
+  things the first cut had missed and this fixed: a boot after a stop
+  composed handovers from the teammates' evidence only, never from the
+  seat's own earlier session, so a wound-down team booted again forgot each
+  seat's own work; and a team being wound down still fired wakes and
+  watchdogs at seats on their way out. ADR-0003 gains its 2026-10-11
+  amendment for the two paths. Built with a recording sender and real
+  throwaway tmux sessions (`tests/team_wind_down.rs`); not yet run on a
+  live seat.
 - 2026-10-11, `R-J132` (pillar J), reversing one line of `R-P7`'s design. *A
   mode on a chord, never a home* was the wall's reason applied here: the
   queue is the thesis, and a view you can leave up argues with it. The first

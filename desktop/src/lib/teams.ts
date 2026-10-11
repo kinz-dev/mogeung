@@ -7,14 +7,60 @@
  * daemon will say about them, so a form can show it before a click fails.
  */
 
-import type { PermissionMode, Policy, Seat, SeatSignals, SendEntry, SessionSource, Team, TeamSends } from "@/wire/types";
+import type { PermissionMode, Policy, Seat, SeatSignals, SendEntry, SessionSource, Team, TeamSends, WindDown, WindDownStatus } from "@/wire/types";
 import { PERMISSION_LABEL } from "@/wire/types";
 
+/**
+ * The wind-down message a new team starts with (`R-P15`) — the daemon's
+ * default, repeated here so a new team's form shows it before the first
+ * save. `{note}` is replaced by the note command's name when typed.
+ */
+export const DEFAULT_WIND_DOWN =
+  "mogeung is stopping this team. Finish nothing new. In one message, write a note for whoever picks this seat up next: " +
+  "what you were doing, what is done, what is unfinished and where it stands, the decisions you made, and anything the " +
+  "next session must not redo. Send it with the `{note}` command on your PATH — `{note} \"<text>\"` or on stdin — then stop. " +
+  "You will be stopped once the note is in, or after a few minutes.";
+
 /** The policy a new team starts with: the owner's numbers (three hops,
- *  sixty an hour), a handover you read first, no press, nothing declared. */
+ *  sixty an hour), a handover you read first, no press, nothing declared,
+ *  and three minutes to answer a wind-down. */
 export function defaultPolicy(): Policy {
-  return { hop_budget: 3, hourly_cap: 60, handover: "after_read", readiness_press: false, wakes: [], watchdogs: [] };
+  return {
+    hop_budget: 3,
+    hourly_cap: 60,
+    handover: "after_read",
+    readiness_press: false,
+    wakes: [],
+    watchdogs: [],
+    wind_down: DEFAULT_WIND_DOWN,
+    wind_down_minutes: 3,
+  };
 }
+
+/**
+ * One line for a wind-down (`R-P15`): how far along, and how long is left —
+ * or how it went, once every seat is finished.
+ */
+export function windDownLine(w: WindDown, now: number): string {
+  const done = w.seats.filter((s) => s.status !== "asked").length;
+  const noted = w.seats.filter((s) => s.status === "noted").length;
+  if (done === w.seats.length) {
+    const how = w.seats.map((s) => `${s.seat} ${WIND_DOWN_LABEL[s.status]}`).join(", ");
+    return `wound down — ${noted} of ${w.seats.length} left a note · ${how}`;
+  }
+  const left = Math.max(0, w.deadline - now);
+  const m = Math.floor(left / 60);
+  const sec = Math.floor(left % 60);
+  return `winding down · ${done} of ${w.seats.length} answered, ${noted} with a note · ${m}:${String(sec).padStart(2, "0")} left`;
+}
+
+export const WIND_DOWN_LABEL: Record<WindDownStatus, string> = {
+  asked: "asked",
+  noted: "left a note",
+  stopped: "stopped without a note",
+  timed_out: "timed out",
+  gone: "already gone",
+};
 
 export function newTeam(): Team {
   return {
@@ -132,6 +178,8 @@ export function sendBy(e: SendEntry): string {
       return e.composed_by ? `handover (${e.composed_by})` : "handover";
     case "press":
       return "press";
+    case "wind_down":
+      return "you (wind down)";
   }
 }
 
@@ -157,6 +205,8 @@ export function firstProblem(team: Team): string | null {
   if (!team.name.trim()) return "a team needs a name";
   if (team.repo.trim() && !team.repo.startsWith("/")) return "the repository must be an absolute path";
   if (team.policy.hourly_cap < 1) return "the hourly cap must be at least one — pause the team to stop every send";
+  if (!team.policy.wind_down.trim()) return "the wind-down message is empty — a seat asked for nothing writes nothing";
+  if (team.policy.wind_down_minutes < 1 || team.policy.wind_down_minutes > 60) return "a wind-down waits between one and sixty minutes";
   const seen = new Set<string>();
   for (const s of team.seats) {
     if (!validSeatName(s.name)) return `seat name \`${s.name}\` must be lower-case letters, digits and dashes, starting with a letter`;

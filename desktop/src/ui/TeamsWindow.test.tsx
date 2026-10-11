@@ -77,7 +77,8 @@ describe("the Teams window", () => {
     const t = lastSave();
     expect(t.id).toBe("");
     expect(t.name).toBe("docs sweep");
-    expect(t.policy).toMatchObject({ hop_budget: 3, hourly_cap: 60, handover: "after_read", readiness_press: false });
+    expect(t.policy).toMatchObject({ hop_budget: 3, hourly_cap: 60, handover: "after_read", readiness_press: false, wind_down_minutes: 3 });
+    expect(t.policy.wind_down).toContain("{note}");
     expect(t.permission).toBe("default");
     expect(t.repo).toBe("/home/you/docs");
   });
@@ -138,9 +139,11 @@ describe("the Teams window", () => {
     render(<TeamsWindow />);
     arrives([team()]);
     const boot = screen.getByText("Boot team").closest("button")!;
-    const stop = screen.getByText("Stop team").closest("button")!;
+    const stop = screen.getByText("Stop now").closest("button")!;
+    const wind = screen.getByText("Wind down").closest("button")!;
     expect(boot).not.toBeDisabled();
     expect(stop).toBeDisabled();
+    expect(wind).toBeDisabled();
     expect(stop.title).toContain("no seat of this team is running");
     fireEvent.click(boot);
     expect(sent).toContainEqual({ cmd: "team_boot", id: "t1" });
@@ -222,9 +225,32 @@ describe("the Teams window", () => {
     expect(screen.getByTestId("seat-0-status").textContent).toContain("running in geung-port-openrig-planner");
     // `R-P5`: what its hooks have said, under where it runs.
     expect(screen.getByTestId("seat-0-status").textContent).toContain("hooked — 3 events, last Stop 1m ago · context 12%");
-    expect(screen.getByText("Stop team").closest("button")).not.toBeDisabled();
-    fireEvent.click(screen.getByText("Stop team"));
+    expect(screen.getByText("Stop now").closest("button")).not.toBeDisabled();
+    fireEvent.click(screen.getByText("Stop now"));
     expect(sent).toContainEqual({ cmd: "team_stop", id: "t1" });
+    // `R-P15`: the graceful way down asks for notes first, and is one press —
+    // once every seat has been asked the button greys out and Stop now reads
+    // as the cut-short it is.
+    const wind = screen.getByText("Wind down").closest("button")!;
+    expect(wind).not.toBeDisabled();
+    expect(wind.title).toContain("3 min at most");
+    fireEvent.click(wind);
+    expect(sent).toContainEqual({ cmd: "team_wind_down", id: "t1" });
+    act(() =>
+      useStore.setState({
+        teamSends: [
+          { team_id: "t1", team: "port-openrig", chain: 0, hop_budget: 3, this_hour: 0, hourly_cap: 60, paused: false, held: 0, log: [], wind_down: { started: 1, deadline: 181, seats: [{ seat: "planner", status: "asked", at: 1 }] } },
+        ],
+      }),
+    );
+    expect(screen.getByText("Wind down").closest("button")).toBeDisabled();
+    expect(screen.getByText("Stop now").closest("button")!.title).toContain("cut the wind-down short");
+    // The message and the minutes are the policy's, edited here.
+    fireEvent.change(screen.getByLabelText("wind-down message"), { target: { value: "Leave a note with {note}." } });
+    fireEvent.change(screen.getByLabelText("minutes to answer"), { target: { value: "7" } });
+    fireEvent.click(screen.getByText("Save"));
+    expect(lastSave().policy).toMatchObject({ wind_down: "Leave a note with {note}.", wind_down_minutes: 7 });
+    useStore.setState({ teamSends: [] });
     // The builder is not running: its worktree can be asked away.
     expect(screen.getByTestId("seat-1-status").textContent).toContain("stopped");
     fireEvent.click(screen.getByText("remove worktree"));

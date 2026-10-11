@@ -98,7 +98,7 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // runs on that machine and nowhere else, so its definition is edited
         // there. Teams across machines are `R-P13`'s deferral.
         TeamList | TeamSave { .. } | TeamDelete { .. } => Hop::Here,
-        TeamBoot { .. } | TeamStop { .. } | SeatWorktreeRemove { .. } => Hop::Here,
+        TeamBoot { .. } | TeamStop { .. } | TeamWindDown { .. } | SeatWorktreeRemove { .. } => Hop::Here,
         // A team's sends are judged by the daemon that owns its seats
         // (fence 5), and that is the daemon the window is on. `R-P6`.
         TeamPause { .. } | SendRelease { .. } | SendDrop { .. } => Hop::Here,

@@ -1102,6 +1102,10 @@ export interface Policy {
   readiness_press: boolean;
   wakes: Wake[];
   watchdogs: Watchdog[];
+  /** What every running seat is told on a wind-down; `{note}` stands for the note command. `R-P15`. */
+  wind_down: string;
+  /** How long a seat has to answer before it is stopped anyway. */
+  wind_down_minutes: number;
 }
 export interface Seat {
   /** Lower-case letters, digits, dashes; unique in the team. An address. */
@@ -1239,7 +1243,7 @@ export interface HeldSend {
 // -- Sends. `R-P6`. ADR-0003's amendment, fence 4, as the wire carries it.
 
 /** Who caused a send: you, a declared wake, a declared watchdog, a seat. */
-export type SendKind = "human" | "wake" | "watchdog" | "agent" | "handover" | "press";
+export type SendKind = "human" | "wake" | "watchdog" | "agent" | "handover" | "press" | "wind_down";
 export type SendStatus = "delivered" | "held" | "released" | "dropped" | "refused" | "failed";
 /** One line of a team's send log: what, to whom, why, when, and what became of it. */
 export interface SendEntry {
@@ -1272,7 +1276,23 @@ export interface TeamSends {
   paused: boolean;
   held: number;
   log: SendEntry[];
+  /** A wind-down in progress, or how the last one went, until the next boot. `R-P15`. */
+  wind_down?: WindDown;
 }
+
+/** A team being wound down: who was asked for a note, who has answered, the deadline. `R-P15`. */
+export interface WindDown {
+  started: number;
+  deadline: number;
+  seats: WindDownSeat[];
+}
+export interface WindDownSeat {
+  seat: string;
+  status: WindDownStatus;
+  at: number;
+  note?: string;
+}
+export type WindDownStatus = "asked" | "noted" | "stopped" | "timed_out" | "gone";
 
 export interface Note {
   id: string;
@@ -1495,6 +1515,8 @@ export type ClientMsg =
    *  `R-P4`. Judged like `run_start`. */
   | { cmd: "team_boot"; id: string }
   | { cmd: "team_stop"; id: string }
+  /** Wind the team down: ask every seat for a note, stop each as it answers or at the deadline. `R-P15`. */
+  | { cmd: "team_wind_down"; id: string }
   | { cmd: "seat_worktree_remove"; team_id: string; seat: string }
   /** The pause switch, judged like a save; release and drop a held send,
    *  judged like your own send. `R-P6`. */

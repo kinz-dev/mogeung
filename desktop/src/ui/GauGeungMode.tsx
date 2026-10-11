@@ -39,7 +39,7 @@
  */
 
 import { useEffect, useMemo } from "react";
-import { Anchor, Ban, Check, Copy, Pause, Play, RotateCcw, SquareTerminal, Users } from "lucide-react";
+import { Anchor, Ban, Check, Copy, Moon, Pause, Play, RotateCcw, Square, SquareTerminal, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Button, Chip, Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
@@ -51,7 +51,7 @@ import { compact, shortDir } from "@/lib/format";
 import { copyPath } from "@/lib/clipboard";
 import { showDialog } from "@/lib/dialogWindow";
 import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
-import { countersLine, sendLine, sendsFor, signalsLine } from "@/lib/teams";
+import { WIND_DOWN_LABEL, countersLine, sendLine, sendsFor, signalsLine, windDownLine } from "@/lib/teams";
 import { LANES, agoShort, edges, parseSeatKey, ring, seatKey, seatViews, teamTab, termOfPane, type Lane, type SeatView } from "@/lib/teamMode";
 import { SCREEN_LABEL, isScreenGate, needsHuman, sourceLabel, type AttentionReason, type Team, type TeamSends } from "@/wire/types";
 
@@ -358,16 +358,58 @@ function TeamSection({ team }: { team: Team }) {
   const sends = useStore((s) => s.teamSends.find((t) => t.team_id === team.id));
   const allowed = useStore((s) => s.teamsAllowed);
   const selected = useStore((s) => s.gauSeat);
+  const send = useStore((s) => s.send);
+  const running = useStore((s) => s.seatLaunches.some((l) => l.team_id === team.id));
+  const winding = sends?.wind_down?.seats.some((x) => x.status === "asked") ?? false;
   const pick = (v: SeatView) => {
     useStore.setState({ gauSeat: seatKey(v.team.id, v.seat.name) });
     showSeatPane();
   };
   return (
     <div className="flex flex-col gap-2 rounded border border-[var(--line)] p-2" data-testid={`team-${team.id}`}>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-[var(--text-strong)]">{team.name}</span>
         <Dim className="text-2xs">{teamTab(team, views, sends)}</Dim>
+        <span className="ml-auto flex items-center gap-1">
+          {/* The quick way down (`R-P15`): ask every seat for its note and
+              stop each as it answers; Stop now ends them at once. */}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!allowed || !running || winding}
+            title={
+              winding
+                ? "winding down — every seat has been asked for its note"
+                : running
+                  ? `ask every seat for a note of where it got to, then stop each as it answers — ${team.policy.wind_down_minutes} min at most; the next handover reads the notes`
+                  : "no seat is running"
+            }
+            onClick={() => send({ cmd: "team_wind_down", id: team.id })}
+          >
+            <Moon size={12} /> Wind down
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!allowed || !running}
+            title={winding ? "cut the wind-down short — the seats still asked are stopped without a note" : running ? "end every seat at once, no note asked — the worktrees stay" : "no seat is running"}
+            onClick={() => send({ cmd: "team_stop", id: team.id })}
+          >
+            <Square size={12} /> Stop now
+          </Button>
+        </span>
       </div>
+      {sends?.wind_down && (
+        <div className="flex flex-col gap-0.5 rounded border border-[var(--amber)] px-2 py-1 text-2xs" data-testid="wind-down">
+          <span className="font-semibold text-[var(--text-strong)]">{windDownLine(sends.wind_down, now())}</span>
+          {sends.wind_down.seats.map((x) => (
+            <Dim key={x.seat} className="truncate" title={x.note ?? undefined}>
+              {x.seat} · {WIND_DOWN_LABEL[x.status]}
+              {x.note ? ` — “${x.note.length > 90 ? `${x.note.slice(0, 90)}…` : x.note}”` : ""}
+            </Dim>
+          ))}
+        </div>
+      )}
       <Pulse views={views} sends={sends} selected={selected} pick={pick} />
       <div className="flex flex-wrap gap-2">
         <Graph views={views} sends={sends} selected={selected} pick={pick} />

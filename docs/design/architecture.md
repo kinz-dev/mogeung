@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-10
+updated: 2026-10-11
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
@@ -275,7 +275,18 @@ tag onto the CLI's own session once it claims the pane or the chosen id
 ([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)'s
 amendment). A stop ends the processes and forgets the records; the worktrees
 stay, and removing one is a separate verb that refuses a dirty tree. Boot,
-stop and remove are judged like a run start.
+stop and remove are judged like a run start. Since `R-P14` a boot reads
+*running* off tmux rather than off the record — the record outlives the
+process so the exit can be waked on — so a seat whose pane has gone is
+forgotten and started again, the team session is rebuilt only when something
+started, and `TeamBooted` tells the asker what happened. Since `R-P15` there
+is a second way down: `TeamWindDown` types the policy's wind-down text into
+every running seat and finishes each as its note arrives (`POST
+/api/seat/note`, through `mogeung-note` on the seat's `PATH`), as its turn
+ends, or at the deadline; the note is kept as `note.md` beside the seat's
+files and is the first evidence the next handover quotes for that seat, and a
+boot after a stop hands each seat its own earlier session and note. A team
+winding down wakes and nudges nobody; `Sends` carries how it is going.
 
 **And a seat talks back** (`R-P5`, since 2026-10-10): `hooks.rs` is the first
 surface in mogeung that an agent's **own process** reaches — ADR-0043 clause

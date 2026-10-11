@@ -97,7 +97,7 @@ impl Ledger {
         for e in self.log.iter().rev() {
             match e.status {
                 SendStatus::Released => break,
-                SendStatus::Delivered if e.kind == SendKind::Human => break,
+                SendStatus::Delivered if !e.kind.is_automatic() => break,
                 SendStatus::Delivered if e.kind.is_hop() => n += 1,
                 _ => {}
             }
@@ -125,7 +125,7 @@ impl Ledger {
                 "the team's definition could not be read, so the team is treated as paused".to_string(),
             );
         };
-        if kind == SendKind::Human {
+        if !kind.is_automatic() {
             return Verdict::Deliver { hop: 0 };
         }
         if team.paused {
@@ -283,6 +283,8 @@ impl Engine {
             paused: team.paused,
             held: l.held().count() as u32,
             log: l.log.clone(),
+            // Filled by the state, which holds the wind-downs (`R-P15`).
+            wind_down: None,
         }
     }
 }

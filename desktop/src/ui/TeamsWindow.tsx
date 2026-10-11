@@ -67,6 +67,7 @@ import {
   Upload,
   Users,
   X,
+  Moon,
 } from "lucide-react";
 import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
@@ -213,6 +214,10 @@ export function TeamsWindow() {
   }, [booted, open, draft]);
 
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(base);
+  // A wind-down in progress for the team on screen (`R-P15`): one Wind down
+  // is enough, and Stop now reads as the cut-short it is.
+  const winding =
+    draft !== null && (allSends.find((t) => t.team_id === draft.id)?.wind_down?.seats.some((x) => x.status === "asked") ?? false);
 
   // Which seats a Boot would start. `R-P14`: a seat is running when it has
   // a launch record and no session of its has died — a record whose every
@@ -442,6 +447,26 @@ export function TeamsWindow() {
                     >
                       <Play size={12} /> Boot team
                     </Button>
+                    {/* Two ways down (`R-P15`). Wind down asks every seat
+                        for a note and stops each as it answers; Stop now
+                        ends them at once, and cuts a wind-down short. */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!allowed || !launches.some((l) => l.team_id === draft.id) || winding}
+                      title={
+                        !allowed
+                          ? (refusal ?? "")
+                          : winding
+                            ? "winding down — every seat has been asked for its note"
+                            : launches.some((l) => l.team_id === draft.id)
+                              ? `ask every seat for a note of where it got to, then stop each as its note arrives or its turn ends — ${draft.policy.wind_down_minutes} min at most; the next handover reads the notes`
+                              : "no seat of this team is running"
+                      }
+                      onClick={() => send({ cmd: "team_wind_down", id: draft.id })}
+                    >
+                      <Moon size={12} /> Wind down
+                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -450,12 +475,14 @@ export function TeamsWindow() {
                         !allowed
                           ? (refusal ?? "")
                           : launches.some((l) => l.team_id === draft.id)
-                            ? "end every seat's process — the worktrees stay"
+                            ? winding
+                              ? "cut the wind-down short — the seats still asked are stopped without a note"
+                              : "end every seat's process at once, no note asked — the worktrees stay"
                             : "no seat of this team is running"
                       }
                       onClick={() => send({ cmd: "team_stop", id: draft.id })}
                     >
-                      <Square size={12} /> Stop team
+                      <Square size={12} /> Stop now
                     </Button>
                   </>
                 }
@@ -527,6 +554,26 @@ export function TeamsWindow() {
                     onChange={(v) => patchPolicy({ handover: v })}
                     options={HANDOVERS.map((h) => ({ value: h.value, label: h.label, title: h.title }))}
                   />
+                </Field>
+                {/* `R-P15`: the one message every seat is asked on a wind-down,
+                    and how long it has to answer. Declared text, like a wake. */}
+                <Field label="wind down" hint="what every seat is asked when you wind the team down; {note} is the note command" align="start">
+                  <div className="flex w-full flex-col gap-1.5">
+                    <textarea
+                      aria-label="wind-down message"
+                      className={TEXTAREA}
+                      rows={3}
+                      spellCheck={false}
+                      value={draft.policy.wind_down}
+                      onChange={(e) => patchPolicy({ wind_down: e.target.value })}
+                    />
+                    <NumberField
+                      label="minutes to answer"
+                      value={draft.policy.wind_down_minutes}
+                      onChange={(n) => patchPolicy({ wind_down_minutes: n })}
+                      title="a seat still silent after this long is stopped anyway, without a note"
+                    />
+                  </div>
                 </Field>
                 <Field label="wakes" hint="one seat's event types a line into another" align="start">
                   <div className="flex w-full flex-col gap-1">

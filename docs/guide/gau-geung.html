@@ -185,7 +185,7 @@
       <tr><td>Codex</td><td><code>-a</code>, <code>-s workspace-write</code>; guidance as a marked block in the worktree's <code>AGENTS.md</code>, taken back at stop</td><td><span class="badge quiet">plain</span> always; its hooks live in a config format nobody here has read</td></tr>
     </table></div>
     <p>A Codex seat in the team's checkout cannot be given guidance without writing there, so it is refused in words: put it in a worktree, or give it a home of its own.</p>
-    <p><strong>Stop team</strong> ends every seat's process and forgets the records. The worktrees stay. <strong>remove worktree</strong> is a separate click on a stopped seat, and it refuses a dirty tree and tells you what is in it; the branch stays either way.</p>
+    <p><strong>Wind down</strong> is the graceful way to close a team, in the Teams window and on the board. The daemon types the policy's <strong>wind-down message</strong> into every running seat — by default, a request to write a note of what it was doing, what is done, what is unfinished and what not to redo, and to send it with <code>mogeung-note</code> — then stops each seat as its note arrives, as its turn ends, or when the minutes are up (three by default). The board says how far along it is and, afterwards, how each seat answered. The notes are kept beside the seats' files, and the next boot's handover quotes each seat its own. <strong>Stop now</strong> ends every seat at once with no note asked, and during a wind-down it cuts the wind-down short. Either way the worktrees stay. <strong>remove worktree</strong> is a separate click on a stopped seat, and it refuses a dirty tree and tells you what is in it; the branch stays either way.</p>
     <p>A hooked seat's status line shows what the daemon knows: <code>port/reviewer · a seat of mogeung's · hops 1/3 · 4/60 this hour</code>.</p>
 
     <h2 id="mode">The board</h2>
@@ -256,7 +256,7 @@ echo "done" | mogeung-send planner</code></pre>
       <tr><td>deliver automatically</td><td>composed and typed as an automatic send, a hop, counted against the cap</td></tr>
       <tr><td>none</td><td>nothing is composed; the seat starts cold</td></tr>
     </table></div>
-    <p>The entry is logged <em>composed by &lt;model&gt; @ &lt;host&gt;</em> and shown whole in the seat pane. With no model endpoint configured, or a host you have not consented to, a refusal entry says the seat started without one. A cold boot, where nobody has done anything yet, hands over nothing.</p>
+    <p>The entry is logged <em>composed by &lt;model&gt; @ &lt;host&gt;</em> and shown whole in the seat pane. With no model endpoint configured, or a host you have not consented to, a refusal entry says the seat started without one. A cold boot, where nobody has done anything yet, hands over nothing. A seat's own note, left with <code>mogeung-note</code> when the team was wound down, is the first thing the handover quotes for that seat — and a team booted after a wind-down hands each seat its own earlier session as well as its teammates'.</p>
 
     <h2 id="screen">What the screen says</h2>
     <p>A seat's pane is read each scan into a closed set of shapes, and only a seat's: the capture takes a pane from the launch record and nowhere else, so no pane you opened yourself is ever captured. The capture is never kept; what reaches the row is the shape, the few lines it was read from, and when.</p>
@@ -314,6 +314,7 @@ echo "done" | mogeung-send planner</code></pre>
       <tr><th>you see</th><th>why, and what to do</th></tr>
       <tr><td>a seat says <em>plain</em></td><td>its CLI carries no hooks (Codex), or it is Qwen without a home of its own, or <code>curl</code> is missing. A plain seat still works; it cannot run <code>mogeung-send</code> without curl</td></tr>
       <tr><td>no <code>geung-&lt;team&gt;</code> session</td><td>tmux refused the layout; the seats are up and the daemon logged why. The window reaches each seat regardless</td></tr>
+      <tr><td>a seat sits <em>asked</em> through the whole wind-down</td><td>it never read the message — a permission menu or a login in front of it, or a plain seat with no hooks whose turn end was not seen. It is stopped at the deadline without a note; attach its terminal next time and answer the gate first, or press <strong>Stop now</strong></td></tr>
       <tr><td>a handover entry reads <em>refused</em></td><td>no model endpoint is configured, the host is not consented to, or the endpoint failed; the note says which. Set <code>model_url</code> and <code>allow_remote_model</code> in <code>~/.mogeung/config.toml</code></td></tr>
       <tr><td><code>screen:claude</code> in Health</td><td>a seat's pane showed something the closed set does not name. Attach the terminal and look; a restyled menu is a fixture to pin</td></tr>
       <tr><td><code>hook:Something</code> in Health</td><td>a seat posted a hook event nobody has classified. Nothing was dropped; it is a decision to take</td></tr>

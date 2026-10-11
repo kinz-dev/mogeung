@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { countersLine, firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, sendLine, sendsFor, signalsLine, teamSummary, validSeatName } from "./teams";
+import { DEFAULT_WIND_DOWN, countersLine, firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, sendBy, sendLine, sendsFor, signalsLine, teamSummary, validSeatName, windDownLine } from "./teams";
 
 describe("team helpers", () => {
   it("starts a team with the owner's numbers", () => {
@@ -17,6 +17,30 @@ describe("team helpers", () => {
     expect(t.policy.hourly_cap).toBe(60);
     expect(t.permission).toBe("default");
     expect(t.id).toBe("");
+    // `R-P15`: three minutes to answer a wind-down, and a message that names the command.
+    expect(t.policy.wind_down_minutes).toBe(3);
+    expect(t.policy.wind_down).toBe(DEFAULT_WIND_DOWN);
+    expect(DEFAULT_WIND_DOWN).toContain("{note}");
+  });
+
+  /** `R-P15`. The strip's one line while a wind-down runs, and after. */
+  it("says how a wind-down is going, and how it went", () => {
+    const now = 1_000_000;
+    expect(
+      windDownLine({ started: now - 30, deadline: now + 125, seats: [{ seat: "a", status: "asked", at: now - 30 }, { seat: "b", status: "noted", at: now - 2, note: "x" }, { seat: "c", status: "gone", at: now - 30 }] }, now),
+    ).toBe("winding down · 2 of 3 answered, 1 with a note · 2:05 left");
+    expect(windDownLine({ started: now - 300, deadline: now - 120, seats: [{ seat: "a", status: "timed_out", at: now - 120 }, { seat: "b", status: "stopped", at: now - 200 }] }, now)).toBe(
+      "wound down — 0 of 2 left a note · a timed out, b stopped without a note",
+    );
+    // Past the deadline but a seat still asked: no negative clock.
+    expect(windDownLine({ started: 0, deadline: now - 5, seats: [{ seat: "a", status: "asked", at: 0 }] }, now)).toContain("0:00 left");
+    expect(sendBy({ id: "1", team_id: "t", at: 0, kind: "wind_down", to: "a", text: "", why: "", status: "delivered", hop: 0 })).toBe("you (wind down)");
+    // The mirror of `team::validate`'s two new refusals.
+    const t = newTeam();
+    t.name = "x";
+    expect(firstProblem({ ...t, policy: { ...t.policy, wind_down: "  " } })).toContain("wind-down message is empty");
+    expect(firstProblem({ ...t, policy: { ...t.policy, wind_down_minutes: 0 } })).toContain("between one and sixty minutes");
+    expect(firstProblem({ ...t, policy: { ...t.policy, wind_down_minutes: 61 } })).toContain("between one and sixty minutes");
   });
 
   it("names a seat the way the daemon addresses one", () => {

@@ -58,6 +58,7 @@ fn seat_router(state: Arc<AppState>) -> Router {
         .route(crate::hooks::HOOK_PATH, axum::routing::post(seat_hook))
         .route(crate::hooks::STATUS_PATH, axum::routing::post(seat_status))
         .route(crate::hooks::SEND_PATH, axum::routing::post(seat_send))
+        .route(crate::hooks::NOTE_PATH, axum::routing::post(seat_note))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .with_state(state)
 }
@@ -87,6 +88,32 @@ async fn seat_send(
     let to = q.get("to").map(String::as_str).unwrap_or("");
     let text = String::from_utf8_lossy(&body);
     match state.seat_send(bearer, to, &text).await {
+        None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
+        Some((code, line)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), line).into_response(),
+    }
+}
+
+/// A seat's note about its own work. `R-P15`. The same fences as `seat_send`
+/// — loopback, the seat's token, a bounded body — and no policy: a note goes
+/// to the daemon, not to a seat. Kept beside the seat's files; during a
+/// wind-down it is the seat's answer.
+async fn seat_note(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    if !crate::hooks::admit(peer) {
+        return (StatusCode::FORBIDDEN, "a seat is heard on loopback only").into_response();
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let text = String::from_utf8_lossy(&body);
+    match state.seat_note(bearer, &text).await {
         None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
         Some((code, line)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), line).into_response(),
     }
@@ -2634,6 +2661,17 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
+        // Wind the team down (`R-P15`): the question is typed now, the
+        // seats are stopped as they answer, and every window hears each
+        // step. Judged like a stop.
+        ClientMsg::TeamWindDown { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            if let Err(e) = state.wind_down_team(&id).await {
+                err(e);
+            }
+        }
         ClientMsg::TeamStop { id } => {
             if !(state.runs.allowed() || from_this_machine) {
                 return err(anyhow::anyhow!(team_refusal()));
@@ -2641,6 +2679,7 @@ async fn handle(
             match state.stop_team(&id).await {
                 Ok(_) => {
                     state.broadcast(state.seats_msg().await);
+                    state.broadcast(state.sends_msg().await);
                     state.refresh_provisional().await;
                     state.publish_queue().await;
                 }

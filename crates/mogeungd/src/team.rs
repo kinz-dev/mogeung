@@ -82,6 +82,12 @@ pub fn validate(team: &Team) -> Result<()> {
     if team.policy.hop_budget > 100 {
         bail!("a hop budget over a hundred is a budget in name only");
     }
+    if team.policy.wind_down.trim().is_empty() {
+        bail!("the wind-down message is empty — a seat asked for nothing writes nothing");
+    }
+    if !(1..=60).contains(&team.policy.wind_down_minutes) {
+        bail!("a wind-down waits between one and sixty minutes, not {}", team.policy.wind_down_minutes);
+    }
     let mut seen = std::collections::HashSet::new();
     for s in &team.seats {
         if !valid_seat_name(&s.name) {
@@ -153,6 +159,7 @@ pub fn render(t: &Team) -> String {
     let _ = writeln!(out, "- automatic sends per hour: {}", p.hourly_cap);
     let _ = writeln!(out, "- handover: {:?}", p.handover);
     let _ = writeln!(out, "- readiness press: {}", if p.readiness_press { "on" } else { "off" });
+    let _ = writeln!(out, "- wind down: {} minute(s) to answer; the message: {:?}", p.wind_down_minutes, p.wind_down);
     if !p.wakes.is_empty() {
         out.push_str("\n### Wakes — declared text\n\n");
         for w in &p.wakes {
