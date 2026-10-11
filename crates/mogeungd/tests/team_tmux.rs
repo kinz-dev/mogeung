@@ -109,3 +109,42 @@ fn the_team_session_shows_every_seat_and_leaves_them_standing_when_killed() {
     assert_eq!(linked.trim(), "0", "and its window is linked nowhere else");
     cleanup();
 }
+
+/// `R-P14`: a launch record is not a running seat; tmux is asked. A session
+/// that is there is running, one that was killed is not, and the exact-match
+/// prefix keeps `-2` from passing for its base.
+#[test]
+fn a_seat_is_running_while_its_tmux_session_exists() {
+    if !have_tmux() {
+        eprintln!("skipped: no tmux here");
+        return;
+    }
+    let tag = std::process::id();
+    let name = format!("geung-alive-test-{tag}");
+    let longer = format!("{name}-2");
+    let _ = tmux(&["kill-session", "-t", &format!("={name}")]);
+    let _ = tmux(&["kill-session", "-t", &format!("={longer}")]);
+    let team = Team {
+        id: "t-alive".into(),
+        name: format!("alive-test-{tag}"),
+        repo: "/tmp".into(),
+        guidance: String::new(),
+        permission: Default::default(),
+        policy: Default::default(),
+        seats: vec![Seat::new("alpha", SessionSource::Codex)],
+        paused: false,
+        created: 0,
+        updated: 0,
+    };
+    let l = launch(&team, "alpha", &name);
+    assert!(!mogeungd::seat::is_running(&l), "nothing started yet");
+    assert!(tmux(&["new-session", "-d", "-s", &longer, "sleep 60"]).is_some());
+    assert!(!mogeungd::seat::is_running(&l), "a longer name is not this seat's");
+    assert!(tmux(&["new-session", "-d", "-s", &name, "sleep 60"]).is_some());
+    assert!(mogeungd::seat::is_running(&l));
+    let _ = tmux(&["kill-session", "-t", &format!("={name}")]);
+    assert!(!mogeungd::seat::is_running(&l), "gone with its session");
+    let _ = tmux(&["kill-session", "-t", &format!("={longer}")]);
+    let blank = SeatLaunch { tmux_session: String::new(), ..l };
+    assert!(!mogeungd::seat::is_running(&blank), "no session named, so not running");
+}

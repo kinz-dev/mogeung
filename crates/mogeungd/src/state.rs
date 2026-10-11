@@ -701,6 +701,25 @@ fn blank_session(
     }
 }
 
+
+/// What a boot did, seat by seat. `R-P14`.
+///
+/// Answered to the asker as `TeamBooted` so the Teams window can close on a
+/// boot that did something and say what, rather than waiting on rows it
+/// cannot tell apart from the ones already there.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BootOutcome {
+    /// Every seat of the team the daemon now has on record.
+    pub launches: Vec<mogeung_core::team::SeatLaunch>,
+    /// Seats started by this boot, the revived ones among them.
+    pub started: Vec<String>,
+    /// Seats whose record was there but whose pane was gone: forgotten and
+    /// started again. A subset of `started`.
+    pub revived: Vec<String>,
+    /// Seats left alone because they are running.
+    pub skipped: Vec<String>,
+}
+
 impl AppState {
     pub fn new(store: Store) -> Result<Arc<Self>> {
         Self::with_home(store, watcher::default_home())
@@ -5262,7 +5281,20 @@ impl AppState {
     /// per seat started, saved as it starts, so a failure on the third seat
     /// leaves the first two on record rather than orphaned in tmux; the
     /// error names the seat.
-    pub async fn boot_team(&self, id: &str) -> Result<Vec<mogeung_core::team::SeatLaunch>> {
+    /// Start every seat of a team that is not running, and say which. `R-P4`,
+    /// answered in words since `R-P14`. See [`BootOutcome`].
+    ///
+    /// *Running* is read off tmux, not off the launch record: a seat that
+    /// exited keeps its record so the exit can be seen and waked on
+    /// (`R-P6`), and the first cut took that record for a running seat and
+    /// skipped it forever — a Boot after a seat had died started nothing and
+    /// said nothing. Now a dead seat is forgotten and started again; a live
+    /// one is skipped and named as skipped.
+    ///
+    /// The team's tmux session (`R-P8`) is rebuilt only when something
+    /// started or it is missing. Rebuilding it on every Boot detached any
+    /// terminal you had on it, for nothing.
+    pub async fn boot_team(&self, id: &str) -> Result<BootOutcome> {
         let team = self
             .store
             .load_teams()?
@@ -5273,20 +5305,24 @@ impl AppState {
         if team.seats.is_empty() {
             return Err(anyhow!("the team `{}` has no seats to boot", team.name));
         }
-        let running: Vec<String> = self
-            .launches
-            .read()
-            .await
-            .iter()
-            .filter(|l| l.team_id == id)
-            .map(|l| l.seat.clone())
-            .collect();
+        let on_record: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
         let seats_dir = self.seats_dir();
         let bins = crate::seat::Binaries::installed();
         let receiver = self.receiver_url();
+        let mut outcome = BootOutcome::default();
         for seat in &team.seats {
-            if running.contains(&seat.name) {
-                continue;
+            if let Some(old) = on_record.iter().find(|l| l.seat == seat.name) {
+                if crate::seat::is_running(old) {
+                    outcome.skipped.push(seat.name.clone());
+                    continue;
+                }
+                // Its pane is gone. The record goes with it — `stop` kills
+                // nothing here, and tidies what the launcher left behind.
+                crate::seat::stop(old);
+                self.store.delete_launch(id, &seat.name)?;
+                self.launches.write().await.retain(|l| !(l.team_id == id && l.seat == seat.name));
+                outcome.revived.push(seat.name.clone());
             }
             let launch = crate::seat::start(&team, seat, &seats_dir, &bins, receiver.as_deref())
                 .map_err(|e| anyhow!("seat `{}`: {e:#}", seat.name))?;
@@ -5294,14 +5330,19 @@ impl AppState {
             // Its exit and its liveness start over with it. `R-P6`.
             self.policy.lock().await.team_mut(&team.id).booted(&seat.name);
             self.launches.write().await.push(launch);
+            outcome.started.push(seat.name.clone());
         }
         // The team's own session, around the seats, for a terminal. `R-P8`.
         // A tmux that refuses it is a warning: the seats are up.
         let launches = self.launches.read().await.clone();
-        if let Err(e) = crate::seat::layout_team(&team, &launches) {
-            tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
+        let team_session = crate::seat::team_session_name(&team);
+        if !outcome.started.is_empty() || !crate::seat::session_exists(&team_session) {
+            if let Err(e) = crate::seat::layout_team(&team, &launches) {
+                tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
+            }
         }
-        Ok(launches)
+        outcome.launches = launches;
+        Ok(outcome)
     }
 
     /// End every seat's process and forget the records. The worktrees stay.

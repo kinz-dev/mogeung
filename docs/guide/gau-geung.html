@@ -168,7 +168,7 @@
     <p>Save is grey with the daemon's own sentence while the definition cannot be addressed: a bad seat name, two seats with one name, a wake aimed at a seat the team lacks, a cap of zero. The daemon validates again on Save and mirrors the definition as markdown under <code>~/.mogeung/teams/</code>.</p>
 
     <h2 id="boot">Boot and stop</h2>
-    <p><strong>Boot team</strong> starts every seat that is not already running, each in a tmux session of its own named <code>geung-&lt;team&gt;-&lt;seat&gt;</code>. A seat's row is on the queue from birth, marked with its team and seat, and the Teams window shows where it runs. What a boot makes, and where:</p>
+    <p><strong>Boot team</strong> starts every seat that is not running, each in a tmux session of its own named <code>geung-&lt;team&gt;-&lt;seat&gt;</code>. A seat that is running is left alone; one that exited is started again. The button says beforehand which seats it would start and is grey when every seat is running; once the daemon has answered, the window closes and a notice says what started. A seat's row is on the queue from birth, marked with its team and seat, under a collapsible <strong>Team</strong> section at the top of the Attention list with a heading per team, apart from the sessions you started yourself. The Teams window shows where each seat runs. What a boot makes, and where:</p>
     <div class="tablewrap"><table>
       <tr><th>what</th><th>where</th></tr>
       <tr><td>the worktree</td><td><code>~/.mogeung/worktrees/&lt;repo&gt;/&lt;team&gt;-&lt;seat&gt;</code>, branch <code>geung/&lt;team&gt;/&lt;seat&gt;</code>; found again on the next boot, left behind at stop</td></tr>

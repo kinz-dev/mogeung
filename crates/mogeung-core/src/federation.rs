@@ -187,7 +187,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         // About that machine's desktop; never asked across a hop.
         IntellijProbe { .. } => Relay::Theirs,
         GitFetched { .. } => Relay::Pass,
-        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Sends { .. } | TeamExported { .. } | TeamDraft { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
+        Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Sends { .. } | TeamExported { .. } | TeamBooted { .. } | TeamDraft { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
         ModelChunk { .. } | ModelReply { .. } => Relay::Theirs,
         ReadingGuideReady { .. } | SentToSession { .. } => Relay::Pass,
         SemanticResults { .. } | FailureClusters { .. } | ChatHistory { .. } | ChatConversation { .. } | Config { .. } => {

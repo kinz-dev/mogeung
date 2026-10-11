@@ -2566,30 +2566,31 @@ async fn handle(
             if !(state.runs.allowed() || from_this_machine) {
                 return err(anyhow::anyhow!(team_refusal()));
             }
-            let before: std::collections::HashSet<String> =
-                state.launches.read().await.iter().filter(|l| l.team_id == id).map(|l| l.seat.clone()).collect();
             let outcome = state.boot_team(&id).await;
             state.broadcast(state.seats_msg().await);
             state.refresh_provisional().await;
             state.publish_queue().await;
-            // A handover for every seat that joined a team with history,
-            // composed in the background: a model's answer is seconds, and
-            // the boot is answered by rows, not by a wait. `R-P10`.
-            let started: Vec<String> = state
-                .launches
-                .read()
-                .await
-                .iter()
-                .filter(|l| l.team_id == id && !before.contains(&l.seat))
-                .map(|l| l.seat.clone())
-                .collect();
-            if !started.is_empty() {
-                let st = state.clone();
-                let team_id = id.clone();
-                tokio::spawn(async move { st.handovers_after_boot(&team_id, &started).await });
-            }
-            if let Err(e) = outcome {
-                err(e);
+            match outcome {
+                Ok(o) => {
+                    // A handover for every seat that joined a team with
+                    // history, composed in the background: a model's answer
+                    // is seconds, and the boot is answered by rows and a
+                    // word, not by a wait. `R-P10`.
+                    if !o.started.is_empty() {
+                        let st = state.clone();
+                        let team_id = id.clone();
+                        let started = o.started.clone();
+                        tokio::spawn(async move { st.handovers_after_boot(&team_id, &started).await });
+                    }
+                    // `R-P14`: the asker hears what happened, seat by seat,
+                    // so the window can close on a boot that did something
+                    // and say so when it did nothing.
+                    send_reply(
+                        reply,
+                        ServerMsg::TeamBooted { team_id: id, started: o.started, revived: o.revived, skipped: o.skipped },
+                    );
+                }
+                Err(e) => err(e),
             }
         }
         // A definition out as a file, and a file in as a draft. `R-P12`.

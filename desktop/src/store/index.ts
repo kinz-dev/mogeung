@@ -723,6 +723,11 @@ export interface AppState {
    *  unsaved draft with the import's notes. `R-P12`. Taken by the window. */
   teamDraft: { team: Team; notes: string[] } | null;
   /**
+   * The last boot's answer, for the Teams window to close on. `R-P14`.
+   * `at` tells two boots of the same team apart.
+   */
+  teamBooted: { team_id: string; started: string[]; revived: string[]; skipped: string[]; at: number } | null;
+  /**
    * The daemons this one follows, and where each stands. `R-I21`.
    *
    * `null` until the daemon answers, and it answers **only a window on its
@@ -1238,6 +1243,7 @@ export const useStore = create<AppState>((set, get) => ({
   seatLaunches: [],
   teamSends: [],
   teamDraft: null,
+  teamBooted: null,
   peers: null,
   foldedGroups: [],
   noteOpenId: null,
@@ -1970,6 +1976,14 @@ export const useStore = create<AppState>((set, get) => ({
       case "team_exported":
         get().pushNotice(`team exported — ${msg.path}`);
         break;
+      case "team_booted": {
+        // `R-P14`: one line saying what the boot did, and the answer kept
+        // for the Teams window, which closes on a boot that did something.
+        const team = get().teams.find((t) => t.id === msg.team_id)?.name ?? "team";
+        get().pushNotice(bootLine(team, msg));
+        set({ teamBooted: { team_id: msg.team_id, started: msg.started, revived: msg.revived, skipped: msg.skipped, at: Date.now() } });
+        break;
+      }
       case "peers":
         set({ peers: msg.peers });
         break;
@@ -2782,4 +2796,16 @@ export function togglePaneHold(paneId: string): void {
   else if (selected) next[paneId] = selected;
   else return; // Nothing on screen to hold onto.
   setScoped({ paneHold: next });
+}
+
+/**
+ * What a boot did, as one line. `R-P14`. Exported for its test.
+ */
+export function bootLine(team: string, o: { started: string[]; revived: string[]; skipped: string[] }): string {
+  if (o.started.length === 0) {
+    return o.skipped.length > 0 ? `${team} is already up — every seat is running` : `${team} booted nothing`;
+  }
+  const again = o.revived.length > 0 ? ` (${o.revived.join(", ")} again, after exiting)` : "";
+  const left = o.skipped.length > 0 ? ` · ${o.skipped.join(", ")} already running` : "";
+  return `${team} booted — started ${o.started.join(", ")}${again}${left}`;
 }

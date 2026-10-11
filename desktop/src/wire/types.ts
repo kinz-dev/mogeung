@@ -1749,6 +1749,12 @@ export type ServerMsg =
   /** A definition was written as a file; a file came in as a draft with notes. `R-P12`. To the asker. */
   | { ev: "team_exported"; team_id: string; path: string }
   | { ev: "team_draft"; team: Team; notes: string[] }
+  /**
+   * What a `team_boot` did, seat by seat. `R-P14`. To the asker, after the
+   * `seats` broadcast: `started` by this boot, `revived` among them had a
+   * record but no pane, `skipped` were running and left alone.
+   */
+  | { ev: "team_booted"; team_id: string; started: string[]; revived: string[]; skipped: string[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
   | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }

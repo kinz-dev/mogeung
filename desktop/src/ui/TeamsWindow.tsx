@@ -174,6 +174,7 @@ export function TeamsWindow() {
   const teams = useStore((s) => s.teams);
   const allowed = useStore((s) => s.teamsAllowed);
   const launches = useStore((s) => s.seatLaunches);
+  const sessions = useStore((s) => s.sessions);
   const allSends = useStore((s) => s.teamSends);
   const send = useStore((s) => s.send);
   // The window of its own this opens in (`R-J128`), the size it was left at.
@@ -189,6 +190,7 @@ export function TeamsWindow() {
   // until the draft is saved or replaced.
   const [importNotes, setImportNotes] = useState<string[]>([]);
   const incoming = useStore((s) => s.teamDraft);
+  const booted = useStore((s) => s.teamBooted);
 
   // A file came in: it becomes the draft, unsaved, with its notes. Taken
   // from the store so a second import replaces the first.
@@ -201,7 +203,27 @@ export function TeamsWindow() {
     useStore.setState({ teamDraft: null });
   }, [incoming]);
 
+  // The daemon answered a Boot of the team on screen (`R-P14`): the window
+  // has done its job and closes, whatever the boot found to do. The notice
+  // carries the words. A boot the daemon refused never answers this way, so
+  // the window stays open with the refusal in a toast.
+  useEffect(() => {
+    if (!open || !booted || !draft || booted.team_id !== draft.id) return;
+    useStore.setState({ teamBooted: null, showTeams: false });
+  }, [booted, open, draft]);
+
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(base);
+
+  // Which seats a Boot would start. `R-P14`: a seat is running when it has
+  // a launch record and no session of its has died — a record whose every
+  // session is dead is a seat that exited, and the daemon starts it again.
+  const seatRunning = (seatName: string): boolean => {
+    if (!draft || !launches.some((l) => l.team_id === draft.id && l.seat === seatName)) return false;
+    const own = Object.values(sessions).filter((x) => x.seat?.team_id === draft.id && x.seat.seat === seatName);
+    return own.length === 0 || own.some((x) => x.alive);
+  };
+  const toStart = draft ? draft.seats.filter((x) => !seatRunning(x.name)).map((x) => x.name) : [];
+  const alreadyUp = draft !== null && draft.seats.length > 0 && toStart.length === 0;
 
   // Ask on open, every time: a reconnect is a new daemon's worth of teams.
   useEffect(() => {
@@ -400,7 +422,7 @@ export function TeamsWindow() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={!allowed || draft.id === "" || dirty || draft.seats.length === 0}
+                      disabled={!allowed || draft.id === "" || dirty || draft.seats.length === 0 || alreadyUp}
                       title={
                         !allowed
                           ? (refusal ?? "")
@@ -410,7 +432,11 @@ export function TeamsWindow() {
                               ? "save your changes first — Boot starts what is saved"
                               : draft.seats.length === 0
                                 ? "a team with no seats boots nothing"
-                                : "start every seat that is not already running, each in a tmux session of its own"
+                                : alreadyUp
+                                  ? "every seat is running"
+                                  : toStart.length === draft.seats.length
+                                    ? "start every seat, each in a tmux session of its own"
+                                    : `start ${toStart.join(", ")} — the rest are running`
                       }
                       onClick={() => send({ cmd: "team_boot", id: draft.id })}
                     >

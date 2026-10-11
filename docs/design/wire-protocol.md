@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-10
+updated: 2026-10-11
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -364,7 +364,7 @@ amendment.
 | `TeamList` | — | `Teams`, to the asker, with `allowed` | here |
 | `TeamSave` | `team` — whole; an empty `id` mints one, and the daemon stamps `created` and `updated` whatever was sent | `Teams`, broadcast | here |
 | `TeamDelete` | `id` | `Teams`, broadcast | here |
-| `TeamBoot` | `id` — starts every seat not already running; a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once | here |
+| `TeamBoot` | `id` — starts every seat not running; *running* is read off tmux, so a seat whose pane has gone is forgotten and started again (`R-P14`); a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once; then `TeamBooted` to the asker | here |
 | `TeamStop` | `id` — ends every seat's process; the worktrees stay | `Seats`, broadcast | here |
 | `SeatWorktreeRemove` | `team_id`, `seat` — a stopped seat's worktree, only when clean | an `Error` naming what was removed or why not, to the asker | here |
 | `TeamPause` | `id`, `paused` — the switch, on the definition; the only verb that writes `paused` (`R-P6`) | `Teams` and `Sends`, broadcast | here |
@@ -379,6 +379,7 @@ amendment.
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
 | `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
 | `TeamExported` | `team_id`, the `path` written (`R-P12`) | theirs |
+| `TeamBooted` | what a `TeamBoot` did, seat by seat (`R-P14`): `started` by this boot, `revived` among them had a record but no pane, `skipped` were running and left alone; all three empty is a team already up. After the `Seats` broadcast, so the window closes on an answer and not on rows it cannot tell from the ones already there | theirs |
 | `TeamDraft` | a `team` with no id and no stamps, for the window to show as an unsaved draft, and the import's `notes` — what was and was not carried (`R-P12`) | theirs |
 | `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop — oldest first, the last two hundred; with every `TeamList` answer and after every change | theirs |
 

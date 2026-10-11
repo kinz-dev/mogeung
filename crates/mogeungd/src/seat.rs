@@ -620,21 +620,33 @@ fn start_in_tmux(name: &str, window: &str, dir: &Path, env: &[(String, String)],
     Ok((pane.to_string(), target.to_string()))
 }
 
+/// Does a tmux session of exactly this name exist? The `=` prefix asks tmux
+/// for an exact match rather than a prefix, so `geung-port` is not `geung-port-2`.
+pub fn session_exists(name: &str) -> bool {
+    crate::env::command("tmux")
+        .args(["has-session", "-t", &format!("={name}")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Is the seat's own tmux session still there? `R-P14`. The launch record
+/// outlives the process — a seat that exited keeps its row so the exit can be
+/// seen and waked on — so the record alone cannot say whether a boot has
+/// anything to do for this seat. tmux can: the session is the one thing that
+/// goes when the seat does, and nothing else is named the same.
+pub fn is_running(launch: &SeatLaunch) -> bool {
+    !launch.tmux_session.is_empty() && session_exists(&launch.tmux_session)
+}
+
 /// A session name no other tmux session holds: the base, else `-2`, `-3`…
 fn unique_tmux_name(base: &str) -> String {
-    let taken = |name: &str| {
-        crate::env::command("tmux")
-            .args(["has-session", "-t", &format!("={name}")])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    };
-    if !taken(base) {
+    if !session_exists(base) {
         return base.to_string();
     }
     for n in 2..100 {
         let cand = format!("{base}-{n}");
-        if !taken(&cand) {
+        if !session_exists(&cand) {
             return cand;
         }
     }

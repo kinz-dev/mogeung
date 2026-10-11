@@ -1567,6 +1567,11 @@ pub enum ServerMsg {
     Seats { launches: Vec<crate::team::SeatLaunch> },
     /// A team's definition was written as a file. `R-P12`. To the asker.
     TeamExported { team_id: String, path: String },
+    /// What a `TeamBoot` did, seat by seat. `R-P14`. To the asker, after the
+    /// `Seats` broadcast: `started` were started by this boot, `revived`
+    /// among them had a record but no pane, `skipped` were running and left
+    /// alone. All three empty is a team already up.
+    TeamBooted { team_id: String, started: Vec<String>, revived: Vec<String>, skipped: Vec<String> },
     /// A file came in as a draft for review: the team, unsaved, and what the
     /// import had to say about it. `R-P12`. To the asker.
     TeamDraft { team: crate::team::Team, notes: Vec<String> },

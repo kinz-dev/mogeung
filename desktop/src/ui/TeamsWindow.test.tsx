@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { useStore } from "@/store";
+import { bootLine, useStore } from "@/store";
 import type { ClientMsg, Team } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
 import { TeamsWindow } from "./TeamsWindow";
@@ -149,6 +149,49 @@ describe("the Teams window", () => {
     fireEvent.change(screen.getByLabelText("team name"), { target: { value: "renamed" } });
     expect(boot).toBeDisabled();
     expect(boot.title).toContain("save your changes first");
+  });
+
+  /** `R-P14`, after the first team: Boot says what it would start, is grey
+   *  when every seat is running, and the window closes on the daemon's
+   *  answer — not before, so a refusal leaves it open. */
+  it("names what Boot would start, greys out when every seat is running, and closes on the answer", () => {
+    render(<TeamsWindow />);
+    arrives([team()]);
+    const launch = (seat: string) =>
+      ({ team_id: "t1", team: "port-openrig", seat, cli: "claude_code", session_id: null, pane_id: "%1", tmux_target: `s-${seat}:0.0`, tmux_session: `s-${seat}`, team_session: "", dir: "/d", worktree: false, files_dir: "/f", started: 1, signals: { kind: "plain", events: 0, unread: 0 } }) as never;
+    const live = (id: string, seat: string, alive: boolean) =>
+      ({ id, title: null, name: null, cwd: "/d", repo_root: "/d", alive, touched_files: [], collisions: [], verify_runs: [], claims: [], last_event_at: "", seat: { team_id: "t1", team: "port-openrig", seat, signals: "plain" } }) as never;
+    const boot = () => screen.getByText("Boot team").closest("button")!;
+
+    // One of two running: the title names the other.
+    act(() => useStore.setState({ seatLaunches: [launch("planner")], sessions: { a: live("a", "planner", true) } }));
+    expect(boot()).not.toBeDisabled();
+    expect(boot().title).toBe("start builder — the rest are running");
+
+    // Both on record, both alive: nothing to do.
+    act(() => useStore.setState({ seatLaunches: [launch("planner"), launch("builder")], sessions: { a: live("a", "planner", true), b: live("b", "builder", true) } }));
+    expect(boot()).toBeDisabled();
+    expect(boot().title).toBe("every seat is running");
+
+    // The builder's session died: its record is not a running seat.
+    act(() => useStore.setState({ sessions: { a: live("a", "planner", true), b: live("b", "builder", false) } }));
+    expect(boot()).not.toBeDisabled();
+    expect(boot().title).toBe("start builder — the rest are running");
+
+    // The daemon's answer for another team changes nothing; for this one, the window closes.
+    act(() => useStore.setState({ teamBooted: { team_id: "t2", started: ["x"], revived: [], skipped: [], at: 1 } }));
+    expect(screen.queryByText("Boot team")).not.toBeNull();
+    act(() => useStore.setState({ teamBooted: { team_id: "t1", started: ["builder"], revived: ["builder"], skipped: ["planner"], at: 2 } }));
+    expect(screen.queryByText("Boot team")).toBeNull();
+    expect(useStore.getState().showTeams).toBe(false);
+    expect(useStore.getState().teamBooted).toBeNull();
+    useStore.setState({ sessions: {}, seatLaunches: [] });
+  });
+
+  it("says what a boot did in one line", () => {
+    expect(bootLine("port", { started: ["a", "b"], revived: [], skipped: [] })).toBe("port booted — started a, b");
+    expect(bootLine("port", { started: ["b"], revived: ["b"], skipped: ["a"] })).toBe("port booted — started b (b again, after exiting) · a already running");
+    expect(bootLine("port", { started: [], revived: [], skipped: ["a", "b"] })).toBe("port is already up — every seat is running");
   });
 
   it("shows where a seat runs, and offers to remove a stopped seat's worktree", () => {

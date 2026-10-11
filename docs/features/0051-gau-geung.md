@@ -1,7 +1,7 @@
 ---
 title: Gau Geung — a team of agents
 status: draft
-updated: 2026-10-10
+updated: 2026-10-11
 roadmap: [R-P1, R-P2, R-P3, R-P4, R-P5, R-P6, R-P7, R-P8, R-P9, R-P10, R-P11, R-P12, R-P13]
 depends_on: [A1, A24, A39, A51, A52, A53, A54]
 ---
@@ -707,3 +707,16 @@ gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
   should show all of it, and it is never read back on its own. Nothing here
   has been tried on a rig the owner uses; the demo rig and a focused one
   were the corpus.
+- 2026-10-11, `R-P14`, after the **first real boot** — `tcnews-control-room`,
+  three seats, the evening of 2026-10-11. Boot's *already running* was read
+  off the launch record, and the record outlives the process on purpose
+  (`R-P6` wakes on the exit it shows), so a seat that had exited was skipped
+  for ever and a Boot said nothing. Now *running* is tmux's word
+  (`seat::is_running`, an exact `has-session`), a dead seat is forgotten and
+  started again, the team session is rebuilt only when something started or
+  it is missing — rebuilding it on every Boot detached the owner's terminal
+  — and the asker hears `TeamBooted` with started, revived and skipped, which
+  is what lets the Teams window close on a boot and stay open on a refusal.
+  The window also says beforehand what Boot would start, and is grey with
+  *every seat is running* when nothing would. On the same first look, the
+  Attention list gained its *Team* section (`R-J131`, pillar J).
