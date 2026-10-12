@@ -1,7 +1,7 @@
 ---
 title: The model and the proxy
 status: active
-updated: 2026-10-10
+updated: 2026-10-12
 covers:
   - crates/mogeung-core/src/model.rs
   - crates/mogeung-core/src/llmproxy.rs
@@ -124,9 +124,11 @@ of 2026-10-09 had to admit it by name before it was built. The daemon asks
 on a seat's own trigger only, a start into a team with history or a restart,
 never on a tick and never on the model's own decision; the prompt is the
 team's two layers of guidance, the teammates' last turns and diffs, the send
-log and on a restart the seat's own earlier session, every line of it framed
-as data another agent wrote and the framing stated before any of it appears,
-bounded the way the reading guide's prompt is. The answer is kept whole —
+log and, on a restart or a boot after a wind-down, the seat's own earlier
+session — since `R-P15` led by the note that seat wrote with `mogeung-note`
+when it was asked for its last words — every line of it framed as data
+another agent wrote and the framing stated before any of it appears, bounded
+the way the reading guide's prompt is. The answer is kept whole —
 fence 3's *shown in full* — trimmed of a wrapping fence and capped, and
 logged as *composed by <model> @ <host>*. Then it is a send like any other:
 held for you under *after you read it*, judged and typed as a hop under

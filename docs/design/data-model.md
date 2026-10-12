@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-10
+updated: 2026-10-12
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -115,7 +115,10 @@ SQLite at `~/.mogeung/mogeung.db`:
 - `teams(id, created, updated, json)` — a team of seats and its policy, the
   whole struct as a JSON blob with the seats inside it (`R-P3`, feature 0051);
   a blob for the reason sessions are one, so a seat gaining a field needs no
-  migration
+  migration — which is how the policy gained its wind-down message and the
+  minutes a seat has to answer it (`R-P15`) with no change here. A wind-down
+  in progress is ephemeral, held in memory until the next boot; a seat's last
+  words land as `note.md` beside its files under `~/.mogeung`, not in a table
 - `seat_launches(team_id, seat, json)` — which panes are seats: the launch
   record a restarted daemon re-adopts from (`R-P4`). Derived, not the user's
   writing, so not mirrored; a stop deletes the row. Since `R-P5` the blob
