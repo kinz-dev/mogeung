@@ -55,6 +55,7 @@ fn launch(team_id: &str, team: &str, seat: &str, cli: SessionSource, pane: &str,
         worktree: false,
         files_dir: "/f".into(),
         started,
+        alive: false,
         token: token.into(),
         signals: SeatSignals { kind, ..Default::default() },
     }

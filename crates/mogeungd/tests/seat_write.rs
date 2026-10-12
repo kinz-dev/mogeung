@@ -47,6 +47,7 @@ async fn daemon(tag: &str) -> Daemon {
         worktree,
         files_dir: "/f".into(),
         started: 1,
+        alive: false,
         token: String::new(),
         signals: SeatSignals { kind: SignalKind::Plain, ..Default::default() },
     };

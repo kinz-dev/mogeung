@@ -728,6 +728,8 @@ pub fn start(
         worktree: seat.works_in == Workplace::Worktree,
         files_dir: files.to_string_lossy().into_owned(),
         started: chrono::Utc::now().timestamp(),
+        // Born running: the session was made a line above.
+        alive: true,
         // The token is kept whenever the seat was handed the way back — by
         // its hooks, or since `R-P6` by `mogeung-send`, which every seat
         // with `curl` gets; a seat handed neither keeps none, so there is

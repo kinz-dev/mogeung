@@ -274,7 +274,7 @@ async fn a_team_outlives_the_daemon_that_defined_it() {
     let md = std::fs::read_to_string(teams_dir.join(&files[0])).unwrap();
     assert!(md.contains("- hop budget: 2"), "{md}");
 
-    state.delete_team(&id).unwrap();
+    state.delete_team(&id).await.unwrap();
     assert_eq!(std::fs::read_dir(&teams_dir).unwrap().count(), 0, "the mirror goes with it");
     std::fs::remove_dir_all(&home).ok();
 }
@@ -308,6 +308,7 @@ async fn a_seat_is_re_adopted_from_its_launch_record() {
                 worktree: false,
                 files_dir: home.join("files").to_string_lossy().into_owned(),
                 started: 1_700_000_000,
+                alive: false,
                 token: "re-adopted-token".into(),
                 signals: mogeung_core::team::SeatSignals {
                     kind: mogeung_core::team::SignalKind::Hooked,

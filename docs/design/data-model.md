@@ -127,7 +127,11 @@ SQLite at `~/.mogeung/mogeung.db`:
   (kind, count, last event, context fill, model), which are live state
   rewritten in memory as hooks arrive and saved only as the record is; since
   `R-P8` `team_session`, the name of the team's own tmux session for a
-  terminal
+  terminal; since `R-J134` `alive`, whether that seat's own tmux session
+  stands — recomputed as the daemon starts and every scan, so the saved
+  value is never believed. A row outlives its process on purpose (the
+  policy wakes on `Exit`); Boot replaces a dead one, Stop now and a team's
+  delete remove it, and the delete takes the seat's generated files with it
 - `sends(team_id, id, at, json)` — a team's send log (`R-P6`): every
   automatic send and every one of yours into a seat, as a `SendEntry` blob —
   who, whom, the text, why, what became of it, the hop it took. **The

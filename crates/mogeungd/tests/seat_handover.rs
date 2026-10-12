@@ -97,6 +97,7 @@ fn launch(seat: &str, cli: SessionSource) -> SeatLaunch {
         worktree: true,
         files_dir: "/f".into(),
         started: 1,
+        alive: false,
         token: String::new(),
         signals: SeatSignals { kind: SignalKind::Plain, ..Default::default() },
     }

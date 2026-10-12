@@ -359,7 +359,11 @@ function TeamSection({ team }: { team: Team }) {
   const allowed = useStore((s) => s.teamsAllowed);
   const selected = useStore((s) => s.gauSeat);
   const send = useStore((s) => s.send);
-  const running = useStore((s) => s.seatLaunches.some((l) => l.team_id === team.id));
+  // `alive` is the daemon's word (`R-J134`): a record of a seat that exited
+  // enables Stop now, which forgets it, and not Wind down, which would ask
+  // nobody.
+  const running = useStore((s) => s.seatLaunches.some((l) => l.team_id === team.id && l.alive));
+  const onRecord = useStore((s) => s.seatLaunches.some((l) => l.team_id === team.id));
   const winding = sends?.wind_down?.seats.some((x) => x.status === "asked") ?? false;
   const pick = (v: SeatView) => {
     useStore.setState({ gauSeat: seatKey(v.team.id, v.seat.name) });
@@ -391,8 +395,16 @@ function TeamSection({ team }: { team: Team }) {
           <Button
             size="sm"
             variant="outline"
-            disabled={!allowed || !running}
-            title={winding ? "cut the wind-down short — the seats still asked are stopped without a note" : running ? "end every seat at once, no note asked — the worktrees stay" : "no seat is running"}
+            disabled={!allowed || !onRecord}
+            title={
+              winding
+                ? "cut the wind-down short — the seats still asked are stopped without a note"
+                : running
+                  ? "end every seat at once, no note asked — the worktrees stay"
+                  : onRecord
+                    ? "nothing is running — forget the exited seats' records"
+                    : "no seat is running"
+            }
             onClick={() => send({ cmd: "team_stop", id: team.id })}
           >
             <Square size={12} /> Stop now

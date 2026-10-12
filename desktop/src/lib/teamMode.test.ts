@@ -28,6 +28,7 @@ const launch = (seat: string, over: Partial<SeatLaunch> = {}): SeatLaunch => ({
   pane_id: `%${seat}`,
   tmux_target: `geung-port-${seat}:0.0`,
   tmux_session: `geung-port-${seat}`,
+  alive: true,
   team_session: "geung-port",
   dir: `/w/${seat}`,
   worktree: true,

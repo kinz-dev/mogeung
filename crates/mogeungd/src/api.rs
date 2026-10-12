@@ -2581,8 +2581,13 @@ async fn handle(
             if !(state.runs.allowed() || from_this_machine) {
                 return err(anyhow::anyhow!(team_refusal()));
             }
-            match state.delete_team(&id) {
-                Ok(teams) => state.broadcast(ServerMsg::Teams { teams, allowed: None }),
+            // The seats too: a delete forgets the exited seats' records
+            // (`R-J134`), and a window counting them would still say so.
+            match state.delete_team(&id).await {
+                Ok(teams) => {
+                    state.broadcast(state.seats_msg().await);
+                    state.broadcast(ServerMsg::Teams { teams, allowed: None })
+                }
                 Err(e) => err(e),
             }
         }

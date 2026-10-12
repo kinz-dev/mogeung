@@ -821,7 +821,12 @@ impl AppState {
         }
         let (tx, _) = broadcast::channel(8192);
         let identity = crate::machine::identity(&claude_home, None);
-        let launches = store.load_launches().unwrap_or_default();
+        // A record's `alive` on disk is whatever it was when last saved; the
+        // answer of the moment is tmux's (`R-J134`).
+        let mut launches = store.load_launches().unwrap_or_default();
+        for l in &mut launches {
+            l.alive = crate::seat::is_running(l);
+        }
         let sends = store.load_sends().unwrap_or_default();
         Ok(Arc::new(AppState {
             store,
@@ -4471,7 +4476,34 @@ impl AppState {
         self.store.load_teams()
     }
 
-    pub fn delete_team(&self, id: &str) -> Result<Vec<mogeung_core::team::Team>> {
+    /// Delete a team: its definition and mirror file, the records of seats
+    /// that have exited, and the files the daemon generated for its seats
+    /// under `~/.mogeung/seats/<id>`. **Refused while a seat is running** —
+    /// a running seat is owned, and an owner that forgets it has broken
+    /// fence 5 — so Stop now or Wind down come first, and the refusal names
+    /// the seats. Worktrees stay, as at a stop: they may hold work, and the
+    /// answer says where. `R-J134`.
+    pub async fn delete_team(&self, id: &str) -> Result<Vec<mogeung_core::team::Team>> {
+        let mine: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
+        let running: Vec<&str> = mine.iter().filter(|l| crate::seat::is_running(l)).map(|l| l.seat.as_str()).collect();
+        if !running.is_empty() {
+            return Err(anyhow!("stop the team first — still running: {}", running.join(", ")));
+        }
+        for l in &mine {
+            self.store.delete_launch(&l.team_id, &l.seat)?;
+            if l.worktree {
+                tracing::info!("team {id} deleted; seat {}'s worktree stays at {}", l.seat, l.dir);
+            }
+        }
+        self.launches.write().await.retain(|l| l.team_id != id);
+        self.winding.lock().await.remove(id);
+        let files = self.seats_dir().join(id);
+        if files.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&files) {
+                tracing::warn!("could not remove {}: {e}", files.display());
+            }
+        }
         self.store.delete_team(id)?;
         let _ = crate::team::unmirror_in(&self.teams_dir(), id);
         self.store.load_teams()
@@ -5688,6 +5720,26 @@ impl AppState {
             return;
         }
         let panes = tmux_panes();
+        // Which seats are running, read off the same listing (`R-J134`): a
+        // seat's own tmux session stands or it does not, which is the one
+        // definition Boot, Wind down and Delete use. Broadcast on change
+        // only, so a window's counts follow a seat that exited by itself —
+        // or was closed by hand — within a scan, and nothing is sent while
+        // nothing moves.
+        let mut flipped = false;
+        {
+            let mut mine = self.launches.write().await;
+            for l in mine.iter_mut() {
+                let alive = session_in_panes(&panes, &l.tmux_session);
+                if l.alive != alive {
+                    l.alive = alive;
+                    flipped = true;
+                }
+            }
+        }
+        if flipped {
+            self.broadcast(self.seats_msg().await);
+        }
         let parents = if panes.is_empty() { HashMap::new() } else { process_parents() };
         let held = self.held_sends(&launches).await;
         let screens = self.screens.lock().await.clone();
@@ -7600,6 +7652,17 @@ fn parse_tmux_panes(stdout: &str) -> Vec<Pane> {
         .collect()
 }
 
+/// Whether a tmux session of this name has a pane in the listing — a seat's
+/// own session, standing. An empty name matches nothing: a record without
+/// one is not a running seat. tmux forbids `:` in a session name, so the
+/// prefix up to the first colon is exact. `R-J134`.
+pub fn session_in_panes(panes: &[Pane], session: &str) -> bool {
+    !session.is_empty()
+        && panes
+            .iter()
+            .any(|p| p.target.strip_prefix(session).is_some_and(|rest| rest.starts_with(':')))
+}
+
 /// Every tmux pane.
 ///
 /// Empty when tmux is not installed or no server is running — both ordinary,
@@ -7902,6 +7965,7 @@ mod terminal_tests {
             worktree: true,
             files_dir: "/f".into(),
             started: 1_700_000_000,
+            alive: false,
             token: String::new(),
             signals: Default::default(),
         }

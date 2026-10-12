@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { bootLine, useStore } from "@/store";
 import type { ClientMsg, Team } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
@@ -160,8 +160,8 @@ describe("the Teams window", () => {
   it("names what Boot would start, greys out when every seat is running, and closes on the answer", () => {
     render(<TeamsWindow />);
     arrives([team()]);
-    const launch = (seat: string) =>
-      ({ team_id: "t1", team: "port-openrig", seat, cli: "claude_code", session_id: null, pane_id: "%1", tmux_target: `s-${seat}:0.0`, tmux_session: `s-${seat}`, team_session: "", dir: "/d", worktree: false, files_dir: "/f", started: 1, signals: { kind: "plain", events: 0, unread: 0 } }) as never;
+    const launch = (seat: string, alive = true) =>
+      ({ team_id: "t1", team: "port-openrig", seat, cli: "claude_code", session_id: null, pane_id: "%1", tmux_target: `s-${seat}:0.0`, tmux_session: `s-${seat}`, team_session: "", dir: "/d", worktree: false, files_dir: "/f", started: 1, alive, signals: { kind: "plain", events: 0, unread: 0 } }) as never;
     const live = (id: string, seat: string, alive: boolean) =>
       ({ id, title: null, name: null, cwd: "/d", repo_root: "/d", alive, touched_files: [], collisions: [], verify_runs: [], claims: [], last_event_at: "", seat: { team_id: "t1", team: "port-openrig", seat, signals: "plain" } }) as never;
     const boot = () => screen.getByText("Boot team").closest("button")!;
@@ -176,8 +176,10 @@ describe("the Teams window", () => {
     expect(boot()).toBeDisabled();
     expect(boot().title).toBe("every seat is running");
 
-    // The builder's session died: its record is not a running seat.
-    act(() => useStore.setState({ sessions: { a: live("a", "planner", true), b: live("b", "builder", false) } }));
+    // The builder exited: the daemon's `alive` on its record says so
+    // (`R-J134`), and that is the answer Boot itself uses — the session
+    // rows are not consulted.
+    act(() => useStore.setState({ seatLaunches: [launch("planner"), launch("builder", false)] }));
     expect(boot()).not.toBeDisabled();
     expect(boot().title).toBe("start builder — the rest are running");
 
@@ -189,6 +191,42 @@ describe("the Teams window", () => {
     expect(useStore.getState().showTeams).toBe(false);
     expect(useStore.getState().teamBooted).toBeNull();
     useStore.setState({ sessions: {}, seatLaunches: [] });
+  });
+
+  /** `R-J134`, after seats closed by hand still read as running: the list
+   *  counts what the daemon says is alive, an exited seat is named as such,
+   *  Wind down needs a running seat, Stop now also forgets exited records,
+   *  and Delete waits — naming the seat — until nothing runs. */
+  it("tells running from exited, and Delete waits until nothing runs", () => {
+    render(<TeamsWindow />);
+    arrives([team()], true);
+    const launch = (seat: string, alive: boolean) =>
+      ({ team_id: "t1", team: "port-openrig", seat, cli: "claude_code", session_id: null, pane_id: "%1", tmux_target: `s-${seat}:0.0`, tmux_session: `s-${seat}`, team_session: "", dir: "/d", worktree: false, files_dir: "/f", started: 1, alive, signals: { kind: "plain", events: 0, unread: 0 } }) as never;
+    const button = (label: string) => screen.getByText(label).closest("button")!;
+
+    act(() => useStore.setState({ seatLaunches: [launch("planner", true), launch("builder", false)] }));
+    expect(screen.getByText(/1 running/)).not.toBeNull();
+    expect(screen.getByText(/1 exited/)).not.toBeNull();
+    expect(within(screen.getByTestId("seat-0")).getByText("running")).not.toBeNull();
+    expect(within(screen.getByTestId("seat-1")).getByText("exited")).not.toBeNull();
+    expect(screen.getByTestId("seat-1-status").textContent).toContain("exited — was in s-builder");
+    expect(button("Wind down")).not.toBeDisabled();
+    expect(button("Delete")).toBeDisabled();
+    expect(button("Delete").title).toBe("stop the team first — still running: planner");
+
+    // Both exited: nothing to ask, records to forget, and the team may go.
+    act(() => useStore.setState({ seatLaunches: [launch("planner", false), launch("builder", false)] }));
+    expect(screen.queryByText(/running/)).toBeNull();
+    expect(screen.getByText(/2 exited/)).not.toBeNull();
+    expect(button("Wind down")).toBeDisabled();
+    expect(button("Wind down").title).toBe("no seat of this team is running — Stop now forgets the exited ones");
+    expect(button("Stop now")).not.toBeDisabled();
+    expect(button("Stop now").title).toBe("nothing is running — forget the exited seats' records");
+    expect(button("Delete")).not.toBeDisabled();
+    fireEvent.click(button("Delete"));
+    fireEvent.click(screen.getByText("Really delete"));
+    expect(sent).toContainEqual({ cmd: "team_delete", id: "t1" });
+    useStore.setState({ seatLaunches: [] });
   });
 
   it("says what a boot did in one line", () => {
@@ -212,6 +250,7 @@ describe("the Teams window", () => {
             pane_id: "%3",
             tmux_target: "geung-port-openrig-planner:0.0",
             tmux_session: "geung-port-openrig-planner",
+            alive: true,
             team_session: "geung-port-openrig",
             dir: "/home/you/.mogeung/worktrees/mogeung/port-openrig-planner",
             worktree: true,

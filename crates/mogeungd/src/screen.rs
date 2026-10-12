@@ -344,6 +344,7 @@ mod tests {
             worktree: false,
             files_dir: "/f".into(),
             started: 0,
+            alive: false,
             token: String::new(),
             signals: SeatSignals { kind: SignalKind::Plain, ..Default::default() },
         };

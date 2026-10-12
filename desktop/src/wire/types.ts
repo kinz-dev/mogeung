@@ -1183,6 +1183,11 @@ export interface SeatLaunch {
   dir: string;
   worktree: boolean;
   files_dir: string;
+  /** The seat's own tmux session stands — the daemon's one definition of
+   *  running, refreshed every scan and broadcast when it changes (`R-J134`).
+   *  A record with `alive: false` is a seat that exited: Boot starts it
+   *  again, Stop now forgets it. */
+  alive: boolean;
   started: number;
   signals: SeatSignals;
 }

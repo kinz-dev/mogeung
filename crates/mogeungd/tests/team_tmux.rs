@@ -41,6 +41,7 @@ fn launch(team: &Team, seat: &str, session: &str) -> SeatLaunch {
         worktree: false,
         files_dir: "/tmp".into(),
         started: 0,
+        alive: false,
         token: String::new(),
         signals: SeatSignals { kind: SignalKind::Plain, ..Default::default() },
     }

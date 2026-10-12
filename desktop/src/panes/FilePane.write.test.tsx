@@ -38,6 +38,7 @@ const launch = (seat: string, worktree: boolean): SeatLaunch => ({
   pane_id: "%1",
   tmux_target: "x:0.0",
   tmux_session: "x",
+  alive: true,
   team_session: "geung-port",
   dir: worktree ? "/w/builder" : "/repo",
   worktree,

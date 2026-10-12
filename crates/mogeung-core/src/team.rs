@@ -442,6 +442,14 @@ pub struct SeatLaunch {
     pub files_dir: String,
     /// Unix seconds.
     pub started: i64,
+    /// Whether the seat's own tmux session stands — the daemon's one
+    /// definition of *running*, the one Boot, Wind down and Delete use
+    /// (`R-P14`, `R-J134`). Refreshed every scan from the pane listing and
+    /// broadcast when it changes, so a window's counts follow a seat that
+    /// exited by itself or was closed by hand. Saved with the record only
+    /// incidentally: read back, it is recomputed before anyone sees it.
+    #[serde(default)]
+    pub alive: bool,
     /// The receiver's token for this seat, minted at launch and handed to
     /// the seat's process in its environment. `R-P5`, ADR-0043 clause 3.
     /// Persisted with the record so a restarted daemon still hears a seat it
@@ -798,6 +806,7 @@ mod tests {
             worktree: true,
             files_dir: "/f".into(),
             started: 1,
+            alive: false,
             token: "secret".into(),
             signals: SeatSignals { kind: SignalKind::Hooked, ..Default::default() },
         };

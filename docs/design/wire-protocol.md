@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-11
+updated: 2026-10-12
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -363,7 +363,7 @@ amendment.
 |---|---|---|---|
 | `TeamList` | — | `Teams`, to the asker, with `allowed` | here |
 | `TeamSave` | `team` — whole; an empty `id` mints one, and the daemon stamps `created` and `updated` whatever was sent | `Teams`, broadcast | here |
-| `TeamDelete` | `id` | `Teams`, broadcast | here |
+| `TeamDelete` | `id` — refused while a seat of the team is running, naming the seats (`R-J134`); otherwise the definition and its mirror, the exited seats' records and the files made for its seats go, and the worktrees stay | `Seats` and `Teams`, broadcast | here |
 | `TeamBoot` | `id` — starts every seat not running; *running* is read off tmux, so a seat whose pane has gone is forgotten and started again (`R-P14`); a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once; then `TeamBooted` to the asker | here |
 | `TeamStop` | `id` — ends every seat's process; the worktrees stay | `Seats`, broadcast | here |
 | `TeamWindDown` | `id` — types the policy's wind-down text into every running seat and stops each as its note arrives, its turn ends, or the deadline passes; the team session comes down with the last seat (`R-P15`); `TeamStop` meanwhile cuts it short | `Seats` and `Sends`, broadcast, at each step | here |
@@ -378,7 +378,7 @@ amendment.
 | Event | Carries | Relay |
 |---|---|---|
 | `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
-| `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
+| `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model), and since `R-J134` `alive` — whether the seat's own tmux session stands, read off the pane listing every scan, so a record with `alive: false` is a seat that exited and a client counts it as such; **never the seat's token** — after a boot, stop or delete, with every `TeamList` answer, after a hook event or a status reading that moved something, and when any seat's `alive` flips | theirs |
 | `TeamExported` | `team_id`, the `path` written (`R-P12`) | theirs |
 | `TeamBooted` | what a `TeamBoot` did, seat by seat (`R-P14`): `started` by this boot, `revived` among them had a record but no pane, `skipped` were running and left alone; all three empty is a team already up. After the `Seats` broadcast, so the window closes on an answer and not on rows it cannot tell from the ones already there | theirs |
 | `TeamDraft` | a `team` with no id and no stamps, for the window to show as an unsaved draft, and the import's `notes` — what was and was not carried (`R-P12`) | theirs |

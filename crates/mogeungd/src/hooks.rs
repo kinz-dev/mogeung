@@ -617,6 +617,7 @@ mod tests {
             worktree: false,
             files_dir: "/f".into(),
             started: 0,
+            alive: false,
             token: String::new(),
             signals: Default::default(),
         };
@@ -837,6 +838,7 @@ mod tests {
             worktree: true,
             files_dir: "/f".into(),
             started: 1,
+            alive: false,
             token: String::new(),
             signals: Default::default(),
         }

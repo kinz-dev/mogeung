@@ -175,7 +175,6 @@ export function TeamsWindow() {
   const teams = useStore((s) => s.teams);
   const allowed = useStore((s) => s.teamsAllowed);
   const launches = useStore((s) => s.seatLaunches);
-  const sessions = useStore((s) => s.sessions);
   const allSends = useStore((s) => s.teamSends);
   const send = useStore((s) => s.send);
   // The window of its own this opens in (`R-J128`), the size it was left at.
@@ -219,14 +218,13 @@ export function TeamsWindow() {
   const winding =
     draft !== null && (allSends.find((t) => t.team_id === draft.id)?.wind_down?.seats.some((x) => x.status === "asked") ?? false);
 
-  // Which seats a Boot would start. `R-P14`: a seat is running when it has
-  // a launch record and no session of its has died — a record whose every
-  // session is dead is a seat that exited, and the daemon starts it again.
-  const seatRunning = (seatName: string): boolean => {
-    if (!draft || !launches.some((l) => l.team_id === draft.id && l.seat === seatName)) return false;
-    const own = Object.values(sessions).filter((x) => x.seat?.team_id === draft.id && x.seat.seat === seatName);
-    return own.length === 0 || own.some((x) => x.alive);
-  };
+  // Which seats a Boot would start. `R-P14`: a seat is running while its
+  // tmux session stands, which the daemon reads every scan and sends as the
+  // record's `alive` (`R-J134`) — the answer Boot itself uses, so the title
+  // and the outcome agree. A record with `alive: false` is a seat that
+  // exited, by itself or closed by hand, and the daemon starts it again.
+  const seatRunning = (seatName: string): boolean =>
+    draft !== null && launches.some((l) => l.team_id === draft.id && l.seat === seatName && l.alive);
   const toStart = draft ? draft.seats.filter((x) => !seatRunning(x.name)).map((x) => x.name) : [];
   const alreadyUp = draft !== null && draft.seats.length > 0 && toStart.length === 0;
 
@@ -335,7 +333,11 @@ export function TeamsWindow() {
     setConfirmDelete(false);
   };
 
-  const running = (t: Team) => launches.filter((l) => l.team_id === t.id);
+  // Records split by the daemon's `alive` (`R-J134`): a seat that exited
+  // keeps its record until Boot starts it again or Stop now forgets it, and
+  // the list says which is which rather than calling both *running*.
+  const running = (t: Team) => launches.filter((l) => l.team_id === t.id && l.alive);
+  const exited = (t: Team) => launches.filter((l) => l.team_id === t.id && !l.alive);
 
   return (
     <Dialog
@@ -384,6 +386,7 @@ export function TeamsWindow() {
             {teams.map((t) => {
               const picked = draft?.id === t.id;
               const live = running(t).length;
+              const gone = exited(t).length;
               return (
                 <button
                   key={t.id}
@@ -399,6 +402,7 @@ export function TeamsWindow() {
                   <Dim className="block text-2xs">
                     {teamSummary(t)}
                     {live > 0 && <span className="text-[var(--green)]"> · {live} running</span>}
+                    {gone > 0 && <span className="text-[var(--amber)]"> · {gone} exited</span>}
                   </Dim>
                 </button>
               );
@@ -453,15 +457,17 @@ export function TeamsWindow() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={!allowed || !launches.some((l) => l.team_id === draft.id) || winding}
+                      disabled={!allowed || running(draft).length === 0 || winding}
                       title={
                         !allowed
                           ? (refusal ?? "")
                           : winding
                             ? "winding down — every seat has been asked for its note"
-                            : launches.some((l) => l.team_id === draft.id)
+                            : running(draft).length > 0
                               ? `ask every seat for a note of where it got to, then stop each as its note arrives or its turn ends — ${draft.policy.wind_down_minutes} min at most; the next handover reads the notes`
-                              : "no seat of this team is running"
+                              : exited(draft).length > 0
+                                ? "no seat of this team is running — Stop now forgets the exited ones"
+                                : "no seat of this team is running"
                       }
                       onClick={() => send({ cmd: "team_wind_down", id: draft.id })}
                     >
@@ -474,11 +480,13 @@ export function TeamsWindow() {
                       title={
                         !allowed
                           ? (refusal ?? "")
-                          : launches.some((l) => l.team_id === draft.id)
+                          : running(draft).length > 0
                             ? winding
                               ? "cut the wind-down short — the seats still asked are stopped without a note"
                               : "end every seat's process at once, no note asked — the worktrees stay"
-                            : "no seat of this team is running"
+                            : exited(draft).length > 0
+                              ? "nothing is running — forget the exited seats' records"
+                              : "no seat of this team is running"
                       }
                       onClick={() => send({ cmd: "team_stop", id: draft.id })}
                     >
@@ -753,9 +761,17 @@ export function TeamsWindow() {
                         <SourceMark source={seat.cli} />
                         <span className="text-xs font-semibold tracking-wider text-[var(--graph-4)] uppercase">seat {i + 1}</span>
                         {seat.label.trim() && <Dim className="min-w-0 truncate text-xs">{seat.label}</Dim>}
-                        {live && (
+                        {live && live.alive && (
                           <Chip color="var(--green)" title={`running in ${live.tmux_session}`}>
                             running
+                          </Chip>
+                        )}
+                        {live && !live.alive && (
+                          <Chip
+                            color="var(--amber)"
+                            title={`its tmux session ${live.tmux_session} is gone — Boot starts it again, Stop now forgets it`}
+                          >
+                            exited
                           </Chip>
                         )}
                         <span className="ml-auto">
@@ -852,7 +868,7 @@ export function TeamsWindow() {
                         {live ? (
                           <div className="rounded-sm border border-[var(--border)] bg-[var(--bg)] px-2 py-1" data-testid={`seat-${i}-status`}>
                             <Dim className="block text-xs">
-                              running in <Mono>{live.tmux_session}</Mono> · {live.dir}
+                              {live.alive ? "running in" : "exited — was in"} <Mono>{live.tmux_session}</Mono> · {live.dir}
                             </Dim>
                             {/* What its hooks have said (`R-P5`): the kind, the
                                 count, the last word and the context fill — or
@@ -939,8 +955,16 @@ export function TeamsWindow() {
                     size="sm"
                     variant={confirmDelete ? "solid" : "ghost"}
                     onClick={remove}
-                    disabled={!allowed}
-                    title={allowed ? "delete this team's definition; its mirror file goes with it" : (refusal ?? undefined)}
+                    disabled={!allowed || running(draft).length > 0}
+                    title={
+                      !allowed
+                        ? (refusal ?? undefined)
+                        : running(draft).length > 0
+                          ? `stop the team first — still running: ${running(draft)
+                              .map((l) => l.seat)
+                              .join(", ")}`
+                          : "delete this team: its definition and mirror file, its seat records and the files made for its seats — worktrees stay"
+                    }
                   >
                     <Trash2 size={12} /> {confirmDelete ? "Really delete" : "Delete"}
                   </Button>

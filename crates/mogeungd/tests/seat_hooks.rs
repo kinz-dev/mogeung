@@ -50,6 +50,7 @@ async fn daemon(tag: &str) -> Daemon {
             worktree: false,
             files_dir: files.to_string_lossy().into_owned(),
             started: 1_700_000_000,
+            alive: false,
             token: SEAT_TOKEN.into(),
             signals: SeatSignals { kind: SignalKind::Hooked, ..Default::default() },
         })

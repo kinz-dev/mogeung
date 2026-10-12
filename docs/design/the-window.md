@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-11
+updated: 2026-10-12
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -74,7 +74,12 @@ message, as `notes` is; `teamsAllowed` is kept only from the answer to
 validates, stamps and mints, and `lib/teams.ts` mirrors its rules so Save is
 grey with the daemon's words before a click. A seat's row on the queue
 carries a `team/seat` chip from the `seat` tag the daemon puts on it, so a
-seat never passes for a session you started by hand. `teamSends` is the
+seat never passes for a session you started by hand. Since `R-J134` the
+window counts *running* off each record's `alive`, the daemon's own word:
+the team list says *1 running · 2 exited*, an exited seat wears an amber
+chip, Wind down needs a running seat, Stop now also forgets exited
+records, and Delete is grey with the running seats named until they stop —
+nothing here infers liveness from session rows. `teamSends` is the
 third cache of the family (`R-P6`): every team's counters and send log,
 replaced whole on `sends`, shown in the Teams window and in the mode.
 

@@ -51,6 +51,7 @@ fn launch(dir: &std::path::Path, seat: &str, pane: &str, token: &str) -> SeatLau
         worktree: false,
         files_dir: dir.join("seats").join("t1").join(seat).to_string_lossy().into_owned(),
         started: chrono::Utc::now().timestamp() - 600,
+        alive: false,
         token: token.into(),
         signals: SeatSignals { kind: SignalKind::Hooked, ..Default::default() },
     }
