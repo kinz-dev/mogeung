@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-10-11
+updated: 2026-10-12
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -150,7 +150,12 @@ of 2026-10-09). Its launch record — pane id, the session id the daemon chose
 where the CLI takes one, the tmux session, the directory — is persisted, and
 the scan publishes a row from it from birth: the chosen id as the row's id,
 or `seat:<team>:<seat>`, never `pane:` and never `provisional`, with the
-seat's tag on it. The provisional pass skips a seat's pane. When the CLI's own
+seat's tag on it. The same pass reads whether each seat's own tmux session
+still stands off the pane listing and, when one has gone or come back, sets
+the record's `alive` and broadcasts `Seats` at once (`R-J134`) — the record
+outlives the process on purpose, so the policy can wake on the exit, and
+this is how a window tells the two apart. The provisional pass skips a
+seat's pane. When the CLI's own
 session appears, `tag_seats` — a post-pass shaped like the branch refresh —
 carries the tag onto it by the chosen id or by the pane it runs in, and the
 seat row stands down; a seat whose pane has gone stays as a dead row until

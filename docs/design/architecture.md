@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-11
+updated: 2026-10-12
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
@@ -286,7 +286,14 @@ every running seat and finishes each as its note arrives (`POST
 ends, or at the deadline; the note is kept as `note.md` beside the seat's
 files and is the first evidence the next handover quotes for that seat, and a
 boot after a stop hands each seat its own earlier session and note. A team
-winding down wakes and nudges nobody; `Sends` carries how it is going.
+winding down wakes and nudges nobody; `Sends` carries how it is going. Since
+`R-J134` the record says *running* itself: `alive` is whether the seat's own
+tmux session stands, read off the `list-panes` the scan already takes
+(`session_in_panes`), recomputed as the daemon starts and broadcast as
+`Seats` when any seat flips — so a window counts exited seats as exited
+rather than as records. A team's delete refuses while a seat runs, naming
+it, and otherwise forgets the exited records and removes the files made for
+its seats; the worktrees stay.
 
 **And a seat talks back** (`R-P5`, since 2026-10-10): `hooks.rs` is the first
 surface in mogeung that an agent's **own process** reaches — ADR-0043 clause

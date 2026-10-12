@@ -1,7 +1,7 @@
 ---
 title: The read boundary
 status: active
-updated: 2026-10-11
+updated: 2026-10-12
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/workspace.rs
@@ -110,9 +110,12 @@ at.
   — a guidance file, a home of its own when asked, since `R-P5` the hook
   script, the Claude `settings.json`, the opencode plugin and the
   `signals.jsonl` of what its hooks posted, and since `R-P6` `bin/mogeung-send`,
-  the command first on the seat's `PATH` — and are the daemon's to write.
-  A Qwen seat's hooks go into the `settings.json` of *that* home, which is
-  mogeung's, never the user's. The one write into a *worktree* is a marked block in a Codex
+  the command first on the seat's `PATH` — and are the daemon's to write,
+  and since `R-J134` the daemon's to remove: deleting a team takes
+  `~/.mogeung/seats/<team-id>/` with it, once no seat of the team is running,
+  and nothing else — a worktree stays, and an agent's own home is never
+  touched. A Qwen seat's hooks go into the `settings.json` of *that* home,
+  which is mogeung's, never the user's. The one write into a *worktree* is a marked block in a Codex
   seat's `AGENTS.md`, only in a worktree the daemon made and taken back at
   stop ([ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)'s amendment);
   a seat in the team's checkout gets no write at all, and a Codex seat that
