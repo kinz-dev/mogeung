@@ -70,6 +70,15 @@ pub enum ClientMsg {
         /// the terminal window it was already getting.
         #[serde(default)]
         headless: bool,
+        /// A followed daemon's machine id, to start the session **there**
+        /// (`R-J135`). The daemon that receives this forwards it as a write
+        /// across the hop — the follow must allow changes — with this field
+        /// stripped and `headless` forced, since a terminal window on a
+        /// machine where nobody is looking is the desktop act the hop
+        /// refuses (`federation::outbound`). `None` is here, as every client
+        /// before this field meant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     /// Rescan for sessions immediately instead of waiting for the next poll.
     Rescan,

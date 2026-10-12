@@ -283,7 +283,7 @@ that can edit it (pillar K), and sending is the one fenced exception.
 
 | Command | Carries | Answered by | Hop |
 |---|---|---|---|
-| `LaunchTerminal` | `dir`, `worktree`, `source` (which CLI, `R-J51`), `headless` (`R-J61`) | a session appears on the board | here |
+| `LaunchTerminal` | `dir`, `worktree`, `source` (which CLI, `R-J51`), `headless` (`R-J61`), `machine` (a followed daemon's machine id, `R-J135`) | a session appears on the board — mirrored, when it was started elsewhere | here; write, to that machine, when `machine` names a followed one |
 | `FocusTerminal` | `session_id` | the terminal app comes forward | desktop |
 | `OpenFolder` | `session_id` | the file manager opens there (`R-J34`) | desktop |
 | `ProbeIntellij` | `session_id` | `IntellijProbe` (`R-J92`) | desktop |
@@ -301,6 +301,13 @@ without one is an error in words, and a headless Codex launch into a
 directory Codex has not been trusted in is refused (`R-J74`) because the
 prompt would have no window to appear in
 ([cross-session-signals.md](cross-session-signals.md#starting-one-and-knowing-whether-you-did-r-b2-r-i3)).
+A launch that names a followed machine (`R-J135`) is the one command that
+crosses the hop without a session id: `federation::machine_of` reads the
+machine off it, the hop is a write — the follow must allow changes — and
+`outbound` sends it on stripped of `machine` and with `headless` forced,
+because a terminal window on a machine where nobody is looking is the desktop
+act the hop refuses; the session then arrives through the follow, mirrored
+as that machine's.
 `SendToSession` delivers exactly the text, once, into the session's own pane,
 and the gate takes no token and no flag; the mechanics are in the same
 document.

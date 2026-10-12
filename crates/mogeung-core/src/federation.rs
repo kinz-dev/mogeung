@@ -74,7 +74,13 @@ pub enum Hop {
 pub fn hop(cmd: &ClientMsg) -> Hop {
     use ClientMsg::*;
     match cmd {
-        Subscribe | Rescan | FetchHealth | LaunchTerminal { .. } | FetchReviewDebt { .. } => Hop::Here,
+        Subscribe | Rescan | FetchHealth | FetchReviewDebt { .. } => Hop::Here,
+        // A launch names no session, so it crosses only when it names a
+        // machine (`R-J135`): a process started there is a change there,
+        // forwarded headless — see `outbound` — because the terminal window
+        // it would otherwise open is the desktop act the hop refuses.
+        LaunchTerminal { machine: Some(_), .. } => Hop::Write,
+        LaunchTerminal { machine: None, .. } => Hop::Here,
         SetHunkReviewed { .. } | ReviewAll { .. } | Snooze { .. } => Hop::Judge,
         RefreshChange { .. } | FetchEvents { .. } | FetchBlastRadius { .. } => Hop::Read,
         ForgetSession { .. } => Hop::Write,
@@ -234,12 +240,34 @@ pub fn target(cmd: &ClientMsg) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The machine a command is for, when it is not this one: the one in its
+/// mirrored session or run id, or — for a launch, which names no session —
+/// the one it names outright (`R-J135`). `None` is this daemon's to handle.
+pub fn machine_of(cmd: &ClientMsg) -> Option<String> {
+    if let ClientMsg::LaunchTerminal { machine: Some(m), .. } = cmd {
+        return Some(m.clone());
+    }
+    let t = target(cmd)?;
+    split_mirrored(&t).map(|(m, _)| m.to_string())
+}
+
 /// A command about a mirrored session or run, rewritten for the daemon that
 /// owns it: the machine it goes to, and the JSON to send. `None` when it is
 /// not about anything mirrored.
+///
+/// A launch bound for another machine goes **without its `machine`** — there
+/// it is a local launch — and **headless whatever was asked**: a terminal
+/// window on a machine where nobody is looking is what the desktop hop
+/// refuses, and a detached tmux session is what the follow then mirrors
+/// back, reachable over ssh the way every mirrored session is.
 pub fn outbound(cmd: &ClientMsg) -> Option<(String, Value)> {
     let mut v = serde_json::to_value(cmd).ok()?;
     let obj = v.as_object_mut()?;
+    if let ClientMsg::LaunchTerminal { machine: Some(m), .. } = cmd {
+        obj.remove("machine");
+        obj.insert("headless".to_string(), Value::Bool(true));
+        return Some((m.clone(), v));
+    }
     for key in ["session_id", "run_id"] {
         let Some(id) = obj.get(key).and_then(|x| x.as_str()) else { continue };
         let Some((machine, orig)) = split_mirrored(id) else { continue };
@@ -354,6 +382,17 @@ mod tests {
         assert_eq!(hop(&ClientMsg::GitCommit { session_id: s(), repo: None, message: "m".into(), amend: false, session_trailer: false }), Hop::Write);
         assert_eq!(hop(&ClientMsg::RunStart { session_id: s(), config_id: "c".into() }), Hop::Write);
         assert_eq!(hop(&ClientMsg::SendToSession { session_id: s(), text: "t".into() }), Hop::Write);
+        // A launch is a change on the machine it names, and nothing across the
+        // hop when it names none (`R-J135`).
+        let launch = |machine: Option<&str>| ClientMsg::LaunchTerminal {
+            dir: "/r".into(),
+            worktree: false,
+            source: Default::default(),
+            headless: false,
+            machine: machine.map(str::to_string),
+        };
+        assert_eq!(hop(&launch(Some("mac"))), Hop::Write);
+        assert_eq!(hop(&launch(None)), Hop::Here);
         assert_eq!(hop(&ClientMsg::RevealRunEnv { session_id: s(), config_id: "c".into(), key: "K".into() }), Hop::Write);
         assert_eq!(hop(&ClientMsg::ForgetSession { session_id: s() }), Hop::Write);
         assert_eq!(hop(&ClientMsg::FocusTerminal { session_id: s() }), Hop::Desktop);
@@ -362,6 +401,33 @@ mod tests {
         assert_eq!(hop(&ClientMsg::GitLog { session_id: s(), repo: None, skip: 0, limit: 10, rev: None, grep: None, author: None, path: None, pickaxe: None, all: false, since: None, until: None }), Hop::Read);
         assert_eq!(hop(&ClientMsg::SetHunkReviewed { session_id: s(), anchor: "a".into(), reviewed: true }), Hop::Judge);
         assert_eq!(hop(&ClientMsg::ModelChat { id: "1".into(), messages: vec![], conversation: None, about: None }), Hop::Here);
+    }
+
+    /// `R-J135`: a launch for a followed machine goes there as that machine's
+    /// own local launch, headless whatever was asked.
+    #[test]
+    fn a_launch_on_a_followed_machine_crosses_as_a_headless_local_launch() {
+        let launch = |machine: Option<&str>, headless: bool| ClientMsg::LaunchTerminal {
+            dir: "/r".into(),
+            worktree: true,
+            source: Default::default(),
+            headless,
+            machine: machine.map(str::to_string),
+        };
+        assert_eq!(machine_of(&launch(Some("mac"), false)).as_deref(), Some("mac"));
+        assert_eq!(machine_of(&launch(None, false)), None, "a launch here names no machine");
+        assert_eq!(
+            machine_of(&ClientMsg::FetchFile { session_id: mirrored_id("mac", "abc"), path: "p".into() }).as_deref(),
+            Some("mac"),
+            "the mirrored id still answers for everything else"
+        );
+        let (machine, json) = outbound(&launch(Some("mac"), false)).expect("it crosses");
+        assert_eq!(machine, "mac");
+        assert!(json.get("machine").is_none(), "there it is a local launch: {json}");
+        assert_eq!(json["headless"], true, "and headless, whatever was asked: {json}");
+        assert_eq!(json["dir"], "/r");
+        assert_eq!(json["worktree"], true);
+        assert!(outbound(&launch(None, true)).is_none(), "a launch here never crosses");
     }
 
     #[test]

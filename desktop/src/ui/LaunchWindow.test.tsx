@@ -19,6 +19,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { LaunchWindow } from "@/ui/LaunchWindow";
 import { useStore } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
+import type { PeerState } from "@/wire/types";
 
 function open(favourites: string[] = []) {
   useStore.setState({ prefs: defaultPrefs(), showLaunch: true, sent: [] } as never);
@@ -315,5 +316,99 @@ describe("browsing for the folder", () => {
       fireEvent.click(screen.getByTitle("browse for a folder"));
     });
     expect(screen.getByPlaceholderText("~/projects/foo")).toHaveValue("/half/typed");
+  });
+});
+
+/**
+ * Starting on a followed machine. `R-J135`.
+ *
+ * The daemon forwards a launch that names a machine and forces it headless
+ * there; this pins the half the window owns — the picker appears only with a
+ * follow that is up, a follow with changes off is grey and says where to turn
+ * them on, the wire carries the machine and `headless: true` whatever the
+ * checkbox said, and the recent repos are that machine's.
+ */
+describe("starting on a followed machine", () => {
+  const launches = (): unknown[] => (useStore.getState() as unknown as { sent: unknown[] }).sent ?? [];
+  const peer = (over: Partial<PeerState> = {}): PeerState => ({
+    id: "p1",
+    name: "devbox",
+    url: "ws://devbox:7717/ws",
+    state: "up",
+    machine_id: "m2",
+    host: "devbox",
+    version: "0.1.0",
+    sessions: 2,
+    allow_writes: true,
+    detail: null,
+    since_ms: 0,
+    ...over,
+  });
+
+  beforeEach(() => {
+    useStore.setState({
+      send: (m: unknown) => useStore.setState({ sent: [...launches(), m] } as never),
+    } as never);
+  });
+  afterEach(() => useStore.setState({ peers: null, sessions: {} }));
+
+  it("offers no machine picker without a follow that is up", () => {
+    useStore.setState({ peers: [peer({ state: "down" })] });
+    open();
+    expect(screen.queryByText("this machine")).toBeNull();
+    expect(screen.queryByText("devbox")).toBeNull();
+  });
+
+  it("starts there, headless whatever the checkbox said, and says so everywhere it speaks", () => {
+    useStore.setState({ peers: [peer()] });
+    open();
+    expect(screen.getByText("this machine").closest("button")!.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.click(screen.getByText("devbox"));
+
+    const headless = screen.getByLabelText("headless — no terminal window") as HTMLInputElement;
+    expect(headless.checked).toBe(true);
+    expect(headless.disabled).toBe(true);
+    expect(screen.getByText(/under tmux on devbox — no terminal window/)).toBeInTheDocument();
+    expect(screen.getByText(/it starts on devbox and joins the queue/)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByText(/start a headless claude on devbox/));
+
+    expect(launches()).toEqual([
+      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "claude_code", headless: true, machine: "m2" },
+    ]);
+  });
+
+  it("greys a follow with changes off, says where to turn them on, and starts here", () => {
+    useStore.setState({ peers: [peer({ allow_writes: false })] });
+    open();
+    const tab = screen.getByText("devbox").closest("button")!;
+    expect(tab).toBeDisabled();
+    expect(tab.title).toMatch(/allow changes/);
+
+    fireEvent.click(tab);
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "/repo" } });
+    fireEvent.click(screen.getByText(/open a claude terminal/));
+
+    expect(launches()).toEqual([
+      { cmd: "launch_terminal", dir: "/repo", worktree: false, source: "claude_code", headless: false },
+    ]);
+  });
+
+  it("lists the repos mirrored from that machine, not this one's", () => {
+    const session = (id: string, repo: string, machine: string | null) =>
+      ({ id, repo_root: repo, origin: machine ? { machine_id: machine, host: "devbox" } : null }) as never;
+    useStore.setState({
+      peers: [peer()],
+      sessions: { a: session("a", "/here/repo", null), b: session("@m2:b", "/there/repo", "m2") },
+    });
+    open();
+    expect(screen.getByText("/here/repo")).toBeInTheDocument();
+    expect(screen.queryByText("/there/repo")).toBeNull();
+
+    fireEvent.click(screen.getByText("devbox"));
+
+    expect(screen.getByText("/there/repo")).toBeInTheDocument();
+    expect(screen.queryByText("/here/repo")).toBeNull();
   });
 });

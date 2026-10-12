@@ -2024,11 +2024,17 @@ async fn handle(
             let lines = state.runs.lines(&run_id).await;
             send_reply(reply, ServerMsg::RunOutputHistory { run_id, lines });
         }
+        // `machine` is spent before this arm: one naming a followed machine
+        // was forwarded there by the relay (`R-J135`), one naming a machine
+        // not followed was refused in words, and what arrives from a relay
+        // has the field stripped. So a launch that reaches here is for this
+        // machine, whatever the field once said.
         ClientMsg::LaunchTerminal {
             dir,
             worktree,
             source,
             headless,
+            machine: _,
         } => {
             if let Err(e) = state.launch_terminal(&dir, worktree, source, headless).await {
                 err(e);

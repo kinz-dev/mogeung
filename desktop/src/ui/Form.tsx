@@ -58,7 +58,10 @@ export function Section({
   bodyClassName,
   testId,
 }: {
-  title: string;
+  /** Without one — and no icon, hint or actions — the card has no header
+   *  strip at all, only its coloured edge: a compact card for a few controls
+   *  that need no banner over them (`R-J136`). */
+  title?: string;
   icon?: ReactNode;
   tone?: Tone;
   /** A few words after the title, dimmed: what this section is for. */
@@ -81,18 +84,22 @@ export function Section({
       className={cn("shrink-0 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-panel)]", className)}
       style={{ borderLeft: `3px solid ${accent}` }}
     >
-      <header className="flex min-h-8 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-faint)] px-3 py-1.5">
-        {icon && (
-          <span className="flex shrink-0 items-center" style={{ color: accent }}>
-            {icon}
-          </span>
-        )}
-        <span className="shrink-0 text-xs font-semibold tracking-wider uppercase" style={{ color: accent }}>
-          {title}
-        </span>
-        {hint && <span className="min-w-0 truncate text-xs text-[var(--dim)]">{hint}</span>}
-        {actions && <span className="ml-auto flex shrink-0 items-center gap-1">{actions}</span>}
-      </header>
+      {(title || icon || hint || actions) && (
+        <header className="flex min-h-8 items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-faint)] px-3 py-1.5">
+          {icon && (
+            <span className="flex shrink-0 items-center" style={{ color: accent }}>
+              {icon}
+            </span>
+          )}
+          {title && (
+            <span className="shrink-0 text-xs font-semibold tracking-wider uppercase" style={{ color: accent }}>
+              {title}
+            </span>
+          )}
+          {hint && <span className="min-w-0 truncate text-xs text-[var(--dim)]">{hint}</span>}
+          {actions && <span className="ml-auto flex shrink-0 items-center gap-1">{actions}</span>}
+        </header>
+      )}
       <div className={cn("flex flex-col gap-2.5 p-3", bodyClassName)}>{children}</div>
     </section>
   );

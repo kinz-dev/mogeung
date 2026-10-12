@@ -770,10 +770,10 @@ impl Relays {
     /// Take a command if it is about a mirrored session: forward it, or refuse
     /// it in words. `false` means it is this daemon's to handle.
     pub fn intercept(&mut self, cmd: &mogeung_core::ClientMsg, from_this_machine: bool) -> bool {
-        use mogeung_core::federation::{hop, outbound, split_mirrored, target, Hop};
-        let Some(t) = target(cmd) else { return false };
-        let Some((machine, _)) = split_mirrored(&t) else { return false };
-        let machine = machine.to_string();
+        use mogeung_core::federation::{hop, machine_of, outbound, Hop};
+        // The machine in its mirrored id — or, for a launch, the one it
+        // names outright (`R-J135`).
+        let Some(machine) = machine_of(cmd) else { return false };
         let h = hop(cmd);
         // A note about a remote session is still this machine's note.
         if h == Hop::Here {

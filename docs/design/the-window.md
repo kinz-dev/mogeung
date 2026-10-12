@@ -352,8 +352,14 @@ be docked back: the panel is the dialog, and there is nothing to dock.
 `Section` is a card with a header strip, an icon and a title in its own
 colour and a bar of it down the left edge; a `Field` puts its label in one
 column so a section's controls start on one edge; a `Callout` is the tinted
-sentence not to skim. New session is agent, where and how, in blue, green and
-purple, with the one verb in a footer that stays while the lists scroll;
+sentence not to skim. New session is two cards since `R-J136`: a blue one
+with no header strip — the CLI, then *on* which machine when a follow is up
+(`R-J135`: the watched daemon first, a follow with changes off grey with the
+reason), the two checkboxes on one row and the yolo flag on one line — above
+the green *where* card with its lists, and the one verb in a footer that
+stays while the lists scroll. A launch on another machine is always headless,
+the checkbox says so, and the footer says the session comes back as that
+machine's;
 Teams is team, policy, sends and seats, in blue, purple, green and teal, the
 list of teams down the left with the chosen one marked, and the verdict — what
 is wrong, unsaved, or saved — in a footer of its own. The two layers keep

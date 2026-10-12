@@ -336,7 +336,10 @@ export function Segmented<T extends string>({
   // picker puts each agent's own mark beside its name, and a segmented control
   // is exactly the right shape for that choice — a picker that could only hold
   // text would have meant a second one built beside this.
-  options: readonly { value: T; label: React.ReactNode; title?: string }[];
+  // `disabled` keeps a choice on screen and grey with its title saying why,
+  // since `R-J135`: a followed machine with changes off is a fact to read,
+  // not a tab to lose.
+  options: readonly { value: T; label: React.ReactNode; title?: string; disabled?: boolean }[];
   onChange: (v: T) => void;
   className?: string;
   /** `sm` sits inside a row or a strip; `md` is a form's own control, with a
@@ -359,6 +362,7 @@ export function Segmented<T extends string>({
           role="tab"
           aria-selected={value === o.value}
           title={o.title}
+          disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cn(
             "rounded-sm whitespace-nowrap",
@@ -367,6 +371,7 @@ export function Segmented<T extends string>({
             value === o.value
               ? "bg-[var(--state-focus)] text-[var(--text-strong)]"
               : "text-[var(--dim)] hover:text-[var(--text)]",
+            o.disabled && "cursor-not-allowed opacity-50 hover:text-[var(--dim)]",
           )}
         >
           {o.label}

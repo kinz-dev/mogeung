@@ -71,10 +71,29 @@
  * callout rather than a line of amber, the button in a footer that stays put
  * while the lists scroll. Asked 2026-10-11: *"make it visual component more
  * visible so it can easily see the diff section"*.
+ *
+ * **Two cards since `R-J136`**, asked 2026-10-12 the day after: *"I like the
+ * coloring of the refactored UI, but can we make it more compact, we
+ * shouldn't need a separate banner for AGENT and HOW"*. The agent and the
+ * shape of the session are five controls that explain themselves, so they
+ * share one blue card with no header strip — the CLI on one row, the two
+ * checkboxes on the next, the yolo line under them — and only *where*, with
+ * its lists, keeps a banner.
+ *
+ * **On which machine, since `R-J135`**, asked the same day: *"if we are
+ * following a remote mogeung daemon, I want to be able to start a remote
+ * session directly from the New session popup"*. A follow that is up is
+ * offered beside the CLI, by the host its daemon says it is; one with
+ * changes off is grey and says where to turn them on. A launch on another
+ * machine is **always headless** — the daemon forwards it so, because a
+ * terminal window there would open where nobody is looking — and the
+ * session comes back mirrored, as that machine's, attachable over ssh the
+ * way every mirrored session is. The recent repos follow the choice, since a
+ * path is a machine's own.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
-import { Bot, FolderOpen, Rocket, SlidersHorizontal, Star, TriangleAlert, X } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { FolderOpen, Rocket, Star, TriangleAlert, X } from "lucide-react";
 import { useStore } from "@/store";
 import { chooseFolder } from "@/lib/tauri";
 import { addFavourite, isFavourite, normaliseDir, removeFavourite } from "@/lib/favourites";
@@ -138,6 +157,22 @@ export function LaunchWindow() {
   const launchSize = useStore((s) => s.prefs.launchSize);
   const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
 
+  // Where it starts (`R-J135`): here — the daemon you are watching — or a
+  // daemon this one follows, by machine id. Offered only while the follow is
+  // up; one with changes off is on screen and grey, with the reason, rather
+  // than missing. Local to the window, not a preference: which machine is a
+  // decision per session, where the CLI is a habit.
+  const peers = useStore((s) => s.peers);
+  const [machine, setMachine] = useState<string | null>(null);
+  const remotes = useMemo(() => (peers ?? []).filter((p) => p.state === "up" && !!p.machine_id), [peers]);
+  const remote = machine ? (remotes.find((p) => p.machine_id === machine) ?? null) : null;
+  const remoteName = remote ? (remote.host ?? remote.name) : null;
+  // A follow that went down while this was open falls back to here, rather
+  // than starting nowhere on the click.
+  useEffect(() => {
+    if (machine && !remote) setMachine(null);
+  }, [machine, remote]);
+
   // Somewhere you have already worked is nearly always where you want to work
   // again, and typing a path is the slowest part of this window.
   //
@@ -145,17 +180,28 @@ export function LaunchWindow() {
   // and the copy you would click is the one with the ✕ next to it.
   const repos = useMemo(() => {
     const seen = new Set<string>();
-    for (const s of Object.values(sessions)) if (s.repo_root) seen.add(s.repo_root);
+    for (const s of Object.values(sessions)) {
+      // A path is a machine's own: here, the sessions with no origin; on a
+      // followed machine, the ones mirrored from it (`R-J135`).
+      const theirs = machine ? s.origin?.machine_id === machine : !s.origin;
+      if (theirs && s.repo_root) seen.add(s.repo_root);
+    }
     return [...seen].filter((r) => !isFavourite(favourites, r)).sort();
-  }, [sessions, favourites]);
+  }, [sessions, favourites, machine]);
 
+  // Only here: the trusted list is this daemon's, and the far daemon refuses
+  // a headless Codex launch of its own accord (`R-J74`).
   const untrusted = useMemo(() => {
     const typedDir = normaliseDir(dir);
-    if (source !== "codex" || !typedDir) return false;
+    if (machine || source !== "codex" || !typedDir) return false;
     const dirs = health?.agents?.find((a) => a.source === "codex")?.trusted_dirs;
     if (!dirs) return false;
     return !dirs.includes(typedDir);
-  }, [source, dir, health]);
+  }, [machine, source, dir, health]);
+
+  // Headless as asked — never into a directory the CLI has not been granted
+  // (`R-J74`), and always on another machine (`R-J135`).
+  const headlessNow = machine !== null || (headless && !untrusted);
 
   if (!open) return null;
   const close = () => useStore.setState({ showLaunch: false });
@@ -187,10 +233,11 @@ export function LaunchWindow() {
       dir: typed,
       worktree,
       source: chosen.source,
-      // Never headless into a directory the CLI has not been granted: the
-      // preference is remembered, so it must not silently apply where it
-      // cannot work. `R-J74`.
-      headless: headless && !untrusted,
+      headless: headlessNow,
+      // Only when it is somewhere else: a client before `R-J135` sent no
+      // such key, and the wire a daemon reads stays the same for a launch
+      // here.
+      ...(machine ? { machine } : {}),
     });
     close();
   };
@@ -199,9 +246,11 @@ export function LaunchWindow() {
     <Dialog
       title="New session"
       subtitle={
-        headless
-          ? `starts a real interactive ${sourceLabel(chosen.source)} under tmux — no terminal window`
-          : `opens a real interactive ${sourceLabel(chosen.source)} in your terminal`
+        remoteName
+          ? `starts a real interactive ${sourceLabel(chosen.source)} under tmux on ${remoteName} — no terminal window`
+          : headless
+            ? `starts a real interactive ${sourceLabel(chosen.source)} under tmux — no terminal window`
+            : `opens a real interactive ${sourceLabel(chosen.source)} in your terminal`
       }
       onClose={close}
       detached={{ name: "launch", size: launchSize, onResized: (size) => setPrefs({ launchSize: size }) }}
@@ -213,29 +262,95 @@ export function LaunchWindow() {
             any other session.
           </Dim>
 
-          {/* First, above the directory: which CLI changes what the rest of this
-              window means — the flag below it, and the name in the button at the
-              bottom — so it is answered before you read either. */}
-          <Section title="Agent" tone="blue" icon={<Bot size={14} />} hint="which CLI starts — the flag and the button follow it">
-            <Segmented
-              size="md"
-              value={chosen.source}
-              onChange={(v) => setPrefs({ launchSource: v })}
-              options={LAUNCHABLE.map((a) => ({
-                value: a.source,
-                title: `start ${sourceLabel(a.source)} — ${a.yolo}`,
-                label: (
-                  <span className="flex items-center gap-1.5">
-                    <SourceMark source={a.source} />
-                    {sourceLabel(a.source)}
-                  </span>
-                ),
-              }))}
-            />
-            <Callout tone="amber" icon={<TriangleAlert size={14} />}>
-              Started in yolo mode: <Mono>{chosen.yolo}</Mono>. The agent will not ask before editing files or running
-              commands.
-            </Callout>
+          {/* One compact card for the choices (`R-J136`), no banner over any of
+              them: which CLI, on which machine, and the shape of the session.
+              The CLI comes first, above the directory, because it changes what
+              the rest of this window means — the flag below it and the name in
+              the button at the bottom — so it is answered before you read either. */}
+          <Section tone="blue" testId="launch-choices">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <Segmented
+                size="md"
+                value={chosen.source}
+                onChange={(v) => setPrefs({ launchSource: v })}
+                options={LAUNCHABLE.map((a) => ({
+                  value: a.source,
+                  title: `start ${sourceLabel(a.source)} — ${a.yolo}`,
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      <SourceMark source={a.source} />
+                      {sourceLabel(a.source)}
+                    </span>
+                  ),
+                }))}
+              />
+              {/* Only with a follow that is up (`R-J135`); the watched daemon
+                  is always the first choice, and the default. */}
+              {remotes.length > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <Dim className="text-xs">on</Dim>
+                  <Segmented
+                    size="md"
+                    value={machine ?? ""}
+                    onChange={(v) => setMachine(v || null)}
+                    options={[
+                      { value: "", label: "this machine", title: "the daemon you are watching — its machine, as before" },
+                      ...remotes.map((p) => {
+                        const name = p.host ?? p.name;
+                        return {
+                          value: p.machine_id ?? "",
+                          label: name,
+                          disabled: !p.allow_writes,
+                          title: p.allow_writes
+                            ? `start on ${name} — headless, a detached tmux session there; it joins the queue as that machine's`
+                            : `changes on ${name} are off for this follow — turn on “allow changes” for it in Connections`,
+                        };
+                      }),
+                    ]}
+                  />
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <Checkbox
+                className="text-sm"
+                checked={worktree}
+                onChange={setWorktree}
+                label="in a fresh git worktree"
+                title="a new branch mogeung/<timestamp> in its own checkout, so this session cannot collide with the one already running there"
+              />
+              <Checkbox
+                className="text-sm"
+                checked={headlessNow}
+                disabled={untrusted || machine !== null}
+                onChange={(v) => setPrefs({ launchHeadless: v })}
+                label="headless — no terminal window"
+                title={
+                  machine !== null
+                    ? "always, on another machine: a terminal window there would open where nobody is looking"
+                    : untrusted
+                      ? "not available here yet: codex will stop on a trust prompt, and a headless session has no window to show it in"
+                      : "a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
+                }
+              />
+            </div>
+            {/* The flag, on one line: it is a sentence to read once, not a box
+                to skim past. */}
+            <div className="flex items-start gap-1.5 text-xs leading-snug text-[var(--dim)]">
+              <TriangleAlert size={13} className="mt-0.5 shrink-0 text-[var(--amber)]" />
+              <span>
+                yolo mode, <Mono>{chosen.yolo}</Mono>: the agent will not ask before editing files or running commands
+              </span>
+            </div>
+            {/* Said before the click, not after. The daemon refuses this launch
+                too, but a refusal you read once the session already failed to
+                appear is a worse version of the same sentence. */}
+            {untrusted && (
+              <Callout tone="amber" icon={<TriangleAlert size={14} />}>
+                codex has not been trusted in this directory. It asks once, and a headless session has no window to
+                ask in — so start it with a terminal this time. Headless works here from then on.
+              </Callout>
+            )}
           </Section>
 
           <Section title="Where" tone="green" icon={<FolderOpen size={14} />} hint="the folder the session starts in">
@@ -331,48 +446,22 @@ export function LaunchWindow() {
             )}
           </Section>
 
-          <Section title="How" tone="purple" icon={<SlidersHorizontal size={14} />} hint="the shape of the session">
-            <Checkbox
-              className="text-sm"
-              checked={worktree}
-              onChange={setWorktree}
-              label="in a fresh git worktree"
-              title="a new branch mogeung/<timestamp> in its own checkout, so this session cannot collide with the one already running there"
-            />
-            <Checkbox
-              className="text-sm"
-              checked={headless && !untrusted}
-              disabled={untrusted}
-              onChange={(v) => setPrefs({ launchHeadless: v })}
-              label="headless — no terminal window"
-              title={
-                untrusted
-                  ? "not available here yet: codex will stop on a trust prompt, and a headless session has no window to show it in"
-                  : "a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
-              }
-            />
-            {/* Said before the click, not after. The daemon refuses this launch
-                too, but a refusal you read once the session already failed to
-                appear is a worse version of the same sentence. */}
-            {untrusted && (
-              <Callout tone="amber" icon={<TriangleAlert size={14} />}>
-                codex has not been trusted in this directory. It asks once, and a headless session has no window to
-                ask in — so start it with a terminal this time. Headless works here from then on.
-              </Callout>
-            )}
-          </Section>
         </div>
 
         {/* The one verb, in a footer that stays while the lists scroll. */}
         <div className="flex shrink-0 items-center gap-3 border-t border-[var(--border)] bg-[var(--bg-panel)] px-3 py-2">
           <Button variant="solid" size="lg" onClick={go} disabled={!typed}>
             <Rocket size={13} />{" "}
-            {headless && !untrusted
-              ? `start a headless ${sourceLabel(chosen.source)}`
-              : `open ${withArticle(sourceLabel(chosen.source))} terminal`}
+            {remoteName
+              ? `start a headless ${sourceLabel(chosen.source)} on ${remoteName}`
+              : headlessNow
+                ? `start a headless ${sourceLabel(chosen.source)}`
+                : `open ${withArticle(sourceLabel(chosen.source))} terminal`}
           </Button>
           <Dim className="text-xs leading-snug">
-            it opens where you are watching — the daemon's machine, not necessarily this one
+            {remoteName
+              ? `it starts on ${remoteName} and joins the queue as that machine's session; its pane attaches over ssh once that daemon has said how`
+              : "it opens where you are watching — the daemon's machine, not necessarily this one"}
           </Dim>
         </div>
       </div>

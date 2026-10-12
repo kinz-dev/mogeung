@@ -1430,7 +1430,9 @@ export type ClientMsg =
    *  a source it has no recipe for rather than starting something else.
    *  `headless` starts it detached under tmux with no terminal window at all
    *  (`R-J61`) — the daemon refuses that without tmux, in words. */
-  | { cmd: "launch_terminal"; dir: string; worktree: boolean; source: SessionSource; headless: boolean }
+  /** `machine`, since `R-J135`: a followed daemon's machine id, to start it
+   *  there — forwarded headless, as a write across the hop. Absent is here. */
+  | { cmd: "launch_terminal"; dir: string; worktree: boolean; source: SessionSource; headless: boolean; machine?: string }
   | { cmd: "rescan" }
   | { cmd: "fetch_health" }
   | { cmd: "snooze"; session_id: SessionId; minutes: number }
