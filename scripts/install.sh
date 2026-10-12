@@ -26,7 +26,8 @@
 #
 # Exit status: 0 done · 1 failed · 2 bad arguments · 3 the password dialog was
 # dismissed · 4 not authorised — so a caller can tell *you said no* from *it
-# broke*.
+# broke*. A run that does work ends by saying how long it took — each slow
+# step as it finishes, and the total last, whichever way it ended.
 #
 # Three things, in the order they matter:
 #
@@ -253,7 +254,41 @@ stop_keepalive() {
     SUDO_KEEPALIVE=""
     return 0
 }
-trap stop_keepalive EXIT
+
+# ── how long did that take? ──────────────────────────────────────────────────
+#
+# Asked for on 2026-10-12, the day the script was made faster (`R-J133`), so
+# the next claim about its speed is a number read off the screen rather than
+# a stopwatch. `SECONDS` is bash's own clock — whole seconds since the shell
+# started, and bash 3.2 has it — so there is no `date` arithmetic to differ
+# between GNU and BSD. Each slow step says what it took as it finishes, and
+# the `EXIT` trap prints the total whichever way the script ends, with the
+# exit status when that is not 0: *failed after 2m 10s (exit 1)* reads as
+# easily as *done in 1m 42s*. A run that did no work — `--help`, a bad
+# argument, `--uninstall` — prints nothing, because `TIMED` is set only once
+# the real steps begin, which is also where the clock starts: a password
+# typed slowly up front is not billed to the build. (With `--elevate pkexec`
+# the dialog comes later, inside the total.)
+TIMED=0
+T0=0
+elapsed() {
+    local s=$(( SECONDS - $1 ))
+    if [ "$s" -ge 60 ]; then
+        printf '%dm %02ds' $(( s / 60 )) $(( s % 60 ))
+    else
+        printf '%ds' "$s"
+    fi
+}
+report_time() {
+    [ "$TIMED" -eq 1 ] || return 0
+    if [ "$1" -eq 0 ]; then
+        echo "▸ done in $(elapsed "$T0")"
+    else
+        echo "▸ failed after $(elapsed "$T0") (exit $1)" >&2
+    fi
+}
+# `$?` first, before anything in the handler can replace it.
+trap 'status=$?; stop_keepalive; report_time "$status"' EXIT
 
 # Authenticate **before** the builds, not after them.
 #
@@ -363,6 +398,10 @@ if [ "$DESKTOP" -eq 1 ] && [ "$UNINSTALL" -eq 0 ] && [ "$PLATFORM" = "linux" ] &
     authenticate_early || exit 1
 fi
 
+# From here on the script does work. See *how long did that take?* above.
+TIMED=1
+T0=$SECONDS
+
 # What this checkout is, written after a successful install. `--git-common-dir`
 # rather than `--show-toplevel`, so an install from a linked worktree — which
 # is how the window builds its updates — records the checkout the worktree
@@ -426,10 +465,14 @@ if [ "$BUILD" -eq 1 ]; then
         # free, and this script is already the slow one.
         if [ ! -d "desktop/node_modules" ]; then
             echo "▸ installing the window's dependencies…"
+            t=$SECONDS
             as_user "cd desktop && npm install" || exit 1
+            echo "▸ dependencies installed in $(elapsed "$t")"
         fi
         echo "▸ building the window (release) — the daemon compiles with it, so it is minutes…"
+        t=$SECONDS
         as_user "cd desktop && npm run tauri build -- --bundles '$BUNDLES'" || exit 1
+        echo "▸ the window built in $(elapsed "$t")"
         # `-p mogeungd` names a package outside the shell's workspace, which
         # cargo allows for a path dependency: it reuses the library the bundler
         # just compiled and links the binary, seconds rather than a minute. No
@@ -437,10 +480,14 @@ if [ "$BUILD" -eq 1 ]; then
         # is needed, since the shell's `custom-protocol` does not reach the
         # daemon's dependencies.
         echo "▸ linking the daemon binary from the window's workspace…"
+        t=$SECONDS
         as_user "cargo build --release --manifest-path '$SHELL_MANIFEST' -p mogeungd --bin mogeungd" || exit 1
+        echo "▸ the daemon linked in $(elapsed "$t")"
     else
         echo "▸ building the daemon (release)…"
+        t=$SECONDS
         as_user "cargo build --release" || exit 1
+        echo "▸ the daemon built in $(elapsed "$t")"
     fi
 fi
 
