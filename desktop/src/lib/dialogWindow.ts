@@ -103,8 +103,14 @@ const open = new Map<DialogName, Handle>();
 // --- which window the shell opened ------------------------------------------------
 
 /** The page a dialog asks for, marked so the shell's announcement can be matched to it. */
-function pageFor(name: DialogName): string {
-  return `${PAGE}?dialog=${name}`;
+function pageFor(name: DialogName, size?: Size): string {
+  // `w` and `h` beside the name: the size, for a shell that cannot read it
+  // off `window.open`'s features (`R-J138`). Linux's webview hands the shell
+  // none, so until this every dialog there opened at the toolkit's 800×600
+  // and then remembered that as the size it was left at. The features string
+  // is still passed, for a browser and for macOS; the two agree.
+  const ask = size ? `&w=${Math.round(size.width)}&h=${Math.round(size.height)}` : "";
+  return `${PAGE}?dialog=${name}${ask}`;
 }
 
 function nameIn(url: string): DialogName | null {
@@ -184,7 +190,7 @@ export function openDialogWindow(name: DialogName, title: string, size: Size, on
   }
   let win: Window | null = null;
   try {
-    win = window.open(pageFor(name), `mogeung-${name}`, `width=${Math.round(size.width)},height=${Math.round(size.height)}`);
+    win = window.open(pageFor(name, size), `mogeung-${name}`, `width=${Math.round(size.width)},height=${Math.round(size.height)}`);
   } catch {
     win = null;
   }

@@ -111,6 +111,38 @@ pub fn label_script(label: &str) -> String {
     )
 }
 
+/// The content size a page asked for, carried in its own URL as `w` and `h`
+/// in CSS pixels. `R-J138`.
+///
+/// `window.open`'s features string — `width=1500,height=1000` — is what the
+/// web says a page should use, and on macOS it works. **On Linux it never
+/// arrives**: wry's WebKitGTK path hands the new-window handler
+/// `NewWindowFeatures { size: None, position: None }` whatever the page said
+/// (wry 0.55.1, `webkitgtk/mod.rs`), so `window_features` had nothing to
+/// apply, every popout opened at the toolkit's 800×600, and a dialog then
+/// measured 800×553 — that, minus a title bar — on close and remembered it as
+/// the size it was left at. Found 2026-10-12, when a bigger Teams window
+/// (`R-J137`) opened no bigger. The URL is the one thing both platforms
+/// deliver intact, so the page says its size there too; where the features
+/// also arrive the two agree.
+///
+/// Bounded, so a malformed or mischievous URL opens a window rather than a
+/// 1×1 or a hundred-thousand-pixel one; half an ask is no ask.
+pub fn requested_size(url: &tauri::Url) -> Option<(f64, f64)> {
+    let mut w = None;
+    let mut h = None;
+    for (k, v) in url.query_pairs() {
+        match &*k {
+            "w" => w = v.parse::<f64>().ok(),
+            "h" => h = v.parse::<f64>().ok(),
+            _ => {}
+        }
+    }
+    let (w, h) = (w?, h?);
+    let sane = |x: f64| x.is_finite() && (200.0..=8000.0).contains(&x);
+    (sane(w) && sane(h)).then_some((w, h))
+}
+
 /// Close a popout window for good — the one step a page cannot take for
 /// itself here (see the module notes). Only ever a `popout-*` window: the
 /// label comes from the page, and the main window is not a page's to close.
@@ -152,7 +184,7 @@ pub fn build_main(app: &tauri::AppHandle) -> tauri::Result<()> {
             // the URL that was actually requested. dockview asks for a
             // same-origin page of its own (`popout.html`), which is why this
             // does not need to know anything about the address.
-            let builder = WebviewWindowBuilder::new(
+            let mut builder = WebviewWindowBuilder::new(
                 &handle,
                 &label,
                 WebviewUrl::External("about:blank".parse().expect("about:blank parses")),
@@ -166,6 +198,11 @@ pub fn build_main(app: &tauri::AppHandle) -> tauri::Result<()> {
             .on_document_title_changed(|window, title| {
                 let _ = window.set_title(&title);
             });
+            // The size the page asked for, read off its URL rather than off
+            // `features`, which arrives empty on Linux. See `requested_size`.
+            if let Some((w, h)) = requested_size(&url) {
+                builder = builder.inner_size(w, h);
+            }
 
             match builder.build() {
                 Ok(window) => {
@@ -208,6 +245,21 @@ pub fn build_main(app: &tauri::AppHandle) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `R-J138`: the size a page asks for comes off its URL, bounded, and
+    /// half an ask or nonsense is no ask at all.
+    #[test]
+    fn a_page_says_its_size_in_its_url_and_nonsense_is_no_size() {
+        let u = |s: &str| tauri::Url::parse(s).unwrap();
+        assert_eq!(requested_size(&u("tauri://localhost/popout.html?dialog=teams&w=1500&h=1000")), Some((1500.0, 1000.0)));
+        assert_eq!(requested_size(&u("tauri://localhost/arcade.html?w=1280&h=860&theme=dark")), Some((1280.0, 860.0)));
+        assert_eq!(requested_size(&u("tauri://localhost/popout.html")), None, "no ask, no size");
+        assert_eq!(requested_size(&u("tauri://localhost/x?w=1500")), None, "half an ask is none");
+        assert_eq!(requested_size(&u("tauri://localhost/x?w=1&h=1")), None, "too small to be a window");
+        assert_eq!(requested_size(&u("tauri://localhost/x?w=100000&h=800")), None, "too big to be one");
+        assert_eq!(requested_size(&u("tauri://localhost/x?w=abc&h=800")), None);
+        assert_eq!(requested_size(&u("tauri://localhost/x?w=NaN&h=800")), None);
+    }
 
     /// The label is what `capabilities/default.json` matches with `popout-*`.
     /// A label that stopped starting with it would produce a window with no

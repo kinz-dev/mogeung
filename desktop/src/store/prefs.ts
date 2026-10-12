@@ -387,7 +387,7 @@ export const emptyScoped = (): ScopedPrefs => ({
  * - **2** — the Git log's columns became shares of its width (2026-09-11);
  *   a file from that morning holds pixels under the same key.
  */
-export const PREFS_VERSION = 3;
+export const PREFS_VERSION = 4;
 
 export const defaultPrefs = (): Prefs => ({
   version: PREFS_VERSION,
@@ -472,10 +472,15 @@ export function migrateDefaults(saved: Partial<Prefs>): Partial<Prefs> {
   // is a 96-fr author beside a NaN, so the whole set goes back to default.
   // Cost: one day's dividers, on the machine that asked for them.
   if (from < 2) out.gitLogColumns = DEFAULT_LOG_COLUMNS;
-  // 3 — Teams opens bigger (`R-J137`). A file still holding the old default
-  // exactly was never resized, so it moves to the new one; a size somebody
-  // chose by resizing is theirs and stays, as `R-J128` promised.
-  if (from < 3 && saved.teamsSize?.width === 1180 && saved.teamsSize?.height === 840) {
+  // 3, then 4 — Teams opens bigger (`R-J137`), and then the sizes a Linux
+  // file had saved turned out never to have been chosen at all (`R-J138`):
+  // the shell never got the size a dialog asked for, so what every file on
+  // Linux holds is the toolkit's default minus a title bar, 800×553, saved
+  // on each close as "the size it was left at". Both sizes go back to the
+  // defaults once, for everyone — a Mac's chosen size is lost with them,
+  // which is the cost rule 1 paid too, and one drag puts it back.
+  if (from < 4) {
+    out.launchSize = defaultPrefs().launchSize;
     out.teamsSize = defaultPrefs().teamsSize;
   }
   return out;

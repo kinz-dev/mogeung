@@ -63,7 +63,7 @@ describe("the way in", () => {
     expect(open).not.toHaveBeenCalled();
     press("9");
     expect(open).toHaveBeenCalledTimes(1);
-    expect(open.mock.calls[0][0]).toBe("/arcade.html");
+    expect(open.mock.calls[0][0]).toBe("/arcade.html?w=1280&h=860");
     // Not over the main window: the room is in the other one.
     expect(room()).toBeNull();
   });
@@ -74,7 +74,7 @@ describe("the way in", () => {
     try {
       render(<Arcade />);
       press("314159");
-      expect(open.mock.calls[0][0]).toBe("/arcade.html?theme=light");
+      expect(open.mock.calls[0][0]).toBe("/arcade.html?w=1280&h=860&theme=light");
     } finally {
       document.documentElement.removeAttribute("data-theme");
     }

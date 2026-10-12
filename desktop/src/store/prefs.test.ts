@@ -112,18 +112,21 @@ describe("loading preferences written by an older build", () => {
     expect(prefs.sideBySide).toBe(false);
   });
 
-  /** `R-J137`: the Teams window opens bigger, and only a file that never
-   *  chose a size is moved. */
-  it("nudges a version-2 file still at the old Teams size to the new one, and keeps a chosen size", () => {
-    localStorage.setItem("mogeung.prefs", JSON.stringify({ version: 2, teamsSize: { width: 1180, height: 840 } }));
-    expect(loadPrefs().teamsSize).toEqual(defaultPrefs().teamsSize);
-    expect(loadPrefs().teamsSize).toEqual({ width: 1500, height: 1000 });
+  /** `R-J137`, `R-J138`: a file from before version 4 holds dialog sizes the
+   *  shell never honoured on Linux — 800×553, the toolkit's default minus a
+   *  title bar, saved on every close. Both go back to the defaults, once. */
+  it("resets a pre-version-4 file's dialog sizes to the defaults, and nothing newer", () => {
+    localStorage.setItem(
+      "mogeung.prefs",
+      JSON.stringify({ version: 3, teamsSize: { width: 800, height: 553 }, launchSize: { width: 800, height: 553 } }),
+    );
+    const prefs = loadPrefs();
+    expect(prefs.teamsSize).toEqual(defaultPrefs().teamsSize);
+    expect(prefs.launchSize).toEqual(defaultPrefs().launchSize);
+    expect(prefs.teamsSize).toEqual({ width: 1500, height: 1000 });
 
-    localStorage.setItem("mogeung.prefs", JSON.stringify({ version: 2, teamsSize: { width: 900, height: 700 } }));
-    expect(loadPrefs().teamsSize).toEqual({ width: 900, height: 700 });
-
-    // Not again on a file that has had it — somebody may have resized back.
-    expect(migrateDefaults({ version: 3, teamsSize: { width: 1180, height: 840 } })).toEqual({});
+    // A current file's size is its owner's, whatever it is.
+    expect(migrateDefaults({ version: 4, teamsSize: { width: 800, height: 553 } })).toEqual({});
   });
 
   it("completes a current file's columns against the shape, as it does zoom", () => {

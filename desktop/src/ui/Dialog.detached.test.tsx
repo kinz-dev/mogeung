@@ -158,7 +158,7 @@ describe("a dialog in a window of its own", () => {
 
     render(<Host onClosed={() => {}} />);
     // The URL says which dialog asked, so the shell's announcement can be told from a pop-out's.
-    expect(window.open).toHaveBeenCalledWith("/popout.html?dialog=teams", "mogeung-teams", "width=1000,height=700");
+    expect(window.open).toHaveBeenCalledWith("/popout.html?dialog=teams&w=1000&h=700", "mogeung-teams", "width=1000,height=700");
     await settle();
 
     const popup = handed[0];

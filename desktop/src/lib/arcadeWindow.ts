@@ -69,7 +69,9 @@ export function openArcadeWindow(): boolean {
     return true;
   }
   const theme = document.documentElement.getAttribute("data-theme");
-  const url = `${PAGE}${theme ? `?theme=${encodeURIComponent(theme)}` : ""}`;
+  // The size in the URL as well as in the features: Linux's webview drops the
+  // features, and the shell reads `w` and `h` off the page instead (`R-J138`).
+  const url = `${PAGE}?w=1280&h=860${theme ? `&theme=${encodeURIComponent(theme)}` : ""}`;
   // A named target, so a second π in a browser tab reuses the window rather
   // than stacking another one.
   opened = window.open(url, "mogeung-arcade", "width=1280,height=860");

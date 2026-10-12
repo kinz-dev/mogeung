@@ -328,8 +328,12 @@ is *claimed* under its label, so the shell's `popout:close` closes the dialog
 first and the dialog then destroys the window through `popout_close`; a
 window closed without asking is noticed by a poll on `closed`. Each window
 opens at the size it was last left at (`launchSize`, `teamsSize`, CSS
-pixels; Teams starts at 1500×1000 since `R-J137`, a file still at the old
-default being nudged once) and has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
+pixels; Teams starts at 1500×1000 since `R-J137`). The size travels in the
+page's own URL as `w` and `h` since `R-J138`, because Linux's webview hands
+the shell none of `window.open`'s features — every dialog there had opened
+at the toolkit's 800×600 and then remembered it — and `popout.rs` reads it
+off the URL into `inner_size`; the arcade's window and a pane's pop-out, with
+the size its group had, say theirs the same way. Each dialog window has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
 step `dialogZoom`, a CSS `zoom` on that page's root, starting from the main
 window's zoom and remembered apart from it — the page's own zoom, which the
 main window refuses for the terminal's sake, costs a dialog nothing and asks

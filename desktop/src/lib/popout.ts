@@ -79,8 +79,17 @@ export async function popOutPane(api: DockviewApi | null, paneId: string): Promi
   const panel = api?.getPanel(paneId);
   if (!api || !panel) return false;
   try {
+    // The size the group had on the board, in the page's URL: the shell
+    // reads `w` and `h` off it, since Linux's webview hands it none of the
+    // features dockview asks with (`R-J138`). A group that cannot say its
+    // size asks for none and gets the toolkit's.
+    // Defensive on `group`: a panel between groups has none for a tick, and
+    // a pop-out that cannot say its size is still a pop-out.
+    const w = panel.group?.api?.width ?? 0;
+    const h = panel.group?.api?.height ?? 0;
+    const ask = w > 0 && h > 0 ? `?w=${Math.round(w)}&h=${Math.round(h)}` : "";
     const ok = await api.addPopoutGroup(panel, {
-      popoutUrl: "/popout.html",
+      popoutUrl: `/popout.html${ask}`,
       onDidOpen: ({ window }) => trackPopout(window),
       onWillClose: ({ window }) => forgetPopout(window),
     });
