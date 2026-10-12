@@ -328,7 +328,8 @@ is *claimed* under its label, so the shell's `popout:close` closes the dialog
 first and the dialog then destroys the window through `popout_close`; a
 window closed without asking is noticed by a poll on `closed`. Each window
 opens at the size it was last left at (`launchSize`, `teamsSize`, CSS
-pixels) and has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
+pixels; Teams starts at 1500×1000 since `R-J137`, a file still at the old
+default being nudged once) and has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
 step `dialogZoom`, a CSS `zoom` on that page's root, starting from the main
 window's zoom and remembered apart from it — the page's own zoom, which the
 main window refuses for the terminal's sake, costs a dialog nothing and asks

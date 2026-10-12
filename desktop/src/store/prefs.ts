@@ -387,7 +387,7 @@ export const emptyScoped = (): ScopedPrefs => ({
  * - **2** — the Git log's columns became shares of its width (2026-09-11);
  *   a file from that morning holds pixels under the same key.
  */
-export const PREFS_VERSION = 2;
+export const PREFS_VERSION = 3;
 
 export const defaultPrefs = (): Prefs => ({
   version: PREFS_VERSION,
@@ -437,9 +437,13 @@ export const defaultPrefs = (): Prefs => ({
   zoom: {},
   appZoom: 1,
   // Tall enough for the whole form at first open (`R-J130`); what you resize
-  // to is what is remembered.
+  // to is what is remembered. Teams opens far larger than New session since
+  // `R-J137`: a team is a list, four sections and every seat's card, where a
+  // launch is five controls and two lists. The desktop clamps a window that
+  // would not fit its screen, so a Mac's smaller display is not a reason to
+  // ask for less here.
   launchSize: { width: 720, height: 780 },
-  teamsSize: { width: 1180, height: 840 },
+  teamsSize: { width: 1500, height: 1000 },
   dialogZoom: null,
   keymap: {},
   terminalFontPx: 13,
@@ -468,6 +472,12 @@ export function migrateDefaults(saved: Partial<Prefs>): Partial<Prefs> {
   // is a 96-fr author beside a NaN, so the whole set goes back to default.
   // Cost: one day's dividers, on the machine that asked for them.
   if (from < 2) out.gitLogColumns = DEFAULT_LOG_COLUMNS;
+  // 3 — Teams opens bigger (`R-J137`). A file still holding the old default
+  // exactly was never resized, so it moves to the new one; a size somebody
+  // chose by resizing is theirs and stays, as `R-J128` promised.
+  if (from < 3 && saved.teamsSize?.width === 1180 && saved.teamsSize?.height === 840) {
+    out.teamsSize = defaultPrefs().teamsSize;
+  }
   return out;
 }
 
