@@ -1085,8 +1085,10 @@ export interface AppState {
   ingest: (msg: ServerMsg) => void;
   select: (id: SessionId) => void;
   setPrefs: (patch: Partial<Prefs>) => void;
-  scoped: () => ScopedPrefs;
-  setScoped: (patch: Partial<ScopedPrefs>) => void;
+  /** The watched daemon's, or — given a followed machine's id (`R-J135`) —
+   *  that machine's: a path kept for one box is not a path on another. */
+  scoped: (machine?: string | null) => ScopedPrefs;
+  setScoped: (patch: Partial<ScopedPrefs>, machine?: string | null) => void;
   zoomPane: (pane: string, factor: number) => void;
   pushError: (msg: string) => void;
   /** Something happened and it was fine. See `Notice.kind`. */
@@ -1619,9 +1621,13 @@ export const useStore = create<AppState>((set, get) => ({
     set({ prefs });
   },
 
-  scoped: () => {
+  // `machine`, since `R-J135`: a followed machine's id, for what belongs to
+  // that machine rather than to the daemon this window watches — the New
+  // session window's favourites, which are paths, and a path is a machine's
+  // own. Absent, the watched daemon's, as everything else here.
+  scoped: (machine) => {
     const { prefs, daemon } = get();
-    const key = daemon?.machine_id ?? "unknown";
+    const key = machine ?? daemon?.machine_id ?? "unknown";
     // `EMPTY_SCOPED`, not `emptyScoped()`. This is read through a selector, and
     // a selector that mints a fresh object every call is never equal to itself
     // — which zustand reads as "changed", re-renders, and calls again. That is
@@ -1630,9 +1636,9 @@ export const useStore = create<AppState>((set, get) => ({
     return prefs.scoped[key] ?? EMPTY_SCOPED;
   },
 
-  setScoped: (patch) => {
+  setScoped: (patch, machine) => {
     const { prefs, daemon } = get();
-    const key = daemon?.machine_id ?? "unknown";
+    const key = machine ?? daemon?.machine_id ?? "unknown";
     const current = prefs.scoped[key] ?? EMPTY_SCOPED;
     const next = { ...prefs, scoped: { ...prefs.scoped, [key]: { ...current, ...patch } } };
     savePrefs(next);

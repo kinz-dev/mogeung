@@ -359,7 +359,10 @@ reason), the two checkboxes on one row and the yolo flag on one line — above
 the green *where* card with its lists, and the one verb in a footer that
 stays while the lists scroll. A launch on another machine is always headless,
 the checkbox says so, and the footer says the session comes back as that
-machine's;
+machine's; both lists are the chosen machine's — the recent repos from the
+sessions mirrored from it, the favourites a starred list of its own, since
+`scoped()` takes a machine and a path kept for one box is not a path on
+another;
 Teams is team, policy, sends and seats, in blue, purple, green and teal, the
 list of teams down the left with the chosen one marked, and the verdict — what
 is wrong, unsaved, or saved — in a footer of its own. The two layers keep

@@ -395,6 +395,29 @@ describe("starting on a followed machine", () => {
     ]);
   });
 
+  it("keeps a favourites list per machine, and the star files a path under the machine it was typed for", () => {
+    useStore.setState({ peers: [peer()] });
+    // After `open`, which resets the preferences to their defaults.
+    open(["/here/kept"]);
+    act(() => useStore.getState().setScoped({ favouriteDirs: ["/there/kept"] }, "m2"));
+    expect(screen.getByText("/here/kept")).toBeInTheDocument();
+    expect(screen.queryByText("/there/kept")).toBeNull();
+
+    fireEvent.click(screen.getByText("devbox"));
+    expect(screen.getByText("/there/kept")).toBeInTheDocument();
+    expect(screen.queryByText("/here/kept")).toBeNull();
+
+    // Starred while devbox is chosen: devbox's list grows, this machine's does not.
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "/there/new" } });
+    fireEvent.click(screen.getByTitle("keep this folder in the list below"));
+    expect(useStore.getState().scoped("m2").favouriteDirs).toEqual(["/there/kept", "/there/new"]);
+    expect(useStore.getState().scoped().favouriteDirs).toEqual(["/here/kept"]);
+
+    fireEvent.click(screen.getByText("this machine"));
+    expect(screen.getByText("/here/kept")).toBeInTheDocument();
+    expect(screen.queryByText("/there/new")).toBeNull();
+  });
+
   it("lists the repos mirrored from that machine, not this one's", () => {
     const session = (id: string, repo: string, machine: string | null) =>
       ({ id, repo_root: repo, origin: machine ? { machine_id: machine, host: "devbox" } : null }) as never;

@@ -88,8 +88,10 @@
  * machine is **always headless** — the daemon forwards it so, because a
  * terminal window there would open where nobody is looking — and the
  * session comes back mirrored, as that machine's, attachable over ssh the
- * way every mirrored session is. The recent repos follow the choice, since a
- * path is a machine's own.
+ * way every mirrored session is. The recent repos and the favourites follow
+ * the choice, since a path is a machine's own: each followed machine keeps a
+ * starred list of its own, and the star files a path under the machine it
+ * was typed for — asked the same afternoon, once the picker was in use.
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -141,22 +143,10 @@ function FolderList({ children, empty }: { children: ReactNode; empty?: ReactNod
 export function LaunchWindow() {
   const open = useStore((s) => s.showLaunch);
   const sessions = useStore((s) => s.sessions);
-  const favourites = useStore((s) => s.scoped().favouriteDirs);
   const setScoped = useStore((s) => s.setScoped);
   const send = useStore((s) => s.send);
   const [dir, setDir] = useState("");
   const [worktree, setWorktree] = useState(false);
-  // Remembered, not local: this is the front door since `R-J45`, and picking
-  // the same CLI every morning is the kind of click you stop noticing and
-  // never stop paying. `setPrefs` writes through to the file.
-  const source = useStore((s) => s.prefs.launchSource);
-  const headless = useStore((s) => s.prefs.launchHeadless);
-  const health = useStore((s) => s.health);
-  const setPrefs = useStore((s) => s.setPrefs);
-  // The window of its own this opens in (`R-J128`), the size it was left at.
-  const launchSize = useStore((s) => s.prefs.launchSize);
-  const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
-
   // Where it starts (`R-J135`): here — the daemon you are watching — or a
   // daemon this one follows, by machine id. Offered only while the follow is
   // up; one with changes off is on screen and grey, with the reason, rather
@@ -172,6 +162,20 @@ export function LaunchWindow() {
   useEffect(() => {
     if (machine && !remote) setMachine(null);
   }, [machine, remote]);
+  // The favourites are the chosen machine's: a path kept for one box is not
+  // a path on another, so each keeps its own list and the star files what
+  // you typed under the machine you typed it for.
+  const favourites = useStore((s) => s.scoped(machine).favouriteDirs);
+  // Remembered, not local: this is the front door since `R-J45`, and picking
+  // the same CLI every morning is the kind of click you stop noticing and
+  // never stop paying. `setPrefs` writes through to the file.
+  const source = useStore((s) => s.prefs.launchSource);
+  const headless = useStore((s) => s.prefs.launchHeadless);
+  const health = useStore((s) => s.health);
+  const setPrefs = useStore((s) => s.setPrefs);
+  // The window of its own this opens in (`R-J128`), the size it was left at.
+  const launchSize = useStore((s) => s.prefs.launchSize);
+  const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
 
   // Somewhere you have already worked is nearly always where you want to work
   // again, and typing a path is the slowest part of this window.
@@ -206,8 +210,8 @@ export function LaunchWindow() {
   if (!open) return null;
   const close = () => useStore.setState({ showLaunch: false });
 
-  const keep = (path: string) => setScoped({ favouriteDirs: addFavourite(favourites, path) });
-  const drop = (path: string) => setScoped({ favouriteDirs: removeFavourite(favourites, path) });
+  const keep = (path: string) => setScoped({ favouriteDirs: addFavourite(favourites, path) }, machine);
+  const drop = (path: string) => setScoped({ favouriteDirs: removeFavourite(favourites, path) }, machine);
 
   const typed = normaliseDir(dir);
   const typedIsKept = isFavourite(favourites, typed);
