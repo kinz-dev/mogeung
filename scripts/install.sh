@@ -58,8 +58,11 @@
 # This script used to stop after step 2 and print a note telling you to run the
 # bundler yourself. It does not any more, which makes the default run **slow**:
 # `npm run tauri build` compiles the shell *and* the daemon (a path dependency)
-# in release. `--no-desktop` is the old behaviour when that is not what you
-# want, and `--no-build` installs whatever is already sitting in `target/`.
+# in release — which is why, since 2026-10-12, the daemon is built **there and
+# only there** when there is a window to build, and the root workspace is not
+# compiled at all (see *the builds*, below). `--no-desktop` is the old
+# behaviour when that is not what you want, and `--no-build` installs whatever
+# is already sitting in the target directory the same rule names.
 #
 # **`sudo` is needed for step 3 and only step 3**, and there are two ways to
 # give it. Either works and neither prompts in the middle of the builds:
@@ -394,25 +397,71 @@ if [ "$BUILD_ONLY" -eq 0 ]; then
     remove_stale_shortcut || exit 1
 fi
 
-# ── the daemon and the launchers ─────────────────────────────────────────────
-
-if [ "$BUILD" -eq 1 ]; then
-    echo "▸ building the daemon (release)…"
-    as_user "cargo build --release" || exit 1
+# ── the builds ───────────────────────────────────────────────────────────────
+#
+# **The daemon is compiled once.** `npm run tauri build` compiles `mogeungd`
+# as the shell's path dependency — the library the window hosts in-process
+# (ADR-0009) — in the shell's own workspace under `desktop/src-tauri/target`,
+# and the standalone binary is one more link away in that same workspace.
+# Until 2026-10-12 this script built it at the root first, `cargo build
+# --release`, and then watched the bundler compile the identical crate again:
+# 57 s and then 44 s on a 16-core box, for one daemon. So with a window to
+# build there is no root build at all, and the installed `mogeungd` is the one
+# resolved by the shell's lockfile — which is the daemon the window runs
+# anyway. Without a window (`--no-desktop`) the root build is the only one and
+# the binary comes from `target/release` as it always did. `--no-build`
+# installs whatever is already sitting in whichever of the two the same rule
+# names — the window's own update builds with `--build-only` and installs with
+# `--no-build`, both with a window, so both look in the same place.
+SHELL_MANIFEST="desktop/src-tauri/Cargo.toml"
+if [ "$DESKTOP" -eq 1 ]; then
+    DAEMON_BIN="desktop/src-tauri/target/release/mogeungd"
+else
+    DAEMON_BIN="target/release/mogeungd"
 fi
 
-if [ ! -x "target/release/mogeungd" ]; then
-    echo "target/release/mogeungd is missing — build first (or drop --no-build)" >&2
+if [ "$BUILD" -eq 1 ]; then
+    if [ "$DESKTOP" -eq 1 ]; then
+        # Only when it is absent. `npm install` on an up-to-date tree is not
+        # free, and this script is already the slow one.
+        if [ ! -d "desktop/node_modules" ]; then
+            echo "▸ installing the window's dependencies…"
+            as_user "cd desktop && npm install" || exit 1
+        fi
+        echo "▸ building the window (release) — the daemon compiles with it, so it is minutes…"
+        as_user "cd desktop && npm run tauri build -- --bundles '$BUNDLES'" || exit 1
+        # `-p mogeungd` names a package outside the shell's workspace, which
+        # cargo allows for a path dependency: it reuses the library the bundler
+        # just compiled and links the binary, seconds rather than a minute. No
+        # `--features` — cargo refuses them for an outside package, and none
+        # is needed, since the shell's `custom-protocol` does not reach the
+        # daemon's dependencies.
+        echo "▸ linking the daemon binary from the window's workspace…"
+        as_user "cargo build --release --manifest-path '$SHELL_MANIFEST' -p mogeungd --bin mogeungd" || exit 1
+    else
+        echo "▸ building the daemon (release)…"
+        as_user "cargo build --release" || exit 1
+    fi
+fi
+
+if [ ! -x "$DAEMON_BIN" ]; then
+    echo "$DAEMON_BIN is missing — build first (or drop --no-build)" >&2
     exit 1
 fi
 
-if [ "$BUILD_ONLY" -eq 0 ]; then
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "▸ built, and nothing installed (--build-only)."
+    exit 0
+fi
+
+# ── the daemon and the launchers ─────────────────────────────────────────────
+
 mkdir -p "$PREFIX" || exit 1
 
 # `install` rather than `cp`: it replaces a running binary atomically enough
 # that an already-running daemon keeps its old image instead of crashing on a
 # half-written file.
-install -m 755 target/release/mogeungd "$PREFIX/mogeungd" || exit 1
+install -m 755 "$DAEMON_BIN"           "$PREFIX/mogeungd" || exit 1
 install -m 755 scripts/yolomo          "$PREFIX/yolomo"   || exit 1
 install -m 755 scripts/yolomop         "$PREFIX/yolomop"  || exit 1
 install -m 755 scripts/qwenmo          "$PREFIX/qwenmo"   || exit 1
@@ -423,27 +472,10 @@ for name in $INSTALLABLES; do
     give_back "$PREFIX/$name"
     echo "▸ installed $PREFIX/$name"
 done
-fi
 
 # ── the window ───────────────────────────────────────────────────────────────
 
 if [ "$DESKTOP" -eq 1 ]; then
-    if [ "$BUILD" -eq 1 ]; then
-        # Only when it is absent. `npm install` on an up-to-date tree is not
-        # free, and this script is already the slow one.
-        if [ ! -d "desktop/node_modules" ]; then
-            echo "▸ installing the window's dependencies…"
-            as_user "cd desktop && npm install" || exit 1
-        fi
-        echo "▸ building the window (release) — this compiles the daemon again, so it is minutes…"
-        as_user "cd desktop && npm run tauri build -- --bundles '$BUNDLES'" || exit 1
-    fi
-
-    if [ "$BUILD_ONLY" -eq 1 ]; then
-        echo "▸ built, and nothing installed (--build-only)."
-        exit 0
-    fi
-
     if [ "$PLATFORM" != "linux" ]; then
         # Newest first, for the same reason the .deb below is: a rebuild that
         # bumped `version` must not be reported as whichever name sorts last.
