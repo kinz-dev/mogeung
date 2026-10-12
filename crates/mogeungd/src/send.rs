@@ -137,6 +137,24 @@ pub fn send(target: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Press Enter in `target`, and nothing else. `R-P11`, ADR-0044 clause 5:
+/// the one press a screen shape may ask for, under the team's policy, for
+/// the one shape — *Press Enter to continue* — that asks for exactly that.
+/// No text travels; the invocation is the third of [`argv`] alone.
+pub fn press_enter(target: &str) -> Result<()> {
+    if !valid_target(target) {
+        bail!("that is not a tmux target this daemon resolved: {target}");
+    }
+    let pressed = crate::env::command("tmux")
+        .args(["send-keys", "-t", target, "Enter"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("tmux is not runnable here: {e}"))?;
+    if !pressed.status.success() {
+        bail!("Enter was refused for {target}: {}", tail(&pressed.stderr));
+    }
+    Ok(())
+}
+
 /// The last line of a tmux complaint, which is the useful one.
 fn tail(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
@@ -176,6 +194,14 @@ mod tests {
         assert!(at("[::1]:7717"));
         assert!(!at("0.0.0.0:7717"), "reaches the network, so it reaches your agents");
         assert!(!at("192.168.1.9:7717"));
+    }
+
+    /// `R-P11`: a press names a target it resolved, like a send, and is
+    /// refused the same shapes.
+    #[test]
+    fn a_press_refuses_a_target_shaped_like_a_flag_before_tmux_is_touched() {
+        let e = press_enter("-C").expect_err("should refuse");
+        assert!(e.to_string().contains("not a tmux target"));
     }
 
     #[test]

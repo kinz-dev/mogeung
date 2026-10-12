@@ -33,7 +33,7 @@ import { usePaneId } from "@/lib/paneScope";
 import { filePaneId, parseFilePaneId } from "@/lib/panes";
 import { forgetCursor, noteCursor, toggleMark } from "@/lib/marks";
 import { forgetEditor, noteEditor } from "@/lib/editors";
-import { Dim, Empty, IconButton } from "@/ui/primitives";
+import { Button, Dim, Empty, IconButton } from "@/ui/primitives";
 import { explorerFetch, forgetFileBodies, languageOf, wrapsByDefault } from "@/lib/explorer";
 import { base } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -340,6 +340,30 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   const [outlineFilter, setOutlineFilter] = useState("");
   const [preview, setPreview] = useState(false);
   /**
+   * **Editable, in one place only.** `R-P9`, ADR-0019's 2026-10-09 amendment:
+   * a file of a seat's worktree — one the daemon made for a team — may be
+   * saved from here, and nothing else may. The session's `seat` tag names
+   * the seat, and its launch record says whether its directory is such a
+   * worktree; a seat in the team's own checkout, a revision tab, a file cut
+   * short by the cap, and every session you started by hand stay a viewer,
+   * message and all.
+   *
+   * The draft is the pane's until it lands: a reload that arrives while you
+   * type (`R-J38`'s triggers, which fire exactly when an agent writes the
+   * file) must not put theirs over yours — so the editor shows the draft,
+   * and the save carries the hash the draft **began** from, so the daemon
+   * refuses it if the file moved meanwhile (fence 3) rather than this pane
+   * having quietly adopted the new hash and saved over the agent.
+   */
+  const seatTag = useStore((s) => s.sessions[session]?.seat);
+  const seatLaunch = useStore((s) =>
+    seatTag ? s.seatLaunches.find((l) => l.team_id === seatTag.team_id && l.seat === seatTag.seat) : undefined,
+  );
+  const [draft, setDraft] = useState<string | null>(null);
+  const baseHash = useRef<string>("");
+  /** The editor's chord is bound once at mount, so it reads the latest save through a ref. */
+  const saveRef = useRef<(force: boolean) => void>(() => {});
+  /**
    * The outline, made to go somewhere. `R-J125`.
    *
    * `reveal` is the rendered markdown's half of a click (the editor's half is
@@ -438,6 +462,16 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
    * A file that has just arrived is not a reload and is left alone, or every
    * newly-opened file would fight `gotoLine` below for the viewport.
    */
+  // A save that landed ends the draft: the store's body is yours now, and
+  // the next reload may follow it again. `R-P9`.
+  const savedCount = tab?.saved ?? 0;
+  useEffect(() => {
+    if (savedCount > 0) {
+      setDraft(null);
+      baseHash.current = "";
+    }
+  }, [savedCount]);
+
   const drawn = useRef<string | null>(null);
   const keepScroll = useRef<number | null>(null);
   if (tab && tab.content !== drawn.current) {
@@ -539,6 +573,36 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
   }
   if (tab.content === null) return <Empty>loading {base(tab.path)}…</Empty>;
 
+  const editable = tab.rev === null && !tab.truncated && !!seatLaunch?.worktree;
+  const dirty = editable && draft !== null && draft !== tab.content;
+  const save = (force: boolean) => {
+    if (!editable || !id || draft === null) return;
+    send({ cmd: "file_write", session_id: id, path: tab.path, content: draft, base_hash: baseHash.current, force });
+  };
+  saveRef.current = save;
+  const reloadTheirs = () => {
+    if (!id || !st) return;
+    setDraft(null);
+    baseHash.current = "";
+    useStore.getState().patchExplorer(id, {
+      open: st.open.map((t, i) => (i === index ? { ...t, refusal: null } : t)),
+    });
+    forgetFileBodies(id, [tab.path]);
+    explorerFetch(id);
+  };
+  // How far theirs is from yours, for the refusal: a line count, honest and
+  // cheap — the diff pane is for a diff, and this is a sentence.
+  const differing = tab.refusal?.current !== null && tab.refusal?.current !== undefined && draft !== null
+    ? (() => {
+        const mine = new Set(draft.split("\n"));
+        const theirs = new Set(tab.refusal!.current!.split("\n"));
+        let n = 0;
+        for (const l of theirs) if (!mine.has(l)) n++;
+        for (const l of mine) if (!theirs.has(l)) n++;
+        return n;
+      })()
+    : 0;
+
   /**
    * Wrapped, or not — **your answer for this file, else the language's**.
    *
@@ -592,6 +656,12 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
     // `R-J99`: the fold chords act on the active pane's editor, and this is
     // how they find it.
     noteEditor(pane, ed);
+    // `Ctrl+S` saves, in the one pane that may (`R-P9`). The editor's own
+    // chord rather than the keymap's, as the scratch pane does: it must not
+    // reach a pty, and it means nothing in a viewer.
+    if (editable && monaco.KeyMod && monaco.KeyCode) {
+      ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current(false));
+    }
     // Where the cursor is, for `R-J37`'s set-a-bookmark chord. Published to a
     // module rather than to the store on purpose — see `noteCursor`: this
     // moves on every arrow key, and a store write per keystroke would render
@@ -633,6 +703,21 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
         {tab.truncated && (
           <span className="shrink-0 text-2xs text-[var(--amber)]" title="the file went past the size cap">
             head only
+          </span>
+        )}
+        {editable && (
+          <span
+            className="flex min-w-0 items-center gap-1 text-2xs"
+            data-testid="editable"
+            title={`a worktree mogeung made for seat ${seatTag?.seat} of team ${seatTag?.team} — the one place the Code pane writes (ADR-0019's amendment); Ctrl+S saves`}
+          >
+            <Dim className="truncate">editable · seat {seatTag?.seat}'s worktree</Dim>
+            <span className={cn("shrink-0", dirty ? "text-[var(--amber)]" : "text-[var(--dim)]")} data-testid="save-status">
+              {dirty ? "unsaved" : "saved"}
+            </span>
+            <Button size="sm" variant="outline" disabled={!dirty} title="save (Ctrl+S) — refused if the file moved under you, or while the seat is mid-turn" onClick={() => save(false)}>
+              save
+            </Button>
           </span>
         )}
           {isMarkdown && (
@@ -697,6 +782,28 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
             <WrapText size={12} />
           </IconButton>
       </div>
+      {editable && tab.refusal && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--amber)] bg-[var(--bg-panel)] px-2 py-1 text-2xs" data-testid="refusal">
+          <span className="text-[var(--amber)]">not saved — {tab.refusal.why}</span>
+          {tab.refusal.current !== null && (
+            <Dim>
+              theirs differs from yours on {differing} line{differing === 1 ? "" : "s"}
+            </Dim>
+          )}
+          <span className="ml-auto flex items-center gap-1">
+            {tab.refusal.current !== null && (
+              <Button size="sm" variant="outline" title="drop your draft and read the file as it is now" onClick={reloadTheirs}>
+                reload theirs
+              </Button>
+            )}
+            {tab.refusal.busy && (
+              <Button size="sm" variant="solid" title={`save while seat ${tab.refusal.busy} is mid-turn — your call, on this save only`} onClick={() => save(true)}>
+                save anyway
+              </Button>
+            )}
+          </span>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
       {/* Markdown is *read* here, not previewed beside its source: a viewer's
           job is the rendered thing, and a split would spend half a narrow pane
@@ -721,18 +828,32 @@ function Viewer({ session, path, rev }: { session: string; path: string; rev: st
           }}
         />
       ) : (
-      <div className="min-h-0 min-w-0 flex-1">
+      <div className="min-h-0 min-w-0 flex-1" {...(editable ? { "data-editor": "writable" } : {})}>
         <Editor
           path={`${tab.path}@${tab.rev ?? "worktree"}`}
           language={languageOf(tab.path)}
-          value={tab.content}
+          // The draft, while there is one: a reload that lands mid-edit must
+          // not put theirs over yours (`R-P9`). The viewer keeps `R-J38`'s
+          // rule and follows the store.
+          value={editable && draft !== null ? draft : tab.content}
           onMount={onMount}
+          onChange={
+            editable
+              ? (v) => {
+                  if (v === undefined) return;
+                  // The first keystroke pins the base: the hash of what the
+                  // draft began from, which is what the save carries back.
+                  if (draft === null) baseHash.current = tab.hash;
+                  setDraft(v);
+                }
+              : undefined
+          }
           theme={monacoTheme(theme)}
           options={{
-            readOnly: true,
+            readOnly: !editable,
             // Says why, rather than just refusing the keystroke.
             readOnlyMessage: { value: "mogeung reads; it never writes a worktree file. Pillar K." },
-            domReadOnly: true,
+            domReadOnly: !editable,
             fontSize: 12 * zoom,
             fontFamily: "var(--font-mono)",
             lineNumbers: "on",

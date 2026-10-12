@@ -1,7 +1,11 @@
 # Working on mogeung
 
 mogeung watches the agent sessions the user runs — Claude Code, Codex, Qwen
-Code, opencode — and tells them which one needs attention. **It never starts, steers or stops an agent.**
+Code, opencode — and tells them which one needs attention. **It never starts,
+steers or stops an agent it did not start itself.** A *seat* — an agent
+mogeung launched in Gau Geung mode — is owned; every session you start by
+hand keeps the old sentence whole
+([ADR-0003](docs/decisions/0003-observe-do-not-spawn.md), amended 2026-10-09).
 
 ## Read first
 
@@ -11,7 +15,9 @@ Code, opencode — and tells them which one needs attention. **It never starts, 
 - [`docs/decisions/0003-observe-do-not-spawn.md`](docs/decisions/0003-observe-do-not-spawn.md)
   — the most important decision here, and why v0.1 was thrown away. Read its
   2026-08-29 amendment too: one word — *steers* — is defined rather than
-  dropped, and a human may now press send
+  dropped, and a human may now press send. Its 2026-10-09 amendment is the
+  one product change: a seat mogeung started itself is owned, with five
+  fences and a hop budget; everything else stays observed
 
 ## Rules for docs
 
@@ -66,7 +72,11 @@ Never edit its output.
 ## Rules for code
 
 - The daemon is the product; every UI is a client with no local authority.
-- Never write to `~/.claude`. Read only.
+- Never write under the user's agent homes — `~/.claude`, `~/.claude.json`,
+  `~/.codex`, `~/.qwen`, opencode's config and data directories. Read only.
+  A seat is configured at launch through its CLI's own flags, anything it
+  needs kept lives under `~/.mogeung`, and a home mogeung owns is opt-in. See
+  [ADR-0043](docs/decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md).
 - Parsers for the agent CLIs' formats must degrade, never panic — they are
   undocumented and change without warning.
 - Prefer a test that would fail today over a test that documents what already
@@ -93,6 +103,11 @@ cargo run -q -p mogeungd --bin sweep    # what the formats look like today
 cargo run -q -p mogeungd --bin runconfigs   # what run configurations exist here
 cargo run -q -p mogeungd --bin beacon -- listen   # does a LAN beacon cross the mesh? (A44)
 ```
+
+**Linux links with mold** — `.cargo/config.toml` passes `-fuse-ld=mold` for
+the Linux target, so every cargo command here needs `sudo apt install mold`
+once. Without it the first link fails with `collect2: fatal error: cannot
+find 'ld'`, which looks like a broken toolchain and is not. macOS is untouched.
 
 ### Run the sweep after any agent CLI upgrade
 

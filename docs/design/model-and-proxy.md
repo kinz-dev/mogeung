@@ -1,7 +1,7 @@
 ---
 title: The model and the proxy
 status: active
-updated: 2026-10-08
+updated: 2026-10-12
 covers:
   - crates/mogeung-core/src/model.rs
   - crates/mogeung-core/src/llmproxy.rs
@@ -10,6 +10,7 @@ covers:
   - crates/mogeungd/src/guide.rs
   - crates/mogeungd/src/why.rs
   - crates/mogeungd/src/embed.rs
+  - crates/mogeungd/src/handover.rs
   - crates/mogeungd/src/bin/judge.rs
   - crates/mogeungd/src/bin/why.rs
 ---
@@ -115,6 +116,27 @@ reason reads as *there is nothing similar*, which is a claim. The same
 embeddings group recurring failures by meaning (`R-F4`, `cluster_failures`),
 a second grouping the Failures panel switches to, at a threshold of 0.85 that
 the harness found rather than a setting anyone chose.
+
+**The handover** (`R-P10`, `handover.rs`) is the fifth feature through the
+same door, and the first whose answer goes into an agent's input — which is
+why [ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s later amendment
+of 2026-10-09 had to admit it by name before it was built. The daemon asks
+on a seat's own trigger only, a start into a team with history or a restart,
+never on a tick and never on the model's own decision; the prompt is the
+team's two layers of guidance, the teammates' last turns and diffs, the send
+log and, on a restart or a boot after a wind-down, the seat's own earlier
+session — since `R-P15` led by the note that seat wrote with `mogeung-note`
+when it was asked for its last words — every line of it framed as data
+another agent wrote and the framing stated before any of it appears, bounded
+the way the reading guide's prompt is. The answer is kept whole —
+fence 3's *shown in full* — trimmed of a wrapping fence and capped, and
+logged as *composed by <model> @ <host>*. Then it is a send like any other:
+held for you under *after you read it*, judged and typed as a hop under
+*automatic*. Clause 6 holds in the plainest way: with no endpoint the seat
+starts without a handover and the log entry says so; consent to a remote
+host is the seam's to judge as for every other ask, and a refusal is logged
+the same way. ADR-0034's two buttons are untouched: a human's draft in the
+window is still a chat ask with its own send button, and this is not that.
 
 ## The two harnesses, and why they are binaries
 

@@ -180,6 +180,9 @@ export function openFile(id: SessionId, path: string, opts: { pin?: boolean; lin
     pinned: !!opts.pin,
     content: null,
     truncated: false,
+    hash: "",
+    saved: 0,
+    refusal: null,
     gotoLine: opts.line ?? null,
     reload: false,
   };

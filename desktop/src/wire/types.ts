@@ -180,6 +180,20 @@ export interface Session {
    */
   provisional?: boolean;
   /**
+   * This session is a seat: an agent the daemon started itself from a team
+   * definition (`R-P4`, ADR-0038's amendment). On the daemon's own row from
+   * birth and carried onto the CLI's real session when it claims the pane.
+   */
+  seat?: SeatTag;
+  /**
+   * A send the team's policy is holding for this seat — the fourth hop, the
+   * cap, the pause — which ranks the row as needing you until released or
+   * dropped in the Teams window. `R-P6`. Never set on an observed session.
+   */
+  held_send?: HeldSend;
+  /** What this seat's pane showed at the last read. `R-P11`. Seats only. */
+  screen?: ScreenRead;
+  /**
    * The machine this session runs on, when it is not the daemon's own.
    * `R-I21`, feature 0047. Set only on a session the daemon **mirrors** from
    * one it follows; its id is then `@<machine>:<id>`, and the daemon forwards
@@ -1049,6 +1063,237 @@ export interface Task {
   group?: string;
 }
 
+// -- Teams. `R-P3`, feature 0051, pillar P. A hand-mirror of `mogeung-core`'s
+// `team.rs`: a definition the daemon holds, never a command line (ADR-0025's
+// 2026-10-09 amendment). Snake case on the wire throughout.
+
+/** Claude Code's four words for how much a seat may do; the daemon maps each
+ *  to every CLI's own flag at launch (`R-P4`). */
+export type PermissionMode = "default" | "accept_edits" | "plan" | "bypass_permissions";
+export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "accept_edits", "plan", "bypass_permissions"];
+export const PERMISSION_LABEL: Record<PermissionMode, string> = {
+  default: "default",
+  accept_edits: "acceptEdits",
+  plan: "plan",
+  bypass_permissions: "bypassPermissions",
+};
+export type Handover = "after_read" | "automatic" | "none";
+export type SeatEvent = "stop" | "exit";
+export type Workplace = "worktree" | "checkout";
+/** A declared send: when `on_seat` does `on`, `to` is told `text`. */
+export interface Wake {
+  on_seat: string;
+  on: SeatEvent;
+  to: string;
+  text: string;
+}
+/** A declared nudge: a seat silent this long is told `text`. `seat` absent
+ *  means every seat. */
+export interface Watchdog {
+  seat?: string;
+  silent_minutes: number;
+  while_busy: boolean;
+  text: string;
+}
+export interface Policy {
+  hop_budget: number;
+  hourly_cap: number;
+  handover: Handover;
+  readiness_press: boolean;
+  wakes: Wake[];
+  watchdogs: Watchdog[];
+  /** What every running seat is told on a wind-down; `{note}` stands for the note command. `R-P15`. */
+  wind_down: string;
+  /** How long a seat has to answer before it is stopped anyway. */
+  wind_down_minutes: number;
+}
+export interface Seat {
+  /** Lower-case letters, digits, dashes; unique in the team. An address. */
+  name: string;
+  label: string;
+  cli: SessionSource;
+  model?: string;
+  works_in: Workplace;
+  /** Absent is the team's default, not none. */
+  permission?: PermissionMode;
+  guidance: string;
+  own_home: boolean;
+}
+export interface Team {
+  /** Empty on the way up means new; the daemon mints one. */
+  id: string;
+  name: string;
+  repo: string;
+  guidance: string;
+  permission: PermissionMode;
+  policy: Policy;
+  seats: Seat[];
+  paused: boolean;
+  created: number;
+  updated: number;
+}
+
+/**
+ * Which kind of seat: one whose hooks reach the daemon (`hooked`), or one
+ * known from its transcript and its screen only (`plain`). `R-P5`, ADR-0043
+ * clause 3 — a fact about the CLI it runs, settled at launch.
+ */
+export type SignalKind = "hooked" | "plain";
+
+/** What a seat's hooks have told the daemon so far. `R-P5`. */
+export interface SeatSignals {
+  kind: SignalKind;
+  /** Hook calls accepted and read; a status reading is not one. */
+  events: number;
+  last_event?: string;
+  /** Unix seconds. */
+  last_event_at?: number;
+  last_detail?: string;
+  /** Whole percent of the context window, from the status line. */
+  context_used?: number;
+  model?: string;
+  /** Calls refused or unreadable: an unclassified name, a body that is not JSON. */
+  unread: number;
+}
+
+/** Which team, which seat — and which kind. */
+export interface SeatTag {
+  team_id: string;
+  team: string;
+  seat: string;
+  signals: SignalKind;
+}
+/**
+ * A seat the daemon started and has not stopped: the launch record. `R-P4`.
+ * The daemon strips the seat's receiver token before this crosses the wire
+ * (`R-P5`); a window never holds it.
+ */
+export interface SeatLaunch {
+  team_id: string;
+  team: string;
+  seat: string;
+  cli: SessionSource;
+  session_id?: string;
+  pane_id: string;
+  tmux_target: string;
+  tmux_session: string;
+  /** The team's own tmux session for a terminal — `tmux attach -t <this>`.
+   *  `R-P8`. Empty where the daemon could not lay it out. */
+  team_session: string;
+  dir: string;
+  worktree: boolean;
+  files_dir: string;
+  started: number;
+  signals: SeatSignals;
+}
+
+/**
+ * What a seat's pane shows, read into a closed set — the gates a TUI draws
+ * and the transcript never carries, the two quiet shapes, and `unknown` for
+ * anything else. `R-P11`, ADR-0044.
+ */
+export type ScreenShape =
+  | "permission_menu"
+  | "plan_approval"
+  | "question"
+  | "trust"
+  | "login"
+  | "press_enter"
+  | "rate_limit"
+  | "exited"
+  | "prompt"
+  | "working"
+  | "unknown";
+
+export const SCREEN_LABEL: Record<ScreenShape, string> = {
+  permission_menu: "permission menu",
+  plan_approval: "plan approval",
+  question: "question",
+  trust: "trust dialog",
+  login: "login",
+  press_enter: "press Enter",
+  rate_limit: "rate limit",
+  exited: "exited to a shell",
+  prompt: "at the prompt",
+  working: "working",
+  unknown: "unknown",
+};
+
+/** A gate: a shape that may rank the row. The quiet shapes and `unknown` are not. */
+export function isScreenGate(shape: ScreenShape): boolean {
+  return shape !== "prompt" && shape !== "working" && shape !== "unknown";
+}
+
+/** What a seat's pane showed at the last read: the shape, the lines it was
+ *  read from, and when (unix seconds). Only a seat's row ever has one. */
+export interface ScreenRead {
+  shape: ScreenShape;
+  excerpt: string[];
+  read_at: number;
+}
+
+/** What the policy holds for a seat: how many, why the oldest, since when. */
+export interface HeldSend {
+  count: number;
+  why: string;
+  /** RFC 3339. */
+  since: string;
+}
+
+// -- Sends. `R-P6`. ADR-0003's amendment, fence 4, as the wire carries it.
+
+/** Who caused a send: you, a declared wake, a declared watchdog, a seat. */
+export type SendKind = "human" | "wake" | "watchdog" | "agent" | "handover" | "press" | "wind_down";
+export type SendStatus = "delivered" | "held" | "released" | "dropped" | "refused" | "failed";
+/** One line of a team's send log: what, to whom, why, when, and what became of it. */
+export interface SendEntry {
+  id: string;
+  team_id: string;
+  /** Unix seconds. */
+  at: number;
+  kind: SendKind;
+  /** The seat whose doing it was; absent for yours and a watchdog's. */
+  from?: string;
+  to: string;
+  text: string;
+  why: string;
+  status: SendStatus;
+  /** Its place in the chain when it counted as a hop; 0 otherwise. */
+  hop: number;
+  /** The hold's or refusal's reason, or tmux's complaint. */
+  note?: string;
+  /** For a handover: `<model> @ <host>` — logged as the model's. `R-P10`. */
+  composed_by?: string;
+}
+/** One team's counters against its budgets, and its log, oldest first. */
+export interface TeamSends {
+  team_id: string;
+  team: string;
+  chain: number;
+  hop_budget: number;
+  this_hour: number;
+  hourly_cap: number;
+  paused: boolean;
+  held: number;
+  log: SendEntry[];
+  /** A wind-down in progress, or how the last one went, until the next boot. `R-P15`. */
+  wind_down?: WindDown;
+}
+
+/** A team being wound down: who was asked for a note, who has answered, the deadline. `R-P15`. */
+export interface WindDown {
+  started: number;
+  deadline: number;
+  seats: WindDownSeat[];
+}
+export interface WindDownSeat {
+  seat: string;
+  status: WindDownStatus;
+  at: number;
+  note?: string;
+}
+export type WindDownStatus = "asked" | "noted" | "stopped" | "timed_out" | "gone";
+
 export interface Note {
   id: string;
   /** Markdown. Empty is legal and means a plain bookmark. */
@@ -1261,6 +1506,35 @@ export type ClientMsg =
       repo?: string | null;
     }
   | { cmd: "note_delete"; id: string }
+  /** Teams. `R-P3`. The list answers the asker with whether it may write; a
+   *  save or delete is judged like `run_start` (ADR-0025's amendment). */
+  | { cmd: "team_list" }
+  | { cmd: "team_save"; team: Team }
+  | { cmd: "team_delete"; id: string }
+  /** Boot and stop a team, and remove one stopped seat's clean worktree.
+   *  `R-P4`. Judged like `run_start`. */
+  | { cmd: "team_boot"; id: string }
+  | { cmd: "team_stop"; id: string }
+  /** Wind the team down: ask every seat for a note, stop each as it answers or at the deadline. `R-P15`. */
+  | { cmd: "team_wind_down"; id: string }
+  | { cmd: "seat_worktree_remove"; team_id: string; seat: string }
+  /** The pause switch, judged like a save; release and drop a held send,
+   *  judged like your own send. `R-P6`. */
+  /** Save a file in a seat's worktree — the one write into a worktree,
+   *  `R-P9`, ADR-0019's amendment. `base_hash` is the `hash` the file came
+   *  with; a moved file is refused with the current text, a busy seat until
+   *  `force`. Judged like the seat verbs, behind the write guard. */
+  | { cmd: "file_write"; session_id: SessionId; path: string; content: string; base_hash: string; force: boolean }
+  | { cmd: "team_pause"; id: string; paused: boolean }
+  | { cmd: "send_release"; team_id: string; id: string }
+  | { cmd: "send_drop"; team_id: string; id: string }
+  /** Stop one seat and start it again, with a handover as the policy says. `R-P10`. */
+  | { cmd: "seat_restart"; team_id: string; seat: string }
+  /** The definition out as a file (at `path`, else beside the mirror), and a
+   *  file in as a draft — mogeung's JSON or an OpenRig rig.yaml. `R-P12`.
+   *  Judged like `team_save`. */
+  | { cmd: "team_export"; id: string; path?: string }
+  | { cmd: "team_import"; path: string }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *
@@ -1403,7 +1677,12 @@ export type ServerMsg =
   | { ev: "review_debt"; debt: ReviewDebt }
   | { ev: "blast_radius"; radius: BlastRadius }
   | { ev: "dir_listing"; session_id: SessionId; path: string; entries: DirEntry[] }
-  | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean }
+  | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean; hash?: string }
+  /** A save landed; the new `file_content` follows as a broadcast. `R-P9`. */
+  | { ev: "file_written"; session_id: SessionId; path: string; hash: string }
+  /** A save was refused: `current` and `hash` when the file moved, `busy`
+   *  naming the seat mid-turn. `R-P9`, fence 3. */
+  | { ev: "file_write_refused"; session_id: SessionId; path: string; why: string; current?: string; hash: string; busy?: string }
   /** A session's own root, the folders added to it, and any that have gone
    *  away — answered on request and after every add or remove. `R-J40`. */
   | {
@@ -1482,6 +1761,22 @@ export type ServerMsg =
   | { ev: "kit"; entries: KitEntry[] }
   | { ev: "kit_doc"; doc: KitDoc }
   | { ev: "notes"; notes: Note[] }
+  /** Every team, after any change. `allowed` only on the answer to
+   *  `team_list`; a broadcast omits it and the window keeps what it had. */
+  | { ev: "teams"; teams: Team[]; allowed?: boolean }
+  /** Every seat the daemon has started and not stopped. `R-P4`. */
+  | { ev: "seats"; launches: SeatLaunch[] }
+  /** Every team's counters and send log, after every change. `R-P6`. */
+  | { ev: "sends"; teams: TeamSends[] }
+  /** A definition was written as a file; a file came in as a draft with notes. `R-P12`. To the asker. */
+  | { ev: "team_exported"; team_id: string; path: string }
+  | { ev: "team_draft"; team: Team; notes: string[] }
+  /**
+   * What a `team_boot` did, seat by seat. `R-P14`. To the asker, after the
+   * `seats` broadcast: `started` by this boot, `revived` among them had a
+   * record but no pane, `skipped` were running and left alone.
+   */
+  | { ev: "team_booted"; team_id: string; started: string[]; revived: string[]; skipped: string[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
   | { ev: "tasks"; tasks: Task[]; closed_today: number }
   | { ev: "scratches"; names: string[]; folders?: string[] }

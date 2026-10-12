@@ -1,7 +1,7 @@
 ---
 title: A pane pops out into a window of its own, and that window is an ordinary client
 status: active
-updated: 2026-10-08
+updated: 2026-10-11
 decided: 2026-09-08
 ---
 
@@ -224,3 +224,59 @@ half is pinned against a real dockview.
 ## Amendment — 2026-10-08
 
 **One fact under Context is wrong, and the decision does not depend on it.** "tmux sizes a session to its smallest attached client" describes tmux's default; `yolomo` sets `window-size latest` ([ADR-0021](0021-the-pane-sizes-the-window.md)), so a session follows whichever client last sent input. Two heads still churn — the resize ping-pongs with focus rather than clamping to the smaller — so the consequence drawn from it holds.
+
+## Amendment — 2026-10-11
+
+**The door serves dialogs too.** Asked 2026-10-11: *"make the new 'New
+Session' or 'Teams' a real popup dialog that can move around out of the
+current mogeung application. (But make it a modal popup, only allow one copy)
+because the font is too small and I want to make that popup screen resizeable
+independently"* (`R-J128`).
+
+The New session and Teams dialogs now open in OS windows of their own,
+through the same `window.open` the 2026-09-08 amendment opted the shell into:
+`popout.rs` makes each a `popout-*` window with the system's title bar, the
+main window's `Dialog` portals its panel into that document, and the React
+tree — the store, the socket, every `send` — stays where it was. The arcade's
+page-of-its-own was weighed and refused for these: a page with no store would
+have to be told the teams, the sends and the sessions over a channel, where a
+portal reads them. What this adds beyond the pop-outs: a dialog window is
+**claimed** in `popout.ts` under its label, so the close the shell routes as
+`popout:close` closes the dialog rather than looking for a group; the main
+window keeps a backdrop that names the window and raises it, so the dialog is
+modal from either side; and the window has a zoom of its own, stepped from
+inside it and applied to its webview by label.
+
+**What it replaces.** Nothing. The Decision's window is still an ordinary
+client — this one is not even that, being a view of the main window's tree —
+and dockview still owns the pop-outs it opens. The 2026-09-25 amendment's close
+routing is reused as it stands; a label with a tenant simply answers it first.
+
+**Not yet seen in the shipped app**: the sizing `window_features` gives a
+dialog window, the zoom by label, and the close routing for a window that
+holds no group. The client's half is pinned by `Dialog.detached.test.tsx`.
+
+## Amendment — 2026-10-11, later the same day: the opener is told the label
+
+**What changed.** `popout.rs` now announces every window it opens to the
+main window, as `popout:opened` with the label and the URL that was asked
+for. The amendment above left the label with the *page* — an initialization
+script, read by the opener once the page had loaded — and a dialog closed
+before that moment had no label to close by, so it fell back to the page's
+own `window.close()`, which the 2026-09-25 amendment already records as
+leaving an OS window standing, empty. `tauri dev` did it on every open,
+because StrictMode mounts, unmounts and mounts a dialog once. With the
+label announced at creation, `lib/dialogWindow.ts` closes through
+`popout_close` in every case, including a page that never loads. The
+dialogs' zoom is a CSS `zoom` on their page's root rather than the webview's
+by label: nothing of the shell is needed for it, and the reason the main
+window refuses a CSS zoom — the terminal's hit-testing — is not in a dialog.
+
+**What it replaces.** Nothing of the Decision, and nothing of the
+amendments: the page is still told its label, dockview's pop-outs still
+close as the 2026-09-25 amendment says, and the announcement is one more
+sentence the shell speaks, which a pop-out's opener may ignore.
+
+**Still not seen in the shipped app**: the announcement's arrival before a
+close, and `window_features` sizing. The client's half is pinned by
+`Dialog.detached.test.tsx`.

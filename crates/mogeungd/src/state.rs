@@ -11,7 +11,7 @@ use crate::notify::{NotifyConfig, Notifier};
 use crate::store::Store;
 use crate::usage::UsageScanner;
 use crate::watcher::{self, Tailer};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use chrono::Utc;
 use mogeung_core::attention::{rank, AttentionConfig, AttentionItem};
 use mogeung_core::health::Health;
@@ -23,6 +23,27 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
+
+/// Types `text` into the tmux target. `R-P6`'s seam over `send::send`. A
+/// readiness press (`R-P11`) comes through the same seam as the text
+/// `"<Enter>"`, so a test can tell it from a send; the real one presses.
+pub type Sender = Arc<dyn Fn(&str, &str) -> Result<()> + Send + Sync>;
+/// Reads a seat's pane. `R-P11`'s seam over `screen::capture`.
+pub type Capturer = Arc<dyn Fn(&crate::screen::SeatPane) -> Option<String> + Send + Sync>;
+
+/// What a seat's pane last showed, and what clause 6 of ADR-0044 needs to
+/// make an unchanged screen cost nothing. `R-P11`.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenState {
+    pub read: Option<mogeung_core::team::ScreenRead>,
+    /// The last capture's hash: the same screen is not reclassified.
+    pub hash: u64,
+    /// When the last capture was taken, unix seconds; a seat rests between.
+    pub captured_at: i64,
+    /// The capture a readiness press was made for, so one screen is pressed
+    /// once however many scans it stays up.
+    pub pressed_for: Option<u64>,
+}
 
 /// How far back to look for sessions on startup.
 const HISTORY_DAYS: i64 = 14;
@@ -137,6 +158,37 @@ pub struct AppState {
     /// left orphan files in a user's own notes folder, one per run, discovered
     /// 2026-09-10 while looking for something else.
     pub notes_dir: std::sync::OnceLock<PathBuf>,
+    /// Where the team mirror is written. `R-P3`, feature 0051. Overridable for
+    /// the reason `notes_dir` is: a test must not write into the developer's
+    /// real `~/.mogeung/teams`.
+    pub teams_dir: std::sync::OnceLock<PathBuf>,
+    /// Where a seat's generated files live. `R-P4`. Overridable as the
+    /// mirrors are, so a test never writes under the real `~/.mogeung/seats`.
+    pub seats_dir: std::sync::OnceLock<PathBuf>,
+    /// Every seat this daemon has started and not stopped: the launch
+    /// records, loaded from the store so a restarted daemon re-adopts its
+    /// seats. `R-P4`, ADR-0025's amendment clause 3.
+    pub launches: tokio::sync::RwLock<Vec<mogeung_core::team::SeatLaunch>>,
+    /// The address this daemon serves on, set once by `server::run` so the
+    /// launcher can name the receiver a seat's hooks post to. `R-P5`. Unset
+    /// — a test, an embedding — means no receiver, and every seat is plain.
+    pub listen_addr: std::sync::OnceLock<std::net::SocketAddr>,
+    /// The policy engine: every team's send log and the counters read off
+    /// it. `R-P6`, ADR-0003's amendment fence 4. Loaded from the store so a
+    /// restarted daemon counts what it counted before.
+    pub policy: Mutex<crate::policy::Engine>,
+    /// How text reaches a seat's pane: `send::send` unless a test set a
+    /// recording one. `R-P6`. The one seam, so no test ever types into a
+    /// real pane; the function it replaces is still the only code that does.
+    pub sender: std::sync::OnceLock<Sender>,
+    /// What each seat's pane last showed, and the bookkeeping ADR-0044
+    /// clause 6 asks for — the hash, the rest, the press. `R-P11`. Keyed by
+    /// team and seat; never persisted: a capture is the scan's memory.
+    pub screens: Mutex<HashMap<(String, String), ScreenState>>,
+    /// How a seat's pane is read: `screen::capture` unless a test set one.
+    /// `R-P11`. The seam takes a `SeatPane`, which only a launch record
+    /// makes, so a test cannot capture anything a seat is not either.
+    pub capturer: std::sync::OnceLock<Capturer>,
     /// The daemons this one follows, and what it mirrors from them. `R-I18`,
     /// feature 0047. **Not in `sessions`**: see `federation.rs` for why.
     pub federation: crate::federation::Federation,
@@ -152,6 +204,13 @@ pub struct AppState {
     /// Beside `model` and `runs` for the same reason both of those are here:
     /// it owns something outside this process. Health only ever reports.
     pub proxy: crate::llmproxy::Proxy,
+    /// Teams being, or lately, wound down (`R-P15`), by team id: who was
+    /// asked for a note, who has answered, the deadline. In memory only — a
+    /// daemon restarted mid-wind-down has lost the question it typed, and
+    /// the seats it left running are a Boot's or a Stop's to deal with. An
+    /// entry stays once every seat is finished, so the board can say how it
+    /// went, until the team is booted again.
+    pub winding: tokio::sync::Mutex<std::collections::HashMap<String, Winding>>,
     /// Whether the config file may be edited through the wire. `R-J79`.
     ///
     /// Loopback and nothing else — **not** `writes_allowed`, which a tokened
@@ -511,6 +570,50 @@ pub fn provisional_session(
     s
 }
 
+/// The daemon's own row for a seat, before the CLI's session claims it.
+/// `R-P4`, ADR-0038's amendment.
+///
+/// Known from the record, not found: the id is the chosen session id or a
+/// seat id, never `pane:`; the tag is on it from birth; `alive` is whether the
+/// pane still exists, and a seat whose pane has gone is a dead row until the
+/// team is stopped. The pid is the agent's where the pane shows one, so the
+/// window's succession can move across when the real session appears.
+pub fn seat_row(
+    l: &mogeung_core::team::SeatLaunch,
+    pane: Option<&Pane>,
+    agent_pid: Option<u32>,
+    now: chrono::DateTime<Utc>,
+) -> Session {
+    let started = chrono::DateTime::from_timestamp(l.started, 0).unwrap_or(now);
+    let mut s = blank_session(l.row_id(), l.cli, started, started);
+    s.alive = pane.is_some();
+    s.pid = agent_pid.or(pane.map(|p| p.pid));
+    s.tmux_target = pane.map(|p| p.target.clone());
+    s.cwd = l.dir.clone();
+    s.repo_root = crate::git::repo_root(std::path::Path::new(&l.dir))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    s.seat = Some(l.tag());
+    s.name = Some(if pane.is_some() {
+        format!("{}/{} — seat, nothing written yet", l.team, l.seat)
+    } else {
+        format!("{}/{} — seat, exited", l.team, l.seat)
+    });
+    s
+}
+
+/// The seat a session belongs to: by the chosen id, or by the pane it runs in.
+pub fn seat_tag_for(
+    launches: &[mogeung_core::team::SeatLaunch],
+    session_id: &str,
+    pane_id: Option<&str>,
+) -> Option<mogeung_core::team::SeatTag> {
+    launches
+        .iter()
+        .find(|l| l.session_id.as_deref() == Some(session_id) || pane_id.is_some_and(|p| p == l.pane_id))
+        .map(|l| l.tag())
+}
+
 /// Fold one `artifact-comment-monitor` line's list into what a session already
 /// has. `R-J115`.
 ///
@@ -591,6 +694,9 @@ fn blank_session(
         // becomes known.
         tmux_target: None,
         provisional: false,
+        seat: None,
+        held_send: None,
+        screen: None,
         origin: None,
         limit_hit_at: None,
         limit_resets: None,
@@ -600,6 +706,48 @@ fn blank_session(
         announced_dirs: Vec::new(),
         artifacts: Vec::new(),
     }
+}
+
+
+/// Where a seat's note lives, beside its files: `~/.mogeung/seats/<team>/<seat>/note.md`.
+/// `R-P15`. The latest replaces the last; the next handover reads it.
+pub const NOTE_FILE: &str = "note.md";
+
+/// The seat's note, cut to the handover's budget, or none.
+fn read_note(files_dir: &str) -> Option<String> {
+    let text = std::fs::read_to_string(Path::new(files_dir).join(NOTE_FILE)).ok()?;
+    let t = text.trim();
+    (!t.is_empty()).then(|| crate::handover::cut(t, crate::handover::NOTE_CHARS))
+}
+
+/// One team's wind-down as the daemon keeps it: what the wire sees, and the
+/// one thing it does not. `R-P15`.
+#[derive(Debug, Clone)]
+pub struct Winding {
+    pub state: mogeung_core::team::WindDown,
+    /// Seats that were mid-turn when asked. The first `Stop` from such a
+    /// seat ends the turn it was in, not the one that reads the question —
+    /// a CLI queues typed text behind the turn in flight — so one `Stop` is
+    /// let pass before the next one counts as the answer.
+    pub skip_stop: std::collections::HashSet<String>,
+}
+
+/// What a boot did, seat by seat. `R-P14`.
+///
+/// Answered to the asker as `TeamBooted` so the Teams window can close on a
+/// boot that did something and say what, rather than waiting on rows it
+/// cannot tell apart from the ones already there.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BootOutcome {
+    /// Every seat of the team the daemon now has on record.
+    pub launches: Vec<mogeung_core::team::SeatLaunch>,
+    /// Seats started by this boot, the revived ones among them.
+    pub started: Vec<String>,
+    /// Seats whose record was there but whose pane was gone: forgotten and
+    /// started again. A subset of `started`.
+    pub revived: Vec<String>,
+    /// Seats left alone because they are running.
+    pub skipped: Vec<String>,
 }
 
 impl AppState {
@@ -673,6 +821,8 @@ impl AppState {
         }
         let (tx, _) = broadcast::channel(8192);
         let identity = crate::machine::identity(&claude_home, None);
+        let launches = store.load_launches().unwrap_or_default();
+        let sends = store.load_sends().unwrap_or_default();
         Ok(Arc::new(AppState {
             store,
             sessions: RwLock::new(sessions),
@@ -685,10 +835,19 @@ impl AppState {
             provisional: tokio::sync::RwLock::new(Vec::new()),
             scratch_dir: std::sync::OnceLock::new(),
             notes_dir: std::sync::OnceLock::new(),
+            teams_dir: std::sync::OnceLock::new(),
+            seats_dir: std::sync::OnceLock::new(),
+            launches: tokio::sync::RwLock::new(launches),
+            listen_addr: std::sync::OnceLock::new(),
+            policy: Mutex::new(crate::policy::Engine::from_log(sends)),
+            sender: std::sync::OnceLock::new(),
+            screens: Mutex::new(HashMap::new()),
+            capturer: std::sync::OnceLock::new(),
             federation: crate::federation::Federation::default(),
             runs: crate::run::Runs::new(),
             model: crate::model::Model::new(),
             proxy: crate::llmproxy::Proxy::new(),
+            winding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             writes_allowed: std::sync::OnceLock::new(),
             config_editable: std::sync::OnceLock::new(),
             send_allowed: std::sync::OnceLock::new(),
@@ -1565,7 +1724,17 @@ impl AppState {
         // Panes running an agent that has not written yet. `R-J75`, ADR-0038.
         // Last, because suppression needs the real sessions this scan just
         // settled — a provisional row exists only while nothing better does.
+        // A seat's own session, once it has one, carries the seat's tag.
+        // `R-P4`. Before the provisional pass, which skips a claimed pane.
+        // The seats' panes, read before the rows are built, so the shape
+        // rides on them. `R-P11`, ADR-0044.
+        self.screen_tick().await;
+        self.tag_seats().await;
         self.refresh_provisional().await;
+        // The policy's clock: watchdogs on silence, a plain seat's turn
+        // ending, a seat's exit. `R-P6`. After the rows are settled, because
+        // it reads them; before the queue, because a hold ranks a row.
+        self.policy_tick().await;
         self.publish_queue().await;
         self.publish_health().await;
         self.maybe_run_retention().await;
@@ -1639,48 +1808,76 @@ impl AppState {
     /// that has a pid, rather than by comparing target strings: a target
     /// renumbers when a window closes, and matching on one would show two rows
     /// for one agent the first time somebody tidied their windows.
-    async fn refresh_provisional(&self) {
+    pub(crate) async fn refresh_provisional(&self) {
         let panes = tmux_panes();
+        let (parents, table) = if panes.is_empty() {
+            (HashMap::new(), Vec::new())
+        } else {
+            (process_parents(), process_commands())
+        };
         let mut out = Vec::new();
-        if !panes.is_empty() {
-            let parents = process_parents();
-            let table = process_commands();
+        let now = Utc::now();
+        let (claimed, known): (std::collections::HashSet<String>, std::collections::HashSet<String>) = {
+            let sessions = self.sessions.read().await;
+            let claimed = sessions
+                .values()
+                .filter(|s| s.alive)
+                .filter_map(|s| s.pid)
+                .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
+                .collect();
+            let known = sessions.values().filter(|s| s.alive).map(|s| s.id.clone()).collect();
+            (claimed, known)
+        };
 
-            let claimed: std::collections::HashSet<String> = {
-                let sessions = self.sessions.read().await;
-                sessions
-                    .values()
-                    .filter(|s| s.alive)
-                    .filter_map(|s| s.pid)
-                    .filter_map(|pid| pane_of(pid, &panes, &parents).map(|p| p.id.clone()))
-                    .collect()
-            };
-
-            let now = Utc::now();
-            for pane in &panes {
-                if claimed.contains(&pane.id) {
-                    continue;
-                }
-                let Some((pid, program)) = agent_process_in_pane(pane, &table) else {
-                    continue;
-                };
-                let mut s = provisional_session(pane, &program, now);
-                // The agent's own pid, not the pane's: the pane usually holds a
-                // shell, and the real session that later claims this pane will
-                // carry the agent's pid. The window's succession — a dead
-                // session and a live one sharing a pid and a cwd — is what moves
-                // your selection across when it does.
-                s.pid = Some(pid);
-                // A row rebuilt every scan cannot remember when it was first
-                // seen, so a waiting one takes its clock from the agent process
-                // itself — or it would read *waiting 0s* on every tick.
-                if s.live_status.is_some() {
-                    if let Some(started) = crate::opencode::process_started(pid) {
-                        s.status_since = Some(started);
-                    }
-                }
-                out.push(s);
+        // Seats first. `R-P4`, ADR-0038's amendment: a pane the daemon made
+        // is known from birth — its row carries the seat's tag and the
+        // chosen session id, is never a `pane:` row, and exists until the
+        // CLI's own session claims the pane (or the chosen id). A seat whose
+        // pane has gone is a dead row, not a vanished one: the record says
+        // it was started, and a stop is what clears it.
+        let mut seat_panes = std::collections::HashSet::new();
+        let launches = self.launches.read().await.clone();
+        let held = self.held_sends(&launches).await;
+        let screens = self.screens.lock().await.clone();
+        for l in launches.iter() {
+            seat_panes.insert(l.pane_id.clone());
+            if claimed.contains(&l.pane_id) {
+                continue;
             }
+            if l.session_id.as_ref().is_some_and(|id| known.contains(id)) {
+                continue;
+            }
+            let pane = panes.iter().find(|p| p.id == l.pane_id);
+            let agent = pane.and_then(|p| agent_process_in_pane(p, &table)).map(|(pid, _)| pid);
+            let mut row = seat_row(l, pane, agent, now);
+            row.held_send = held.get(&(l.team_id.clone(), l.seat.clone())).cloned();
+            row.screen = screens.get(&(l.team_id.clone(), l.seat.clone())).and_then(|s| s.read.clone());
+            out.push(row);
+        }
+
+        for pane in &panes {
+            if claimed.contains(&pane.id) || seat_panes.contains(&pane.id) {
+                continue;
+            }
+            let Some((pid, program)) = agent_process_in_pane(pane, &table) else {
+                continue;
+            };
+            let mut s = provisional_session(pane, &program, now);
+            // The agent's own pid, not the pane's: the pane usually holds a
+            // shell, and the real session that later claims this pane will
+            // carry the agent's pid. The window's succession — a dead
+            // session and a live one sharing a pid and a cwd — is what moves
+            // your selection across when it does.
+            s.pid = Some(pid);
+            // A row rebuilt every scan cannot remember when it was first
+            // seen, so a waiting one takes its clock from the agent process
+            // itself — or it would read *waiting 0s* on every tick.
+            if s.live_status.is_some() {
+                if let Some(started) = crate::opencode::process_started(pid) {
+                    s.status_since = Some(started);
+                }
+            }
+            out.push(s);
         }
 
         // **Told to the windows that are already open.** Until 2026-09-23 this
@@ -3646,7 +3843,7 @@ impl AppState {
 
     /// One worktree file, capped rather than unbounded — the R-A5 rule applied
     /// to worktrees. Returns the text and whether it was cut short.
-    pub async fn read_file(&self, id: &str, rel: &str) -> Result<(String, bool)> {
+    pub async fn read_file(&self, id: &str, rel: &str) -> Result<(String, bool, String)> {
         /// Past this a "file viewer" is really a memory test for the renderer.
         const CAP: usize = 256 * 1024;
         let path = self.resolve_for(id, rel).await?;
@@ -3658,7 +3855,74 @@ impl AppState {
         }
         let truncated = bytes.len() > CAP;
         let head = &bytes[..bytes.len().min(CAP)];
-        Ok((String::from_utf8_lossy(head).into_owned(), truncated))
+        // The hash is of the whole file (`R-P9`), so a save based on a cut
+        // body still fails the comparison it should.
+        Ok((String::from_utf8_lossy(head).into_owned(), truncated, crate::write::hash_bytes(&bytes)))
+    }
+
+    /// A human's save into a seat's worktree. `R-P9`, ADR-0019's amendment.
+    ///
+    /// The session must be a seat's row whose launch record says its
+    /// directory is a worktree the daemon made — fence 1, and the reason an
+    /// observed session, or a seat in the team's checkout, is refused before
+    /// the path is looked at. Then fence 3: the file must still be the one
+    /// the save was based on, and no seat may be mid-turn in the worktree
+    /// unless `force`. `Ok(Err(refusal))` is a refusal the window shows;
+    /// `Err` is a path or disk problem.
+    pub async fn write_seat_file(
+        &self,
+        id: &str,
+        rel: &str,
+        content: &str,
+        base_hash: &str,
+        force: bool,
+    ) -> Result<std::result::Result<String, (crate::write::Refusal, Option<String>, String)>> {
+        let session = self.get(id).await.ok_or_else(|| anyhow!("that session is not one this daemon knows"))?;
+        let tag = session.seat.clone().ok_or_else(|| {
+            anyhow!("that session is not a seat — mogeung writes only in a worktree it made for a team (ADR-0019's amendment)")
+        })?;
+        let launch = self
+            .launches
+            .read()
+            .await
+            .iter()
+            .find(|l| l.team_id == tag.team_id && l.seat == tag.seat)
+            .cloned()
+            .ok_or_else(|| anyhow!("seat `{}` is not running", tag.seat))?;
+        if !launch.worktree {
+            return Err(anyhow!(
+                "seat `{}` works in the team's own checkout, and nothing of mogeung's is written there",
+                tag.seat
+            ));
+        }
+        let root = Path::new(&launch.dir);
+        let path = crate::write::resolve_for_write(root, rel)?;
+        let on_disk = std::fs::read(&path).ok();
+        let on_disk_hash = on_disk.as_deref().map(crate::write::hash_bytes);
+        // The seat whose worktree this is, mid-turn: the daemon knows the
+        // writers, which is what makes this write admissible at all.
+        let busy = {
+            let sessions = self.sessions.read().await;
+            let provisional = self.provisional.read().await;
+            sessions
+                .values()
+                .chain(provisional.iter())
+                .any(|s| {
+                    s.alive
+                        && s.live_status == Some(mogeung_core::session::LiveStatus::Busy)
+                        && s.seat.as_ref().is_some_and(|t| t.team_id == tag.team_id && t.seat == tag.seat)
+                })
+                .then(|| tag.seat.clone())
+        };
+        if let Some(r) = crate::write::judge(on_disk_hash.as_deref(), base_hash, busy.as_deref(), force) {
+            let current = match &r {
+                crate::write::Refusal::Moved => on_disk.map(|b| String::from_utf8_lossy(&b).into_owned()),
+                crate::write::Refusal::Busy { .. } => None,
+            };
+            return Ok(Err((r, current, on_disk_hash.unwrap_or_default())));
+        }
+        crate::write::write_atomic(&path, content)?;
+        Ok(Ok(crate::write::hash_bytes(content.as_bytes())))
     }
 
     /// Every file of the worktree in one flat list, for go-to-file. `R-B25`.
@@ -4158,6 +4422,1306 @@ impl AppState {
         let _ = self.store.forget_tasks(id);
         let _ = crate::notes::unmirror_in(&self.notes_dir(), id);
         self.store.load_notes()
+    }
+
+    // -- Teams. `R-P3`, feature 0051. ---------------------------------------
+
+    /// The team mirror directory in force.
+    pub fn teams_dir(&self) -> PathBuf {
+        self.teams_dir
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::team::mirror_dir)
+    }
+
+    pub fn teams(&self) -> Result<Vec<mogeung_core::team::Team>> {
+        self.store.load_teams()
+    }
+
+    /// Create or update a team, and mirror it. Store first, mirror second,
+    /// for the reason `save_note` gives: the mirror is a copy.
+    ///
+    /// Validated before anything is written, so a definition that could not
+    /// be addressed never reaches the store or the file — the refusal names
+    /// the field. The daemon stamps `created` and `updated` and mints the id
+    /// of a new team; whatever the client sent for those is overwritten.
+    pub fn save_team(&self, mut team: mogeung_core::team::Team) -> Result<Vec<mogeung_core::team::Team>> {
+        crate::team::validate(&team)?;
+        let now = Utc::now().timestamp();
+        let existing = if team.id.is_empty() {
+            None
+        } else {
+            self.store.load_teams()?.into_iter().find(|t| t.id == team.id)
+        };
+        team.created = existing.as_ref().map(|t| t.created).unwrap_or(now);
+        // `R-P6`: the pause switch is `TeamPause`'s to write. A definition
+        // saved from a form that was open when you pressed pause must not
+        // un-pause the team on its way through.
+        if let Some(ex) = &existing {
+            team.paused = ex.paused;
+        }
+        team.updated = now;
+        if team.id.is_empty() {
+            team.id = crate::team::new_id();
+        }
+        self.store.save_team(&team)?;
+        if let Err(e) = crate::team::mirror_in(&self.teams_dir(), &team) {
+            tracing::warn!("could not mirror team {} to disk: {e}", team.id);
+        }
+        self.store.load_teams()
+    }
+
+    pub fn delete_team(&self, id: &str) -> Result<Vec<mogeung_core::team::Team>> {
+        self.store.delete_team(id)?;
+        let _ = crate::team::unmirror_in(&self.teams_dir(), id);
+        self.store.load_teams()
+    }
+
+    // -- Seats. `R-P4`, feature 0051. ----------------------------------------
+
+    /// Where a seat's generated files go.
+    pub fn seats_dir(&self) -> PathBuf {
+        self.seats_dir
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::seat::seats_root)
+    }
+
+    /// Every launch record as a client may see it: the token stripped
+    /// (`R-P5`) — it is the seat's key to this daemon, and a window, local or
+    /// on the LAN, has no business holding it.
+    pub async fn seats_msg(&self) -> ServerMsg {
+        ServerMsg::Seats {
+            launches: self.launches.read().await.iter().map(|l| l.for_the_wire()).collect(),
+        }
+    }
+
+    /// Where a seat's hooks post: this daemon, on loopback. `R-P5`.
+    ///
+    /// `None` when there is no address yet (a test) or when the bind reaches
+    /// loopback by no route — one specific interface that is not loopback —
+    /// because the receiver admits loopback peers only, and a URL the hooks
+    /// could reach but the receiver would refuse is worse than a plain seat
+    /// that says so.
+    pub fn receiver_url(&self) -> Option<String> {
+        use std::net::IpAddr;
+        let addr = self.listen_addr.get()?;
+        let host = match addr.ip() {
+            IpAddr::V4(v) if v.is_unspecified() || v.is_loopback() => "127.0.0.1".to_string(),
+            IpAddr::V6(v) if v.is_unspecified() || v.is_loopback() => "[::1]".to_string(),
+            _ => return None,
+        };
+        Some(format!("http://{host}:{}", addr.port()))
+    }
+
+    /// One body from a seat's hook or status line, already admitted from
+    /// loopback. `R-P5`. `None` when no seat holds `token`; otherwise the
+    /// text the caller answers with — the status line's, or nothing.
+    ///
+    /// What changes on the record is broadcast as `Seats`, coalesced: an
+    /// event always, a status reading only when the fill or the model moved,
+    /// because the status line fires on every repaint.
+    pub async fn seat_signal(
+        &self,
+        token: &str,
+        route: crate::hooks::Route,
+        body: serde_json::Value,
+    ) -> Option<String> {
+        use crate::hooks::Received;
+        let now = Utc::now().timestamp();
+        let mut unknown: Option<String> = None;
+        // What the hook meant for the policy (`R-P6`): a turn ending, a
+        // process ending. Fired after the lock is released.
+        let mut event: Option<(String, String, mogeung_core::team::SeatEvent)> = None;
+        let mut status_of: Option<mogeung_core::team::SeatLaunch> = None;
+        let (reply, changed_launches) = {
+            let mut launches = self.launches.write().await;
+            let i = launches.iter().position(|l| crate::hooks::token_matches(token, &l.token))?;
+            let l = &mut launches[i];
+            let mut changed = true;
+            let reply = match crate::hooks::classify(l.cli, route, &body) {
+                Received::Event { name, detail, .. } => {
+                    l.signals.events += 1;
+                    event = crate::hooks::seat_event(l.cli, &name).map(|e| (l.team_id.clone(), l.seat.clone(), e));
+                    l.signals.last_event = Some(name);
+                    l.signals.last_event_at = Some(now);
+                    l.signals.last_detail = detail;
+                    crate::hooks::append_capture(std::path::Path::new(&l.files_dir), &body);
+                    String::new()
+                }
+                Received::Status { context_used, model, .. } => {
+                    changed = l.signals.context_used != context_used || l.signals.model != model;
+                    l.signals.context_used = context_used;
+                    l.signals.model = model;
+                    status_of = Some(l.clone());
+                    String::new()
+                }
+                Received::Ignored { .. } => {
+                    changed = false;
+                    String::new()
+                }
+                Received::Unknown { name } => {
+                    l.signals.unread += 1;
+                    unknown = Some(name);
+                    String::new()
+                }
+                Received::Malformed => {
+                    l.signals.unread += 1;
+                    String::new()
+                }
+            };
+            let snapshot = changed.then(|| launches.iter().map(|l| l.for_the_wire()).collect::<Vec<_>>());
+            (reply, snapshot)
+        };
+        if let Some(name) = unknown {
+            // The canary's own list, with a prefix so a hook name can never
+            // be mistaken for a transcript type. `R-A1`'s discipline.
+            self.health.lock().await.record_unknown(&format!("hook:{name}"));
+            tracing::warn!("a seat posted a hook event nobody has classified: {name}");
+        }
+        if let Some(launches) = changed_launches {
+            self.broadcast(ServerMsg::Seats { launches });
+        }
+        if let Some((team_id, seat, ev)) = event {
+            self.policy_event(&team_id, &seat, ev).await;
+        }
+        // The status line carries the policy's counters (`R-P6`): read after
+        // the launches lock is gone, because the summary wants the engine.
+        if let Some(l) = status_of {
+            let counters = match self.team_by_id(&l.team_id) {
+                Some(team) => Some(crate::policy::counters_text(&self.policy.lock().await.summary(&team, now))),
+                None => None,
+            };
+            return Some(crate::hooks::status_text(&l, counters.as_deref()));
+        }
+        Some(reply)
+    }
+
+    // -- Sends. `R-P6`, feature 0051, ADR-0003's amendment fence 4. ----------
+
+    /// How text reaches a pane: the real thing unless a test set a seam.
+    fn sender(&self) -> Sender {
+        self.sender
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(|target: &str, text: &str| crate::send::send(target, text)))
+    }
+
+    fn team_by_id(&self, id: &str) -> Option<mogeung_core::team::Team> {
+        self.store.load_teams().ok()?.into_iter().find(|t| t.id == id)
+    }
+
+    /// What the policy holds for each running seat, keyed by team and seat.
+    async fn held_sends(
+        &self,
+        launches: &[mogeung_core::team::SeatLaunch],
+    ) -> HashMap<(String, String), mogeung_core::session::HeldSend> {
+        let p = self.policy.lock().await;
+        launches
+            .iter()
+            .filter_map(|l| {
+                let h = p.team(&l.team_id)?.held_for(&l.seat)?;
+                Some(((l.team_id.clone(), l.seat.clone()), h))
+            })
+            .collect()
+    }
+
+    /// Every team's counters and log, as the wire carries them.
+    pub async fn sends_msg(&self) -> ServerMsg {
+        let teams = self.store.load_teams().unwrap_or_default();
+        let now = Utc::now().timestamp();
+        let winding = self.winding.lock().await.clone();
+        let p = self.policy.lock().await;
+        ServerMsg::Sends {
+            teams: teams
+                .iter()
+                .map(|t| {
+                    let mut s = p.summary(t, now);
+                    s.wind_down = winding.get(&t.id).map(|w| w.state.clone());
+                    s
+                })
+                .collect(),
+        }
+    }
+
+    /// **The one function that types into a seat.** It takes a launch record
+    /// and no other kind of address, which is fence 1 at the type level:
+    /// there is no value of `to` an observed session could ever be. Every
+    /// automatic send — a seat's message, a wake, a watchdog, a release —
+    /// comes through here; `send.rs` is the only thing below it.
+    async fn type_into(&self, to: &mogeung_core::team::SeatLaunch, text: &str, press: bool) -> Result<()> {
+        let target = to.pane_id.clone();
+        // A readiness press (`R-P11`) is Enter and nothing else: no text
+        // travels, and `send::press_enter` is the one invocation. A test's
+        // recording sender sees it as `"<Enter>"`.
+        if press {
+            if let Some(sender) = self.sender.get().cloned() {
+                return tokio::task::spawn_blocking(move || sender(&target, "<Enter>"))
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow!("the press did not run: {e}")));
+            }
+            return tokio::task::spawn_blocking(move || crate::send::press_enter(&target))
+                .await
+                .unwrap_or_else(|e| Err(anyhow!("the press did not run: {e}")));
+        }
+        let sender = self.sender();
+        let text = text.to_string();
+        tokio::task::spawn_blocking(move || sender(&target, &text))
+            .await
+            .unwrap_or_else(|e| Err(anyhow!("the send did not run: {e}")))
+    }
+
+    /// Record one entry — new, or a held one changing status — in the
+    /// engine and the store, and tell every window.
+    async fn record_send(&self, e: mogeung_core::team::SendEntry) {
+        {
+            let mut p = self.policy.lock().await;
+            let l = p.team_mut(&e.team_id);
+            match l.entry_mut(&e.id) {
+                Some(x) => *x = e.clone(),
+                None => l.record(e.clone()),
+            }
+        }
+        if let Err(err) = self.store.save_send(&e) {
+            tracing::warn!("could not save a send: {err}");
+        }
+        let _ = self.store.prune_sends(&e.team_id, crate::policy::LOG_KEEP);
+        self.broadcast(self.sends_msg().await);
+    }
+
+    /// A hold or a release changed what a seat's row says: re-tag now rather
+    /// than at the next scan, so the click is answered by the queue.
+    async fn refresh_seat_rows(&self) {
+        self.tag_seats().await;
+        self.refresh_provisional().await;
+        self.publish_queue().await;
+    }
+
+    /// Judge, then type or hold, then record. The judge sees the definition
+    /// as it is now — `None` when it could not be read, which holds.
+    pub async fn deliver(
+        &self,
+        team: Option<&mogeung_core::team::Team>,
+        to: &mogeung_core::team::SeatLaunch,
+        mut e: mogeung_core::team::SendEntry,
+    ) -> mogeung_core::team::SendEntry {
+        use mogeung_core::team::SendStatus;
+        let verdict = {
+            let p = self.policy.lock().await;
+            let empty = crate::policy::Ledger::default();
+            p.team(&to.team_id).unwrap_or(&empty).judge(team, e.kind, e.at)
+        };
+        match verdict {
+            crate::policy::Verdict::Hold(why) => {
+                e.status = SendStatus::Held;
+                e.note = Some(why);
+            }
+            crate::policy::Verdict::Deliver { hop } => {
+                e.hop = hop;
+                match self.type_into(to, &e.text, e.kind == mogeung_core::team::SendKind::Press).await {
+                    Ok(()) => e.status = SendStatus::Delivered,
+                    Err(err) => {
+                        e.status = SendStatus::Failed;
+                        e.note = Some(err.to_string());
+                    }
+                }
+            }
+        }
+        self.record_send(e.clone()).await;
+        if e.status == SendStatus::Held {
+            self.refresh_seat_rows().await;
+        }
+        e
+    }
+
+    /// A seat's own words to a seat of its team, from the receiver: `None`
+    /// when no seat holds `token`; otherwise the status code and the one
+    /// line the seat is told. `R-P6`, ADR-0003's evening amendment of
+    /// 2026-10-09: the name is resolved within the sender's team and
+    /// nowhere else.
+    pub async fn seat_send(&self, token: &str, to: &str, text: &str) -> Option<(u16, String)> {
+        use mogeung_core::team::{SendKind, SendStatus};
+        let launches = self.launches.read().await.clone();
+        let from = crate::hooks::seat_for(&launches, token)?.clone();
+        let now = Utc::now().timestamp();
+        let text = text.trim();
+        let why = format!("`{}` said so", from.seat);
+        let mut e = crate::policy::entry(&from.team_id, SendKind::Agent, Some(&from.seat), to, text, &why, now);
+        let refuse = |mut e: mogeung_core::team::SendEntry, code: u16, note: String| async move {
+            e.status = SendStatus::Refused;
+            e.note = Some(note.clone());
+            self.record_send(e).await;
+            Some((code, format!("refused — {note}")))
+        };
+        if text.is_empty() {
+            return refuse(e, 400, "there is nothing to send".into()).await;
+        }
+        if text.len() > crate::policy::MAX_TEXT {
+            e.text = text.chars().take(200).collect::<String>() + "…";
+            return refuse(e, 413, format!("the message is over {} KiB", crate::policy::MAX_TEXT / 1024)).await;
+        }
+        if to == from.seat {
+            return refuse(e, 409, "a seat cannot send to itself".into()).await;
+        }
+        let Some(team) = self.team_by_id(&from.team_id) else {
+            return refuse(e, 503, "the team's definition could not be read".into()).await;
+        };
+        if team.seat(to).is_none() {
+            let names: Vec<String> = team.seats.iter().filter(|s| s.name != from.seat).map(|s| format!("`{}`", s.name)).collect();
+            return refuse(
+                e,
+                404,
+                format!(
+                    "no seat `{to}` in team `{}` — a seat talks only to its own team: {}",
+                    team.name,
+                    if names.is_empty() { "there is no other seat".to_string() } else { names.join(", ") }
+                ),
+            )
+            .await;
+        }
+        let Some(target) = launches.iter().find(|l| l.team_id == from.team_id && l.seat == to) else {
+            return refuse(e, 409, format!("seat `{to}` is not running")).await;
+        };
+        let e = self.deliver(Some(&team), target, e).await;
+        Some(match e.status {
+            SendStatus::Delivered => (
+                200,
+                format!("delivered to `{to}` — hop {} of {}", e.hop, team.policy.hop_budget),
+            ),
+            SendStatus::Held => (
+                202,
+                format!(
+                    "held for a human — {}; it is not lost: a person releases or drops it from the Teams window",
+                    e.note.as_deref().unwrap_or("the team's policy")
+                ),
+            ),
+            _ => (500, format!("not delivered — {}", e.note.as_deref().unwrap_or("no reason given"))),
+        })
+    }
+
+    /// A seat's event, from its hook or the scan: fire the wakes declared on
+    /// it. Each is judged and typed, or held, through `deliver`.
+    pub async fn policy_event(&self, team_id: &str, seat: &str, event: mogeung_core::team::SeatEvent) {
+        use mogeung_core::team::{SendKind, SendStatus};
+        // A team being wound down wakes nobody (`R-P15`): the seats are on
+        // their way out, and a seat's `Stop` is its answer to the question —
+        // the turn that read it has ended, note or no note.
+        if self.winding.lock().await.contains_key(team_id) {
+            if event == mogeung_core::team::SeatEvent::Stop {
+                self.wind_down_stop(team_id, seat).await;
+            }
+            return;
+        }
+        let Some(team) = self.team_by_id(team_id) else { return };
+        let wakes: Vec<mogeung_core::team::Wake> =
+            team.policy.wakes.iter().filter(|w| w.on_seat == seat && w.on == event).cloned().collect();
+        if wakes.is_empty() {
+            return;
+        }
+        let launches = self.launches.read().await.clone();
+        let now = Utc::now().timestamp();
+        for w in wakes {
+            let why = format!("wake on `{seat}` {}", event.label());
+            let mut e = crate::policy::entry(team_id, SendKind::Wake, Some(seat), &w.to, &w.text, &why, now);
+            match launches.iter().find(|l| l.team_id == team_id && l.seat == w.to) {
+                Some(target) => {
+                    self.deliver(Some(&team), target, e).await;
+                }
+                None => {
+                    e.status = SendStatus::Refused;
+                    e.note = Some(format!("seat `{}` is not running", w.to));
+                    self.record_send(e).await;
+                }
+            }
+        }
+    }
+
+    /// Read every seat's pane, once per rest, and keep the shape. `R-P11`,
+    /// ADR-0044: the pane comes from the launch record and nowhere else
+    /// (clause 1), the text lives here for one classification and is never
+    /// kept (clause 3), an unchanged capture is not reclassified (clause 6),
+    /// an unknown shape is raised through Health as `screen:<cli>`, and the
+    /// one press — Enter, for *press Enter*, under the team's flag — is made
+    /// once per screen and logged like every automatic send (clause 5).
+    pub async fn screen_tick(&self) {
+        use mogeung_core::team::{ScreenRead, ScreenShape, SendKind};
+        use std::hash::{Hash, Hasher};
+        /// A seat rests this long between captures: a fork per seat per
+        /// tick is `R-J53`'s lesson.
+        const REST_SECS: i64 = 2;
+        let launches = self.launches.read().await.clone();
+        if launches.is_empty() {
+            return;
+        }
+        let capturer: Capturer = self
+            .capturer
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(|p: &crate::screen::SeatPane| crate::screen::capture(p)));
+        let now = Utc::now().timestamp();
+        let mut teams: Option<Vec<mogeung_core::team::Team>> = None;
+        let mut presses: Vec<(mogeung_core::team::Team, mogeung_core::team::SeatLaunch)> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
+        for l in &launches {
+            let key = (l.team_id.clone(), l.seat.clone());
+            let due = self
+                .screens
+                .lock()
+                .await
+                .get(&key)
+                .map(|s| now - s.captured_at >= REST_SECS)
+                .unwrap_or(true);
+            if !due {
+                continue;
+            }
+            let pane = crate::screen::SeatPane::of(l);
+            let c = capturer.clone();
+            let text = tokio::task::spawn_blocking(move || c(&pane)).await.unwrap_or(None);
+            let mut screens = self.screens.lock().await;
+            let st = screens.entry(key).or_default();
+            st.captured_at = now;
+            let Some(text) = text else {
+                // The pane is gone, or tmux is: `unknown`, with a note, not an
+                // error that stops the scan.
+                if st.read.as_ref().map(|r| r.shape) != Some(ScreenShape::Unknown) || st.hash != 0 {
+                    st.read = Some(ScreenRead {
+                        shape: ScreenShape::Unknown,
+                        excerpt: vec!["the pane could not be captured — it is gone, or tmux is".into()],
+                        read_at: now,
+                    });
+                    st.hash = 0;
+                }
+                continue;
+            };
+            let hash = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut h);
+                h.finish()
+            };
+            if hash == st.hash && st.read.is_some() {
+                continue;
+            }
+            st.hash = hash;
+            let read = crate::screen::classify(l.cli, &text, now);
+            if read.shape == ScreenShape::Unknown && !text.trim().is_empty() {
+                unknown.push(l.cli.label().to_string());
+            }
+            if read.shape == ScreenShape::PressEnter && st.pressed_for != Some(hash) {
+                if teams.is_none() {
+                    teams = Some(self.store.load_teams().unwrap_or_default());
+                }
+                if let Some(team) = teams.as_ref().and_then(|ts| ts.iter().find(|t| t.id == l.team_id)) {
+                    if team.policy.readiness_press {
+                        st.pressed_for = Some(hash);
+                        presses.push((team.clone(), l.clone()));
+                    }
+                }
+            }
+            st.read = Some(read);
+        }
+        for cli in unknown {
+            self.health.lock().await.record_unknown(&format!("screen:{cli}"));
+        }
+        for (team, l) in presses {
+            let e = crate::policy::entry(
+                &team.id,
+                SendKind::Press,
+                None,
+                &l.seat,
+                "Enter",
+                "readiness press — the screen said press Enter",
+                now,
+            );
+            self.deliver(Some(&team), &l, e).await;
+        }
+    }
+
+    /// The policy's clock, once per scan: a watchdog on a seat silent long
+    /// enough, a plain seat's turn ending read off its liveness, a seat's
+    /// exit read off its row. Each fires through `deliver`.
+    pub async fn policy_tick(&self) {
+        use mogeung_core::session::LiveStatus;
+        use mogeung_core::team::{SeatEvent, SendKind};
+        let launches = self.launches.read().await.clone();
+        if launches.is_empty() {
+            return;
+        }
+        let teams = self.store.load_teams().unwrap_or_default();
+        let now = Utc::now();
+        let now_ts = now.timestamp();
+        // One row per seat: the live one where there is one.
+        let mut rows: HashMap<(String, String), (bool, Option<LiveStatus>, chrono::DateTime<Utc>)> = HashMap::new();
+        {
+            let sessions = self.sessions.read().await;
+            let provisional = self.provisional.read().await;
+            for s in sessions.values().chain(provisional.iter()) {
+                let Some(t) = &s.seat else { continue };
+                let key = (t.team_id.clone(), t.seat.clone());
+                let row = (s.alive, s.live_status, s.last_event_at);
+                match rows.get(&key) {
+                    Some((true, _, _)) if !s.alive => {}
+                    _ => {
+                        rows.insert(key, row);
+                    }
+                }
+            }
+        }
+        let mut events: Vec<(String, String, SeatEvent)> = Vec::new();
+        let mut nudges: Vec<(mogeung_core::team::Team, mogeung_core::team::SeatLaunch, usize, mogeung_core::team::Watchdog)> =
+            Vec::new();
+        {
+            let mut p = self.policy.lock().await;
+            for l in &launches {
+                let ledger = p.team_mut(&l.team_id);
+                let row = rows.get(&(l.team_id.clone(), l.seat.clone()));
+                let alive = row.is_some_and(|r| r.0);
+                let status = row.and_then(|r| r.1);
+                if !alive {
+                    if ledger.exit_once(&l.seat) {
+                        events.push((l.team_id.clone(), l.seat.clone(), SeatEvent::Exit));
+                    }
+                    continue;
+                }
+                if l.signals.kind == mogeung_core::team::SignalKind::Plain {
+                    if let Some(ev) = ledger.liveness(&l.seat, status) {
+                        events.push((l.team_id.clone(), l.seat.clone(), ev));
+                    }
+                }
+                let Some(team) = teams.iter().find(|t| t.id == l.team_id) else { continue };
+                if team.policy.watchdogs.is_empty() {
+                    continue;
+                }
+                let started = chrono::DateTime::from_timestamp(l.started, 0).unwrap_or(now);
+                let mut last = row.map(|r| r.2).unwrap_or(started).max(started);
+                if let Some(at) = l.signals.last_event_at.and_then(|t| chrono::DateTime::from_timestamp(t, 0)) {
+                    last = last.max(at);
+                }
+                let silent = (now - last).num_seconds();
+                let busy = status.map(|s| s == LiveStatus::Busy);
+                for (i, d) in team.policy.watchdogs.iter().enumerate() {
+                    if d.seat.as_deref().is_some_and(|s| s != l.seat) {
+                        continue;
+                    }
+                    if ledger.watchdog_due(&l.seat, i, d, silent, busy, now_ts) {
+                        ledger.note_nudged(&l.seat, i, now_ts);
+                        nudges.push((team.clone(), l.clone(), i, d.clone()));
+                    }
+                }
+            }
+        }
+        for (team_id, seat, ev) in events {
+            self.policy_event(&team_id, &seat, ev).await;
+        }
+        // `R-P15`: a team on its way out is nudged by nothing, and the seats
+        // still asked past the deadline are stopped anyway.
+        let winding: std::collections::HashSet<String> = self.winding.lock().await.keys().cloned().collect();
+        self.wind_down_tick(now_ts).await;
+        for (team, l, i, d) in nudges {
+            if winding.contains(&team.id) {
+                continue;
+            }
+            let why = format!(
+                "watchdog {} — silent {} min{}",
+                i + 1,
+                d.silent_minutes,
+                if d.while_busy { " while busy" } else { "" }
+            );
+            let e = crate::policy::entry(&team.id, SendKind::Watchdog, None, &l.seat, &d.text, &why, now_ts);
+            self.deliver(Some(&team), &l, e).await;
+        }
+    }
+
+    /// You pressed send into a seat (`R-B54`'s path, already typed): log it
+    /// beside the automatic ones, and the chain starts again after it. A
+    /// session that is not a seat has no ledger and nothing happens here.
+    pub async fn human_sent(&self, session: &Session, text: &str) {
+        use mogeung_core::team::{SendKind, SendStatus};
+        let Some(tag) = &session.seat else { return };
+        let now = Utc::now().timestamp();
+        let mut e = crate::policy::entry(&tag.team_id, SendKind::Human, None, &tag.seat, text, "you pressed send", now);
+        e.status = SendStatus::Delivered;
+        self.record_send(e).await;
+    }
+
+    /// Release a held send: type it now. Your act, so it is logged as
+    /// released and the chain starts again. Refused in words when the seat
+    /// it was for is gone; kept held when tmux would not take it, so you can
+    /// try again.
+    pub async fn release_send(&self, team_id: &str, id: &str) -> Result<()> {
+        use mogeung_core::team::SendStatus;
+        let mut e = {
+            let p = self.policy.lock().await;
+            p.team(team_id)
+                .and_then(|l| l.held().find(|e| e.id == id).cloned())
+                .ok_or_else(|| anyhow!("no held send with that id — it may already have been released or dropped"))?
+        };
+        let target = self
+            .launches
+            .read()
+            .await
+            .iter()
+            .find(|l| l.team_id == team_id && l.seat == e.to)
+            .cloned()
+            .ok_or_else(|| anyhow!("seat `{}` is not running — drop the send, or boot the team first", e.to))?;
+        self.type_into(&target, &e.text, e.kind == mogeung_core::team::SendKind::Press).await?;
+        e.status = SendStatus::Released;
+        self.record_send(e).await;
+        self.refresh_seat_rows().await;
+        Ok(())
+    }
+
+    /// Drop a held send: never delivered.
+    pub async fn drop_send(&self, team_id: &str, id: &str) -> Result<()> {
+        use mogeung_core::team::SendStatus;
+        let mut e = {
+            let p = self.policy.lock().await;
+            p.team(team_id)
+                .and_then(|l| l.held().find(|e| e.id == id).cloned())
+                .ok_or_else(|| anyhow!("no held send with that id — it may already have been released or dropped"))?
+        };
+        e.status = SendStatus::Dropped;
+        self.record_send(e).await;
+        self.refresh_seat_rows().await;
+        Ok(())
+    }
+
+    // -- Handovers. `R-P10`, ADR-0003's later amendment of 2026-10-09. -------
+
+    /// What one seat has done, as the handover's evidence: its row's last
+    /// turns from the store, its diff, its last activity. Read from what the
+    /// daemon already holds — ADR-0031 clause 1 — and nothing is fetched.
+    async fn evidence_for(&self, l: &mogeung_core::team::SeatLaunch) -> crate::handover::Evidence {
+        let session = {
+            let sessions = self.sessions.read().await;
+            let tagged: Vec<&Session> = sessions
+                .values()
+                .filter(|s| s.seat.as_ref().is_some_and(|t| t.team_id == l.team_id && t.seat == l.seat))
+                .collect();
+            tagged
+                .iter()
+                .find(|s| s.alive)
+                .or(tagged.first())
+                .map(|s| (*s).clone())
+                .or_else(|| l.session_id.as_ref().and_then(|id| sessions.get(id)).cloned())
+        };
+        let mut e = crate::handover::Evidence {
+            seat: l.seat.clone(),
+            cli: l.cli.label().to_string(),
+            note: read_note(&l.files_dir),
+            ..Default::default()
+        };
+        if let Some(s) = session {
+            let events = self.store.load_recent_events(&s.id, 0, 60).unwrap_or_default();
+            e.turns = crate::handover::turns_from_events(&events);
+            e.last_activity = s.last_activity.clone();
+            if let Some(c) = self.changes.read().await.get(&s.id) {
+                if !c.files.is_empty() {
+                    e.diff = Some((c.files.len(), c.insertions, c.deletions));
+                }
+            }
+        }
+        e
+    }
+
+    /// Compose a handover for `seat` of `team`, from the team's guidance, the
+    /// predecessor's and the teammates' evidence, and the send log. `None`
+    /// when no model endpoint is configured (ADR-0031 clause 6); `Err` when
+    /// the endpoint refused or failed — consent to a host not granted, say.
+    pub async fn compose_handover(
+        &self,
+        team: &mogeung_core::team::Team,
+        seat: &str,
+        reason: crate::handover::Reason,
+        predecessor: Option<crate::handover::Evidence>,
+    ) -> Result<Option<(String, String)>, String> {
+        let settings = self.model.settings();
+        if !settings.configured() {
+            return Ok(None);
+        }
+        let launches = self.launches.read().await.clone();
+        let mut teammates = Vec::new();
+        for l in launches.iter().filter(|l| l.team_id == team.id && l.seat != seat) {
+            teammates.push(self.evidence_for(l).await);
+        }
+        let sends = {
+            let p = self.policy.lock().await;
+            p.team(&team.id)
+                .map(|l| {
+                    let n = l.log.len().saturating_sub(crate::handover::SENDS_SHOWN);
+                    l.log[n..].iter().map(crate::handover::send_line).collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let input = crate::handover::Input {
+            team: team.name.clone(),
+            team_guidance: team.guidance.clone(),
+            seat: seat.to_string(),
+            seat_guidance: team.seat(seat).map(|s| s.guidance.clone()).unwrap_or_default(),
+            reason: Some(reason),
+            predecessor,
+            teammates,
+            sends,
+        };
+        let prompt = crate::handover::prompt(&input);
+        // The daemon's own ask, for itself: not a LAN client (clause 4), and
+        // consent to a remote host is still the seam's to judge (clause 3).
+        let answer = self.model.chat_as(&[mogeung_core::model::ChatTurn::user(prompt)], true).await?;
+        let text = crate::handover::read_answer(&answer.text);
+        if text.is_empty() {
+            return Err("the model answered with nothing".into());
+        }
+        let host = settings.host();
+        Ok(Some((text, crate::handover::composed_by(&answer.model, host.as_deref()))))
+    }
+
+    /// Compose and send, or hold, a handover for a seat as the team's policy
+    /// says. `None` policy: nothing. No endpoint, or a refusal: a `Refused`
+    /// entry so the row says the seat started without one. Otherwise the
+    /// entry is a `Handover` send — held under *after you read it*, judged
+    /// and delivered under *automatic*.
+    pub async fn handover_for(
+        &self,
+        team_id: &str,
+        seat: &str,
+        reason: crate::handover::Reason,
+        predecessor: Option<crate::handover::Evidence>,
+    ) {
+        use mogeung_core::team::{Handover, SendKind, SendStatus};
+        let Some(team) = self.team_by_id(team_id) else { return };
+        if team.policy.handover == Handover::None {
+            return;
+        }
+        let now = Utc::now().timestamp();
+        let why = format!("handover on {}", reason.label());
+        let mut e = crate::policy::entry(team_id, SendKind::Handover, None, seat, "", &why, now);
+        match self.compose_handover(&team, seat, reason, predecessor).await {
+            Ok(None) => {
+                e.status = SendStatus::Refused;
+                e.note = Some("no model endpoint is configured — the seat started without a handover (ADR-0031 clause 6)".into());
+                self.record_send(e).await;
+            }
+            Err(err) => {
+                e.status = SendStatus::Refused;
+                e.note = Some(format!("not composed — {err}"));
+                self.record_send(e).await;
+            }
+            Ok(Some((text, by))) => {
+                e.text = text;
+                e.composed_by = Some(by.clone());
+                let target = self.launches.read().await.iter().find(|l| l.team_id == team_id && l.seat == seat).cloned();
+                let Some(target) = target else {
+                    e.status = SendStatus::Refused;
+                    e.note = Some(format!("seat `{seat}` is not running"));
+                    self.record_send(e).await;
+                    return;
+                };
+                match team.policy.handover {
+                    Handover::AfterRead => {
+                        e.status = SendStatus::Held;
+                        e.note = Some(format!("composed by {by} — read it, then release it to the seat"));
+                        self.record_send(e).await;
+                        self.refresh_seat_rows().await;
+                    }
+                    Handover::Automatic => {
+                        self.deliver(Some(&team), &target, e).await;
+                    }
+                    Handover::None => {}
+                }
+            }
+        }
+    }
+
+    /// After a boot: a handover for every seat that joined a team with
+    /// history — some other seat has turns or a diff. A cold boot has nothing
+    /// to hand over and says nothing.
+    pub async fn handovers_after_boot(&self, team_id: &str, started: &[String]) {
+        if started.is_empty() {
+            return;
+        }
+        let launches = self.launches.read().await.clone();
+        for seat in started {
+            // The seat's own past (`R-P15`): the session it had before the
+            // team was stopped, and the note it left then. Without this a
+            // team wound down and booted again handed over everyone's work
+            // but the seat's own.
+            let predecessor = match launches.iter().find(|l| l.team_id == team_id && &l.seat == seat) {
+                Some(l) => self.predecessor_for(l).await,
+                None => None,
+            };
+            let mut history = predecessor.is_some();
+            for l in launches.iter().filter(|l| l.team_id == team_id && &l.seat != seat) {
+                if history {
+                    break;
+                }
+                let e = self.evidence_for(l).await;
+                if !e.turns.is_empty() || e.diff.is_some() {
+                    history = true;
+                }
+            }
+            if history {
+                self.handover_for(team_id, seat, crate::handover::Reason::Start, predecessor).await;
+            }
+        }
+    }
+
+    /// What a seat did before this launch: its newest dead session's turns
+    /// and the note it left (`R-P15`). `None` when there is nothing — a seat
+    /// never started here, or one that wrote and said nothing.
+    async fn predecessor_for(&self, l: &mogeung_core::team::SeatLaunch) -> Option<crate::handover::Evidence> {
+        let earlier = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| !s.alive && s.seat.as_ref().is_some_and(|t| t.team_id == l.team_id && t.seat == l.seat))
+                .max_by_key(|s| s.last_event_at)
+                .cloned()
+        };
+        let mut e = crate::handover::Evidence {
+            seat: l.seat.clone(),
+            cli: l.cli.label().to_string(),
+            note: read_note(&l.files_dir),
+            ..Default::default()
+        };
+        if let Some(s) = earlier {
+            let events = self.store.load_recent_events(&s.id, 0, 60).unwrap_or_default();
+            e.turns = crate::handover::turns_from_events(&events);
+            e.last_activity = s.last_activity.clone();
+        }
+        (!e.turns.is_empty() || e.note.is_some()).then_some(e)
+    }
+
+    /// Stop one seat and start it again. The earlier session's evidence is
+    /// read first, so the handover that follows can say where it stopped.
+    /// Answers the predecessor's evidence for the caller to hand to
+    /// `handover_for` once the launch is on record.
+    pub async fn restart_seat(
+        &self,
+        team_id: &str,
+        seat: &str,
+    ) -> Result<(Vec<mogeung_core::team::SeatLaunch>, crate::handover::Evidence)> {
+        let team = self.team_by_id(team_id).ok_or_else(|| anyhow!("no team with id {team_id}"))?;
+        crate::team::validate(&team)?;
+        let def = team.seat(seat).ok_or_else(|| anyhow!("no seat `{seat}` in team `{}`", team.name))?.clone();
+        let old = self
+            .launches
+            .read()
+            .await
+            .iter()
+            .find(|l| l.team_id == team_id && l.seat == seat)
+            .cloned()
+            .ok_or_else(|| anyhow!("seat `{seat}` is not running — boot the team instead"))?;
+        let predecessor = self.evidence_for(&old).await;
+        crate::seat::stop(&old);
+        self.store.delete_launch(team_id, seat)?;
+        self.launches.write().await.retain(|l| !(l.team_id == team_id && l.seat == seat));
+        let seats_dir = self.seats_dir();
+        let bins = crate::seat::Binaries::installed();
+        let receiver = self.receiver_url();
+        let launch = crate::seat::start(&team, &def, &seats_dir, &bins, receiver.as_deref())
+            .map_err(|e| anyhow!("seat `{seat}`: {e:#}"))?;
+        self.store.save_launch(&launch)?;
+        self.policy.lock().await.team_mut(team_id).booted(seat);
+        self.launches.write().await.push(launch);
+        let launches = self.launches.read().await.clone();
+        if let Err(e) = crate::seat::layout_team(&team, &launches) {
+            tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
+        }
+        Ok((launches, predecessor))
+    }
+
+    /// The definition out as a file. `R-P12`. At `path` when given — an
+    /// absolute path the user chose — else beside the mirror.
+    pub fn export_team(&self, id: &str, path: Option<&str>) -> Result<PathBuf> {
+        let team = self.team_by_id(id).ok_or_else(|| anyhow!("no team with id {id}"))?;
+        let json = crate::rig::export_json(&team)?;
+        let target = match path.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let p = PathBuf::from(p);
+                if !p.is_absolute() {
+                    return Err(anyhow!("an export takes an absolute path, not {}", p.display()));
+                }
+                p
+            }
+            None => {
+                let dir = self.teams_dir();
+                std::fs::create_dir_all(&dir)?;
+                dir.join(crate::rig::export_name(&team))
+            }
+        };
+        std::fs::write(&target, json).with_context(|| format!("writing {}", target.display()))?;
+        Ok(target)
+    }
+
+    /// A file in, as a draft. `R-P12`. Nothing is stored.
+    pub fn import_team_file(&self, path: &str) -> Result<crate::rig::Imported> {
+        crate::rig::import_file(Path::new(path))
+    }
+
+    /// The pause switch, on the definition so it survives a restart.
+    pub async fn set_paused(&self, id: &str, paused: bool) -> Result<Vec<mogeung_core::team::Team>> {
+        let mut team = self.team_by_id(id).ok_or_else(|| anyhow!("no team with id {id}"))?;
+        team.paused = paused;
+        team.updated = Utc::now().timestamp();
+        self.store.save_team(&team)?;
+        if let Err(e) = crate::team::mirror_in(&self.teams_dir(), &team) {
+            tracing::warn!("could not mirror team {} to disk: {e}", team.id);
+        }
+        self.store.load_teams()
+    }
+
+    /// Start every seat of a team that is not already running. One record
+    /// per seat started, saved as it starts, so a failure on the third seat
+    /// leaves the first two on record rather than orphaned in tmux; the
+    /// error names the seat.
+    /// Start every seat of a team that is not running, and say which. `R-P4`,
+    /// answered in words since `R-P14`. See [`BootOutcome`].
+    ///
+    /// *Running* is read off tmux, not off the launch record: a seat that
+    /// exited keeps its record so the exit can be seen and waked on
+    /// (`R-P6`), and the first cut took that record for a running seat and
+    /// skipped it forever — a Boot after a seat had died started nothing and
+    /// said nothing. Now a dead seat is forgotten and started again; a live
+    /// one is skipped and named as skipped.
+    ///
+    /// The team's tmux session (`R-P8`) is rebuilt only when something
+    /// started or it is missing. Rebuilding it on every Boot detached any
+    /// terminal you had on it, for nothing.
+    pub async fn boot_team(&self, id: &str) -> Result<BootOutcome> {
+        let team = self
+            .store
+            .load_teams()?
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("no team with id {id}"))?;
+        crate::team::validate(&team)?;
+        if team.seats.is_empty() {
+            return Err(anyhow!("the team `{}` has no seats to boot", team.name));
+        }
+        // A boot is a fresh start for the record of how the last wind-down
+        // went (`R-P15`); one still in progress is finished by it, since
+        // every seat it was waiting on is about to be started again.
+        self.winding.lock().await.remove(id);
+        let on_record: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
+        let seats_dir = self.seats_dir();
+        let bins = crate::seat::Binaries::installed();
+        let receiver = self.receiver_url();
+        let mut outcome = BootOutcome::default();
+        for seat in &team.seats {
+            if let Some(old) = on_record.iter().find(|l| l.seat == seat.name) {
+                if crate::seat::is_running(old) {
+                    outcome.skipped.push(seat.name.clone());
+                    continue;
+                }
+                // Its pane is gone. The record goes with it — `stop` kills
+                // nothing here, and tidies what the launcher left behind.
+                crate::seat::stop(old);
+                self.store.delete_launch(id, &seat.name)?;
+                self.launches.write().await.retain(|l| !(l.team_id == id && l.seat == seat.name));
+                outcome.revived.push(seat.name.clone());
+            }
+            let launch = crate::seat::start(&team, seat, &seats_dir, &bins, receiver.as_deref())
+                .map_err(|e| anyhow!("seat `{}`: {e:#}", seat.name))?;
+            self.store.save_launch(&launch)?;
+            // Its exit and its liveness start over with it. `R-P6`.
+            self.policy.lock().await.team_mut(&team.id).booted(&seat.name);
+            self.launches.write().await.push(launch);
+            outcome.started.push(seat.name.clone());
+        }
+        // The team's own session, around the seats, for a terminal. `R-P8`.
+        // A tmux that refuses it is a warning: the seats are up.
+        let launches = self.launches.read().await.clone();
+        let team_session = crate::seat::team_session_name(&team);
+        if !outcome.started.is_empty() || !crate::seat::session_exists(&team_session) {
+            if let Err(e) = crate::seat::layout_team(&team, &launches) {
+                tracing::warn!("the team session for {} was not laid out: {e:#}", team.name);
+            }
+        }
+        outcome.launches = launches;
+        Ok(outcome)
+    }
+
+    /// End every seat's process and forget the records. The worktrees stay.
+    pub async fn stop_team(&self, id: &str) -> Result<Vec<mogeung_core::team::SeatLaunch>> {
+        let mine: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
+        if mine.is_empty() {
+            return Err(anyhow!("no seat of this team is running"));
+        }
+        // The team session first, so its nested clients let go before the
+        // seats they are attached to are ended. `R-P8`.
+        if let Some(name) = mine.iter().map(|l| l.team_session.as_str()).find(|n| !n.is_empty()) {
+            crate::seat::unlayout_team(name);
+        }
+        for l in &mine {
+            crate::seat::stop(l);
+            self.store.delete_launch(&l.team_id, &l.seat)?;
+        }
+        self.launches.write().await.retain(|l| l.team_id != id);
+        // Stop now, during a wind-down, is the wind-down cut short: the
+        // seats still asked are stopped without a note, and the record says
+        // so (`R-P15`).
+        if let Some(w) = self.winding.lock().await.get_mut(id) {
+            let now = Utc::now().timestamp();
+            for s in w.state.seats.iter_mut().filter(|s| !s.status.finished()) {
+                s.status = mogeung_core::team::WindDownStatus::Stopped;
+                s.at = now;
+            }
+        }
+        Ok(self.launches.read().await.clone())
+    }
+
+    // -- Wind-down. `R-P15`, ADR-0003's amendment of 2026-10-11. -----------
+
+    /// Wind a team down: type the policy's wind-down message into every
+    /// running seat and wait for each to answer. A seat is finished — its
+    /// process ended, its record forgotten — when its note arrives
+    /// (`seat_note`), when its turn ends (`wind_down_stop`), or at the
+    /// deadline (`wind_down_tick`); when the last is finished the team's
+    /// tmux session comes down. The question is your act with declared
+    /// words, so it is logged as a `WindDown` send, neither a hop nor
+    /// counted against the hour, and it is not judged — the pause switch
+    /// stops automatic sends, and this is not one.
+    ///
+    /// Idempotent: a team already being wound down is left to it.
+    pub async fn wind_down_team(&self, id: &str) -> Result<()> {
+        use mogeung_core::team::{SendKind, SendStatus, WindDown, WindDownSeat, WindDownStatus};
+        let team = self.team_by_id(id).ok_or_else(|| anyhow!("no team with id {id}"))?;
+        let mine: Vec<mogeung_core::team::SeatLaunch> =
+            self.launches.read().await.iter().filter(|l| l.team_id == id).cloned().collect();
+        if mine.is_empty() {
+            return Err(anyhow!("no seat of this team is running"));
+        }
+        if self.winding.lock().await.get(id).is_some_and(|w| w.state.seats.iter().any(|s| !s.status.finished())) {
+            return Ok(());
+        }
+        let now = Utc::now().timestamp();
+        let text = team.policy.wind_down.replace("{note}", crate::hooks::NOTE_COMMAND);
+        let busy: std::collections::HashSet<String> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|s| s.alive && s.live_status == Some(mogeung_core::session::LiveStatus::Busy))
+                .filter_map(|s| s.seat.as_ref().filter(|t| t.team_id == id).map(|t| t.seat.clone()))
+                .collect()
+        };
+        let mut w = Winding {
+            state: WindDown { started: now, deadline: now + team.policy.wind_down_minutes as i64 * 60, seats: Vec::new() },
+            skip_stop: std::collections::HashSet::new(),
+        };
+        let mut finish_now: Vec<(mogeung_core::team::SeatLaunch, WindDownStatus)> = Vec::new();
+        for l in &mine {
+            if !crate::seat::is_running(l) {
+                w.state.seats.push(WindDownSeat { seat: l.seat.clone(), status: WindDownStatus::Gone, at: now, note: None });
+                finish_now.push((l.clone(), WindDownStatus::Gone));
+                continue;
+            }
+            let mut e = crate::policy::entry(id, SendKind::WindDown, None, &l.seat, &text, "you wound the team down", now);
+            match self.type_into(l, &text, false).await {
+                Ok(()) => {
+                    e.status = SendStatus::Delivered;
+                    if busy.contains(&l.seat) {
+                        w.skip_stop.insert(l.seat.clone());
+                    }
+                    w.state.seats.push(WindDownSeat { seat: l.seat.clone(), status: WindDownStatus::Asked, at: now, note: None });
+                }
+                Err(err) => {
+                    // A pane that would not take the question is a seat that
+                    // cannot answer it: stopped now, and the log says why.
+                    e.status = SendStatus::Failed;
+                    e.note = Some(format!("the pane would not take the message — {err:#}; the seat is stopped without a note"));
+                    w.state.seats.push(WindDownSeat { seat: l.seat.clone(), status: WindDownStatus::Stopped, at: now, note: None });
+                    finish_now.push((l.clone(), WindDownStatus::Stopped));
+                }
+            }
+            self.record_send(e).await;
+        }
+        self.winding.lock().await.insert(id.to_string(), w);
+        for (l, _) in finish_now {
+            self.forget_seat(&l).await;
+        }
+        self.after_wind_down_change(id).await;
+        Ok(())
+    }
+
+    /// A seat's note arrived (`POST /api/seat/note`, the seat's own token):
+    /// kept whole beside the seat's files as `note.md`, where the next
+    /// handover reads it as the seat's own last words; during a wind-down it
+    /// is also the seat's answer, and the seat is finished. The reply is one
+    /// line and a status the generated command turns into an exit code.
+    pub async fn seat_note(&self, token: &str, text: &str) -> Option<(u16, String)> {
+        use mogeung_core::team::WindDownStatus;
+        let launches = self.launches.read().await.clone();
+        let from = crate::hooks::seat_for(&launches, token)?.clone();
+        let text = text.trim();
+        if text.is_empty() {
+            return Some((400, "refused — there is nothing in the note".into()));
+        }
+        if text.len() > crate::policy::MAX_TEXT {
+            return Some((413, format!("refused — the note is over {} KiB", crate::policy::MAX_TEXT / 1024)));
+        }
+        let path = Path::new(&from.files_dir).join(NOTE_FILE);
+        let body = format!(
+            "# Note from seat `{}` of team `{}` — {}\n\n{text}\n",
+            from.seat,
+            from.team,
+            Utc::now().format("%Y-%m-%d %H:%M UTC")
+        );
+        if let Err(e) = std::fs::create_dir_all(&from.files_dir).and_then(|_| std::fs::write(&path, body)) {
+            return Some((500, format!("not kept — {e}")));
+        }
+        let excerpt = crate::handover::cut(text, 2_000);
+        if self.finish_wind_down_seat(&from.team_id, &from.seat, WindDownStatus::Noted, Some(excerpt)).await {
+            Some((200, "kept — thank you; this seat is being stopped".into()))
+        } else {
+            Some((200, "kept — it reaches the next session's handover".into()))
+        }
+    }
+
+    /// A seat's turn ended during a wind-down: its answer, with or without a
+    /// note — unless it was mid-turn when asked, in which case this is the
+    /// turn it was in and the next one counts.
+    async fn wind_down_stop(&self, team_id: &str, seat: &str) {
+        {
+            let mut winding = self.winding.lock().await;
+            if let Some(w) = winding.get_mut(team_id) {
+                if w.skip_stop.remove(seat) {
+                    return;
+                }
+            }
+        }
+        self.finish_wind_down_seat(team_id, seat, mogeung_core::team::WindDownStatus::Stopped, None).await;
+    }
+
+    /// Past the deadline, every seat still asked is stopped anyway.
+    async fn wind_down_tick(&self, now: i64) {
+        let due: Vec<(String, String)> = {
+            let winding = self.winding.lock().await;
+            winding
+                .iter()
+                .filter(|(_, w)| w.state.deadline <= now)
+                .flat_map(|(id, w)| w.state.seats.iter().filter(|s| !s.status.finished()).map(move |s| (id.clone(), s.seat.clone())))
+                .collect()
+        };
+        for (team_id, seat) in due {
+            self.finish_wind_down_seat(&team_id, &seat, mogeung_core::team::WindDownStatus::TimedOut, None).await;
+        }
+    }
+
+    /// Finish one seat of a wind-down: the record says how, the process is
+    /// ended, the launch forgotten. `false` when the seat was not being
+    /// waited on — not winding down, or already finished.
+    async fn finish_wind_down_seat(
+        &self,
+        team_id: &str,
+        seat: &str,
+        status: mogeung_core::team::WindDownStatus,
+        note: Option<String>,
+    ) -> bool {
+        let now = Utc::now().timestamp();
+        {
+            let mut winding = self.winding.lock().await;
+            let Some(w) = winding.get_mut(team_id) else { return false };
+            let Some(entry) = w.state.seats.iter_mut().find(|s| s.seat == seat && !s.status.finished()) else { return false };
+            entry.status = status;
+            entry.at = now;
+            entry.note = note;
+            w.skip_stop.remove(seat);
+        }
+        let launch = self.launches.read().await.iter().find(|l| l.team_id == team_id && l.seat == seat).cloned();
+        if let Some(l) = launch {
+            self.forget_seat(&l).await;
+        }
+        self.after_wind_down_change(team_id).await;
+        true
+    }
+
+    /// End one seat's process and forget its record; the worktree stays.
+    async fn forget_seat(&self, l: &mogeung_core::team::SeatLaunch) {
+        crate::seat::stop(l);
+        if let Err(e) = self.store.delete_launch(&l.team_id, &l.seat) {
+            tracing::warn!("the launch record for {}/{} was not deleted: {e:#}", l.team, l.seat);
+        }
+        self.launches.write().await.retain(|x| !(x.team_id == l.team_id && x.seat == l.seat));
+    }
+
+    /// After anything moved in a wind-down: the team session comes down
+    /// once every seat is finished, and every window hears the new state.
+    async fn after_wind_down_change(&self, team_id: &str) {
+        let done = self.winding.lock().await.get(team_id).is_some_and(|w| w.state.seats.iter().all(|s| s.status.finished()));
+        if done {
+            if let Some(team) = self.team_by_id(team_id) {
+                crate::seat::unlayout_team(&crate::seat::team_session_name(&team));
+                tracing::info!("team {} wound down", team.name);
+            }
+        }
+        self.broadcast(self.seats_msg().await);
+        self.broadcast(self.sends_msg().await);
+        self.refresh_provisional().await;
+        self.publish_queue().await;
+    }
+
+    /// Remove one stopped seat's worktree, when it is clean.
+    pub async fn remove_seat_worktree(&self, team_id: &str, seat: &str) -> Result<PathBuf> {
+        if self.launches.read().await.iter().any(|l| l.team_id == team_id && l.seat == seat) {
+            return Err(anyhow!("seat `{seat}` is running — stop the team first"));
+        }
+        let team = self
+            .store
+            .load_teams()?
+            .into_iter()
+            .find(|t| t.id == team_id)
+            .ok_or_else(|| anyhow!("no team with id {team_id}"))?;
+        let s = team
+            .seat(seat)
+            .ok_or_else(|| anyhow!("no seat `{seat}` in team `{}`", team.name))?;
+        crate::seat::remove_worktree(&team, s)
+    }
+
+    /// Give the CLI's own session the seat's tag once it claims the pane or
+    /// the chosen id. `R-P4`, ADR-0038's amendment: the real session wins,
+    /// with the seat's identity carried over. Only what changed is saved and
+    /// broadcast, as `refresh_branches` does.
+    async fn tag_seats(&self) {
+        let launches = self.launches.read().await.clone();
+        if launches.is_empty() {
+            return;
+        }
+        let panes = tmux_panes();
+        let parents = if panes.is_empty() { HashMap::new() } else { process_parents() };
+        let held = self.held_sends(&launches).await;
+        let screens = self.screens.lock().await.clone();
+        let mut changed: Vec<Session> = Vec::new();
+        {
+            let mut sessions = self.sessions.write().await;
+            for s in sessions.values_mut() {
+                if !s.alive || s.origin.is_some() {
+                    continue;
+                }
+                let pane = s.pid.and_then(|pid| pane_of(pid, &panes, &parents)).map(|p| p.id.clone());
+                let tag = seat_tag_for(&launches, &s.id, pane.as_deref());
+                let Some(t) = tag else { continue };
+                // What the policy holds for this seat rides on the same row
+                // (`R-P6`), so a held send ranks the seat it was for; so does
+                // what its pane shows (`R-P11`).
+                let key = (t.team_id.clone(), t.seat.clone());
+                let h = held.get(&key).cloned();
+                let sc = screens.get(&key).and_then(|x| x.read.clone());
+                if s.seat.as_ref() != Some(&t) || s.held_send != h || s.screen != sc {
+                    s.seat = Some(t);
+                    s.held_send = h;
+                    s.screen = sc;
+                    changed.push(s.clone());
+                }
+            }
+        }
+        for s in changed {
+            let _ = self.store.save_session(&s);
+            self.quiet_sessions.lock().await.remove(&s.id);
+            self.broadcast(ServerMsg::SessionUpdated {
+                session: Box::new(s),
+            });
+        }
     }
 
     /// Resolve one conflicted file. `R-D22`.
@@ -4981,7 +6545,7 @@ fn session_name(dir: &str, stamp: &str, source: SessionSource) -> String {
 /// back to the bare name is deliberate: if none of this finds it, the error
 /// should be the *terminal's* own "command not found", which at least names
 /// what it looked for.
-fn claude_binary() -> String {
+pub(crate) fn claude_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("claude");
         if cand.is_file() {
@@ -5012,7 +6576,7 @@ fn claude_binary() -> String {
 /// this because `claude` installs itself somewhere already on `PATH`;
 /// `qwenmo` did, and this is the same list it walks, kept deliberately in
 /// sync with it.
-fn qwen_binary() -> String {
+pub(crate) fn qwen_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("qwen");
         if cand.is_file() {
@@ -5095,7 +6659,7 @@ fn agent_command(source: SessionSource) -> Result<Vec<String>> {
 /// Where `opencode` actually is — the same walk as [`qwen_binary`]. The npm
 /// package links `~/.local/bin/opencode` into `node_modules`, and `bun` and
 /// the install script use their own directories; the link is the stable name.
-fn opencode_binary() -> String {
+pub(crate) fn opencode_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("opencode");
         if cand.is_file() {
@@ -5125,7 +6689,7 @@ fn opencode_binary() -> String {
 /// moves with every update. `packages/standalone/current` is listed after it,
 /// not instead of it: same binary, less stable name, reached only when the
 /// symlink is missing.
-fn codex_binary() -> String {
+pub(crate) fn codex_binary() -> String {
     for dir in std::env::split_paths(crate::env::path()) {
         let cand = dir.join("codex");
         if cand.is_file() {
@@ -5616,9 +7180,16 @@ fn significant_change(before: &Session, after: &Session) -> bool {
         open_tools, snoozed_until, collisions, loop_signal,
         tmux_target, provisional, limit_hit_at, limit_resets, verify_runs,
         claims, source, announced_dirs, origin, artifacts, custom_title,
+        // A seat's tag is a fact about the row, not a counter. `R-P4`. What
+        // the policy holds for it ranks the row, so it is heard at once. `R-P6`.
+        seat, held_send, screen,
     } = after;
 
     *id != before.id
+        || *seat != before.seat
+        || *held_send != before.held_send
+        // A gate read off the pane ranks the row; a change is heard at once. `R-P11`.
+        || *screen != before.screen
         || *title != before.title
         || *custom_title != before.custom_title
         || *name != before.name
@@ -6315,6 +7886,63 @@ mod terminal_tests {
     }
 
     // -- Adopting a pane. `R-J75`, ADR-0038. --------------------------------
+
+    fn launch(session_id: Option<&str>) -> mogeung_core::team::SeatLaunch {
+        mogeung_core::team::SeatLaunch {
+            team_id: "t1".into(),
+            team: "port".into(),
+            seat: "builder".into(),
+            cli: SessionSource::Codex,
+            session_id: session_id.map(String::from),
+            pane_id: "%40".into(),
+            tmux_target: "geung-port-builder:0.0".into(),
+            tmux_session: "geung-port-builder".into(),
+            team_session: String::new(),
+            dir: "/tmp".into(),
+            worktree: true,
+            files_dir: "/f".into(),
+            started: 1_700_000_000,
+            token: String::new(),
+            signals: Default::default(),
+        }
+    }
+
+    /// A seat's row is known from the record, not found in a pane: it carries
+    /// the tag from birth, is never provisional and never `pane:`, and a pane
+    /// that has gone makes it a dead row rather than no row. `R-P4`,
+    /// ADR-0038's amendment.
+    #[test]
+    fn a_seat_row_is_known_from_birth_and_dies_with_its_pane() {
+        let now = Utc::now();
+        let pane = Pane { id: "%40".into(), pid: 900, target: "geung-port-builder:0.0".into() };
+        let live = seat_row(&launch(None), Some(&pane), Some(901), now);
+        assert_eq!(live.id, "seat:t1:builder");
+        assert!(live.alive && !live.provisional);
+        assert_eq!(live.pid, Some(901), "the agent's pid, for the window's succession");
+        assert_eq!(live.tmux_target.as_deref(), Some("geung-port-builder:0.0"));
+        assert_eq!(live.seat.as_ref().map(|t| t.seat.as_str()), Some("builder"));
+        assert_eq!(live.source, SessionSource::Codex);
+        assert!(live.name.as_deref().unwrap().contains("nothing written yet"));
+
+        let dead = seat_row(&launch(None), None, None, now);
+        assert!(!dead.alive);
+        assert_eq!(dead.tmux_target, None);
+        assert!(dead.name.as_deref().unwrap().contains("exited"));
+
+        // Where the CLI took the daemon's id, the row *is* the session to come.
+        assert_eq!(seat_row(&launch(Some("abc")), Some(&pane), None, now).id, "abc");
+    }
+
+    /// The real session is tagged by the id the daemon chose, or by the pane
+    /// it runs in; a session in neither is nobody's seat.
+    #[test]
+    fn a_session_is_a_seat_by_chosen_id_or_by_pane() {
+        let launches = vec![launch(Some("abc"))];
+        assert!(seat_tag_for(&launches, "abc", None).is_some());
+        assert!(seat_tag_for(&launches, "other", Some("%40")).is_some());
+        assert!(seat_tag_for(&launches, "other", Some("%41")).is_none());
+        assert!(seat_tag_for(&launches, "other", None).is_none());
+    }
 
     /// The identity is the **pane**, not the target, and the prefix keeps it
     /// unmistakable for a real session id.

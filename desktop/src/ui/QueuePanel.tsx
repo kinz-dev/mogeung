@@ -6,16 +6,16 @@
  * the room back a decision rather than a search.
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Monitor, Network, Pin, Tag, TerminalSquare } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Clock, EyeOff, FolderTree, Monitor, Network, Pin, Tag, TerminalSquare, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Chip, Dim, Empty, IconButton, Input, Row, Segmented, Tooltip } from "@/ui/primitives";
 import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
-import { groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
+import { TEAM_KEY, groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
 import { revealSession } from "@/lib/panes";
@@ -342,6 +342,30 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
               did nothing — and this is one that has not been *able* to. The
               terminal is the point: open it and type.
             */}
+            {/*
+              A seat: an agent the daemon started itself, from a team. `R-P4`.
+              Named on the row, team and seat, because a seat ranks on the
+              same queue as everything else and must never pass for a session
+              you started by hand.
+            */}
+            {session?.seat && (
+              <Chip
+                color="var(--blue)"
+                title={
+                  `a seat of team ${session.seat.team} — started by mogeung in Gau Geung mode; ` +
+                  (session.seat.signals === "hooked"
+                    ? "hooked: its hooks reach the daemon (R-P5)"
+                    : "plain: known from its transcript and its screen only — its CLI carries no hook here (ADR-0043 clause 3)")
+                }
+                className="shrink-0"
+              >
+                {session.seat.team}/{session.seat.seat}
+                {/* Which kind of seat, on the row (`R-P5`): the two are
+                    watched by different means, and a plain seat's silence
+                    is not a hooked seat's. */}
+                <span className="opacity-70"> · {session.seat.signals === "hooked" ? "hooked" : "plain"}</span>
+              </Chip>
+            )}
             {session?.provisional && (
               <Chip
                 color="var(--amber)"
@@ -513,6 +537,21 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   );
 }
 
+/**
+ * What a line *is*, for React and for the virtualizer alike: a heading's fold
+ * key, a session's id. `R-J129`.
+ *
+ * The virtualizer remembers each row's measured height under this key, and
+ * its default is the index — which is where the blank bands and the heading
+ * drawn across a card came from. A row that moves index, because a group
+ * above it folded or a grouping was toggled, is the same element to React, so
+ * it is never measured again; keyed by index it inherited the height of
+ * whatever used to sit there. Keyed by what it is, its height travels with it.
+ */
+function lineKey(line: QueueLine): string {
+  return line.kind === "header" ? line.key : line.session.id;
+}
+
 export function QueuePanel() {
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -557,10 +596,15 @@ export function QueuePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
+  // Memoised on `display` because the virtualizer rebuilds its measurements
+  // whenever this function changes identity, and `display` changes only on a
+  // real regroup or re-rank.
+  const keyAt = useCallback((i: number) => (display[i] ? lineKey(display[i]) : i), [display]);
   const rowVirtualizer = useVirtualizer({
     count: display.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (i) => (display[i]?.kind === "header" ? 24 : 74),
+    getItemKey: keyAt,
     overscan: 8,
   });
 
@@ -707,7 +751,7 @@ export function QueuePanel() {
                 const r = display[v.index];
                 return (
                   <div
-                    key={r.kind === "header" ? r.key : r.session.id}
+                    key={lineKey(r)}
                     ref={rowVirtualizer.measureElement}
                     data-index={v.index}
                     style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${v.start}px)` }}
@@ -741,6 +785,10 @@ export function QueuePanel() {
                         )}
                         {r.key.startsWith("machine:") && (
                           <Monitor size={11} className="shrink-0 text-[var(--dim)]" />
+                        )}
+                        {/* The seats' section and each team under it. `R-J131`. */}
+                        {r.key.startsWith(TEAM_KEY) && (
+                          <Users size={11} className="shrink-0 text-[var(--dim)]" />
                         )}
                         <span className="truncate text-xs font-semibold text-[var(--text-strong)]">
                           {r.label}

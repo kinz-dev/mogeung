@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                    ▄
+                                                   █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                                   █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                                   ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+                                 ┃
+                                 ┃  Ask anything… "Fix a TODO in the codebase"
+                                 ┃
+                                 ┃  Build · Qwen3.8 Flash Next (NVFP4) Spark (local vLLM)
+                                 ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                 tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ~/projects/mogeung:gau-geung                                                                                                     1.18.35

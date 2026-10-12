@@ -1,7 +1,7 @@
 ---
 title: A tmux pane running an agent is a session, provisionally
 status: active
-updated: 2026-09-23
+updated: 2026-10-09
 decided: 2026-09-10
 ---
 
@@ -201,4 +201,30 @@ pid and a cwd is the window's succession rule, which moves the selection and
 any held pane onto the real session. For that, the row's `pid` is now the
 agent's own rather than the pane's, which is usually a shell. Pane rows are
 still left out of notifications, as they always were.
+
+## Amendment — 2026-10-09
+
+**A seat is not a provisional row.** A pane the daemon created for a seat
+([ADR-0003's amendment of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started))
+is known from birth: the daemon's launch record names the pane, the definition
+it was started from, and the session id it chose where the CLI takes one
+(`--session-id` for Claude Code and Qwen). So it is never published as
+`pane:%N`. The seat's row exists before the pane has written anything, carries
+`seat: true` on the wire and the definition's name, and — unlike every row this
+ADR is about — **is persisted**, as a launch record under `~/.mogeung`, because
+a seat survives the daemon: its pane is tmux's
+([ADR-0011](0011-own-a-shell-never-an-agent.md)). When the CLI's own session
+appears it claims the seat row by the chosen id, or by the pane where the CLI
+chose its own, and clause 2's rule — the real session wins, in the same
+snapshot — holds with the seat's identity carried over rather than lost.
+
+**Clause 5 stands for every provisional row, and is now the fence between two
+kinds of pane.** A pane mogeung *found* is observed, whatever is running in
+it and however it got there; that is fence 1 of the amendment above, and
+recognising an agent in a pane is exactly the thing that does not make it a
+seat. The trust prompt `R-J74` found is, on a seat, still yours to answer
+([ADR-0043](0043-a-seat-is-configured-at-launch-never-in-your-home.md),
+clause 6) — the row ranks as needing you, and the thing that unblocks it is
+you, typing in the pane mogeung put in front of you, as this clause has always
+said.
 

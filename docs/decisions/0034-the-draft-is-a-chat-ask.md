@@ -1,7 +1,7 @@
 ---
 title: A model may draft the follow-up prompt; it still leaves only by the clipboard
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 decided: 2026-08-29
 supersedes: ADR-0008
 ---
@@ -178,6 +178,26 @@ rather than automatic — are untouched.
 ## Amendment — 2026-10-08
 
 **Clause 4's bind rule is per connection since 2026-09-23.** "Refused outright on a bind beyond loopback" and "a daemon bound beyond loopback will not take one at all" are narrowed to clients that are not on this machine; see [ADR-0031](0031-consent-to-a-named-host.md)'s amendment of this date. The draft, the copy and the fenced send are unchanged.
+## Amendment — 2026-10-09
+
+**Clause 5, and the last paragraph of the 2026-08-29 amendment, are narrowed
+to a human's draft.** *The draft is asked for, never automatic* and *a model
+still never composes-and-delivers in one gesture* stand for the follow-up
+prompt this ADR is about: flags, the window, two buttons, your click. For a
+**seat** — a session the daemon started itself, under
+[ADR-0003's amendments of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started)
+— the daemon composes a **handover** and delivers it on the seat's own
+trigger, with the fences recorded there and in
+[ADR-0031's amendment of this date](0031-consent-to-a-named-host.md). Asked
+2026-10-09: *"a handover recap should be model composed, which could write
+much better than a human user."*
+
+The meta-prompt for that one lives in `mogeungd`, which is the move the
+Revisit above asked for, and the reason this is not a third free-form family:
+the daemon composes, so nothing free-form crosses the wire to ask for it.
+Clauses 1 to 4 and 6 are untouched, and so is every word about the draft a
+human makes in the window.
+
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an
 `## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped. A

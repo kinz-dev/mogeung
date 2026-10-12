@@ -1,11 +1,18 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-08
+updated: 2026-10-11
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
   - crates/mogeungd/src/state.rs
+  - crates/mogeungd/src/seat.rs
+  - crates/mogeungd/src/hooks.rs
+  - crates/mogeungd/src/policy.rs
+  - crates/mogeungd/src/write.rs
+  - crates/mogeungd/src/handover.rs
+  - crates/mogeungd/src/screen.rs
+  - crates/mogeungd/src/rig.rs
   - crates/mogeungd/src/env.rs
   - crates/mogeungd/src/machine.rs
   - crates/mogeungd/src/version.rs
@@ -247,9 +254,156 @@ and spawning opt-in beyond loopback by `--allow-run`, read from the bind once
 by the code that bound the socket so the start-up refusal and the per-request
 gate cannot disagree ([run-and-debug.md](run-and-debug.md)). A signal command
 you configured, on a click (`R-E2`). And its own llmproxy
-([model-and-proxy.md](model-and-proxy.md)). Never an agent: `run::AGENTS` is
-the list refused by name, and the same list is what recognises an agent in a
-tmux pane ([cross-session-signals.md](cross-session-signals.md)).
+([model-and-proxy.md](model-and-proxy.md)). Never an agent you started:
+`run::AGENTS` is the list refused by name, and the same list is what
+recognises an agent in a tmux pane ([cross-session-signals.md](cross-session-signals.md)).
+
+**And since 2026-10-09, a seat** (`R-P4`, feature 0051): an agent the daemon
+starts itself from a team definition it holds, in Gau Geung mode
+([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s amendment). `seat.rs`
+composes each CLI's argv and environment from the definition through one
+match per `SessionSource` — session id where the CLI takes one, permission
+mode in the CLI's own flag, the two layers of guidance by a flag or a file
+under `~/.mogeung`, a home of its own only when asked
+([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md))
+— and starts it in a tmux session of its own, in a worktree cut on
+`geung/<team>/<seat>` or the team's checkout. The **launch record** (pane id,
+chosen session id, tmux session, directory) is persisted so a restarted
+daemon re-adopts the seat; the scan publishes a seat's row from the record
+from birth, never as a `pane:` row, and a post-pass (`tag_seats`) carries the
+tag onto the CLI's own session once it claims the pane or the chosen id
+([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)'s
+amendment). A stop ends the processes and forgets the records; the worktrees
+stay, and removing one is a separate verb that refuses a dirty tree. Boot,
+stop and remove are judged like a run start. Since `R-P14` a boot reads
+*running* off tmux rather than off the record — the record outlives the
+process so the exit can be waked on — so a seat whose pane has gone is
+forgotten and started again, the team session is rebuilt only when something
+started, and `TeamBooted` tells the asker what happened. Since `R-P15` there
+is a second way down: `TeamWindDown` types the policy's wind-down text into
+every running seat and finishes each as its note arrives (`POST
+/api/seat/note`, through `mogeung-note` on the seat's `PATH`), as its turn
+ends, or at the deadline; the note is kept as `note.md` beside the seat's
+files and is the first evidence the next handover quotes for that seat, and a
+boot after a stop hands each seat its own earlier session and note. A team
+winding down wakes and nudges nobody; `Sends` carries how it is going.
+
+**And a seat talks back** (`R-P5`, since 2026-10-10): `hooks.rs` is the first
+surface in mogeung that an agent's **own process** reaches — ADR-0043 clause
+3, and the *new daemon surface* that ADR names. When the server is up it
+records its bind in `AppState::listen_addr`, and the launcher hands every
+seat whose CLI can carry a hook the way back: a token minted per seat and the
+receiver's loopback URL in the seat's environment, then whatever the CLI
+accepts at launch — a `--settings` document with hooks and a status line for
+Claude Code, a plugin file named in the inline config for opencode, `hooks`
+in the `settings.json` of a home of mogeung's own for Qwen Code, and nothing
+for Codex, whose hooks live in its config beside trust hashes. Every file is
+under `~/.mogeung/seats/<team>/<seat>/`. The receiver (`POST /api/seat/hook`,
+`/api/seat/status`) is merged **outside** the shared-token layer and admits a
+loopback peer with one seat's token and no other; what arrives is data —
+classified against `CLAUDE_HANDLED` / `OPENCODE_HANDLED` the way transcript
+lines are, an unknown name raised through the Health canary as `hook:<name>`
+— and becomes the launch record's `signals`: the kind (*hooked* or *plain*,
+on the row's tag), the count, the last event and its line, the context fill
+and the model from the status line. Hook bodies are kept beside the seat's
+files as `signals.jsonl`, capped, for the week of captures; status readings
+are never kept. The token is persisted with the record so a restarted daemon
+still hears a seat it re-adopts, and stripped before the record crosses the
+wire.
+
+**And a seat is sent to** (`R-P6`, since 2026-10-10): `policy.rs` is fence 4
+of ADR-0003's amendment — *every automatic send is visible, budgeted and
+stoppable* — as a ledger per team and a judge over it. The ledger is the send
+log; the counters (the chain of hops since a human last sent, the automatic
+deliveries in the last hour) are read off it, so there is no second state to
+keep right and a restart counts what it counted before. The judge answers
+*deliver* or *hold* from the team's pause switch, the hop budget and the
+hourly cap, and holds when it cannot read the definition at all — a daemon
+that cannot reach its own policy behaves as if paused. **One function types
+into a seat**, `AppState::type_into`, and it takes a launch record and no
+other kind of address: there is no value an observed session could be, which
+is fence 1 at the type level; `send.rs`'s three tmux invocations are still
+the only code below it that reaches a pane, and a test seam over them is the
+only thing a test replaces. Three things reach the judge: a seat's own words,
+through `mogeung-send` — a generated command first on every seat's `PATH`
+under its files, posting to `POST /api/seat/send` with the seat's token, the
+recipient resolved within the sender's team only; a declared wake, fired by a
+`Stop` or `SessionEnd` hook (`hooks::seat_event`), by a plain seat's registry
+going busy to idle, or by its pane going; and a declared watchdog, on the
+scan's tick once per silence. A held send lands on the recipient's row as
+`held_send` and ranks it as needing you; the Teams window shows the counters,
+the pause switch (which acts at once and is the one writer of `paused`), what
+is held with *release* and *drop*, and the log. The status line a Claude seat
+shows carries the counters too.
+
+**And the team has a session for a terminal** (`R-P8`, since 2026-10-10):
+*"ideally I want it to have a special grouped layout"* — so `tmux attach -t
+geung-<team>` is the TUI client this feature has instead of one of its own.
+Every seat keeps its own session (`R-P4`), because the scan, the send path
+and the window all key on the seat's pane and a pane belongs to one window;
+`seat::layout_team` builds the team's session **around** them after a boot:
+a window named `all` whose panes are nested tmux clients, one attached to
+each seat's session (`env -u TMUX tmux attach`, so the inner tmux forgets it
+is inside) and tiled, so every seat is on screen at once and keys typed into
+a pane reach its seat; then every seat's own window linked in by name
+(`link-window`), so one seat can take the whole screen with a window switch;
+the status line on, which lists the seats. A stop kills the team session
+first, and the seats stand: tmux closes only windows linked nowhere else,
+and a nested client merely detaches — pinned by `tests/team_tmux.rs` against
+a real server, with `sleep` for seats. The window does not mirror this
+layout; it attaches per pane and arranges its own grid, and the mode offers
+the attach command to copy. The launch record carries the session's name as
+`team_session`.
+
+**And a human writes in a seat's worktree** (`R-P9`, since 2026-10-10):
+`write.rs` is the narrow part of ADR-0019's amendment — the hash a
+`FileContent` carries, the judge over *moved* and *busy*, containment for a
+path that may not exist yet, and a rename for the write itself.
+`AppState::write_seat_file` resolves the seat from the session's tag and
+refuses before the path is looked at unless the launch record says the
+directory is a worktree the daemon made; `FileWrite` is the verb, behind the
+write guard and the runs gate. [read-boundary.md](read-boundary.md#the-one-write-r-p9)
+has the fences in order.
+
+**And a seat is handed over to** (`R-P10`, since 2026-10-10): the one
+automatic send that is not declared text, under ADR-0003's later amendment.
+`handover.rs` is the prompt and the reading of the answer; `state.rs`
+gathers the evidence from what the daemon already holds — the team's two
+layers of guidance, the teammates' last turns from the store and their
+diffs, the send log, and on a restart the seat's own earlier session — asks
+the model through the one seam (ADR-0031: consent to a remote host is the
+seam's to judge, and with no endpoint the seat starts without a handover and
+the log says so), and hands the text to the policy engine as a `Handover`
+send: held on the seat's row under *after you read it*, judged and typed as
+a hop under *automatic*, nothing under *none*. Every line of evidence is
+framed as data another agent wrote, and the prompt says so before any of it
+appears. The trigger is a boot that joins a team with history, or
+`SeatRestart`, which stops one seat and starts it again with its earlier
+session as predecessor; composition runs in the background, so a boot is
+answered by rows. The entry is logged *composed by <model> @ <host>* and the
+text is kept whole.
+
+**And a seat's pane is read** (`R-P11`, since 2026-10-10):
+[ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md)
+admitted reading a pane the daemon made and no other, and `screen.rs` is
+the reading. `SeatPane` has one constructor and it takes a launch record,
+which is clause 1 as a type; `classify` is a keyword matcher over the last
+forty lines through one `match` per CLI into a closed set of shapes, with
+`unknown` as a value, pinned by every fixture phase 0 captured. The scan
+reads each seat's pane once per rest (`screen_tick`, before the rows are
+built so the shape rides on them), skips an unchanged capture by its hash,
+raises an unknown screen as `screen:<cli>` through Health, and makes the one
+press — Enter, for *press Enter*, under the team's `readiness_press` — once
+per screen as a logged automatic send. A gate ranks the row with *(screen)*
+in the detail, after the registry's facts; the mode's seat pane shows the
+shape, when it was read and the lines it was read from.
+
+**And a team crosses a file boundary** (`R-P12`, since 2026-10-10): `rig.rs`
+is the door. Out, the definition whole as JSON where you say or beside the
+mirror; in, a draft and never a save — mogeung's own file as a new team, or an
+OpenRig `rig.yaml` read as other people's configuration, members to seats by
+runtime, guidance followed beside the rig, edges as text, the rest listed as
+not carried. The window shows the draft with the notes and you press Save.
 
 ### The PATH a launcher does not give (`R-J87`)
 
@@ -351,6 +505,7 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `workspace.rs` | the folders a session may be read through | [read-boundary.md](read-boundary.md) |
 | `kit.rs` (both crates) | skills and memory under `~/.claude`, read only | [claude-code-formats.md](claude-code-formats.md) |
 | `run.rs` (both) · `detect.rs` · `runconfig.rs` · `runner.rs` | run configurations, the daemon-owned process, the signal runner | [run-and-debug.md](run-and-debug.md) |
+| `team.rs` (both) · `seat.rs` · `hooks.rs` · `policy.rs` · `write.rs` · `handover.rs` · `screen.rs` · `rig.rs` | team and seat definitions, their mirror; the seat launcher and its records; the hook receiver and what a seat is handed to reach it; the policy engine — the send log, the judge, the counters; the one write into a seat's worktree; the handover's prompt and reading; the pane read into a closed set of shapes; a definition out as a file and a file in as a draft | this document; [wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051); [data-model.md](data-model.md); [read-boundary.md](read-boundary.md#the-one-write-r-p9) |
 | `model.rs` · `llmproxy.rs` (both) · `guide.rs` · `why.rs` · `embed.rs` | the model seam, the proxy, the three model features | [model-and-proxy.md](model-and-proxy.md) |
 | `usage.rs` · `pricing.rs` (core) · `pricing_refresh.rs` | token burn by model and day, the price table and its weekly reading | this document; [health-and-canary.md](health-and-canary.md#the-price-tables-canary-r-j124-2026-10-08) |
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |

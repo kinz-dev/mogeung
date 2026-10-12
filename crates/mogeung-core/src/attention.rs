@@ -172,6 +172,42 @@ pub fn classify(s: &Session, now: DateTime<Utc>, cfg: &AttentionConfig) -> Atten
                     waiting_since(s),
                 )
             }
+            // A send the team's policy is holding for this seat — the fourth
+            // hop, the cap, the pause — needs you whatever the seat is doing:
+            // the message waits until you release or drop it. `R-P6`,
+            // ADR-0003's amendment, fence 4. After an approval, because a
+            // seat blocked on a prompt cannot take the message anyway.
+            _ if s.held_send.is_some() => {
+                let h = s.held_send.as_ref().expect("checked above");
+                (
+                    AttentionReason::AwaitingInput,
+                    if h.count > 1 {
+                        format!("{} sends held for it — {}", h.count, h.why)
+                    } else {
+                        format!("a send held for it — {}", h.why)
+                    },
+                    Some(h.since),
+                )
+            }
+            // A gate read off the seat's pane (`R-P11`, ADR-0044 clause 4):
+            // after the registry's facts and the policy's hold, before plain
+            // idle, and the detail says *(screen)* so a reading is never
+            // mistaken for a fact. The quiet shapes and `unknown` never rank.
+            _ if s.screen.as_ref().is_some_and(|r| r.shape.is_gate()) => {
+                use crate::team::ScreenShape;
+                let r = s.screen.as_ref().expect("checked above");
+                let since = Some(DateTime::from_timestamp(r.read_at, 0).unwrap_or(s.last_event_at));
+                let detail = format!("{} (screen)", r.shape.label());
+                match r.shape {
+                    ScreenShape::PermissionMenu | ScreenShape::PlanApproval | ScreenShape::Question => {
+                        (AttentionReason::AwaitingPermission, detail, since)
+                    }
+                    ScreenShape::RateLimit => (AttentionReason::RateLimited, detail, None),
+                    ScreenShape::Exited => (AttentionReason::Failed, detail, None),
+                    // Trust, login, press Enter: yours, named.
+                    _ => (AttentionReason::AwaitingInput, detail, since),
+                }
+            }
             Some(LiveStatus::Idle) => (
                 AttentionReason::AwaitingInput,
                 "waiting for you".to_string(),
@@ -306,6 +342,9 @@ mod tests {
             recent_tools: vec![],
             tmux_target: None,
             provisional: false,
+            seat: None,
+            held_send: None,
+            screen: None,
             origin: None,
             limit_hit_at: None,
             limit_resets: None,

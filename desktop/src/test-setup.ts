@@ -26,6 +26,16 @@ if (!window.matchMedia) {
 if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
 
 /**
+ * `window.open`, quietly refused. jsdom's is "not implemented": it answers
+ * `undefined` and prints an error for every call. The window treats a refused
+ * `open` as *stay in this window* — the arcade draws its room inline, a
+ * dialog that wanted a window of its own (`R-J128`) opens here — so a quiet
+ * refusal is the browser's own behaviour minus the noise. A test that wants a
+ * window handed back hands one back itself, with `vi.spyOn(window, "open")`.
+ */
+window.open = () => null;
+
+/**
  * `localStorage`, on a Node that ships its own. `R-J19`.
  *
  * Node 25 defines a global `localStorage` of its own, and it is inert without

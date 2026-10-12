@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-08
+updated: 2026-10-11
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -12,6 +12,10 @@ covers:
   - crates/mogeungd/src/server.rs
   - crates/mogeungd/src/scratch.rs
   - crates/mogeungd/src/notes.rs
+  - crates/mogeung-core/src/team.rs
+  - crates/mogeungd/src/team.rs
+  - crates/mogeungd/src/seat.rs
+  - crates/mogeungd/src/hooks.rs
 ---
 
 # Wire protocol
@@ -102,11 +106,12 @@ everyone else is judged by the bind and the flag:
 
 | Gate | Covers | Beyond loopback |
 |---|---|---|
-| the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir` | needs the token |
-| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv` | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md)) |
+| the write guard (`is_write`) | the ten git write verbs, `GitFetch`, `AddWorkspaceDir`, `RemoveWorkspaceDir`, and since `R-P9` `FileWrite` | needs the token |
+| `runs_allowed` | `RunStart`, `RunStop`, `RevealRunEnv`, and since `R-P3` `TeamSave`, `TeamDelete`, `TeamBoot`, `TeamStop`, `SeatWorktreeRemove`, since `R-P6` `TeamPause`, since `R-P9` `FileWrite` (which passes the write guard too) | needs `--allow-run` ([ADR-0025](../decisions/0025-run-a-process-you-named-never-an-agent.md), and its 2026-10-09 amendment for the team verbs) |
 | `chat_allowed` | `ModelChat`, `ModelStop`, the chat history | refused, no flag ([ADR-0031](../decisions/0031-consent-to-a-named-host.md) clause 4) |
-| `send_allowed` | `SendToSession` | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
+| `send_allowed` | `SendToSession`, and since `R-P6` `SendRelease` and `SendDrop` — releasing a held send types into a seat | refused, no flag, no token ([ADR-0003](../decisions/0003-observe-do-not-spawn.md), amended) |
 | `config_editable` | `ConfigSave` | refused, read from the bind |
+| a seat's own token (`hooks.rs`) | `POST /api/seat/hook`, `POST /api/seat/status`, since `R-P6` `POST /api/seat/send`, and since `R-P15` `POST /api/seat/note` — the one surface an agent's **own process** talks to (`R-P5`) | refused, loopback only, and the shared token is not accepted there: it is a window's key, not a process's ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md) clause 3) |
 
 The write guard is one function listing its family, so omitting a new verb is
 a visible gap in a list of thirteen rather than a missing line in a
@@ -163,6 +168,7 @@ joined with `R-J124`; a `ConfigSave` wakes the pricing task.
 | `RemoveWorkspaceDir` | `session_id`, `path` | `Workspace`; passes the write guard | write |
 | `ListDir` | `session_id`, `path` (relative, or absolute inside the workspace) | `DirListing` | read |
 | `FetchFile` | `session_id`, `path` | `FileContent` | read |
+| `FileWrite` | `session_id` (a seat's row), `path`, `content`, `base_hash` (the `hash` the file came with; empty for a new file), `force` — **the one write into a worktree** (`R-P9`, [ADR-0019](../decisions/0019-a-viewer-not-an-editor.md)'s amendment): a worktree the daemon made for that seat, and nothing else | `FileWritten` to the asker and the new `FileContent` broadcast; `FileWriteRefused` to the asker; passes the write guard and the runs gate | here |
 | `ListTree` | `session_id` | `TreeListing`, capped at 20k | read |
 | `SearchContent` | `session_id`, `query` (literal, smart-cased) | `ContentMatches`, capped at 500 | read |
 
@@ -170,7 +176,9 @@ joined with `R-J124`; a `ConfigSave` wakes the pricing task.
 |---|---|---|
 | `Workspace` | the session's root, `dirs` added, `missing`, `hints` offered, `repos` that are checkouts (the session's own first) | pass |
 | `DirListing` | one directory, dirs then files, `.git` never | pass |
-| `FileContent` | one file, `truncated` past 256 KiB; binary refused | pass |
+| `FileContent` | one file, `truncated` past 256 KiB; binary refused; since `R-P9` `hash`, sha256 of the whole file as served, which a save carries back | pass |
+| `FileWritten` | `session_id`, `path`, the new `hash` — a save landed (`R-P9`) | theirs |
+| `FileWriteRefused` | `why` in a sentence; `current` and `hash` when the file moved under you, so the window shows the distance and reloads; `busy` naming the seat mid-turn, when a second save with `force` is the *unless you say so* (`R-P9`, fence 3) | theirs |
 | `TreeListing` | every path, gitignore respected, `truncated` | pass |
 | `ContentMatches` | the matches, echoing `query` | pass |
 
@@ -339,6 +347,166 @@ invisible to any string rule
 Content goes to the asker and the list goes to everyone, which is how a second
 window learns to close a pane whose file has gone.
 
+## Teams (`R-P3`, feature 0051)
+
+A team is the second kind of thing the daemon stores that it could not
+recompute — the user's own writing, like a note, and kept the same way:
+in the store, mirrored one way to `~/.mogeung/teams/<id>-<slug>.md`, served
+whole after every change ([ADR-0015](../decisions/0015-markdown-is-the-truth.md);
+[ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+clause 8). What crosses the wire is a **definition, never a command line**: a
+seat names its CLI as a `SessionSource` and the launcher (`R-P4`) composes the
+command from the variant, which is how ADR-0025 clause 1 survives its own
+amendment.
+
+| Command | Carries | Answered by | Hop |
+|---|---|---|---|
+| `TeamList` | — | `Teams`, to the asker, with `allowed` | here |
+| `TeamSave` | `team` — whole; an empty `id` mints one, and the daemon stamps `created` and `updated` whatever was sent | `Teams`, broadcast | here |
+| `TeamDelete` | `id` | `Teams`, broadcast | here |
+| `TeamBoot` | `id` — starts every seat not running; *running* is read off tmux, so a seat whose pane has gone is forgotten and started again (`R-P14`); a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once; then `TeamBooted` to the asker | here |
+| `TeamStop` | `id` — ends every seat's process; the worktrees stay | `Seats`, broadcast | here |
+| `TeamWindDown` | `id` — types the policy's wind-down text into every running seat and stops each as its note arrives, its turn ends, or the deadline passes; the team session comes down with the last seat (`R-P15`); `TeamStop` meanwhile cuts it short | `Seats` and `Sends`, broadcast, at each step | here |
+| `SeatWorktreeRemove` | `team_id`, `seat` — a stopped seat's worktree, only when clean | an `Error` naming what was removed or why not, to the asker | here |
+| `TeamPause` | `id`, `paused` — the switch, on the definition; the only verb that writes `paused` (`R-P6`) | `Teams` and `Sends`, broadcast | here |
+| `SendRelease` | `team_id`, `id` — type a held send now; your act, so the chain starts again | `Sends`, broadcast; the seat rows at once | here |
+| `SendDrop` | `team_id`, `id` — never deliver it | `Sends`, broadcast; the seat rows at once | here |
+| `SeatRestart` | `team_id`, `seat` — stop one seat and start it again; a handover follows as the policy says (`R-P10`) | `Seats`, broadcast; the seat rows at once; a `Sends` when the handover is composed | here |
+| `TeamExport` | `id`, `path` (absolute, optional) — the definition whole as JSON, where you say or beside the markdown mirror (`R-P12`) | `TeamExported`, to the asker | here |
+| `TeamImport` | `path` (absolute) — mogeung's own `.json`, or an OpenRig `rig.yaml` read as other people's configuration (`R-P12`) | `TeamDraft`, to the asker; **nothing stored** | here |
+
+| Event | Carries | Relay |
+|---|---|---|
+| `Teams` | every team, whole; `allowed` on the answer to `TeamList` only, so a broadcast cannot flip a window's gate | theirs |
+| `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model); **never the seat's token** — after a boot or stop, with every `TeamList` answer, and after a hook event or a status reading that moved something | theirs |
+| `TeamExported` | `team_id`, the `path` written (`R-P12`) | theirs |
+| `TeamBooted` | what a `TeamBoot` did, seat by seat (`R-P14`): `started` by this boot, `revived` among them had a record but no pane, `skipped` were running and left alone; all three empty is a team already up. After the `Seats` broadcast, so the window closes on an answer and not on rows it cannot tell from the ones already there | theirs |
+| `TeamDraft` | a `team` with no id and no stamps, for the window to show as an unsaved draft, and the import's `notes` — what was and was not carried (`R-P12`) | theirs |
+| `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop; a `wind_down` (`R-P15`) is your press with declared words, neither hop nor automatic — oldest first, the last two hundred; and `wind_down` while a team is being wound down or lately was: `started`, `deadline`, a seat each as `asked` / `noted` / `stopped` / `timed_out` / `gone` with the note's excerpt, kept until the next boot; with every `TeamList` answer and after every change | theirs |
+
+**A save is judged like a run is started.** `TeamList` is open; `TeamSave`
+and `TeamDelete` pass `runs_allowed` — this machine whatever the bind, anyone
+else only with `--allow-run` and the token — because a definition is what a
+later click starts, and a socket that may not start a run may not write one
+either. The refusal names the clause. `allowed` travels on the list's answer
+the way `RunConfigs.allowed` does, so the window greys Save with the sentence
+rather than letting a click fail.
+
+**The daemon validates, not the window.** `team::validate` refuses what could
+not be addressed or counted — a seat with no name or a bad one, two seats with
+one name, a wake aimed at a seat the team lacks or at itself, a cap of zero —
+and the error names the field. It does not check that the repository exists or
+the CLI is installed: those refusals belong to the launcher, at the moment they
+matter. The window's `lib/teams.ts` mirrors the rule so Save is grey with the
+same words while you type; the daemon's answer is still the one that counts.
+
+**A seat's row is known from birth** (`R-P4`). A `Session` carries `seat`
+— team id, team, seat — and the daemon publishes one per launch record from
+the moment the process starts: its id is the session id the daemon chose
+where the CLI takes one (Claude Code, Qwen Code), so the CLI's own session is
+the same row, or `seat:<team>:<seat>` where the CLI chooses its own; never
+`pane:`, never `provisional`. When the real session claims the pane or the id
+the tag moves onto it, and a seat whose pane has gone stays as a dead row
+until the team is stopped. Nothing on this wire starts a seat but a
+definition the daemon holds: the launcher's match per CLI is in `seat.rs`,
+and the command line never travels. Since `R-P11` a seat's row also carries
+`screen` — the shape its pane showed, from ADR-0044's closed set, the lines
+it was read from, and when — and never the capture.
+
+**Two layers, on the wire as an absence.** A seat's `permission` is omitted
+when it inherits the team's, and its `guidance` is its own, appended after the
+team's by the launcher; the two are never merged in a definition. Policy —
+`hop_budget` (3), `hourly_cap` (60), `handover`, `readiness_press`, `wakes`,
+`watchdogs` — is per team, and every automatic send it can make is declared
+text in it, readable before it fires (ADR-0003's amendment, fence 3).
+
+**A seat's own voice** (`R-P5`, `hooks.rs`). Two REST routes, `POST
+/api/seat/hook` and `POST /api/seat/status`, are the one surface an agent's
+own process talks to ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+clause 3). They sit **outside** the shared-token layer and behind three
+fences of their own: a loopback peer, a bearer token that names one seat —
+minted at launch, carried in the seat's environment, persisted with the
+launch record so a re-adopted seat is still heard, compared in constant time
+and never sent to a client — and a body that is JSON with an event name the
+receiver has classified. The order is the fence: peer before token, token
+before body, so an address that is not loopback learns nothing. An event the
+tables know (`CLAUDE_HANDLED`, `OPENCODE_HANDLED`) is counted and becomes the
+record's last word; a name on the ignored list is a decision already taken;
+a name on neither is counted as `unread` and raised through Health as
+`hook:<name>`, the canary's own list — `R-A1`'s discipline, one surface over.
+The status route answers with the seat's status-line text and counts nothing:
+it fires on every repaint, so it is never kept and is broadcast only when the
+fill or the model moved. `Session.seat` carries `signals: hooked | plain` so
+the row says which kind of seat it is, because a plain seat's silence is not
+a hooked seat's.
+
+**Sends** (`R-P6`, `policy.rs`). Fence 4 of ADR-0003's amendment, on the
+wire. Every automatic send into a seat — a seat's own words through
+`mogeung-send`, a declared wake, a declared watchdog — is judged by the
+policy engine against three facts (the team's pause switch, the chain of hops
+since a human last sent, the automatic deliveries in the last hour), then
+typed or **held**, and either way logged as a `SendEntry` the `Sends` event
+carries. The counters are read off that log, so a restarted daemon counts
+what it counted before. A seat's message arrives on `POST /api/seat/send`
+with the seat's own token, the recipient as `?to=` and the text as the body,
+and is resolved **within the sender's team and nowhere else** (the evening
+amendment of 2026-10-09): a name outside it is a `404` with the team's seats
+listed, itself a `409`, a seat not running a `409`, and the answer is one line
+the generated command prints and turns into an exit code — `200` delivered,
+`202` held, anything else refused. A held send rides on the recipient's row as
+`Session.held_send` (how many, why the oldest, since when), which ranks the
+row as needing you ([attention-ranking.md](attention-ranking.md)); `SendRelease`
+types it and starts the chain again, `SendDrop` never does, and both are
+judged like your own send. `TeamPause` is the one writer of `paused`:
+`TeamSave` keeps what the daemon holds, so a form left open cannot un-pause a
+team on its way through. Your own `SendToSession` into a seat is logged beside
+the automatic ones as `human`, and resets the chain; into any other session it
+is what it always was, and no ledger exists for it. One kind of entry is not
+declared text: a `handover` (`R-P10`), composed by the model the daemon is
+configured with on a seat's start into a team with history or on
+`SeatRestart`, from the team's guidance, the teammates' transcripts and diffs
+and the send log — all framed as data — and logged *composed by <model> @
+<host>*. Under *after you read it* it arrives held and the seat's row ranks
+until you release it whole or drop it; under *automatic* it goes through the
+judge as a hop; with no endpoint configured, or a host the config does not
+consent to, the entry is a refusal that says the seat started without one.
+
+**A file out, a file in** (`R-P12`, `rig.rs`). `TeamExport` writes the
+definition the daemon holds, whole — id, stamps and pause included — as
+JSON where you say or beside the markdown mirror as `<id>-<slug>.json`; the
+mirror stays one way, and the export is never read back on its own.
+`TeamImport` reads a file you named and answers a **draft**: mogeung's own
+JSON with the id dropped, the stamps zeroed and the pause cleared, so it is a
+new team here and not an overwrite; or an OpenRig `rig.yaml` mapped the way
+[ADR-0026](../decisions/0026-other-peoples-run-configurations.md) reads an
+IDE's launch file — members to seats by `runtime` through one match, a
+runtime that is not a CLI skipped and said so, `agent_ref` followed beside
+the rig to the agent's guidance markdown, the summary and culture file to the
+team's guidance, the edges appended as declared text rather than invented
+wakes, and profiles, skills, plugins and startup actions listed as not
+carried. The repository arrives empty in both cases and the window asks for
+it. Both verbs are judged like `TeamSave`.
+
+**The one write into a worktree** (`R-P9`, `write.rs`). ADR-0019 refused an
+editor for the concurrent writer it could not see; its 2026-10-09 amendment
+admits one write where the daemon knows the writers — a worktree it made for
+a seat — and `FileWrite` is that write and no other. Fence 1 is resolved
+before the path is looked at: the session must carry a seat's tag, the
+seat's launch record must say its directory is a worktree the daemon made,
+and a session you started by hand or a seat in the team's own checkout is
+refused in words. Then the path is canonicalised under that one root (`..`,
+an absolute path and anything under `.git` refused), and fence 3 is judged:
+the file on disk must hash to the `base_hash` the save carries — the
+`FileContent` it was opened from — or the save is refused with the current
+text and **no override**, you reload and edit again; and no seat may be
+mid-turn in that worktree, read from the registry, or the save is refused
+until it says `force`. The write is a rename, so a seat reading the file sees
+one version or the other. The window's file pane is editable in exactly this
+case and says so; it keeps the draft on screen through `R-J38`'s reloads and
+sends the hash the draft **began** from, so an agent's write between your
+first keystroke and your save is the daemon's refusal rather than a quiet
+overwrite.
+
 ## Skills and memory
 
 | Command | Carries | Answered by | Hop |
@@ -506,6 +674,10 @@ this machine's loopback authority. A follow to a daemon that sends no
 
 ```
 GET  /api/health                         # liveness, and whether it still sees everything; carries `daemon`
+POST /api/seat/hook                      # a seat's hook event, with the seat's own bearer token; loopback only (R-P5)
+POST /api/seat/status                    # a seat's status-line reading; answers with the line to show, counters included
+POST /api/seat/send?to=<seat>            # a seat's words to a seat of its team, plain text; 200 delivered, 202 held, else refused (R-P6)
+POST /api/seat/note                      # a seat's note about its own work, plain text; 200 kept beside its files for the next handover (R-P15)
 GET  /api/queue
 GET  /api/sessions
 GET  /api/sessions/{id}

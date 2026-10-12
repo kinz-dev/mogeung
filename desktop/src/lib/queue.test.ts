@@ -312,3 +312,43 @@ describe("grouping by machine", () => {
     expect(shape(lines)).toEqual(["@mac-id:w", "a"]);
   });
 });
+
+/**
+ * Seats under their team. `R-J131`, asked 2026-10-11 after the first team:
+ * *"grouped under the ATTENTION panel as a collapsible TEAM section that is
+ * separate from the headless sessions running locally… with a sub-tree as
+ * team name"*.
+ */
+describe("grouping seats under their team", () => {
+  const seat = (id: string, team: string, name: string, extra: Partial<Session> = {}) =>
+    session(id, { seat: { team_id: `${team}-id`, team, seat: name, signals: "plain" }, ...extra });
+  const rowsOf = (sessions: Session[], reasons: Record<string, AttentionItem["reason"]> = {}) =>
+    sessions.map((s) => ({ item: item(s.id, reasons[s.id] ?? "running"), session: s }));
+  const shape = (lines: QueueLine[]) =>
+    lines.map((l) => (l.kind === "header" ? `${"  ".repeat(l.depth)}# ${l.label}` : `${l.session.id}`));
+  const flat = { byRepo: false, byMachine: false, collapsed: [] as string[], here: null };
+
+  it("puts every seat under a Team heading, a team each, ahead of your own sessions — whatever the toggles say", () => {
+    const rows = rowsOf([session("mine"), seat("p1", "port", "planner"), seat("n1", "news", "editor"), seat("p2", "port", "builder")], {
+      p2: "awaiting_input",
+    });
+    const expected = ["# Team", "  # port", "p1", "p2", "  # news", "n1", "mine"];
+    expect(shape(groupQueue(rows, flat))).toEqual(expected);
+    // The folder toggle groups your own rows and leaves the seats where they are.
+    expect(shape(groupQueue(rows, { ...flat, byRepo: true }))).toEqual([...expected.slice(0, -1), "# repo", "mine"]);
+    const all = groupQueue(rows, flat)[0];
+    expect(all).toMatchObject({ kind: "header", key: "team:", count: 3, needing: 1 });
+    const port = groupQueue(rows, flat)[1];
+    expect(port).toMatchObject({ kind: "header", key: "team:port-id", count: 2, needing: 1, depth: 1 });
+  });
+
+  it("folds the whole section, or one team, by key", () => {
+    const rows = rowsOf([seat("p1", "port", "planner"), seat("n1", "news", "editor"), session("mine")]);
+    expect(shape(groupQueue(rows, { ...flat, collapsed: ["team:"] }))).toEqual(["# Team", "mine"]);
+    expect(shape(groupQueue(rows, { ...flat, collapsed: ["team:port-id"] }))).toEqual(["# Team", "  # port", "  # news", "n1", "mine"]);
+  });
+
+  it("adds no heading while no seat is on the list", () => {
+    expect(shape(groupQueue(rowsOf([session("a"), session("b")]), flat))).toEqual(["a", "b"]);
+  });
+});

@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-10-08
+updated: 2026-10-10
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -250,6 +250,8 @@ checked.
 | Codex | three levels — `item_completed` wraps an `item.type`, so drift can hide one layer deeper than `kind/item` | `event_msg/item_completed/<Type>`; `KNOWN_COMPLETED_ITEMS` holds only what has been observed, so a tool call or a file change announces itself the first time one happens |
 | Qwen Code | `system` records are three lines in five and discriminate on `subtype` | `system/<subtype>` |
 | opencode | rows of `opencode.db`, classified by row id so a re-read at the watermark does not count one twice | `part/<type>`; `tool/<status>` outside `pending`/`running`/`completed`/`error`; `message/<role>` |
+| a seat's hooks (`R-P5`) | the event names a CLI posts to the daemon's receiver — twenty-six for Claude Code, a bus for opencode — classified against `CLAUDE_HANDLED` / `OPENCODE_HANDLED` | `hook:<name>`, the bare event name, prefixed so it can never be mistaken for a transcript type |
+| a seat's pane (`R-P11`) | the screen a TUI draws, read into [ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md)'s closed set of shapes by keyword; a release that restyles a menu turns a shape `unknown` | `screen:<cli>`, once per changed capture that matched nothing — a pane that could not be captured is not drift and is not counted |
 
 **Codex.** Rollouts are read incrementally — `codex::ScanCache` tails appended
 bytes rather than re-reading every file per pass — so the per-thread counts the

@@ -1,7 +1,7 @@
 ---
 title: Observe sessions, never spawn them
 status: active
-updated: 2026-09-23
+updated: 2026-10-11
 decided: 2026-07-25
 supersedes: The v0.1 spawning model
 ---
@@ -203,6 +203,255 @@ this clause has always named as a person's. Nothing here opens a path around
 the clause — no token, no flag, and no *allow changes* consent can make a LAN
 relay count as loopback. The consent is a second gate on this machine, never a
 substitute for the one on that machine. Clauses 1–3 and 5–6 are untouched.
+
+## Amendment — 2026-10-09: mogeung may own a seat it started
+
+**The decision is narrowed from *an agent* to *an agent mogeung did not start
+itself*.** A session mogeung launches in Gau Geung mode is a **seat**, and a
+seat is owned: it may be sent to, woken, watched, restarted and stopped. Every
+session mogeung merely finds — which is every session this page has ever been
+about — stays observed, and everything above stands for it word for word,
+including both exceptions and all seven clauses of 2026-08-29.
+
+Asked on 2026-10-09, when the Gau Geung epic set out to port OpenRig's
+orchestration — send, broadcast, wakes, watchdogs, a team of agents in named
+panes — and the list of what this page refuses was read back one item at a
+time. The owner's argument for relaxing it: *"when the mogeung product evolve
+to agent harness + orchestration, it has to be able to spawn agent, and own an
+agent."* That is a change of product, and it is recorded here as one.
+
+### Why this is an amendment and not a reversal
+
+The failure this page records was **wrapping**, not sending. v0.1 sat inside
+the agent's pty, between the human and the CLI, and so could not see what the
+CLI publishes about itself — `status: idle` in its own registry, the
+transcript line that says a tool is waiting — and had to guess at the one thing
+the product exists to know. OpenRig orchestrates without wrapping: real CLIs
+in real tmux panes, reading their own configuration, reporting through hooks
+they were launched with, written to over `send-keys` by a daemon that is not
+in the pty. The lesson under *The durable lesson* is therefore intact and
+load-bearing for seats too. What changes is the amendment of 2026-08-29's
+definition of steering: **a seat's loop may be owned**, and no other session's
+may.
+
+### What a seat is
+
+A seat is a session the daemon started itself, in Gau Geung mode, as the
+unmodified CLI in a tmux pane, with the configuration
+[ADR-0043](0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+describes. The daemon records the birth — the definition it was started from,
+the pane, the session id it chose where the CLI takes one — and that record
+is the only thing that makes a session a seat. A **team** is a named set of
+seats with one policy. An **observed** session is everything else.
+
+### The fences
+
+1. **Birth decides ownership.** A session is a seat because the daemon's own
+   launch record says it started it, and for no other reason. **Nothing
+   promotes an observed session to a seat**: not a click, not a flag, not
+   recognising the pane. The session you started in your own terminal keeps
+   the whole of this page, and if you want it orchestrated you start it as a
+   seat. "I can see it, so I may drive it" is the superstition this page warns
+   about, running the other way.
+2. **Never wrap.** A seat is the real CLI in a real pane. mogeung learns about
+   it from what the CLI writes, from the flags and hooks the CLI itself
+   accepts at launch, and from the pane — never from a pty of its own in the
+   middle. A seat that cannot run under tmux is not started
+   ([ADR-0011](0011-own-a-shell-never-an-agent.md)'s amendment of this date).
+3. **An automatic send is declared text.** A wake, a watchdog or a readiness
+   press sends fixed text from the team's policy, readable on the seat's row
+   before it ever fires. The local model never composes a send —
+   [ADR-0030](0030-a-model-reads-the-evidence.md) is untouched, and its output
+   stays a labelled column. An agent's message to another seat is that agent's
+   own words, delivered verbatim.
+4. **Every automatic send is visible, budgeted and stoppable.** It shows on
+   the seat's row: what was sent, to whom, why, when. A team has a **hop
+   budget**: one hop is one delivery from an agent to an agent with no human
+   between, and a chain may travel **three hops** before the next delivery is
+   held and ranks on the queue as needing you; your send starts the count
+   again. A hop budget of zero is *every message through you*, and it is a
+   setting, not a different mode. A team also has a cap on automatic deliveries
+   per hour, whose default the spec sets and the panel shows. One switch pauses
+   every automatic send for a team, and a human typing in a pane always wins.
+5. **The owning daemon judges every send.** The two amendments of 2026-09-23
+   stand as written: a send that crosses a hop is judged by the daemon that
+   owns the seat, over loopback only, and no token, flag or consent makes a
+   LAN relay count as loopback. The daemon that owns a seat is the one that
+   launched it.
+
+### What this does to the clauses of 2026-08-29
+
+Clauses 2, 4, 5 and 6 — exactly the text on screen into exactly one session,
+loopback only, only a session with a pane, the clipboard stays — hold for every
+send, to a seat or not. Clauses 1, 3 and 7 — a human clicks and confirms, no
+code path from an agent's output to an agent's input, the draft is not sent by
+the gesture that made it — hold for every observed session and for a human's
+own send into a seat. **For a seat, clause 3's path exists**, under fence 4,
+and that is the thing this amendment admits with its eyes open: it is the path
+that burns tokens in a loop nobody is watching, and the hop budget is the cost
+cap on it, not a correctness guarantee.
+
+### What was considered and lost
+
+**A second product for orchestration**, leaving this daemon as the watcher.
+Rejected: a seat that needs you belongs on the one ranked board
+([A1](../product/assumptions.md)), and two daemons reading one home is the
+federation problem with no hop between them.
+
+**Adopting an observed session as a seat**, on a click. The convenient shape,
+and the one the next request will ask for. Rejected by fence 1: birth is the
+only test a daemon can apply without asking a question it cannot answer, and
+the promise this page makes to sessions the user starts by hand is worth more
+than the click.
+
+**Model-composed automatic sends.** OpenRig's agents write prompts to each
+other, and a local model could write a wake that fits the situation. Rejected:
+ADR-0031 keeps the model's words out of every agent's input, and a wake that
+is template text is one you can read before it fires.
+
+**Unbounded agent-to-agent delivery.** OpenRig's default. Rejected on the
+cost: a reviewer and a builder blaming each other for an hour is a bill, and
+a chain that must pass through a human every three hops ends it for the price
+of a click.
+
+**Every message through you**, which is the shape of 2026-08-29 repeated. Kept
+as the zero setting rather than the default, because with it the "parked with
+baton" and "blocked on agents" lanes OpenRig's pulse is built on cannot exist
+— nothing is ever parked with an agent when you carry every baton.
+
+### What it costs
+
+**mogeung starts agents.** The first sentence of `CLAUDE.md` said never, and
+now says never for a session it did not start. The product is two things — a
+watcher and a harness — and every row has to say which it is, because the
+guarantees differ.
+
+**A send can land on a menu, with nobody reading a dialog.** The cost named
+under 2026-08-29 — mogeung cannot see the session's screen — is now paid by a
+policy rather than by a person. A readiness press that reacts to what the
+pane shows needs the pane read, which no ADR yet admits
+([ADR-0010](0010-attach-a-terminal-never-own-one.md) renders a pane and does
+not read it), so until one does a readiness press is not built, and a trust
+or login gate on a seat is a row that needs **you**. Fence 4's pause and
+budget are the mitigation for the sends that are built.
+
+**The read-only daemon is further gone.** `A24` was qualified by
+[ADR-0025](0025-run-a-process-you-named-never-an-agent.md); a daemon that
+starts agents on request is qualified again, and the seat verbs are judged
+per connection exactly as run verbs are (ADR-0025's amendment of this date).
+
+**More rows, and a new kind.** A team of four is four sessions, each with a
+policy and a send log, on a board designed around one queue. Where that lives
+in the window is the Gau Geung spec's question, and [feature 0031](../archive/features/0031-the-wall.md)'s
+answer — a grid is a bet against the queue, so it lives on a chord — is the
+precedent.
+
+**Revisit if** an automatic send ever lands where it was not aimed, which is
+the 2026-08-29 condition and applies here with more force. Or if a team's hop
+budget is routinely exhausted and raised to silence it — then the budget is
+decoration and the honest response is zero, not a bigger number. Or if a
+hand-started session is ever found to have received a wake, by any path: that
+is fence 1 broken, and the response is to find the path, not to document it.
+Or if Claude Code grows a sanctioned way to enqueue a prompt, which should
+replace `send-keys` for seats as the 2026-08-29 text already says it should
+for a human's send.
+
+## Amendment — 2026-10-09, later: a handover may be composed by a model
+
+**Fence 3 of the amendment above is narrowed: an automatic send is declared
+text, *or a handover the daemon had a model compose for a seat*.** Asked the
+same day, in the walkthrough that followed: *"a handover recap should be model
+composed, which could write much better than a human user."*
+
+A handover is what a seat is told when it starts, restarts, or takes the baton
+— what the team is doing, what its predecessor did, where it stopped.
+OpenRig's restore passes one. Template text cannot write it; a model reading
+the evidence can, and the user is right that it writes it better.
+
+### The fences on a composed handover
+
+1. **Composed from what the model may already read**, under
+   [ADR-0031](0031-consent-to-a-named-host.md) clause 1: the team's documents,
+   the seats' transcripts and diffs, notes. Nothing a seat said is laundered
+   into a fact by passing through — the handover is an *input* to a seat,
+   never evidence about one, and ADR-0031 clause 5 stands.
+2. **Composed in the daemon, on the seat's own trigger.** The daemon holds the
+   endpoint; the trigger is a seat event the team's policy names — start,
+   restart, baton passed — never a scan tick, and never a model's own
+   decision to speak. With no endpoint configured the seat starts without a
+   handover and the row says so (clause 6 of that ADR). A handover that would
+   have to be composed on a host the config does not consent to is not
+   composed.
+3. **Shown in full, and logged as the model's.** On the seat's row before it
+   is delivered where the policy says *after you read it*, and after
+   otherwise; in the send log as *sent by mogeung, composed by <model> at
+   <host>*.
+4. **It is an automatic send.** It counts against the team's per-hour cap,
+   counts as a hop when it carries what another seat said or did, and stops
+   with the pause switch — fence 4 above, unchanged.
+5. **Only for a seat.** The model has no path into an observed session's
+   input, and a human's draft in the window keeps
+   [ADR-0034](0034-the-draft-is-a-chat-ask.md)'s two buttons.
+
+What this does not reopen: the loop with nobody in it. The model composes
+*what* is said; the policy, read by a human, decides *when*; the budget and
+the switch bound *how often*. A model that chose when to speak to an agent
+would be the thing fence 3 was written to prevent, and it is still prevented.
+
+## Amendment — 2026-10-09, evening: a seat talks only to its own team
+
+**Fence 4 above gains a sentence: a seat may address only the seats of its
+own team.** Asked when the wireframes for the team component drew two teams
+side by side and the question could no longer be avoided: *"ok, a seat only
+talks to its own team."*
+
+The reason is what a team is. A team is the unit of policy — one hop budget,
+one hourly cap, one pause switch, one set of wakes and watchdogs. A message
+from a seat in one team to a seat in another would be a delivery between two
+policies, counted against which budget, stopped by which switch, and visible
+in which log. Rather than answer that three ways, the delivery is refused:
+the seat's command to send names a seat, the daemon resolves it within the
+sender's team, and a name outside it is an error the seat sees. Two teams
+that need to talk are one team, or they talk through you — a human's send
+into any seat is unchanged, and so is the queue, which ranks every team's
+seats on one board.
+
+Nothing else moves. The hop count, the cap and the pause stay per team as
+fence 4 already said; fence 1 still makes an observed session unreachable
+from any seat.
+
+## Amendment — 2026-10-11: a wind-down asks a seat for its last words
+
+**Two small paths are added to the 2026-10-09 amendment, both for a seat and
+no other session.** Asked after the first real team had run for an evening:
+*"We need a way to quickly close the whole team, but that should be a
+'graceful' shutdown where it will ask each of the 'seat' to write down what I
+was up to so that next time the 'handover' can resume from there."*
+
+1. **A wind-down is a send of yours with declared words.** `TeamWindDown`
+   types the team's `wind_down` text — policy, declared and read in the
+   Teams window like a wake's — once into every running seat, then stops each
+   seat as its note arrives, as its turn ends, or when the policy's minutes
+   are up. The press is yours, so the send is logged as `wind_down`, counts as
+   neither a hop nor an automatic send, and the chain starts again after it
+   as after any send of yours. The pause switch does not hold it: the switch
+   stops the automatic path, and this is not that path. `TeamStop` stays the
+   stop at once, and during a wind-down it is the wind-down cut short.
+2. **A seat may tell mogeung about itself.** `mogeung-note`, on every seat's
+   `PATH` beside `mogeung-send`, posts a note to `POST /api/seat/note` with
+   the seat's own token — the same three fences as the send route — and the
+   daemon keeps it beside the seat's files as `note.md`, under `~/.mogeung`
+   (ADR-0043), never in a repository or a home. The note goes to the daemon
+   and to no seat; it is not a send and nothing judges it. The next handover
+   for that seat (the amendment above) quotes it as the seat's own last words,
+   framed as data like every other line of evidence; and a team booted after a
+   wind-down hands each seat its own earlier session and note, where before it
+   handed over only its teammates'.
+
+What this does not reopen: fence 1. A session you started by hand has no
+token, no `PATH` entry and no note; a wind-down reaches launch records and
+nothing else. Fence 3 holds too — the wind-down text is declared, and the
+note is read by a model only inside a handover that is already fenced.
 
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an

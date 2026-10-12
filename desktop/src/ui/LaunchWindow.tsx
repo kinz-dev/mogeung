@@ -65,14 +65,21 @@
  * subtitle and the button follow it the way the yolo warning follows the CLI:
  * a dialog promising a terminal it will not open is a sentence about a thing
  * that is not being done.
+ *
+ * **Three sections since `R-J130`**, in a window of its own (`R-J128`): the
+ * agent, where, and how — each a card in its own colour, the warning a
+ * callout rather than a line of amber, the button in a footer that stays put
+ * while the lists scroll. Asked 2026-10-11: *"make it visual component more
+ * visible so it can easily see the diff section"*.
  */
 
-import { useMemo, useState } from "react";
-import { FolderOpen, Rocket, Star, X } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Bot, FolderOpen, Rocket, SlidersHorizontal, Star, TriangleAlert, X } from "lucide-react";
 import { useStore } from "@/store";
 import { chooseFolder } from "@/lib/tauri";
 import { addFavourite, isFavourite, normaliseDir, removeFavourite } from "@/lib/favourites";
 import { Dialog } from "@/ui/Dialog";
+import { Callout, Field, Section } from "@/ui/Form";
 import { Button, Checkbox, Dim, IconButton, Input, Mono, Row, Segmented } from "@/ui/primitives";
 import { SourceMark } from "@/ui/SourceMark";
 import { sourceLabel, type SessionSource } from "@/wire/types";
@@ -99,6 +106,19 @@ function withArticle(name: string): string {
   return `${/^[aeiou]/i.test(name) ? "an" : "a"} ${name}`;
 }
 
+/** A list of folders in a box of its own, so each list has an edge. */
+function FolderList({ children, empty }: { children: ReactNode; empty?: ReactNode }) {
+  return (
+    <div className="w-full rounded-sm border border-[var(--border)] bg-[var(--bg)]">
+      {empty ? (
+        <Dim className="block px-2 py-1.5 text-xs italic">{empty}</Dim>
+      ) : (
+        <div className="max-h-40 overflow-y-auto py-0.5">{children}</div>
+      )}
+    </div>
+  );
+}
+
 export function LaunchWindow() {
   const open = useStore((s) => s.showLaunch);
   const sessions = useStore((s) => s.sessions);
@@ -114,6 +134,8 @@ export function LaunchWindow() {
   const headless = useStore((s) => s.prefs.launchHeadless);
   const health = useStore((s) => s.health);
   const setPrefs = useStore((s) => s.setPrefs);
+  // The window of its own this opens in (`R-J128`), the size it was left at.
+  const launchSize = useStore((s) => s.prefs.launchSize);
   const chosen = LAUNCHABLE.find((a) => a.source === source) ?? LAUNCHABLE[0];
 
   // Somewhere you have already worked is nearly always where you want to work
@@ -143,7 +165,6 @@ export function LaunchWindow() {
 
   const typed = normaliseDir(dir);
   const typedIsKept = isFavourite(favourites, typed);
-
 
   /**
    * Would a headless launch here create a session nobody can see? `R-J74`.
@@ -183,179 +204,174 @@ export function LaunchWindow() {
           : `opens a real interactive ${sourceLabel(chosen.source)} in your terminal`
       }
       onClose={close}
+      detached={{ name: "launch", size: launchSize, onResized: (size) => setPrefs({ launchSize: size }) }}
     >
-      <div className="min-w-[30rem]">
-        <Dim className="block text-2xs">
-          mogeung does not wrap the conversation — you drive it exactly as usual, and it shows
-          up in the queue like any other session.
-        </Dim>
-
-        {/* First, above the directory: which CLI changes what the rest of this
-            window means — the flag below it, and the name in the button at the
-            bottom — so it is answered before you read either. */}
-        <div className="mt-2 flex items-center gap-2">
-          <Dim className="text-2xs">agent</Dim>
-          <Segmented
-            value={chosen.source}
-            onChange={(v) => setPrefs({ launchSource: v })}
-            options={LAUNCHABLE.map((a) => ({
-              value: a.source,
-              title: `start ${sourceLabel(a.source)} — ${a.yolo}`,
-              label: (
-                <span className="flex items-center gap-1">
-                  <SourceMark source={a.source} />
-                  {sourceLabel(a.source)}
-                </span>
-              ),
-            }))}
-          />
-        </div>
-
-        <div className="mt-1 text-2xs text-[var(--amber)]">
-          Started in yolo mode: <Mono>{chosen.yolo}</Mono>. The agent will not
-          ask before editing files or running commands.
-        </div>
-
-        <div className="mt-2">
-          <Dim className="mb-0.5 block text-2xs">directory</Dim>
-          <div className="flex items-center gap-1">
-            <Input
-              value={dir}
-              mono
-              className="flex-1"
-              onChange={setDir}
-              placeholder="~/projects/foo"
-              onKeyDown={(e) => e.key === "Enter" && go()}
-            />
-            {/*
-              The star is a toggle rather than an add, so a folder already kept
-              says so instead of offering to keep it a second time — which is
-              the only state `addFavourite` has no visible answer for.
-            */}
-            {/*
-              Beside the star rather than replacing the box: the box is still
-              the fastest route for a path you can type or paste, and a picker
-              that is the only way in makes that route longer.
-            */}
-            <IconButton
-              title="browse for a folder"
-              onClick={async () => {
-                const picked = await chooseFolder("Folder to start the session in", dir);
-                if (picked) setDir(picked);
-              }}
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-            </IconButton>
-            <IconButton
-              disabled={!typed}
-              active={typedIsKept}
-              title={
-                !typed
-                  ? "type a folder first"
-                  : typedIsKept
-                    ? "stop keeping this folder"
-                    : "keep this folder in the list below"
-              }
-              onClick={() => (typedIsKept ? drop(typed) : keep(typed))}
-            >
-              <Star className="h-3.5 w-3.5" fill={typedIsKept ? "currentColor" : "none"} />
-            </IconButton>
-          </div>
-        </div>
-
-        <Dim className="mt-2 mb-0.5 block text-2xs">favourites</Dim>
-        {favourites.length === 0 ? (
-          // An empty list that says nothing looks like a list that failed to
-          // load. `R-J5`, and here it doubles as the only place the star is
-          // explained.
-          <Dim className="block text-2xs italic">
-            none yet — type a folder above and press the star to keep it here
+      <div className="flex h-full min-h-0 min-w-[30rem] flex-col">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+          <Dim className="block text-xs leading-snug">
+            mogeung does not wrap the conversation — you drive it exactly as usual, and it shows up in the queue like
+            any other session.
           </Dim>
-        ) : (
-          <div className="max-h-40 overflow-y-auto">
-            {favourites.map((f) => (
-              <Row key={f} selected={typed === f} onClick={() => setDir(f)} className="flex items-center gap-1 px-1 py-0.5">
-                <Mono className="flex-1 truncate text-2xs">{f}</Mono>
+
+          {/* First, above the directory: which CLI changes what the rest of this
+              window means — the flag below it, and the name in the button at the
+              bottom — so it is answered before you read either. */}
+          <Section title="Agent" tone="blue" icon={<Bot size={14} />} hint="which CLI starts — the flag and the button follow it">
+            <Segmented
+              size="md"
+              value={chosen.source}
+              onChange={(v) => setPrefs({ launchSource: v })}
+              options={LAUNCHABLE.map((a) => ({
+                value: a.source,
+                title: `start ${sourceLabel(a.source)} — ${a.yolo}`,
+                label: (
+                  <span className="flex items-center gap-1.5">
+                    <SourceMark source={a.source} />
+                    {sourceLabel(a.source)}
+                  </span>
+                ),
+              }))}
+            />
+            <Callout tone="amber" icon={<TriangleAlert size={14} />}>
+              Started in yolo mode: <Mono>{chosen.yolo}</Mono>. The agent will not ask before editing files or running
+              commands.
+            </Callout>
+          </Section>
+
+          <Section title="Where" tone="green" icon={<FolderOpen size={14} />} hint="the folder the session starts in">
+            <Field label="directory" hint="type or paste a path, or browse">
+              <div className="flex w-full items-center gap-1">
+                <Input
+                  value={dir}
+                  mono
+                  className="flex-1"
+                  onChange={setDir}
+                  placeholder="~/projects/foo"
+                  onKeyDown={(e) => e.key === "Enter" && go()}
+                />
+                {/*
+                  Beside the star rather than replacing the box: the box is still
+                  the fastest route for a path you can type or paste, and a picker
+                  that is the only way in makes that route longer.
+                */}
                 <IconButton
-                  title={`stop keeping ${f}`}
-                  onClick={(e) => {
-                    // The row sets the directory; the button must not do that
-                    // on its way to removing the row it sits in.
-                    e.stopPropagation();
-                    drop(f);
+                  title="browse for a folder"
+                  onClick={async () => {
+                    const picked = await chooseFolder("Folder to start the session in", dir);
+                    if (picked) setDir(picked);
                   }}
                 >
-                  <X className="h-3 w-3" />
+                  <FolderOpen className="h-3.5 w-3.5" />
                 </IconButton>
-              </Row>
-            ))}
-          </div>
-        )}
+                {/*
+                  The star is a toggle rather than an add, so a folder already kept
+                  says so instead of offering to keep it a second time — which is
+                  the only state `addFavourite` has no visible answer for.
+                */}
+                <IconButton
+                  disabled={!typed}
+                  active={typedIsKept}
+                  title={
+                    !typed
+                      ? "type a folder first"
+                      : typedIsKept
+                        ? "stop keeping this folder"
+                        : "keep this folder in the list below"
+                  }
+                  onClick={() => (typedIsKept ? drop(typed) : keep(typed))}
+                >
+                  <Star className="h-3.5 w-3.5" fill={typedIsKept ? "currentColor" : "none"} />
+                </IconButton>
+              </div>
+            </Field>
 
-        {repos.length > 0 && (
-          <>
-            <Dim className="mt-2 mb-0.5 block text-2xs">recent repos</Dim>
-            <div className="max-h-40 overflow-y-auto">
-              {repos.map((r) => (
-                <Row key={r} selected={typed === r} onClick={() => setDir(r)} className="flex items-center gap-1 px-1 py-0.5">
-                  <Mono className="flex-1 truncate text-2xs">{r}</Mono>
-                  <IconButton
-                    title={`keep ${r}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      keep(r);
-                    }}
-                  >
-                    <Star className="h-3 w-3" />
-                  </IconButton>
-                </Row>
-              ))}
-            </div>
-          </>
-        )}
+            <Field label="favourites" hint="kept with the star" align="start">
+              {/* An empty list that says nothing looks like a list that failed to
+                  load. `R-J5`, and here it doubles as the only place the star is
+                  explained. */}
+              <FolderList empty={favourites.length === 0 && "none yet — type a folder above and press the star to keep it here"}>
+                {favourites.map((f) => (
+                  <Row key={f} selected={typed === f} onClick={() => setDir(f)} className="flex items-center gap-1 px-2 py-0.5">
+                    <Mono className="flex-1 truncate text-xs">{f}</Mono>
+                    <IconButton
+                      title={`stop keeping ${f}`}
+                      onClick={(e) => {
+                        // The row sets the directory; the button must not do that
+                        // on its way to removing the row it sits in.
+                        e.stopPropagation();
+                        drop(f);
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </IconButton>
+                  </Row>
+                ))}
+              </FolderList>
+            </Field>
 
-        <div className="mt-2">
-          <Checkbox
-            checked={worktree}
-            onChange={setWorktree}
-            label="in a fresh git worktree"
-            title="a new branch mogeung/<timestamp> in its own checkout, so this session cannot collide with the one already running there"
-          />
+            {repos.length > 0 && (
+              <Field label="recent repos" hint="where a session has run" align="start">
+                <FolderList>
+                  {repos.map((r) => (
+                    <Row key={r} selected={typed === r} onClick={() => setDir(r)} className="flex items-center gap-1 px-2 py-0.5">
+                      <Mono className="flex-1 truncate text-xs">{r}</Mono>
+                      <IconButton
+                        title={`keep ${r}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          keep(r);
+                        }}
+                      >
+                        <Star className="h-3 w-3" />
+                      </IconButton>
+                    </Row>
+                  ))}
+                </FolderList>
+              </Field>
+            )}
+          </Section>
+
+          <Section title="How" tone="purple" icon={<SlidersHorizontal size={14} />} hint="the shape of the session">
+            <Checkbox
+              className="text-sm"
+              checked={worktree}
+              onChange={setWorktree}
+              label="in a fresh git worktree"
+              title="a new branch mogeung/<timestamp> in its own checkout, so this session cannot collide with the one already running there"
+            />
+            <Checkbox
+              className="text-sm"
+              checked={headless && !untrusted}
+              disabled={untrusted}
+              onChange={(v) => setPrefs({ launchHeadless: v })}
+              label="headless — no terminal window"
+              title={
+                untrusted
+                  ? "not available here yet: codex will stop on a trust prompt, and a headless session has no window to show it in"
+                  : "a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
+              }
+            />
+            {/* Said before the click, not after. The daemon refuses this launch
+                too, but a refusal you read once the session already failed to
+                appear is a worse version of the same sentence. */}
+            {untrusted && (
+              <Callout tone="amber" icon={<TriangleAlert size={14} />}>
+                codex has not been trusted in this directory. It asks once, and a headless session has no window to
+                ask in — so start it with a terminal this time. Headless works here from then on.
+              </Callout>
+            )}
+          </Section>
         </div>
 
-        <div className="mt-1">
-          <Checkbox
-            checked={headless && !untrusted}
-            disabled={untrusted}
-            onChange={(v) => setPrefs({ launchHeadless: v })}
-            label="headless — no terminal window"
-            title={
-              untrusted
-                ? "not available here yet: codex will stop on a trust prompt, and a headless session has no window to show it in"
-                : "a detached tmux session, hosted in a mogeung pane; reach it from any terminal later with tmux attach. Needs tmux on the daemon's machine"
-            }
-          />
-        </div>
-
-        {/* Said before the click, not after. The daemon refuses this launch
-            too, but a refusal you read once the session already failed to
-            appear is a worse version of the same sentence. */}
-        {untrusted && (
-          <div className="mt-1 text-2xs text-[var(--amber)]">
-            codex has not been trusted in this directory. It asks once, and a
-            headless session has no window to ask in — so start it with a
-            terminal this time. Headless works here from then on.
-          </div>
-        )}
-
-        <div className="mt-3 flex items-center gap-2">
-          <Button variant="solid" onClick={go} disabled={!typed}>
-            <Rocket size={11} />{" "}
+        {/* The one verb, in a footer that stays while the lists scroll. */}
+        <div className="flex shrink-0 items-center gap-3 border-t border-[var(--border)] bg-[var(--bg-panel)] px-3 py-2">
+          <Button variant="solid" size="lg" onClick={go} disabled={!typed}>
+            <Rocket size={13} />{" "}
             {headless && !untrusted
               ? `start a headless ${sourceLabel(chosen.source)}`
               : `open ${withArticle(sourceLabel(chosen.source))} terminal`}
           </Button>
-          <Dim className="text-2xs">
+          <Dim className="text-xs leading-snug">
             it opens where you are watching — the daemon's machine, not necessarily this one
           </Dim>
         </div>

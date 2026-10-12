@@ -1,13 +1,15 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-08
+updated: 2026-10-12
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
   - crates/mogeung-core/src/transcript.rs
   - crates/mogeungd/src/store.rs
   - crates/mogeungd/src/notes.rs
+  - crates/mogeung-core/src/team.rs
+  - crates/mogeungd/src/team.rs
 ---
 
 # Data model
@@ -79,6 +81,9 @@ whether the value survives a restart or is re-derived on the first scan.
 | `artifacts` (`R-J115`) | pages this session published on claude.ai, newest first; `url` worked out by the daemon from the UUID's base58 form | yes; skipped when empty |
 | `provisional` (`R-J75`) | a pane row, rebuilt every scan | never |
 | `origin` (`R-I21`) | the machine a mirrored session runs on: `machine_id`, `host`, `ssh_target`, `stale` | never |
+| `seat` (`R-P4`, `R-P5`) | the seat this session is, when the daemon started it: `team_id`, `team`, `seat`, and `signals` — `hooked` when its hooks reach the daemon, `plain` when it is known from its transcript and screen only | yes; re-tagged every scan from the launch records |
+| `held_send` (`R-P6`) | a send the team's policy is holding for this seat — how many, why the oldest, since when — which ranks the row as needing you; never set on an observed session, because only the policy engine writes it and it addresses launch records | no; derived from the send log every scan |
+| `screen` (`R-P11`) | what this seat's pane showed at the last read: a `shape` from ADR-0044's closed set, the `excerpt` it was read from, `read_at`; a gate ranks the row with *(screen)*; never set on an observed session, because the capture takes a pane from a launch record and nowhere else; the capture itself is never kept | no; the scan's memory, re-read every rest |
 
 **`alive` and `live_status` are never trusted from storage**; both are
 re-derived from the OS on the first scan. **`pid` is kept and is not a
@@ -107,6 +112,30 @@ SQLite at `~/.mogeung/mogeung.db`:
   heading above it (`R-L3`, `R-L10`)
 - `task_events(note_id, text, done, at)` — append-only, the history a checkbox
   cannot keep (`R-L3`)
+- `teams(id, created, updated, json)` — a team of seats and its policy, the
+  whole struct as a JSON blob with the seats inside it (`R-P3`, feature 0051);
+  a blob for the reason sessions are one, so a seat gaining a field needs no
+  migration — which is how the policy gained its wind-down message and the
+  minutes a seat has to answer it (`R-P15`) with no change here. A wind-down
+  in progress is ephemeral, held in memory until the next boot; a seat's last
+  words land as `note.md` beside its files under `~/.mogeung`, not in a table
+- `seat_launches(team_id, seat, json)` — which panes are seats: the launch
+  record a restarted daemon re-adopts from (`R-P4`). Derived, not the user's
+  writing, so not mirrored; a stop deletes the row. Since `R-P5` the blob
+  carries the seat's receiver `token` — persisted so a re-adopted seat is
+  still heard, stripped before the record is served — and its `signals`
+  (kind, count, last event, context fill, model), which are live state
+  rewritten in memory as hooks arrive and saved only as the record is; since
+  `R-P8` `team_session`, the name of the team's own tmux session for a
+  terminal
+- `sends(team_id, id, at, json)` — a team's send log (`R-P6`): every
+  automatic send and every one of yours into a seat, as a `SendEntry` blob —
+  who, whom, the text, why, what became of it, the hop it took. **The
+  counters are derived from this table**, never stored beside it: the chain
+  is the run of hop deliveries since the last entry a human caused, the hour
+  is the automatic deliveries newer than sixty minutes, so a restarted daemon
+  counts what it counted before. Kept to the last two hundred per team plus
+  every held entry, which is a question for you and is not pruned
 - `chats(id, title, turns, n_turns, created, updated)` — the chat panel's
   conversations (`R-O9`)
 - `tail_offsets(path, offset)` — how far each transcript has been read (`R-A6`)
@@ -127,9 +156,16 @@ warning rather than refusing to start.
   wholesale on a rebuild because a half-rebuilt index would mix two models in
   a space the cosine assumes is one; `vec` is little-endian `f32`s in a BLOB,
   since a thousand floats as JSON is ten times the bytes.
-- **Yours** — `notes`: a note cannot be recomputed from anything, which is why
-  [ADR-0015](../decisions/0015-markdown-is-the-truth.md) requires a one-way
-  mirror to `~/.mogeung/notes/*.md`, never read back. `session_id` and `seq`
+- **Yours** — `notes` and `teams`: neither can be recomputed from anything,
+  which is why [ADR-0015](../decisions/0015-markdown-is-the-truth.md) requires
+  a one-way mirror — `~/.mogeung/notes/*.md` for a note, `~/.mogeung/teams/*.md`
+  for a team ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md)
+  clause 8) — never read back. A team's mirror says what each seat will be
+  started with, the inherited mode marked as the team's; since `R-P12` an
+  export may put the same definition beside it as `<id>-<slug>.json`, whole
+  and also never read back on its own — importing a file is the explicit
+  act, and it answers a draft rather than writing the store; and the daemon
+  stamps `created` and `updated` and mints the id, whatever a client sent. `session_id` and `seq`
   on a note are tags, not a location, so a note outlives the session being
   forgotten. `note_tasks` and `task_events` are the opposite case on purpose:
   the first is a cache of what the documents already say and is dropped and

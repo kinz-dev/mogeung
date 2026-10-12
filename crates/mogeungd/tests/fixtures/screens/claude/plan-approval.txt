@@ -1,0 +1,40 @@
+▝▜██████▀  Haiku 5.5 · Claude Max                                            │ gau-geung origin/gau-geung                              ?:19
+ ▝▝   ▝▝   ~/projects/mogeung                                                │/ : search
+                                                                             │  .git
+                                                                             │  .idea
+╭──────────────────────────────────────────────────────────────────────────╮ │  .vscode                                                  
+│ Plan a one-sentence addition to README.md: two lines of plan, then call  │ │  assets
+│ ExitPlanMode so I can approve. Edit nothing.                             │ │  crates                                                ?:14
+╰──────────────────────────────────────────────────────────────────────────╯ │  desktop
+                                                                             │  docs
+┃                                                                            │  node_modules                                             
+●─ Other 1                                                                   │  scripts                                                ?:5
+                                                                             │  target                                                   
+● I'll add a single sentence to README.md describing what mogeung is,        │  web
+  matching the existing tone, then run ./scripts/check-docs.sh to verify. Let│  󰊢 .gitignore                              2026-08-10 16:58
+  me read the README first to get the wording and placement right. · summary │  󰍔 AGENTS.md                               2026-10-09 10:06
+                                                                             │   Cargo.lock                              2026-09-22 00:27
+                                                                             │   Cargo.toml                              2026-08-26 16:56
+                                                                             │   CLAUDE.md
+                                                                             │   LICENSE                                 2026-07-27 11:23
+                                                                             │   mprocs.yaml                             2026-08-28 12:58
+                                                                             │  󰍔 README.md                               2026-10-09 09:59
+                                                                             │  󰍔 STATUS.md                               2026-10-09 11:56
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll ▔
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Exit plan mode?
+
+    Claude wants to exit plan mode
+
+    ❯ 1. Yes, and switch to default (ask each time) for this session
+      2. No

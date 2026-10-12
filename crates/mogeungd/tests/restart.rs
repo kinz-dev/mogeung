@@ -210,3 +210,137 @@ async fn a_stored_label_full_of_command_markup_is_repaired_on_load() {
     // is what a session without a title falls back to.
     assert_eq!(after.last_prompt.as_deref(), Some("/clear"));
 }
+
+/// A team definition survives the daemon. `R-P3`, feature 0051, the first
+/// acceptance line of the Gau Geung spec: *"the definition survives a daemon
+/// restart"*. The id the first daemon minted is the id the second one lists,
+/// the policy comes back as written, and the mirror file is on disk for
+/// anything that is not mogeung.
+#[tokio::test]
+async fn a_team_outlives_the_daemon_that_defined_it() {
+    use mogeung_core::session::SessionSource;
+    use mogeung_core::team::{PermissionMode, Policy, Seat, Team};
+    let home = std::env::temp_dir().join(format!("mogeung-restart-team-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let teams_dir = home.join("teams");
+
+    let id = {
+        let store = Store::open(&db(&home)).unwrap();
+        let state = AppState::with_home(store, home.join("claude")).unwrap();
+        state.teams_dir.set(teams_dir.clone()).unwrap();
+        let mut seat = Seat::new("builder", SessionSource::Codex);
+        seat.permission = Some(PermissionMode::Plan);
+        let teams = state
+            .save_team(Team {
+                id: String::new(),
+                name: "port openrig".into(),
+                repo: "/home/you/mogeung".into(),
+                guidance: "Read the spec.".into(),
+                permission: PermissionMode::AcceptEdits,
+                policy: Policy { hop_budget: 2, hourly_cap: 30, ..Policy::default() },
+                seats: vec![seat],
+                paused: true,
+                created: 0,
+                updated: 0,
+            })
+            .unwrap();
+        assert_eq!(teams.len(), 1);
+        assert!(!teams[0].id.is_empty(), "the daemon mints the id");
+        assert!(teams[0].created > 0, "and stamps the clock");
+        teams[0].id.clone()
+    };
+
+    let state = boot(&home).await;
+    // The second daemon's mirror is the same directory, as it would be in
+    // production — and pointed away from the real one, as every test must.
+    state.teams_dir.set(teams_dir.clone()).unwrap();
+    let teams = state.teams().unwrap();
+    assert_eq!(teams.len(), 1);
+    let t = &teams[0];
+    assert_eq!(t.id, id);
+    assert_eq!(t.name, "port openrig");
+    assert_eq!((t.policy.hop_budget, t.policy.hourly_cap), (2, 30));
+    assert_eq!(t.seats[0].permission, Some(PermissionMode::Plan));
+    assert!(t.paused, "a paused team stays paused across a restart");
+
+    let files: Vec<String> = std::fs::read_dir(&teams_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].starts_with(&format!("{id}-port-openrig")), "{files:?}");
+    let md = std::fs::read_to_string(teams_dir.join(&files[0])).unwrap();
+    assert!(md.contains("- hop budget: 2"), "{md}");
+
+    state.delete_team(&id).unwrap();
+    assert_eq!(std::fs::read_dir(&teams_dir).unwrap().count(), 0, "the mirror goes with it");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A seat outlives the daemon that started it. `R-P4`, ADR-0025's amendment
+/// clause 3: the launch record is persisted, and a restarted daemon lists the
+/// seat's row from it — here as a dead row, because the pane the record
+/// names does not exist on this machine, which is the honest answer rather
+/// than no row at all.
+#[tokio::test]
+async fn a_seat_is_re_adopted_from_its_launch_record() {
+    use mogeung_core::session::SessionSource;
+    use mogeung_core::team::SeatLaunch;
+    let home = std::env::temp_dir().join(format!("mogeung-restart-seat-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    {
+        let store = Store::open(&db(&home)).unwrap();
+        store
+            .save_launch(&SeatLaunch {
+                team_id: "t1".into(),
+                team: "port".into(),
+                seat: "builder".into(),
+                cli: SessionSource::Codex,
+                session_id: None,
+                pane_id: "%999999".into(),
+                tmux_target: "geung-port-builder:0.0".into(),
+                tmux_session: "geung-port-builder".into(),
+                team_session: String::new(),
+                dir: home.to_string_lossy().into_owned(),
+                worktree: false,
+                files_dir: home.join("files").to_string_lossy().into_owned(),
+                started: 1_700_000_000,
+                token: "re-adopted-token".into(),
+                signals: mogeung_core::team::SeatSignals {
+                    kind: mogeung_core::team::SignalKind::Hooked,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+    }
+    let state = boot(&home).await;
+    assert_eq!(state.launches.read().await.len(), 1, "the record came back with the daemon");
+    // `R-P5`: the token came back with it, so the seat's hooks are still
+    // heard by the daemon that re-adopted it — and the wire never sees it.
+    let heard = state
+        .seat_signal(
+            "re-adopted-token",
+            mogeungd::hooks::Route::Hook,
+            serde_json::json!({ "hook_event_name": "Stop", "session_id": "x" }),
+        )
+        .await;
+    assert!(heard.is_some(), "the re-adopted seat's token was not matched");
+    assert_eq!(state.launches.read().await[0].signals.events, 1);
+    let mogeung_core::ServerMsg::Seats { launches } = state.seats_msg().await else { panic!("not seats") };
+    assert!(launches[0].token.is_empty(), "the token must not cross the wire");
+    assert_eq!(launches[0].signals.last_event.as_deref(), Some("Stop"));
+    let snap = state.snapshot(false).await;
+    let mogeung_core::ServerMsg::Snapshot { sessions, .. } = snap else { panic!("not a snapshot") };
+    let row = sessions.iter().find(|s| s.id == "seat:t1:builder").expect("the seat's row, from its record");
+    assert!(!row.alive, "its pane is not on this machine, so it is a dead row, not a missing one");
+    assert!(!row.provisional);
+    assert_eq!(row.seat.as_ref().map(|t| t.team.as_str()), Some("port"));
+
+    // A stop clears the record; the next daemon has nothing to re-adopt.
+    state.stop_team("t1").await.unwrap();
+    assert!(Store::open(&db(&home)).unwrap().load_launches().unwrap().is_empty());
+    std::fs::remove_dir_all(&home).ok();
+}

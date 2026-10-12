@@ -63,15 +63,21 @@ export function applyAppZoom(zoom: number): void {
   });
 }
 
-export function nudgeAppZoom(direction: 1 | -1 | 0): void {
-  const { prefs, setPrefs } = useStore.getState();
-  const next =
-    direction === 0
-      ? 1
-      : Math.min(MAX, Math.max(MIN, prefs.appZoom * (direction > 0 ? STEP : 1 / STEP)));
+/**
+ * One step of zoom from `from`: in, out, or back to 1. The arithmetic the
+ * window and the dialogs in windows of their own (`lib/dialogWindow.ts`)
+ * share, so a step is the same size everywhere.
+ */
+export function steppedZoom(from: number, direction: 1 | -1 | 0): number {
+  const next = direction === 0 ? 1 : Math.min(MAX, Math.max(MIN, from * (direction > 0 ? STEP : 1 / STEP)));
   // Snap near-1 back to exactly 1, so "reset" is reachable by stepping as well
   // as by pressing the reset key.
-  const snapped = Math.abs(next - 1) < 0.02 ? 1 : next;
+  return Math.abs(next - 1) < 0.02 ? 1 : next;
+}
+
+export function nudgeAppZoom(direction: 1 | -1 | 0): void {
+  const { prefs, setPrefs } = useStore.getState();
+  const snapped = steppedZoom(prefs.appZoom, direction);
   setPrefs({ appZoom: snapped });
   applyAppZoom(snapped);
 }

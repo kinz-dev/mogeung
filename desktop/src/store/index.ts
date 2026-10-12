@@ -46,6 +46,9 @@ import type {
   Health,
   Note,
   Task,
+  Team,
+  SeatLaunch,
+  TeamSends,
   PromptCluster,
   FailureCluster,
   RecurringFailure,
@@ -267,6 +270,17 @@ export type PaneId =
   | "git"
   | "insight";
 
+/** Why a save was refused, as the daemon said it. `R-P9`, fence 3. */
+export interface WriteRefusal {
+  why: string;
+  /** What is on disk now, when the file moved under you. */
+  current: string | null;
+  /** Its hash — the base a save after a reload would carry. */
+  hash: string;
+  /** The seat mid-turn, when that was the reason; a second save with `force` is the *anyway*. */
+  busy: string | null;
+}
+
 /** One open file in the Code pane. Client-side view state. */
 export interface FileTab {
   path: string;
@@ -275,6 +289,13 @@ export interface FileTab {
   pinned: boolean;
   content: string | null;
   truncated: boolean;
+  /** sha256 of the file as the daemon served it — what a save carries back
+   *  as `base_hash`. `R-P9`. Empty until the body arrives. */
+  hash: string;
+  /** Bumped when a save lands, so the pane can clear *unsaved*. */
+  saved: number;
+  /** The last refusal, until the next save or reload. */
+  refusal: WriteRefusal | null;
   gotoLine: number | null;
   /**
    * The body we are holding is known to be out of date. `R-J38`.
@@ -688,6 +709,24 @@ export interface AppState {
   radius: BlastRadius | null;
   usage: UsageReport | null;
   notes: Note[];
+  /** Every team the daemon holds. `R-P3`. Replaced wholesale on every `teams`
+   *  message and never edited in place, as `notes` is — the daemon owns them. */
+  teams: Team[];
+  /** Whether this connection may save or delete a team — the daemon's answer
+   *  to `team_list`, kept across broadcasts, which carry none. */
+  teamsAllowed: boolean;
+  /** Every seat the daemon has started and not stopped. `R-P4`. */
+  seatLaunches: SeatLaunch[];
+  /** Every team's counters and send log. `R-P6`. Replaced whole on `sends`. */
+  teamSends: TeamSends[];
+  /** A team that came in from a file, for the Teams window to show as an
+   *  unsaved draft with the import's notes. `R-P12`. Taken by the window. */
+  teamDraft: { team: Team; notes: string[] } | null;
+  /**
+   * The last boot's answer, for the Teams window to close on. `R-P14`.
+   * `at` tells two boots of the same team apart.
+   */
+  teamBooted: { team_id: string; started: string[]; revived: string[]; skipped: string[]; at: number } | null;
   /**
    * The daemons this one follows, and where each stands. `R-I21`.
    *
@@ -961,6 +1000,18 @@ export interface AppState {
   ambient: boolean;
   /** Start a session in a terminal. `R-B2`. */
   showLaunch: boolean;
+  /** The Teams window: definitions, edited here first (`R-P3`). */
+  showTeams: boolean;
+  /**
+   * Whether the team board is a pane in the tile tree right now (`R-J132`).
+   * Kept by the dock's add and remove events, read by the top bar's button;
+   * never the thing that opens it — `toggleTeamBoard` is.
+   */
+  teamBoardOpen: boolean;
+  /** Which team the mode shows: a team id, or `null` for all of them. */
+  gauTeam: string | null;
+  /** The seat the mode's seat pane follows: `team_id/seat`, or none. */
+  gauSeat: string | null;
   showTerminal: boolean;
   /** The global-search overlay. `R-F13`, the ask-and-go half. */
   searchOpen: boolean;
@@ -1191,6 +1242,12 @@ export const useStore = create<AppState>((set, get) => ({
   radius: null,
   usage: null,
   notes: [],
+  teams: [],
+  teamsAllowed: true,
+  seatLaunches: [],
+  teamSends: [],
+  teamDraft: null,
+  teamBooted: null,
   peers: null,
   foldedGroups: [],
   noteOpenId: null,
@@ -1251,6 +1308,10 @@ export const useStore = create<AppState>((set, get) => ({
   diffAnswers: {},
   ambient: false,
   showLaunch: false,
+  showTeams: false,
+  teamBoardOpen: false,
+  gauTeam: null,
+  gauSeat: null,
   showTerminal: false,
   searchOpen: false,
   machineId: null,
@@ -1284,6 +1345,9 @@ export const useStore = create<AppState>((set, get) => ({
     // which is the line ADR-0015 and the client contract both draw.
     if (msg.cmd === "note_delete" || msg.cmd === "note_save") {
       client?.send({ cmd: "note_list" });
+    }
+    if (msg.cmd === "team_delete" || msg.cmd === "team_save") {
+      client?.send({ cmd: "team_list" });
     }
   },
 
@@ -1681,6 +1745,9 @@ export const useStore = create<AppState>((set, get) => ({
         // every snapshot rather than once, because a reconnect is a new
         // daemon's worth of state and the notes may be another machine's.
         client?.send({ cmd: "note_list" });
+        // Teams likewise, and for the same reason — and the answer carries
+        // whether this connection may write one, which only the daemon knows.
+        client?.send({ cmd: "team_list" });
         // The follow list too, from a daemon that has one. Cleared first: a
         // remote answers nothing, and the last daemon's list must not show.
         set({ peers: null });
@@ -1898,6 +1965,29 @@ export const useStore = create<AppState>((set, get) => ({
       case "notes":
         set({ notes: msg.notes });
         break;
+      case "teams":
+        set(msg.allowed === undefined ? { teams: msg.teams } : { teams: msg.teams, teamsAllowed: msg.allowed });
+        break;
+      case "seats":
+        set({ seatLaunches: msg.launches });
+        break;
+      case "sends":
+        set({ teamSends: msg.teams });
+        break;
+      case "team_draft":
+        set({ teamDraft: { team: msg.team, notes: msg.notes }, showTeams: true });
+        break;
+      case "team_exported":
+        get().pushNotice(`team exported — ${msg.path}`);
+        break;
+      case "team_booted": {
+        // `R-P14`: one line saying what the boot did, and the answer kept
+        // for the Teams window, which closes on a boot that did something.
+        const team = get().teams.find((t) => t.id === msg.team_id)?.name ?? "team";
+        get().pushNotice(bootLine(team, msg));
+        set({ teamBooted: { team_id: msg.team_id, started: msg.started, revived: msg.revived, skipped: msg.skipped, at: Date.now() } });
+        break;
+      }
       case "peers":
         set({ peers: msg.peers });
         break;
@@ -2168,7 +2258,7 @@ export const useStore = create<AppState>((set, get) => ({
           const st = s.explorer[msg.session_id] ?? emptyExplorer();
           const open = st.open.map((t) =>
             t.rev === null && t.path === msg.path
-              ? { ...t, content: msg.content, truncated: msg.truncated, reload: false }
+              ? { ...t, content: msg.content, truncated: msg.truncated, hash: msg.hash ?? "", reload: false }
               : t,
           );
           // The search panel's preview is a second consumer of the same
@@ -2186,6 +2276,27 @@ export const useStore = create<AppState>((set, get) => ({
             explorer: { ...s.explorer, [msg.session_id]: { ...st, open, pendingFiles } },
             search,
           };
+        });
+        break;
+      // The save's two answers. `R-P9`. The body itself follows as a
+      // `file_content` broadcast, so only the bookkeeping is here.
+      case "file_written":
+        set((s) => {
+          const st = s.explorer[msg.session_id];
+          if (!st) return s;
+          const open = st.open.map((t) =>
+            t.rev === null && t.path === msg.path ? { ...t, hash: msg.hash, saved: t.saved + 1, refusal: null } : t,
+          );
+          return { explorer: { ...s.explorer, [msg.session_id]: { ...st, open } } };
+        });
+        break;
+      case "file_write_refused":
+        set((s) => {
+          const st = s.explorer[msg.session_id];
+          if (!st) return s;
+          const refusal: WriteRefusal = { why: msg.why, current: msg.current ?? null, hash: msg.hash, busy: msg.busy ?? null };
+          const open = st.open.map((t) => (t.rev === null && t.path === msg.path ? { ...t, refusal } : t));
+          return { explorer: { ...s.explorer, [msg.session_id]: { ...st, open } } };
         });
         break;
       case "git_file_at_rev_content":
@@ -2689,4 +2800,16 @@ export function togglePaneHold(paneId: string): void {
   else if (selected) next[paneId] = selected;
   else return; // Nothing on screen to hold onto.
   setScoped({ paneHold: next });
+}
+
+/**
+ * What a boot did, as one line. `R-P14`. Exported for its test.
+ */
+export function bootLine(team: string, o: { started: string[]; revived: string[]; skipped: string[] }): string {
+  if (o.started.length === 0) {
+    return o.skipped.length > 0 ? `${team} is already up — every seat is running` : `${team} booted nothing`;
+  }
+  const again = o.revived.length > 0 ? ` (${o.revived.join(", ")} again, after exiting)` : "";
+  const left = o.skipped.length > 0 ? ` · ${o.skipped.join(", ")} already running` : "";
+  return `${team} booted — started ${o.started.join(", ")}${again}${left}`;
 }

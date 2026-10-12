@@ -5,6 +5,7 @@
 //! matters far less than being able to change `Run` without a migration.
 
 use anyhow::Result;
+use mogeung_core::team::{SeatLaunch, SendEntry, Team};
 use mogeung_core::wire::Note;
 use mogeung_core::{Session, TranscriptEvent};
 use rusqlite::{params, Connection};
@@ -199,6 +200,41 @@ impl Store {
                 path   TEXT PRIMARY KEY,
                 offset INTEGER NOT NULL
             );
+
+            -- Teams. `R-P3`, feature 0051. The user's own writing, like a
+            -- note (ADR-0015; ADR-0043 clause 8): one JSON blob per team,
+            -- seats inside it, mirrored one way to ~/.mogeung/teams/*.md by
+            -- `team.rs`. A blob for the reason sessions are one — the shape
+            -- is moving, and a seat gaining a field must not need a migration.
+            CREATE TABLE IF NOT EXISTS teams (
+                id      TEXT PRIMARY KEY,
+                created INTEGER NOT NULL,
+                updated INTEGER NOT NULL,
+                json    TEXT NOT NULL
+            );
+
+            -- Seat launches. `R-P4`. Derived state: which panes are seats,
+            -- kept so a restarted daemon re-adopts them (ADR-0025's
+            -- amendment, clause 3). Not mirrored (ADR-0043 clause 8).
+            CREATE TABLE IF NOT EXISTS seat_launches (
+                team_id TEXT NOT NULL,
+                seat    TEXT NOT NULL,
+                json    TEXT NOT NULL,
+                PRIMARY KEY (team_id, seat)
+            );
+
+            -- A team's send log. `R-P6`, ADR-0003's amendment fence 4: every
+            -- automatic send visible, and the counters — the chain, the
+            -- hour — derived from this log rather than kept beside it, so a
+            -- restarted daemon counts what it counted before.
+            CREATE TABLE IF NOT EXISTS sends (
+                team_id TEXT NOT NULL,
+                id      TEXT NOT NULL,
+                at      INTEGER NOT NULL,
+                json    TEXT NOT NULL,
+                PRIMARY KEY (team_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS sends_team_at ON sends(team_id, at);
             "#,
         )?;
         Ok(Store {
@@ -421,6 +457,134 @@ impl Store {
     pub fn delete_note(&self, id: &str) -> Result<()> {
         let c = self.conn.lock().unwrap();
         c.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Teams (R-P3, feature 0051)
+    // -----------------------------------------------------------------------
+
+    /// Every team, most recently changed first.
+    ///
+    /// A row that fails to deserialise is skipped with a warning, as a
+    /// session's is: a definition written by a newer daemon must not stop an
+    /// older one from starting, and the blob is still on disk for the newer
+    /// one to read.
+    pub fn load_teams(&self) -> Result<Vec<Team>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT id, json FROM teams ORDER BY updated DESC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (id, json) = r?;
+            match serde_json::from_str::<Team>(&json) {
+                Ok(t) => out.push(t),
+                Err(e) => tracing::warn!("skipping team {id}: {e}"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert or update one team. `created` and `updated` are read from the
+    /// struct, which the state stamps before it gets here.
+    pub fn save_team(&self, t: &Team) -> Result<()> {
+        let json = serde_json::to_string(t)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO teams (id, created, updated, json) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(id) DO UPDATE SET updated = ?3, json = ?4",
+            params![t.id, t.created, t.updated, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_team(&self, id: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM teams WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Every seat launch on record. A row that fails to deserialise is
+    /// skipped with a warning, as a session's is.
+    pub fn load_launches(&self) -> Result<Vec<SeatLaunch>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT team_id, seat, json FROM seat_launches ORDER BY team_id, seat")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (team, seat, json) = r?;
+            match serde_json::from_str::<SeatLaunch>(&json) {
+                Ok(l) => out.push(l),
+                Err(e) => tracing::warn!("skipping seat launch {team}/{seat}: {e}"),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn save_launch(&self, l: &SeatLaunch) -> Result<()> {
+        let json = serde_json::to_string(l)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO seat_launches (team_id, seat, json) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(team_id, seat) DO UPDATE SET json = ?3",
+            params![l.team_id, l.seat, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_launch(&self, team_id: &str, seat: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "DELETE FROM seat_launches WHERE team_id = ?1 AND seat = ?2",
+            params![team_id, seat],
+        )?;
+        Ok(())
+    }
+
+    /// Every send on record, oldest first. `R-P6`. A row that fails to
+    /// deserialise is skipped with a warning.
+    pub fn load_sends(&self) -> Result<Vec<SendEntry>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT team_id, id, json FROM sends ORDER BY at, id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (team, id, json) = r?;
+            match serde_json::from_str::<SendEntry>(&json) {
+                Ok(e) => out.push(e),
+                Err(e) => tracing::warn!("skipping send {team}/{id}: {e}"),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert or update one entry — a held send that is released keeps its
+    /// id and changes its status.
+    pub fn save_send(&self, e: &SendEntry) -> Result<()> {
+        let json = serde_json::to_string(e)?;
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO sends (team_id, id, at, json) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(team_id, id) DO UPDATE SET at = ?3, json = ?4",
+            params![e.team_id, e.id, e.at, json],
+        )?;
+        Ok(())
+    }
+
+    /// Keep the newest `keep` entries of a team, and every held one whatever
+    /// its age: a held send is a question for you, and a question is not
+    /// pruned.
+    pub fn prune_sends(&self, team_id: &str, keep: usize) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "DELETE FROM sends WHERE team_id = ?1 AND json NOT LIKE '%\"status\":\"held\"%' AND id NOT IN \
+             (SELECT id FROM sends WHERE team_id = ?1 ORDER BY at DESC, id DESC LIMIT ?2)",
+            params![team_id, keep as i64],
+        )?;
         Ok(())
     }
 
@@ -872,6 +1036,74 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mogeung-store-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Store::open(&dir.join("t.db")).unwrap()
+    }
+
+    /// A launch record round-trips, and a stop deletes it. `R-P4`.
+    #[test]
+    fn a_seat_launch_survives_the_store_until_stopped() {
+        use mogeung_core::session::SessionSource;
+        let s = store("launches");
+        let l = SeatLaunch {
+            team_id: "t1".into(),
+            team: "port".into(),
+            seat: "builder".into(),
+            cli: SessionSource::Codex,
+            session_id: None,
+            pane_id: "%9".into(),
+            tmux_target: "geung-port-builder:0.0".into(),
+            tmux_session: "geung-port-builder".into(),
+            team_session: String::new(),
+            dir: "/w".into(),
+            worktree: true,
+            files_dir: "/f".into(),
+            started: 7,
+            // `R-P5`: the token is persisted with the record, so a restarted
+            // daemon still hears the seat it re-adopts.
+            token: "s3cret".into(),
+            signals: Default::default(),
+        };
+        s.save_launch(&l).unwrap();
+        s.save_launch(&l).unwrap();
+        let back = s.load_launches().unwrap();
+        assert_eq!(back, vec![l.clone()]);
+        assert_eq!(back[0].token, "s3cret");
+        s.delete_launch("t1", "builder").unwrap();
+        assert!(s.load_launches().unwrap().is_empty());
+    }
+
+    /// A team round-trips whole — seats, policy, the inherited mode as
+    /// absent — and comes back newest first, which is the order the window
+    /// lists them in. `R-P3`.
+    #[test]
+    fn a_team_survives_the_store_and_lists_newest_first() {
+        use mogeung_core::session::SessionSource;
+        use mogeung_core::team::{PermissionMode, Policy, Seat};
+        let s = store("teams");
+        let mut t = Team {
+            id: "t1".into(),
+            name: "port".into(),
+            repo: "/r".into(),
+            guidance: "g".into(),
+            permission: PermissionMode::AcceptEdits,
+            policy: Policy::default(),
+            seats: vec![Seat::new("builder", SessionSource::Codex)],
+            paused: false,
+            created: 1,
+            updated: 1,
+        };
+        s.save_team(&t).unwrap();
+        t.id = "t2".into();
+        t.updated = 5;
+        t.seats[0].permission = Some(PermissionMode::Plan);
+        s.save_team(&t).unwrap();
+        let back = s.load_teams().unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].id, "t2");
+        assert_eq!(back[0].seats[0].permission, Some(PermissionMode::Plan));
+        assert_eq!(back[1].seats[0].permission, None);
+        assert_eq!(back[1].policy.hop_budget, 3);
+        s.delete_team("t1").unwrap();
+        assert_eq!(s.load_teams().unwrap().len(), 1);
     }
 
     /// The retention pass keeps every session a note anchors to, so this list

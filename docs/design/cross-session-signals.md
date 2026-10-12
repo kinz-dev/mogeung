@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-10-08
+updated: 2026-10-11
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -142,6 +142,76 @@ therefore the same limit: a wrapper script calling `claude` is not `claude`.
 carries the reasoning; an unclaimed opencode pane is *waiting for your first
 prompt*, because opencode writes a session the moment it is spoken to.
 
+### A pane the daemon made: a seat (`R-P4`)
+
+The one pane that is **not** found is one the daemon started itself, in Gau
+Geung mode ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s amendment
+of 2026-10-09). Its launch record — pane id, the session id the daemon chose
+where the CLI takes one, the tmux session, the directory — is persisted, and
+the scan publishes a row from it from birth: the chosen id as the row's id,
+or `seat:<team>:<seat>`, never `pane:` and never `provisional`, with the
+seat's tag on it. The provisional pass skips a seat's pane. When the CLI's own
+session appears, `tag_seats` — a post-pass shaped like the branch refresh —
+carries the tag onto it by the chosen id or by the pane it runs in, and the
+seat row stands down; a seat whose pane has gone stays as a dead row until
+the team is stopped, so a seat that died is seen rather than silently
+missing ([ADR-0038](../decisions/0038-a-pane-running-an-agent-is-a-session-provisionally.md)'s
+amendment; [architecture.md](architecture.md#the-daemon-may-own-a-process)).
+
+And a seat may **tell** the daemon things (`R-P5`), where every found pane
+is only read: a Claude Code or opencode seat, and a Qwen seat in a home of
+mogeung's own, posts its hook events and its status line to the daemon's
+loopback receiver with a token of its own, and the tag on its row says
+`hooked`; a Codex seat, or a Qwen seat in the user's home, carries none and
+says `plain`, so its silence is read as what it is. What arrives is
+classified the way transcript lines are and lands on the launch record's
+`signals` — the last event and its line, the context fill, the model — for
+the Teams window and the policy engine. `hooks.rs` has the tables and the fences;
+[wire-protocol.md](wire-protocol.md#teams-r-p3-feature-0051) the routes.
+
+And since `R-P6` a seat may be **sent to** — the one path from an agent's
+output to an agent's input that ADR-0003's amendment admits, and only for a
+seat. Three things cause a send: a seat's own words through `mogeung-send`, a
+command the launcher puts first on its `PATH`, which posts to the daemon's
+receiver with the seat's token and names a seat of its own team; a wake the
+team's policy declares on a seat's `Stop` or `Exit`, read from its hook, from
+a plain seat's registry going busy to idle, or from its pane going; and a
+watchdog on a seat silent long enough. Each is judged by `policy.rs` against
+the team's pause switch, hop budget and hourly cap, then typed through
+**one function**, `AppState::type_into`, which takes a launch record and no
+other address — an observed session cannot be named to it, which is fence 1
+at the type level — and below it `send::send`'s three tmux invocations are
+still the only code that reaches a pane. A send the policy holds lands on the
+recipient's row as `held_send` and ranks it as needing you; the Teams window
+releases or drops it. Your own send into a seat is what it always was, logged
+beside the automatic ones, and it starts the chain again.
+
+### Reading a seat's pane (`R-P11`)
+
+And since `R-P11` a seat's pane is **read**, on
+[ADR-0044](../decisions/0044-mogeung-reads-a-seats-pane-and-no-other.md)'s
+terms and for a seat and no other. `screen.rs` takes a `SeatPane`, a type
+whose one constructor takes a launch record — a provisional row, an attach
+target, a pane of your own are not that type and cannot be captured — runs
+`capture-pane` on it once per rest, and classifies the last forty lines
+through one `match` per CLI into a closed set: permission menu, plan
+approval, question, trust, login, press Enter, rate limit, exited to a
+shell, at the prompt, working, and `unknown` for everything else, never the
+nearest guess. What rides on the row is the shape, the few lines it was read
+from and when; the capture lives in the scan's memory for one classification
+and is never stored, sent or shown to a model. An unchanged screen is not
+reclassified; a pane that cannot be captured is `unknown` with a note; a
+screen that matches nothing raises `screen:<cli>` through the Health canary,
+because four CLIs redraw their gates without warning and `A54` is the bet.
+A gate ranks the row with *(screen)* in its detail, after the registry's
+facts ([attention-ranking.md](attention-ranking.md#what-ranking-does-not-read)).
+One press exists, and it is the one the shape asks for: under the team's
+`readiness_press` — off by default until a week of captures says the shape
+is read reliably — *press Enter* is pressed once per screen, as a logged
+automatic send that is not a hop. Nothing else is ever pressed from a
+reading: a permission menu is the seat's permission mode, settled at launch,
+and trust and login are yours.
+
 ### Handing a folder to the desktop (`R-J34`)
 
 `open_folder` — `open` on macOS, `xdg-open` elsewhere — is in the daemon
@@ -218,6 +288,12 @@ are opposite kinds of act and both end at a terminal.
   with the follow's *allow changes* consent, and the owning daemon then
   applies the gate to the relay as to any client — over a LAN it is refused
   there, in its words.
+- **A wind-down** (`R-P15`) is this act done for you, for seats only: your
+  press types the team's declared `wind_down` text into every running seat
+  through the same one function (`type_into`, a launch record and no other
+  address), logged as a `wind_down` send that is neither a hop nor automatic.
+  The pause switch does not hold it, the judge does not see it, and nothing
+  of it can reach a session you started by hand.
 
 ## What the signals do not read
 

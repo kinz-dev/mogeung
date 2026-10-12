@@ -1,0 +1,7 @@
+cli=qwen
+version=0.23.0
+gate=prompt
+captured=2026-10-09T15:01:58+0100
+pane=140x42
+lines=17
+how=tmux capture-pane -p, trailing blank lines dropped, last 40

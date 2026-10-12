@@ -1,9 +1,12 @@
 ---
 title: The window
 status: active
-updated: 2026-10-08
+updated: 2026-10-11
 covers:
   - desktop/src/wire/client.ts
+  - desktop/src/lib/dialogWindow.ts
+  - desktop/src/ui/Form.tsx
+  - desktop/src/ui/QueuePanel.tsx
   - desktop/src/store/index.ts
   - desktop/src/store/prefs.ts
   - desktop/src/lib/keymap.ts
@@ -12,6 +15,7 @@ covers:
   - desktop/src/lib/federation.ts
   - desktop/src/lib/dial.ts
   - desktop/src/lib/tmux.ts
+  - desktop/src/lib/teamMode.ts
   - desktop/src/lib/gitActions.ts
   - desktop/src/lib/popout.ts
   - desktop/src-tauri/src/lib.rs
@@ -61,6 +65,90 @@ graph's lanes and the file trees are pure functions under `lib/` with their
 own tests; nothing about the topology is asked of the daemon, since every
 commit row carries its parents.
 
+**Teams and seats are the daemon's, cached here** (`R-P3`, `R-P4`). `teams`
+and `seatLaunches` are replaced wholesale on every `teams` and `seats`
+message, as `notes` is; `teamsAllowed` is kept only from the answer to
+`team_list`, because a broadcast carries no gate. The Teams window
+(`ui/TeamsWindow.tsx`, the top bar's Users button, `Alt+Shift+g` — spelled
+`Alt+Shift+KeyG` in `MAC_KEYS`) edits a draft and sends it whole; the daemon
+validates, stamps and mints, and `lib/teams.ts` mirrors its rules so Save is
+grey with the daemon's words before a click. A seat's row on the queue
+carries a `team/seat` chip from the `seat` tag the daemon puts on it, so a
+seat never passes for a session you started by hand. `teamSends` is the
+third cache of the family (`R-P6`): every team's counters and send log,
+replaced whole on `sends`, shown in the Teams window and in the mode.
+
+**Gau Geung, the team board** (`R-P7`, `ui/GauGeungMode.tsx`, `lib/teamMode.ts`;
+panes since `R-J132`) is three kinds of pane in the main tile tree: the
+**board** (`team-board`, one), the **seat pane** (`team-seat`, one, following
+the pick), and a **terminal pane per seat** you attach
+(`seat-term:<team>/<seat>`, a `tmux attach` of its own like the Agent pane,
+scaled by its font). The bare `Alt+g` (`Alt+KeyG` on a Mac, where `⌥g`
+composes `©`) raises the board, or closes it when it is the pane in front;
+the top bar's button does the same and is lit from the dock's own add and
+remove events (`teamBoardOpen`), so a board closed from its tab reads as
+closed. It took the chord from the Agent pane, which moved to `Alt+e` (the
+Mac keeps `⌘G`). `R-P7` had built this as a mode over the whole window with
+a second dockview and `Esc` to leave, the wall's shape; the first real team
+(2026-10-11) showed the Attention list, the rail and `Alt+a`'s chat all
+underneath it and its panels unable to dock with anything else, and the
+owner asked for *"a normal UI"* — so the second dockview, its per-machine
+layout and the overlay went, and the three panes dock, split, tab and pop
+out as every other pane does, in the one saved layout. A pick on the board
+opens the seat pane beside it when it is not there and raises it when it is a
+background tab (`showSeatPane`); an attach adds the terminal pane beside
+whatever is in front, keyed by the seat so a second attach raises the first
+(`attachSeatTerminal`). Nothing is fetched beyond `team_list` when the board
+mounts — teams, launches, sessions, the queue and the send logs are read as
+the store already holds them. The daemon's grouped tmux layout (`R-P8`) is
+for a terminal and is not mirrored — the board's header offers
+`tmux attach -t geung-<team>` to copy, read off the launch record's
+`team_session`. The board shows OpenRig's **five lanes** for seats in a team —
+needs you, parked with baton, blocked on agents, now, just finished — each
+card carrying mogeung's badge inside, and `lib/teamMode.ts` reads the two
+idle lanes off the send log: a seat idle after a message arrived holds the
+baton, one idle after sending waits on the seat it told; both rank
+`WAITING` on the queue, and the lane is what the board knows that the queue
+does not. Below it the **topology** is a graph and a table of the same
+seats, together and with no toggle: an edge is the last send between two
+seats, held edges drawn as waiting for you with the hop on them; a row names
+its state and its **source** — `(hook)`, `(plugin)`, `(transcript)`, and
+`(screen)` once `R-P11` reads a pane — its context fill where a status line
+gave one and *unknown · no hooks* where none did, its tokens, and its sends.
+The policy strip carries the counters, the pause switch and every held send
+with release and drop, through the same verbs the Teams window sends. Tabs
+show one team or all of them; each team keeps its own counters and switch.
+
+**The one editable file pane** (`R-P9`): a file of a seat's worktree — the
+session carries a seat's tag and `seatLaunches` says its directory is a
+worktree the daemon made — opens writable, with the header saying so, and
+nothing else does: a hand-started session, a seat in the team's checkout, a
+revision tab and a file cut short by the cap keep the viewer and its
+message. `file_content` carries the daemon's `hash`; the pane pins the hash
+the draft **began** from on the first keystroke and sends it with
+`file_write`, so `R-J38`'s reloads can arrive while you type without putting
+theirs over yours or quietly moving the base. A refusal lands on the tab:
+*moved* shows how many lines theirs and yours differ on and offers to reload
+theirs; *busy* names the seat and offers *save anyway*, the one override.
+`Ctrl+S` is the editor's own chord, as the scratch pane's is.
+
+**What a seat's pane showed** (`R-P11`) rides on its row as `screen` — the
+shape, the lines it was read from, when — and the mode's seat pane shows all
+three, so a misread is visible rather than silent; the topology names
+`(screen)` as a state's source only when the queue's reason is that reading,
+because a hook's fact outranks it. The window never answers a gate: the
+excerpt is beside *Attach terminal*, and the one press the policy may make is
+the daemon's.
+
+**A team in and out of a file** (`R-P12`): the Teams window's *Import…* asks
+for a file — the shell's picker, a typed path in a browser tab — and sends
+`team_import`; the daemon's `team_draft` becomes the editor's draft, unsaved,
+with the import's notes shown above the verdict row until you press Save or
+start another. *Export…* on a saved team asks where (`chooseSavePath` with a
+`.json` filter) and sends `team_export`; with no picker the daemon writes
+beside the mirror, and either way a notice names the path. `teamDraft` in the
+store is a hand-off the window takes and clears, not state it keeps.
+
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept
 in the log; an `info` shows as a toast and is not counted. `capNotices` keeps
@@ -105,7 +193,16 @@ the window. The terminal panel is its own dockview since `R-B56`: one shell
 per split, tabs behind a hover grip, a colour per shell. Chrome state rides in
 the client's preferences rather than in dockview's serialisation, because the
 surrounding furniture's widths are the user's settings and must survive the
-layout being reset.
+layout being reset. The Attention list is virtualised, and its rows are keyed
+by what they are — a heading's fold key, a session's id — for the virtualizer
+as well as for React: a measured height remembered by index stays with the
+index when the list regroups, and the row that moves there is never measured
+again (`R-J129`). Seats — the sessions mogeung started itself, tagged `seat` on
+the wire — sit first, under one *Team* heading with a heading per team beneath
+it, whatever the machine and folder toggles say (`R-J131`, `groupQueue` in
+`lib/queue.ts`): the keystone ADR's line between owned and observed is drawn
+on the list itself, the section folds like any other by key, and your own
+sessions keep their groups below it.
 
 **The wall** (`R-B50`) is neither: an overlay on a chord, every live session a
 tile keyed by id so it never moves, no state but a boolean, fetching nothing.
@@ -209,6 +306,53 @@ Tauri close button never raises the `beforeunload` dockview listens for, so
 OS window once its group has gone; a second close passes through, so a client
 that never answers cannot trap a window. The cost is coupling: one dockview,
 one store, one socket, so a popout cannot outlive the main window.
+
+**Dialogs through the same door** (`R-J128`, ADR-0037's 2026-10-11
+amendment). The New session and Teams dialogs open in OS windows of their own:
+`Dialog` asks `lib/dialogWindow.ts` for a window, which is `window.open` on
+the same empty `popout.html`, and portals its panel into that document once
+it has loaded — the stylesheets copied across as dockview does, the theme
+mirrored, the window titled after the dialog. The React tree, the store and
+the socket stay in the main window, which is why this is not the arcade's
+page-of-its-own: a Teams page with no store would have to be told the teams
+and the sends over a channel. The main window keeps a dimmed backdrop that
+names the window and raises it on a click, Escape in either window closes,
+and the store's one flag per dialog is the one copy — `showDialog` raises the
+window that is open rather than setting a flag already set. A dialog window
+is *claimed* under its label, so the shell's `popout:close` closes the dialog
+first and the dialog then destroys the window through `popout_close`; a
+window closed without asking is noticed by a poll on `closed`. Each window
+opens at the size it was last left at (`launchSize`, `teamsSize`, CSS
+pixels) and has a zoom of its own: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` inside it
+step `dialogZoom`, a CSS `zoom` on that page's root, starting from the main
+window's zoom and remembered apart from it — the page's own zoom, which the
+main window refuses for the terminal's sake, costs a dialog nothing and asks
+nothing of the shell. Where `window.open` is refused the dialog stays inline,
+as every other dialog still is.
+
+**Every close goes through the shell** (`R-J130`). A page's own
+`window.close()` destroys the webview on this shell and leaves the OS window
+standing, and the first cut fell back to it whenever a dialog closed before
+its page had said its label — which `tauri dev` did on every open, because
+StrictMode mounts, unmounts and mounts a dialog once. So `popout.rs` now
+announces every window it opens to the main window as `popout:opened`, with
+the label and the URL asked for; a dialog marks its URL (`?dialog=teams`),
+`lib/dialogWindow.ts` waits for that label and closes by it, a page that never
+loads is closed the same way while the dialog stays inline, and `Dialog` lets
+the window go a tick after it leaves so a StrictMode re-run takes it over
+instead of opening another. The window is not a dockview pop-out and cannot
+be docked back: the panel is the dialog, and there is nothing to dock.
+
+**The two forms** (`R-J130`, `ui/Form.tsx`) are sections in colours: a
+`Section` is a card with a header strip, an icon and a title in its own
+colour and a bar of it down the left edge; a `Field` puts its label in one
+column so a section's controls start on one edge; a `Callout` is the tinted
+sentence not to skim. New session is agent, where and how, in blue, green and
+purple, with the one verb in a footer that stays while the lists scroll;
+Teams is team, policy, sends and seats, in blue, purple, green and teal, the
+list of teams down the left with the chosen one marked, and the verdict — what
+is wrong, unsaved, or saved — in a footer of its own. The two layers keep
+their order: the team's guidance and mode come before any seat's.
 
 ## Client state, split by what it is about (`R-I11`, ADR-0023)
 

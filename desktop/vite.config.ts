@@ -26,7 +26,17 @@ export default defineConfig({
       ignored: ["**/src-tauri/**"],
     },
   },
-  // Tauri expects a fixed dist dir and no source maps in release.
+  // Tauri expects a fixed dist dir, and gets no source maps in release.
+  //
+  // **`sourcemap: false`, since 2026-10-12.** This line said `true` from the
+  // first React commit while the comment above it said the opposite, and the
+  // cost was measured before it was turned off: the maps were 59 MB of a
+  // 79 MB `dist`, which `tauri-codegen` compresses and embeds into the shell
+  // binary at compile time — 11 MB of the 54 MB executable, about 5 s of
+  // the Vite build and about 22 s of the shell's own compile, every install.
+  // The trade is that a stack trace in the installed window's inspector
+  // (`devtools` is on in release, `R-J89`) names a minified line rather than
+  // a source one. The dev server is unaffected: it serves its own maps.
   //
   // Two pages: the window, and the arcade's window of its own
   // (`src/lib/arcadeWindow.ts`). `popout.html` is not one of them — it is
@@ -34,7 +44,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "esnext",
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, "index.html"),

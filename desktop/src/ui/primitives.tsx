@@ -281,6 +281,7 @@ export function Checkbox({
   label,
   title,
   disabled = false,
+  className,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
@@ -289,6 +290,7 @@ export function Checkbox({
   /** Shown, dimmed and inert. A control that is simply gone invites "where did
    *  it go"; one that is visible with a reason beside it answers that. */
   disabled?: boolean;
+  className?: string;
 }) {
   return (
     <label
@@ -299,6 +301,7 @@ export function Checkbox({
         disabled
           ? "cursor-not-allowed opacity-50"
           : "cursor-pointer hover:bg-[var(--state-hover)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-[var(--ring)] has-[:focus-visible]:-outline-offset-2",
+        className,
       )}
     >
       <input
@@ -326,6 +329,7 @@ export function Segmented<T extends string>({
   options,
   onChange,
   className,
+  size = "sm",
 }: {
   value: T;
   // `ReactNode` and not `string` since `R-J51`: the New session window's CLI
@@ -335,9 +339,19 @@ export function Segmented<T extends string>({
   options: readonly { value: T; label: React.ReactNode; title?: string }[];
   onChange: (v: T) => void;
   className?: string;
+  /** `sm` sits inside a row or a strip; `md` is a form's own control, with a
+   *  border round the set so it reads as one choice. `R-J130`. */
+  size?: "sm" | "md";
 }) {
   return (
-    <div role="tablist" className={cn("flex items-center gap-0.5", className)}>
+    <div
+      role="tablist"
+      className={cn(
+        "flex items-center gap-0.5",
+        size === "md" && "rounded-sm border border-[var(--border)] bg-[var(--bg)] p-0.5",
+        className,
+      )}
+    >
       {options.map((o) => (
         <button
           key={o.value}
@@ -347,7 +361,8 @@ export function Segmented<T extends string>({
           title={o.title}
           onClick={() => onChange(o.value)}
           className={cn(
-            "rounded-sm px-1.5 py-0.5 text-2xs whitespace-nowrap",
+            "rounded-sm whitespace-nowrap",
+            size === "md" ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-2xs",
             interactive,
             value === o.value
               ? "bg-[var(--state-focus)] text-[var(--text-strong)]"

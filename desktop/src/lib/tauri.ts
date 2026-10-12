@@ -109,17 +109,43 @@ export async function ptyWrite(id: string, data: string, origin?: string): Promi
  * at all, and a top-level import of a plugin makes `npm run dev` fail on load
  * rather than degrade.
  */
-export async function chooseSavePath(suggested: string): Promise<string | null | undefined> {
+export async function chooseSavePath(suggested: string, ext = "md"): Promise<string | null | undefined> {
   if (!isTauri()) return undefined;
   try {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const picked = await save({
       defaultPath: suggested,
-      filters: [{ name: "Markdown", extensions: ["md"] }],
+      filters: [{ name: ext === "json" ? "JSON" : "Markdown", extensions: [ext] }],
     });
     return picked ?? null;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Ask for a file. `R-P12`: a team definition in, mogeung's own or an OpenRig
+ * rig.yaml. The same two routes as `chooseFolder`, for the same reason — the
+ * daemon reads and checks whatever path arrives, so a typed one in a browser
+ * tab is as safe as a picked one. `null` means you declined.
+ */
+export async function chooseFile(prompt: string, extensions: string[], startIn?: string): Promise<string | null> {
+  if (!isTauri()) {
+    const typed = window.prompt(prompt, startIn ?? "");
+    return typed?.trim() ? typed.trim() : null;
+  }
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      directory: false,
+      multiple: false,
+      defaultPath: startIn && startIn.trim() ? startIn : undefined,
+      title: prompt,
+      filters: [{ name: "team definition", extensions }],
+    });
+    return typeof picked === "string" ? picked : null;
+  } catch {
+    return null;
   }
 }
 

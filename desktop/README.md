@@ -88,11 +88,12 @@ last one's files.
 
 ### What it needs installed
 
-Linux wants webkit's headers and the packaging tools; on Debian/Ubuntu that is:
+Linux wants webkit's headers, the packaging tools and `mold`, the linker the
+repository's `.cargo/config.toml` asks for; on Debian/Ubuntu that is:
 
 ```sh
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev mold
 ```
 
 macOS needs the Xcode command-line tools and produces `.app` and `.dmg` instead;

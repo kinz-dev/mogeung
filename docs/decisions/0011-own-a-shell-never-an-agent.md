@@ -1,7 +1,7 @@
 ---
 title: mogeung may own a shell, and runs it under tmux so nothing started inside it is trapped
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 decided: 2026-07-29
 ---
 
@@ -121,6 +121,38 @@ decision with a much worse security story, and this ADR does not license it.
 ## Amendment — 2026-10-08
 
 **One write path into the shell pane exists, on a click, and it is not the one this ADR ruled out.** `R-O12` (2026-08-29) pastes a command the human asked a model to write into the human's own shell, *unsubmitted*, through `R-B54`'s paste-buffer path; it runs only on `Alt+Enter`, a keystroke of the human's. "Nothing types into it" is narrowed to: nothing types into it unasked, nothing presses Enter for you, nothing runs on a timer — and the ruled-out list under Consequences stands word for word for those three. ADR-0008, named above as untouched, is superseded by [ADR-0034](0034-the-draft-is-a-chat-ask.md). Two details have also moved since the port: the shells are named per panel (`mog-<n>`, `desktop/src/lib/tmux.ts`) rather than per worktree, and the widget is xterm.js in the Tauri shell since [ADR-0020](0020-the-egui-client-is-retired.md), not `term.rs`.
+## Amendment — 2026-10-09
+
+**A seat's pane has a write path. The shell pane still has none.**
+[ADR-0003's amendment of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started)
+lets the daemon own a **seat** — an agent CLI it started itself, in Gau Geung
+mode — and owning it means delivering text and pressing Enter under that
+amendment's fences: declared text, visible, budgeted, stoppable. The mechanism
+is `R-B54`'s paste-buffer path addressed to the pane by id, the same one the
+2026-10-08 amendment above describes for the human's `Alt+Enter`.
+
+What the Decision rules out — *"a write path from mogeung into this pty: no
+'run this command', no 'paste the prompt and press Enter', no scheduled
+check"* — **stands word for word for the shell pane**, and for the Agent pane
+of every session mogeung did not start. The shell is yours; nothing types into
+it unasked, nothing presses Enter for you, nothing runs on a timer. A seat
+pane is the one kind of pane those three sentences no longer cover, and the
+row says it is a seat so that nobody has to guess which kind they are looking
+at.
+
+The trapdoor this ADR exists to keep shut is now load-bearing twice. A seat
+runs under tmux, so it outlives mogeung and is reachable from any terminal —
+the property this page bought for the shell, now bought for the agent too.
+And a seat is never on a pty mogeung owns: the no-tmux fallback, the one
+place this page admits it can trap something, **cannot host a seat**. Without
+tmux there are no seats, and the window says so rather than offering a trapped
+one.
+
+The first *Revisit if* above — the shell pane used mostly to start sessions —
+has its answer: starting a seat is a button, under
+[ADR-0025's amendment of this date](0025-run-a-process-you-named-never-an-agent.md#amendment--2026-10-09),
+and the shell stays what it was.
+
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

@@ -9,10 +9,14 @@ use serde::{Deserialize, Serialize};
 
 /// What a client asks the daemon to do.
 ///
-/// Note what is absent: nothing here starts, steers or stops an agent. mogeung
-/// observes sessions you run yourself. The only thing it launches is a real
-/// interactive `claude` in your own terminal, which is the opposite of wrapping
-/// it.
+/// Note what is absent: nothing here starts, steers or stops an agent **you**
+/// started. mogeung observes sessions you run yourself; the only thing it
+/// launches for one is a real interactive CLI in your own terminal, which is
+/// the opposite of wrapping it. Since 2026-10-09 a *seat* — an agent the
+/// daemon starts itself, in Gau Geung mode, from a definition it already holds
+/// — is owned ([ADR-0003](../../../docs/decisions/0003-observe-do-not-spawn.md),
+/// amended); the `Team*` verbs below carry those definitions, and never a
+/// command line (ADR-0025's amendment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum ClientMsg {
@@ -127,6 +131,23 @@ pub enum ClientMsg {
     ListDir { session_id: SessionId, path: String },
     /// Read one file of the session's worktree, same path rules as `ListDir`.
     FetchFile { session_id: SessionId, path: String },
+    /// Save a file in a **team's worktree** — the one write verb into a
+    /// worktree the protocol has, `R-P9`, ADR-0019's 2026-10-09 amendment.
+    /// The session is a seat's row; its launch record says whether `dir` is
+    /// a worktree the daemon made, and nothing else may be written.
+    /// `base_hash` is the `hash` the `FileContent` carried (empty for a file
+    /// that did not exist); a file that moved is refused with the current
+    /// text, a seat mid-turn in the worktree is refused unless `force`.
+    /// Judged like the seat verbs, and behind the write guard.
+    FileWrite {
+        session_id: SessionId,
+        path: String,
+        content: String,
+        #[serde(default)]
+        base_hash: String,
+        #[serde(default)]
+        force: bool,
+    },
     /// Every file path under the session root in one answer, for go-to-file.
     /// Capped and gitignore-aware; still read-only (`R-B25`).
     ListTree { session_id: SessionId },
@@ -350,6 +371,65 @@ pub enum ClientMsg {
         repo: Option<String>,
     },
     NoteDelete { id: String },
+
+    // -- Teams. `R-P3`, feature 0051, pillar P.
+    //
+    // A definition, never a command line: ADR-0025 clause 1 holds for a seat
+    // as for a run. `TeamList` is open like `NoteList`; `TeamSave` and
+    // `TeamDelete` are judged like the run verbs (loopback, or `--allow-run`
+    // with a token — ADR-0025's amendment, clause 4), because a definition is
+    // what the launcher will start, and a socket that may not start a run may
+    // not write what a later click starts either.
+    /// Send every team. Small by nature, so it is not paged.
+    TeamList,
+    /// Create or update one. An empty `id` mints a new team and the daemon
+    /// answers with the id it chose; `created` and `updated` are the daemon's
+    /// to stamp whatever the client sent.
+    TeamSave { team: crate::team::Team },
+    TeamDelete { id: String },
+    /// Start every seat of a team that is not already running. `R-P4`. Judged
+    /// like `RunStart`; what it starts is the definition and nothing else.
+    TeamBoot { id: String },
+    /// End every seat's process. The worktrees stay; removing one is the verb
+    /// below, which refuses when the worktree is dirty.
+    TeamStop { id: String },
+    /// Wind the team down (`R-P15`): type the policy's wind-down message
+    /// into every running seat, stop each as its note arrives, its turn
+    /// ends, or the deadline passes, and take the team session down when the
+    /// last is stopped. `TeamStop` meanwhile cuts it short. Judged like
+    /// `TeamStop`.
+    TeamWindDown { id: String },
+    /// Remove one stopped seat's worktree, when it is clean.
+    SeatWorktreeRemove { team_id: String, seat: String },
+    /// The pause switch. `R-P6`, ADR-0003's amendment fence 4: no automatic
+    /// send while set; typing in a pane always works. On the definition, so
+    /// it survives a restart, and the only verb that writes `paused` —
+    /// `TeamSave` keeps what the daemon holds. Judged like `TeamSave`.
+    TeamPause { id: String, paused: bool },
+    /// Release a send the policy held — deliver it now. Your act, so the
+    /// chain starts again after it and the hour does not count it. Judged
+    /// like `SendToSession`: it types into a seat.
+    SendRelease { team_id: String, id: String },
+    /// Drop a held send: never delivered. Judged like `SendRelease`.
+    SendDrop { team_id: String, id: String },
+    /// The definition out as a file: its own JSON, whole, at `path` or
+    /// beside the markdown mirror under `~/.mogeung/teams/`. `R-P12`. Judged
+    /// like `TeamSave` — it writes a file where you say.
+    TeamExport {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// A file in — mogeung's own JSON, or an OpenRig `rig.yaml` read as
+    /// other people's configuration — answered as a `TeamDraft` for the
+    /// window to show and you to save, never stored by itself. `R-P12`.
+    /// Judged like `TeamSave`.
+    TeamImport { path: String },
+    /// Stop one seat and start it again, with a handover composed from what
+    /// its earlier session and its teammates did, as the team's policy says
+    /// (`after_read` holds it for you, `automatic` delivers it, `none` starts
+    /// it cold and the row says so). `R-P10`. Judged like `TeamBoot`.
+    SeatRestart { team_id: String, seat: String },
 
     // -- Scratch files. `R-L5`, ADR-0035.
     //
@@ -1286,6 +1366,29 @@ pub enum ServerMsg {
         path: String,
         content: String,
         truncated: bool,
+        /// sha256 of the whole file on disk, as served. `R-P9`: what a save
+        /// carries back as `base_hash`. Empty from a daemon older than this.
+        #[serde(default)]
+        hash: String,
+    },
+    /// A save landed. `R-P9`. To the asker; the new `FileContent` follows
+    /// as a broadcast so every pane on the file agrees.
+    FileWritten { session_id: SessionId, path: String, hash: String },
+    /// A save was refused. `R-P9`, fence 3: `moved` when the file on disk is
+    /// not the one the save was based on — `current` is what is there now,
+    /// `hash` its hash, so the window shows the difference and reloads;
+    /// `busy` names the seat mid-turn, and a second save with `force` is
+    /// the *unless you say so*.
+    FileWriteRefused {
+        session_id: SessionId,
+        path: String,
+        why: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<String>,
+        #[serde(default)]
+        hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        busy: Option<String>,
     },
     /// A session's workspace: its own root, the folders added to it, and the
     /// ones that have since gone away. `R-J40`.
@@ -1449,6 +1552,40 @@ pub enum ServerMsg {
     /// one daemon cannot drift — which is the property daemon ownership was
     /// chosen for.
     Notes { notes: Vec<Note> },
+
+    /// Every team the daemon holds. `R-P3`.
+    ///
+    /// The whole set, after any change, for the reason `Notes` is: two windows
+    /// on one daemon cannot drift. `allowed` is whether *this* connection may
+    /// save or delete one — ADR-0025 clause 4 travelling to the client, the way
+    /// `RunConfigs.allowed` does, so the window can say why a button is grey
+    /// rather than letting a click fail.
+    Teams {
+        teams: Vec<crate::team::Team>,
+        /// Present on the answer to `TeamList`, absent on a broadcast: a
+        /// broadcast reaches every window and has no one connection to
+        /// answer for, and a window keeps the answer it was given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allowed: Option<bool>,
+    },
+    /// Every seat the daemon has started and not stopped. `R-P4`. The whole
+    /// set, after a boot or a stop, and in answer to `TeamList`.
+    Seats { launches: Vec<crate::team::SeatLaunch> },
+    /// A team's definition was written as a file. `R-P12`. To the asker.
+    TeamExported { team_id: String, path: String },
+    /// What a `TeamBoot` did, seat by seat. `R-P14`. To the asker, after the
+    /// `Seats` broadcast: `started` were started by this boot, `revived`
+    /// among them had a record but no pane, `skipped` were running and left
+    /// alone. All three empty is a team already up.
+    TeamBooted { team_id: String, started: Vec<String>, revived: Vec<String>, skipped: Vec<String> },
+    /// A file came in as a draft for review: the team, unsaved, and what the
+    /// import had to say about it. `R-P12`. To the asker.
+    TeamDraft { team: crate::team::Team, notes: Vec<String> },
+    /// Every team's counters and send log. `R-P6`, fence 4's *visible*: the
+    /// chain, the hour, the pause, what is held, and the log of what was
+    /// sent, to whom, why and what became of it. The whole set, after every
+    /// change, and in answer to `TeamList`.
+    Sends { teams: Vec<crate::team::TeamSends> },
 
     /// Every scratch file's name, newest first. `R-L5`.
     ///

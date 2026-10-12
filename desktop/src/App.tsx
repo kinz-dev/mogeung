@@ -42,10 +42,13 @@ import { ConfigWindow } from "@/ui/ConfigWindow";
 import { ConnectionsWindow } from "@/ui/ConnectionsWindow";
 import { PromptWindow } from "@/ui/PromptWindow";
 import { LaunchWindow } from "@/ui/LaunchWindow";
+import { TeamsWindow } from "@/ui/TeamsWindow";
 import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
+import { SeatDetail, SeatTerminal, TeamBoard } from "@/ui/GauGeungMode";
+import { BOARD_PANE, SEAT_PANE, TERM_KIND } from "@/lib/teamMode";
 import { FileDrop } from "@/ui/FileDrop";
 import { GitOpsPopup } from "@/ui/GitOpsPopup";
 import { BranchesPopup } from "@/ui/BranchesPopup";
@@ -61,6 +64,7 @@ import { ZoomPane } from "@/ui/ZoomPane";
 import { BottomDock } from "@/ui/BottomDock";
 import { closePanesFor, dropOrphanHolds, filePanes, setDock, diffPanes } from "@/lib/panes";
 import { listenForPopoutCloses, retheme, watchPopouts } from "@/lib/popout";
+import { listenForDialogWindows } from "@/lib/dialogWindow";
 import { PaneScope, paneKind } from "@/lib/paneScope";
 import { PaneActions, PaneTab } from "@/ui/PaneChrome";
 import { useNotifications } from "@/lib/notify";
@@ -165,6 +169,13 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // One file of one commit, out of the Git tool window. `R-D30`. Its id
   // names a sha, so it is stripped on restore with the `file:` panes.
   diff: pane("diff", DiffPane),
+  // Gau Geung, as panes since `R-J132`: the team board and the seat pane are
+  // one each, and a seat's terminal is one per seat, keyed by it in the id
+  // (`seat-term:<team>/<seat>`). A terminal is scaled by its font, as the
+  // Agent pane is; the board and the seat pane take the CSS zoom.
+  [BOARD_PANE]: pane(BOARD_PANE, TeamBoard),
+  [SEAT_PANE]: pane(SEAT_PANE, SeatDetail),
+  [TERM_KIND]: pane(TERM_KIND, SeatTerminal, { scale: false }),
 };
 
 const LAYOUT_KEY = "mogeung.layout";
@@ -272,6 +283,9 @@ export default function App() {
     // close button sends its group home first (`R-J108`, `popout.rs`).
     watchPopouts(event.api);
     void listenForPopoutCloses(event.api);
+    // And which window each `window.open` became, for the dialogs in windows
+    // of their own (`R-J130`).
+    void listenForDialogWindows();
 
     // When a session ends, its Agent pane goes with it — anchored or not.
     // Registered here rather than imported by the store, so the dependency
@@ -316,6 +330,17 @@ export default function App() {
     // selection. `closeAgentPane` clears its own; this catches the layouts that
     // lost a pane some other way.
     dropOrphanHolds(event.api);
+
+    // Whether the team board is up, for the top bar's button (`R-J132`):
+    // read off the dock's own events, so a board closed from its tab, or
+    // restored with the layout, reads right without anyone setting a flag.
+    useStore.setState({ teamBoardOpen: !!event.api.getPanel(BOARD_PANE) });
+    event.api.onDidAddPanel((p) => {
+      if (p.id === BOARD_PANE) useStore.setState({ teamBoardOpen: true });
+    });
+    event.api.onDidRemovePanel((p) => {
+      if (p.id === BOARD_PANE) useStore.setState({ teamBoardOpen: false });
+    });
 
     // Clicking into an Agent pane makes its session the current one.
     //
@@ -397,6 +422,7 @@ export default function App() {
       <ConnectionsWindow />
       <PromptWindow />
       <LaunchWindow />
+      <TeamsWindow />
       <AmbientWindow />
         <LabelWindow />
         <SearchOverlay />

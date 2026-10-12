@@ -1,0 +1,7 @@
+cli=codex
+version=codex-cli 0.154.0
+gate=trust
+captured=2026-10-09T15:01:16+0100
+pane=140x42
+lines=9
+how=tmux capture-pane -p, trailing blank lines dropped, last 40

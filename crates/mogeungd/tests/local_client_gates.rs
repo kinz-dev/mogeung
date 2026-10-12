@@ -136,3 +136,127 @@ async fn without_a_peer_address_run_and_send_are_still_judged_by_the_bind() {
     let why = ask(&url, send("no-such-session"), error_text).await;
     assert!(why.contains("beyond loopback"), "{why}");
 }
+
+// -- Teams. `R-P3`, feature 0051: a definition is written like a run is
+// started (ADR-0025's amendment, clause 4) — by this machine whatever the
+// bind, by anyone else only with `--allow-run`.
+
+fn teams_allowed(msg: ServerMsg) -> Option<Option<bool>> {
+    match msg {
+        ServerMsg::Teams { allowed, .. } => Some(allowed),
+        _ => None,
+    }
+}
+
+fn team_named(name: &str) -> ClientMsg {
+    ClientMsg::TeamSave {
+        team: mogeung_core::team::Team {
+            id: String::new(),
+            name: name.into(),
+            repo: String::new(),
+            guidance: String::new(),
+            permission: Default::default(),
+            policy: Default::default(),
+            seats: vec![],
+            paused: false,
+            created: 0,
+            updated: 0,
+        },
+    }
+}
+
+#[tokio::test]
+async fn the_window_on_this_machine_may_write_a_team_on_a_lan_bound_daemon() {
+    let url = lan_bound_daemon("team-local", true).await;
+    let allowed = ask(&url, ClientMsg::TeamList, teams_allowed).await;
+    assert_eq!(allowed, Some(true), "the list answers the asker with its own gate");
+    // Past the gate, the next refusal in line is validation — the error names
+    // the field, not the bind.
+    let why = ask(&url, team_named(""), error_text).await;
+    assert!(why.contains("needs a name"), "{why}");
+}
+
+#[tokio::test]
+async fn without_a_peer_address_a_team_write_is_judged_by_the_bind() {
+    let url = lan_bound_daemon("team-unknown", false).await;
+    assert_eq!(ask(&url, ClientMsg::TeamList, teams_allowed).await, Some(false));
+    let why = ask(&url, team_named("port"), error_text).await;
+    assert!(why.contains("--allow-run"), "{why}");
+    let why = ask(&url, ClientMsg::TeamDelete { id: "x".into() }, error_text).await;
+    assert!(why.contains("--allow-run"), "{why}");
+}
+
+/// `R-P4`: starting a team is judged like starting a run. Past the gate, the
+/// next refusal in line is the lookup — the error names the team, not the bind.
+#[tokio::test]
+async fn the_window_on_this_machine_is_past_the_boot_gate() {
+    let url = lan_bound_daemon("boot-local", true).await;
+    let why = ask(&url, ClientMsg::TeamBoot { id: "no-such-team".into() }, error_text).await;
+    assert!(why.contains("no team with id"), "{why}");
+    let why = ask(&url, ClientMsg::TeamStop { id: "no-such-team".into() }, error_text).await;
+    assert!(why.contains("no seat of this team is running"), "{why}");
+}
+
+/// `R-P6`: the pause switch is judged like a save, and a release or a drop
+/// like your own send — a release types into a seat. Past either gate the
+/// next refusal is the lookup, in words.
+#[tokio::test]
+async fn pause_is_judged_like_a_save_and_a_release_like_a_send() {
+    let url = lan_bound_daemon("sends-lan", false).await;
+    let why = ask(&url, ClientMsg::TeamPause { id: "x".into(), paused: true }, error_text).await;
+    assert!(why.contains("--allow-run"), "{why}");
+    for cmd in [
+        ClientMsg::SendRelease { team_id: "x".into(), id: "y".into() },
+        ClientMsg::SendDrop { team_id: "x".into(), id: "y".into() },
+    ] {
+        let why = ask(&url, cmd, error_text).await;
+        assert!(why.contains("beyond loopback"), "{why}");
+    }
+    let url = lan_bound_daemon("sends-local", true).await;
+    let why = ask(&url, ClientMsg::TeamPause { id: "x".into(), paused: true }, error_text).await;
+    assert!(why.contains("no team with id"), "{why}");
+    // `R-P12`: a file out and a file in are judged like a save too.
+    let lan = lan_bound_daemon("files-lan", false).await;
+    for cmd in [ClientMsg::TeamExport { id: "x".into(), path: None }, ClientMsg::TeamImport { path: "/x.json".into() }] {
+        let why = ask(&lan, cmd, error_text).await;
+        assert!(why.contains("--allow-run"), "{why}");
+    }
+    let why = ask(&url, ClientMsg::TeamExport { id: "x".into(), path: None }, error_text).await;
+    assert!(why.contains("no team with id"), "{why}");
+    let why = ask(&url, ClientMsg::SendRelease { team_id: "x".into(), id: "y".into() }, error_text).await;
+    assert!(why.contains("no held send"), "{why}");
+}
+
+/// `R-P9`: the one write into a worktree is judged like the seat verbs and
+/// sits behind the write guard; past both, the lookup refuses in words.
+#[tokio::test]
+async fn a_worktree_write_is_judged_like_a_seat_verb_and_the_write_guard() {
+    let write = || ClientMsg::FileWrite {
+        session_id: "x".into(),
+        path: "a.rs".into(),
+        content: String::new(),
+        base_hash: String::new(),
+        force: false,
+    };
+    let url = lan_bound_daemon("write-lan", false).await;
+    let why = ask(&url, write(), error_text).await;
+    assert!(why.contains("token") || why.contains("--allow-run"), "{why}");
+    let url = lan_bound_daemon("write-local", true).await;
+    let why = ask(&url, write(), error_text).await;
+    assert!(why.contains("not one this daemon knows"), "{why}");
+}
+
+#[tokio::test]
+async fn without_a_peer_address_boot_stop_and_remove_are_judged_by_the_bind() {
+    let url = lan_bound_daemon("boot-unknown", false).await;
+    for cmd in [
+        ClientMsg::TeamBoot { id: "x".into() },
+        ClientMsg::TeamStop { id: "x".into() },
+        ClientMsg::SeatWorktreeRemove { team_id: "x".into(), seat: "s".into() },
+        // `R-P10`: a restart is a boot of one seat, judged the same way.
+        ClientMsg::SeatRestart { team_id: "x".into(), seat: "s".into() },
+    ] {
+        let why = ask(&url, cmd, error_text).await;
+        assert!(why.contains("--allow-run"), "{why}");
+    }
+}

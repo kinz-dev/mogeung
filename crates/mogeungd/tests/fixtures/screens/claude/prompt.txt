@@ -1,0 +1,40 @@
+▝▜██████▀  Haiku 5.5 · Claude Max                                            │ gau-geung origin/gau-geung                               ?:5
+ ▝▝   ▝▝   ~/projects/mogeung                                                │/ : search
+                                                                             │  .git
+                                                                             │  .idea
+                                                                             │  .vscode                                                  
+                                                                             │  assets
+                                                                             │  crates
+                                                                             │  desktop
+                                                                             │  docs
+                                                                             │  node_modules                                             
+                                                                             │  scripts                                                ?:5
+                                                                             │  target                                                   
+                                                                             │  web
+                                                                             │  󰊢 .gitignore                              2026-08-10 16:58
+                                                                             │  󰍔 AGENTS.md                               2026-10-09 10:06
+                                                                             │   Cargo.lock                              2026-09-22 00:27
+                                                                             │   Cargo.toml                              2026-08-26 16:56
+                                                                             │   CLAUDE.md
+                                                                             │   LICENSE                                 2026-07-27 11:23
+                                                                             │   mprocs.yaml                             2026-08-28 12:58
+                                                                             │  󰍔 README.md                               2026-10-09 09:59
+                                                                             │  󰍔 STATUS.md                               2026-10-09 11:56
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+                                                                             │
+▰▱▱▱▱▱▱▱ 11% 5h   ▰▰▱▱▱▱▱▱ 31% 7d                        0: Compact      [-] │
+                                                         ◐ medium · /effort  │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── geung-a54 ─
+❯ Try "write a test for keymap.ts"
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

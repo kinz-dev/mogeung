@@ -9,13 +9,14 @@
  * nowhere you can see while using it.
  */
 
-import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun } from "lucide-react";
+import { Activity, Bell, BellOff, Command, Flag, HeartPulse, Keyboard, Monitor, Moon, Network, RefreshCw, Rocket, ScreenShare, Settings, SquareTerminal, Sun, Users } from "lucide-react";
 import { useStore } from "@/store";
 import { maskToken } from "@/lib/connections";
 import { useChord } from "@/lib/keymap";
+import { showDialog } from "@/lib/dialogWindow";
 import { Chip, Dim, IconButton, Tooltip } from "@/ui/primitives";
 import { isSameMachine } from "@/wire/types";
-import { showPane } from "@/lib/panes";
+import { showPane, toggleTeamBoard } from "@/lib/panes";
 import { toggleTerminal } from "@/lib/shellDock";
 import { WindowControls } from "@/ui/WindowControls";
 import { ConnectionSwitcher } from "@/ui/ConnectionSwitcher";
@@ -30,6 +31,7 @@ export function TopBar() {
   // every one of them named a chord this window is not listening for.
   const paletteChord = useChord("palette");
   const terminalChord = useChord("terminal.toggle");
+  const gauChord = useChord("gaugeung");
   const rescanChord = useChord("rescan");
   const healthChord = useChord("health");
   const keymapChord = useChord("keymap");
@@ -45,6 +47,7 @@ export function TopBar() {
   // never updates, so the button's lit state was permanently whatever it was
   // when the bar first mounted.
   const showTerminal = useStore((s) => s.showTerminal);
+  const teamBoardOpen = useStore((s) => s.teamBoardOpen);
   const rescanning = useStore((s) => s.rescanning);
   const daemonStatus = useStore((s) => s.daemonStatus);
   const bell = bellState(prefs.notify, daemonStatus?.mode === "hosting");
@@ -131,9 +134,30 @@ export function TopBar() {
       <div className="ml-auto flex items-center gap-0.5">
         <IconButton
           title="start a session — opens a terminal on the daemon's machine, and mogeung watches it like any other"
-          onClick={() => useStore.setState({ showLaunch: true })}
+          onClick={() => showDialog("launch")}
         >
           <Rocket size={13} />
+        </IconButton>
+        {/* Teams. `R-P3`: the definitions, kept by the daemon under
+            ~/.mogeung and edited here first. Beside the launcher because it
+            is the other way a session comes to exist — a seat the daemon
+            starts from one of these. Both open in windows of their own
+            (`R-J128`), so a second press brings the window forward. */}
+        <IconButton
+          title="teams — define a team of seats (Gau Geung mode)"
+          onClick={() => showDialog("teams")}
+        >
+          <Users size={13} />
+        </IconButton>
+        {/* The team board. `R-P7`: the five lanes, the topology, a seat's
+            pane and its terminals — a pane in the tile tree since `R-J132`,
+            lit while it is open. */}
+        <IconButton
+          title={`Gau Geung — the team board${gauChord ? `  (${gauChord})` : ""}`}
+          active={teamBoardOpen}
+          onClick={() => toggleTeamBoard()}
+        >
+          <Network size={13} />
         </IconButton>
         <IconButton
           title={

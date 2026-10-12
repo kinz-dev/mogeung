@@ -24,8 +24,8 @@ use std::sync::Arc;
 /// constant-time; a miss is a plain 401, never a hang. No token configured
 /// means the historical open-on-loopback behaviour, unchanged.
 pub fn router_with_token(state: Arc<AppState>, token: Option<String>) -> Router {
-    let r = router(state);
-    match token.filter(|t| !t.is_empty()) {
+    let r = router(state.clone());
+    let r = match token.filter(|t| !t.is_empty()) {
         None => r,
         Some(t) => r.layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
@@ -43,6 +43,126 @@ pub fn router_with_token(state: Arc<AppState>, token: Option<String>) -> Router 
                 }
             },
         )),
+    };
+    // Merged **after** the layer, on purpose: a seat's hooks carry the
+    // seat's own token and nothing else, and the shared token is a window's
+    // key, not a process's. `R-P5`, `hooks.rs`.
+    r.merge(seat_router(state))
+}
+
+/// The seat's own two routes: loopback only, one seat's token, a bounded
+/// body. `R-P5`, ADR-0043 clause 3. Outside every other gate by design —
+/// see `router_with_token`.
+fn seat_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route(crate::hooks::HOOK_PATH, axum::routing::post(seat_hook))
+        .route(crate::hooks::STATUS_PATH, axum::routing::post(seat_status))
+        .route(crate::hooks::SEND_PATH, axum::routing::post(seat_send))
+        .route(crate::hooks::NOTE_PATH, axum::routing::post(seat_note))
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
+        .with_state(state)
+}
+
+/// A seat's own words to a teammate. `R-P6`. The same three fences as the
+/// hook routes — loopback, the seat's token, a bounded body — then the
+/// policy: the daemon resolves the name within the sender's team, judges
+/// the send against the hop budget, the cap and the pause, and types it or
+/// holds it. The answer is one line and a status the generated command
+/// turns into an exit code: 200 delivered, 202 held, anything else refused.
+async fn seat_send(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    if !crate::hooks::admit(peer) {
+        return (StatusCode::FORBIDDEN, "a seat is heard on loopback only").into_response();
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let to = q.get("to").map(String::as_str).unwrap_or("");
+    let text = String::from_utf8_lossy(&body);
+    match state.seat_send(bearer, to, &text).await {
+        None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
+        Some((code, line)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), line).into_response(),
+    }
+}
+
+/// A seat's note about its own work. `R-P15`. The same fences as `seat_send`
+/// — loopback, the seat's token, a bounded body — and no policy: a note goes
+/// to the daemon, not to a seat. Kept beside the seat's files; during a
+/// wind-down it is the seat's answer.
+async fn seat_note(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    if !crate::hooks::admit(peer) {
+        return (StatusCode::FORBIDDEN, "a seat is heard on loopback only").into_response();
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let text = String::from_utf8_lossy(&body);
+    match state.seat_note(bearer, &text).await {
+        None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
+        Some((code, line)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), line).into_response(),
+    }
+}
+
+async fn seat_hook(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    seat_post(peer, state, headers, body, crate::hooks::Route::Hook).await
+}
+
+async fn seat_status(
+    Peer(peer): Peer,
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    seat_post(peer, state, headers, body, crate::hooks::Route::Status).await
+}
+
+/// Admit, match, read. The order is the fence: the peer is judged before
+/// the token is compared, and the token before the body is parsed, so an
+/// address that is not loopback learns nothing — not even whether its token
+/// was one.
+async fn seat_post(
+    peer: Option<std::net::SocketAddr>,
+    state: Arc<AppState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+    route: crate::hooks::Route,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    if !crate::hooks::admit(peer) {
+        return (StatusCode::FORBIDDEN, "a seat's hooks are heard on loopback only").into_response();
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    // A body that is not JSON still reaches the seat's record, as unread:
+    // `classify` answers `Malformed` for anything that is not an object.
+    let json = serde_json::from_slice::<serde_json::Value>(&body).unwrap_or(serde_json::Value::Null);
+    match state.seat_signal(bearer, route, json).await {
+        None => (StatusCode::UNAUTHORIZED, "no seat of this daemon's holds that token").into_response(),
+        Some(text) => (StatusCode::OK, text).into_response(),
     }
 }
 
@@ -727,10 +847,11 @@ async fn get_file(
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
     match state.read_file(&id, &q.path).await {
-        Ok((content, truncated)) => Json(serde_json::json!({
+        Ok((content, truncated, hash)) => Json(serde_json::json!({
             "path": q.path,
             "content": content,
             "truncated": truncated,
+            "hash": hash,
         })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
@@ -1326,6 +1447,17 @@ fn send_reply(reply: &tokio::sync::mpsc::Sender<ServerMsg>, msg: ServerMsg) {
     }
 }
 
+/// Why a team may not be written from here, in words that name the clause.
+///
+/// The same sentence shape as a run refusal: a definition is what the
+/// launcher starts, so a socket that may not start a run may not write one.
+fn team_refusal() -> String {
+    "this daemon is reachable beyond loopback and was not started with --allow-run, \
+     so it will not take a team definition from here (ADR-0025 clause 4, amended \
+     2026-10-09 for seats). Edit it from a window on that machine."
+        .to_string()
+}
+
 /// Whether a command changes the repository. `R-D19`.
 ///
 /// Enumerated in one function rather than checked at each verb, so that adding
@@ -1360,6 +1492,9 @@ fn is_write(cmd: &ClientMsg) -> bool {
             // able to extend the read surface of the daemon it is watching.
             | ClientMsg::AddWorkspaceDir { .. }
             | ClientMsg::RemoveWorkspaceDir { .. }
+            // The one write into a worktree (`R-P9`, ADR-0019's amendment):
+            // a repository write by the plainest definition.
+            | ClientMsg::FileWrite { .. }
     )
 }
 
@@ -1484,11 +1619,18 @@ async fn handle(
             };
             // Three subprocesses. Off the reactor like every other shell-out.
             let t = target.clone();
-            let sent = tokio::task::spawn_blocking(move || crate::send::send(&t, &text))
+            let typed = text.clone();
+            let sent = tokio::task::spawn_blocking(move || crate::send::send(&t, &typed))
                 .await
                 .unwrap_or_else(|e| Err(anyhow::anyhow!("the send did not run: {e}")));
             match sent {
-                Ok(()) => send_reply(&reply, ServerMsg::SentToSession { session_id, target }),
+                Ok(()) => {
+                    // A seat's log keeps your send beside the automatic ones,
+                    // and the chain starts again after it (`R-P6`). An
+                    // observed session has no ledger: nothing happens.
+                    state.human_sent(&session, &text).await;
+                    send_reply(&reply, ServerMsg::SentToSession { session_id, target })
+                }
                 Err(e) => return err(e),
             }
         }
@@ -2072,12 +2214,53 @@ async fn handle(
         }
         ClientMsg::FetchFile { session_id, path } => {
             match state.read_file(&session_id, &path).await {
-                Ok((content, truncated)) => state.broadcast(ServerMsg::FileContent {
+                Ok((content, truncated, hash)) => state.broadcast(ServerMsg::FileContent {
                     session_id,
                     path,
                     content,
                     truncated,
+                    hash,
                 }),
+                Err(e) => err(e),
+            }
+        }
+        // The one write into a worktree. `R-P9`, ADR-0019's amendment: a
+        // seat's worktree only, judged like the seat verbs (fence 4) and
+        // behind the write guard above like every other write. The answer
+        // goes to the asker; the new body is broadcast so a second pane on
+        // the same file agrees.
+        ClientMsg::FileWrite { session_id, path, content, base_hash, force } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.write_seat_file(&session_id, &path, &content, &base_hash, force).await {
+                Ok(Ok(hash)) => {
+                    send_reply(
+                        reply,
+                        ServerMsg::FileWritten { session_id: session_id.clone(), path: path.clone(), hash: hash.clone() },
+                    );
+                    state.broadcast(ServerMsg::FileContent {
+                        session_id,
+                        path,
+                        content,
+                        truncated: false,
+                        hash,
+                    });
+                }
+                Ok(Err((why, current, hash))) => send_reply(
+                    reply,
+                    ServerMsg::FileWriteRefused {
+                        session_id,
+                        path,
+                        busy: match &why {
+                            crate::write::Refusal::Busy { seat } => Some(seat.clone()),
+                            crate::write::Refusal::Moved => None,
+                        },
+                        why: why.sentence(),
+                        current,
+                        hash,
+                    },
+                ),
                 Err(e) => err(e),
             }
         }
@@ -2366,6 +2549,189 @@ async fn handle(
             }
             Err(e) => err(e),
         },
+        // -- Teams. `R-P3`, feature 0051. The list is open and answers the
+        // asker with whether *it* may write; a save or delete is judged like
+        // a run verb (ADR-0025's amendment, clause 4) and answered by a
+        // broadcast of the whole set, which carries no `allowed` because a
+        // broadcast has no one connection to answer for.
+        ClientMsg::TeamList => match state.teams() {
+            Ok(teams) => {
+                send_reply(
+                    reply,
+                    ServerMsg::Teams {
+                        teams,
+                        allowed: Some(state.runs.allowed() || from_this_machine),
+                    },
+                );
+                send_reply(reply, state.seats_msg().await);
+                send_reply(reply, state.sends_msg().await);
+            }
+            Err(e) => err(e),
+        },
+        ClientMsg::TeamSave { team } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.save_team(team) {
+                Ok(teams) => state.broadcast(ServerMsg::Teams { teams, allowed: None }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::TeamDelete { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.delete_team(&id) {
+                Ok(teams) => state.broadcast(ServerMsg::Teams { teams, allowed: None }),
+                Err(e) => err(e),
+            }
+        }
+        // Boot and stop. `R-P4`. The same gate as a run start, for the same
+        // reason; the seat rows are refreshed at once rather than at the
+        // next scan, so the click is answered by rows, not by a wait.
+        ClientMsg::TeamBoot { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            let outcome = state.boot_team(&id).await;
+            state.broadcast(state.seats_msg().await);
+            state.refresh_provisional().await;
+            state.publish_queue().await;
+            match outcome {
+                Ok(o) => {
+                    // A handover for every seat that joined a team with
+                    // history, composed in the background: a model's answer
+                    // is seconds, and the boot is answered by rows and a
+                    // word, not by a wait. `R-P10`.
+                    if !o.started.is_empty() {
+                        let st = state.clone();
+                        let team_id = id.clone();
+                        let started = o.started.clone();
+                        tokio::spawn(async move { st.handovers_after_boot(&team_id, &started).await });
+                    }
+                    // `R-P14`: the asker hears what happened, seat by seat,
+                    // so the window can close on a boot that did something
+                    // and say so when it did nothing.
+                    send_reply(
+                        reply,
+                        ServerMsg::TeamBooted { team_id: id, started: o.started, revived: o.revived, skipped: o.skipped },
+                    );
+                }
+                Err(e) => err(e),
+            }
+        }
+        // A definition out as a file, and a file in as a draft. `R-P12`.
+        // Judged like a save: an export writes where you say, an import
+        // reads a file you named. The draft is the asker's to review.
+        ClientMsg::TeamExport { id, path } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.export_team(&id, path.as_deref()) {
+                Ok(p) => send_reply(reply, ServerMsg::TeamExported { team_id: id, path: p.to_string_lossy().into_owned() }),
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::TeamImport { path } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.import_team_file(&path) {
+                Ok(imported) => send_reply(reply, ServerMsg::TeamDraft { team: imported.team, notes: imported.notes }),
+                Err(e) => err(e),
+            }
+        }
+        // Stop one seat and start it again, then the handover its policy
+        // says, composed in the background with the earlier session as its
+        // predecessor. `R-P10`. Judged like a boot.
+        ClientMsg::SeatRestart { team_id, seat } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.restart_seat(&team_id, &seat).await {
+                Ok((_, predecessor)) => {
+                    state.broadcast(state.seats_msg().await);
+                    state.refresh_provisional().await;
+                    state.publish_queue().await;
+                    let st = state.clone();
+                    tokio::spawn(async move {
+                        st.handover_for(&team_id, &seat, crate::handover::Reason::Restart, Some(predecessor)).await;
+                    });
+                }
+                Err(e) => err(e),
+            }
+        }
+        // Wind the team down (`R-P15`): the question is typed now, the
+        // seats are stopped as they answer, and every window hears each
+        // step. Judged like a stop.
+        ClientMsg::TeamWindDown { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            if let Err(e) = state.wind_down_team(&id).await {
+                err(e);
+            }
+        }
+        ClientMsg::TeamStop { id } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.stop_team(&id).await {
+                Ok(_) => {
+                    state.broadcast(state.seats_msg().await);
+                    state.broadcast(state.sends_msg().await);
+                    state.refresh_provisional().await;
+                    state.publish_queue().await;
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::SeatWorktreeRemove { team_id, seat } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.remove_seat_worktree(&team_id, &seat).await {
+                Ok(dir) => send_reply(
+                    reply,
+                    ServerMsg::Error {
+                        message: format!("removed the worktree at {} — its branch stays", dir.display()),
+                    },
+                ),
+                Err(e) => err(e),
+            }
+        }
+        // The pause switch and the two verbs on a held send. `R-P6`. Pause
+        // is judged like a save — it writes the definition; release and
+        // drop like a human's send — a release types into a seat, and a
+        // drop is the same decision the other way.
+        ClientMsg::TeamPause { id, paused } => {
+            if !(state.runs.allowed() || from_this_machine) {
+                return err(anyhow::anyhow!(team_refusal()));
+            }
+            match state.set_paused(&id, paused).await {
+                Ok(teams) => {
+                    state.broadcast(ServerMsg::Teams { teams, allowed: None });
+                    state.broadcast(state.sends_msg().await);
+                }
+                Err(e) => err(e),
+            }
+        }
+        ClientMsg::SendRelease { team_id, id } => {
+            if let Some(why) = send_refusal(state, from_this_machine) {
+                return err(anyhow::anyhow!(why));
+            }
+            if let Err(e) = state.release_send(&team_id, &id).await {
+                return err(e);
+            }
+        }
+        ClientMsg::SendDrop { team_id, id } => {
+            if let Some(why) = send_refusal(state, from_this_machine) {
+                return err(anyhow::anyhow!(why));
+            }
+            if let Err(e) = state.drop_send(&team_id, &id).await {
+                return err(e);
+            }
+        }
         // -- Scratch files. `R-L5`, ADR-0035. The list is broadcast so two
         // windows agree on what exists; a file's content goes to whoever
         // asked, because a read must never open a pane somewhere else.
@@ -2704,6 +3070,15 @@ mod write_guard_tests {
             // (ADR-0014), and an open socket must not be able to make this
             // daemon talk to someone else's server.
             ClientMsg::GitFetch { session_id: id(), repo: None },
+            // The one write into a worktree (`R-P9`): a repository write by
+            // the plainest definition, and the newest line in this list.
+            ClientMsg::FileWrite {
+                session_id: id(),
+                path: "a.rs".into(),
+                content: String::new(),
+                base_hash: String::new(),
+                force: false,
+            },
         ] {
             assert!(is_write(&cmd), "{cmd:?} changes the repository");
         }

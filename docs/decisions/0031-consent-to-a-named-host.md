@@ -1,7 +1,7 @@
 ---
 title: Consent to a remote model endpoint names the host, and may be given in the config file
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 decided: 2026-08-28
 supersedes: ADR-0030
 ---
@@ -149,6 +149,28 @@ reading it. One host, or all of them, said out loud.
 ## Amendment — 2026-10-08
 
 **Clause 4 is decided per connection, not from the bind — a rule in force since 2026-09-23 and recorded on the wrong ADR until today.** "Refused entirely on a non-loopback bind with no flag" became, on 2026-09-23: a client on this machine, a loopback peer, may use `model_chat` whatever the daemon is bound to; every other client is judged by the bind and the flag exactly as before. The reason is `R-J103`: `R-I17`'s step 7 lets the daemon a window hosts bind the LAN from `config.toml`, and the window on that same machine was refused its own chat. The amendment was appended to [ADR-0030](0030-a-model-reads-the-evidence.md), the ADR this one superseded, so the active ADR stated the dead rule for a fortnight. It lives here now; ADR-0030's amendments of 2026-09-23 remain the fuller argument, and [ADR-0032](0032-the-chat-panel-remembers.md) and [ADR-0034](0034-the-draft-is-a-chat-ask.md), which restate clause 4, read this one. A relayed `model_chat` for a mirrored session is still refused: chat never asks about another machine's session ([ADR-0013](0013-one-window-one-daemon.md), second amendment).
+
+## Amendment — 2026-10-09
+
+**Clause 1, carried forward from ADR-0030, is narrowed: the model has no path
+into an *observed* session's input.** Into a **seat's** input — a session the
+daemon started itself under
+[ADR-0003's amendments of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started)
+— one path exists: a **handover** composed in the daemon on a seat's start,
+restart or baton, under the fences recorded in the later of those two
+amendments. Asked 2026-10-09: *"a handover recap should be model composed,
+which could write much better than a human user."*
+
+Clauses 2 to 6 stand in full, and two of them are what keep a handover
+honest. Clause 5: it is text sent *to* a seat, shown and logged as the
+model's, never a column about the seat and never a tier. Clause 3, the one
+this ADR replaced: a handover composed on a host the file does not consent to
+is not composed, and the seat starts without one. Clause 6 holds as written —
+with no endpoint there is no handover, and nothing blocks a scan tick to
+write one. [ADR-0034](0034-the-draft-is-a-chat-ask.md)'s amendment of this
+date narrows its *never composes-and-delivers in one gesture* to the human's
+draft, which is the other half of this change.
+
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*

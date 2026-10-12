@@ -1,7 +1,7 @@
 ---
 title: Attach a terminal through tmux, never own one
 status: active
-updated: 2026-10-08
+updated: 2026-10-09
 decided: 2026-07-26
 supersedes: ADR-0002
 ---
@@ -139,6 +139,24 @@ here.
 ## Amendment — 2026-10-08
 
 **Two things moved around this ADR and neither was recorded here.** First, the pane resolution it built — which tmux pane belongs to which session — became the delivery target of [ADR-0003](0003-observe-do-not-spawn.md)'s 2026-08-29 amendment: a human-confirmed one-shot send (`R-B54`) goes into exactly that pane. "mogeung also still types nothing" above remains true of this ADR's own mechanism, the attach, and is no longer true of the product; ADR-0008, cited as standing, is superseded by [ADR-0034](0034-the-draft-is-a-chat-ask.md). Second, the vendored egui terminal widget named under Consequences (`crates/egui-term`) was deleted with the egui client ([ADR-0020](0020-the-egui-client-is-retired.md)); the attach is rendered by xterm.js in the Tauri shell with the same argv (`desktop/src/lib/tmux.ts`). The decision is untouched: attach, never own.
+
+## Amendment — 2026-10-09
+
+**A seat's pane is read.** This ADR renders a pane and says nothing about
+reading one — *owning the loop is forbidden; rendering it is not* left
+reading unnamed on either side. [ADR-0044](0044-mogeung-reads-a-seats-pane-and-no-other.md)
+names it: the daemon captures the pane of a **seat** — one it created under
+[ADR-0003's amendment of this date](0003-observe-do-not-spawn.md#amendment--2026-10-09-mogeung-may-own-a-seat-it-started)
+— each rest, classifies the tail into a closed set of gate shapes, honestly
+`unknown` otherwise, and **never captures a pane it did not create**. The
+pane resolution this ADR built for observed sessions is untouched and is not
+an input to that capture, by type: an attach target is not a seat's pane.
+*"mogeung also still types nothing"* holds for this mechanism exactly as the
+2026-10-08 amendment left it; the one press a screen reading may trigger is
+ADR-0044's fence 5, for a seat, under ADR-0003's fences. The Revisit
+condition above — a real local control channel — is ADR-0044's too, and
+would retire the reading for that CLI before it retired the attach.
+
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*
