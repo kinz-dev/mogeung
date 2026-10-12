@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-10-08
+updated: 2026-10-12
 ---
 
 # Getting started
@@ -23,7 +23,9 @@ an agent — you keep using the CLI exactly as you do today.
 ## Requirements
 
 Rust 1.85+, `git`, and at least one of the four CLIs on `PATH`; `tmux`, so a
-session can be hosted in a pane. macOS or Linux.
+session can be hosted in a pane. macOS or Linux. On Linux, `mold` as well
+(`sudo apt install mold`): the repository's `.cargo/config.toml` links with it,
+and a build without it stops at the first link with *cannot find 'ld'*.
 
 The window additionally needs node 20+ and the system webview
 (`libwebkit2gtk-4.1-dev` on Linux) to build, since it is a Tauri application —

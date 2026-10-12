@@ -1,0 +1,21 @@
+# Link with mold on Linux.
+#
+# A release install links at least seven binaries — the daemon, its five
+# extra bins and the Tauri shell with webkit in it — and GNU `ld`, the
+# default, does each one mostly on one core. mold does the same job in
+# parallel and produces the same kind of executable. Added 2026-10-12 after
+# measuring where `./scripts/install.sh` spends its three minutes.
+#
+# Scoped to the Linux target, so a macOS checkout is untouched: its system
+# linker is already fast and does not know this flag. On Linux it needs
+# mold installed — `sudo apt install mold` — and a machine without it fails
+# at the first link with `collect2: fatal error: cannot find 'ld'`, which is
+# the one symptom to recognise. gcc 12 and later understand `-fuse-ld=mold`
+# directly, so no `clang` is needed.
+#
+# This file is read by cargo from the working directory upwards, which is
+# why one copy at the repo root also covers `desktop/src-tauri`, cargo's own
+# workspace root for the shell.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

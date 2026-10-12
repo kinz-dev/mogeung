@@ -104,6 +104,11 @@ cargo run -q -p mogeungd --bin runconfigs   # what run configurations exist here
 cargo run -q -p mogeungd --bin beacon -- listen   # does a LAN beacon cross the mesh? (A44)
 ```
 
+**Linux links with mold** — `.cargo/config.toml` passes `-fuse-ld=mold` for
+the Linux target, so every cargo command here needs `sudo apt install mold`
+once. Without it the first link fails with `collect2: fatal error: cannot
+find 'ld'`, which looks like a broken toolchain and is not. macOS is untouched.
+
 ### Run the sweep after any agent CLI upgrade
 
 `A4` says the formats are undocumented and move without warning, and the
