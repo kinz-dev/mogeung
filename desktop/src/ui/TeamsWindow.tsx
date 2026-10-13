@@ -75,7 +75,11 @@ import { chooseFile, chooseFolder, chooseSavePath } from "@/lib/tauri";
 import {
   countersLine,
   firstProblem,
+  effortsFor,
   freeSeatName,
+  listedModel,
+  modelLine,
+  modelsFor,
   newSeat,
   newTeam,
   permissionFor,
@@ -84,6 +88,7 @@ import {
   sendsFor,
   signalsLine,
   teamSummary,
+  withModel,
 } from "@/lib/teams";
 import { Dialog } from "@/ui/Dialog";
 import { Callout, Field, Section } from "@/ui/Form";
@@ -94,6 +99,8 @@ import {
   PERMISSION_LABEL,
   PERMISSION_MODES,
   sourceLabel,
+  type CliModels,
+  type Effort,
   type Handover,
   type PermissionMode,
   type Seat,
@@ -170,11 +177,125 @@ function SeatPicker({
   );
 }
 
+/** Chosen from the list when the model typed is not on it. */
+const ANOTHER = "\u0000another";
+
+/**
+ * A seat's model: the daemon's list for its CLI as a picker, with the CLI's
+ * default first and *another model…* last, which opens the box for any name
+ * the CLI accepts. A CLI the daemon has no list for gets the box alone, as
+ * before. `R-P16`.
+ */
+function ModelPicker({
+  seat,
+  index,
+  models,
+  onChange,
+}: {
+  seat: Seat;
+  index: number;
+  models: CliModels | undefined;
+  onChange: (model: string | undefined) => void;
+}) {
+  const listed = models?.models ?? [];
+  const onList = !!seat.model && listed.some((m) => m.id === seat.model);
+  // Typing is a choice the picker remembers, so choosing *another model…*
+  // opens an empty box rather than snapping back to the default.
+  const [typing, setTyping] = useState(!!seat.model && !onList);
+  const showBox = listed.length === 0 || typing || (!!seat.model && !onList);
+  const box = (
+    <Input
+      value={seat.model ?? ""}
+      onChange={(v) => onChange(v.trim() ? v : undefined)}
+      ariaLabel={`seat ${index + 1} model`}
+      mono
+      placeholder={listed.length === 0 ? "the CLI's default" : "as the CLI spells it"}
+      className="w-48"
+    />
+  );
+  if (listed.length === 0) return box;
+  const value = showBox ? ANOTHER : (seat.model ?? "");
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <select
+        aria-label={`seat ${index + 1} model choice`}
+        className={cn(SELECT, "max-w-64")}
+        value={value}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === ANOTHER) {
+            setTyping(true);
+            return;
+          }
+          setTyping(false);
+          onChange(v || undefined);
+        }}
+      >
+        <option value="">the CLI's default</option>
+        {listed.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label && m.label !== m.id ? `${m.label} · ${m.id}` : m.id}
+          </option>
+        ))}
+        <option value={ANOTHER}>another model…</option>
+      </select>
+      {showBox && box}
+    </span>
+  );
+}
+
+/**
+ * A seat's thinking level: the CLI's default, then each level its CLI — or
+ * its listed model — takes. A CLI that takes none says so instead of showing
+ * a control that cannot do anything; opencode's stay grey until a model is
+ * named, since it applies a level to a model it was told. `R-P16`.
+ */
+function EffortPicker({
+  seat,
+  models,
+  onChange,
+}: {
+  seat: Seat;
+  models: CliModels | undefined;
+  onChange: (effort: Effort | undefined) => void;
+}) {
+  const catalogue = models ? [models] : [];
+  const levels = effortsFor(catalogue, seat);
+  if (levels.length === 0) {
+    return <Dim className="text-xs">{sourceLabel(seat.cli)} takes no thinking level at launch — it runs at its own default</Dim>;
+  }
+  const needsModel = seat.cli === "opencode" && !seat.model?.trim();
+  const fallback = listedModel(catalogue, seat)?.default_effort;
+  return (
+    <Segmented<Effort | "default">
+      size="md"
+      value={seat.effort ?? "default"}
+      onChange={(v) => onChange(v === "default" ? undefined : v)}
+      options={[
+        {
+          value: "default",
+          label: fallback ? `default (${fallback})` : "default",
+          title: "whatever the CLI or the model runs at when not told",
+        },
+        ...levels.map((e) => ({
+          value: e,
+          label: e,
+          disabled: needsModel,
+          title: needsModel
+            ? "name the model first — opencode applies a thinking level only to a model it is told"
+            : `start it at ${e} thinking`,
+        })),
+      ]}
+    />
+  );
+}
+
 export function TeamsWindow() {
   const open = useStore((s) => s.showTeams);
   const teams = useStore((s) => s.teams);
   const allowed = useStore((s) => s.teamsAllowed);
   const launches = useStore((s) => s.seatLaunches);
+  const seatModels = useStore((s) => s.seatModels);
   const allSends = useStore((s) => s.teamSends);
   const send = useStore((s) => s.send);
   // The window of its own this opens in (`R-J128`), the size it was left at.
@@ -288,6 +409,10 @@ export function TeamsWindow() {
   const patchPolicy = (p: Partial<Team["policy"]>) => setDraft((d) => (d ? { ...d, policy: { ...d.policy, ...p } } : d));
   const patchSeat = (i: number, p: Partial<Seat>) =>
     setDraft((d) => (d ? { ...d, seats: d.seats.map((s, j) => (j === i ? { ...s, ...p } : s)) } : d));
+  // A model or CLI change goes through `withModel`, which drops a level the
+  // new one cannot take (`R-P16`).
+  const changeSeat = (i: number, p: Partial<Pick<Seat, "cli" | "model">>) =>
+    setDraft((d) => (d ? { ...d, seats: d.seats.map((s, j) => (j === i ? withModel(seatModels, s, p) : s)) } : d));
   const removeSeat = (i: number) => setDraft((d) => (d ? { ...d, seats: d.seats.filter((_, j) => j !== i) } : d));
   const addSeat = () => setDraft((d) => (d ? { ...d, seats: [...d.seats, newSeat(freeSeatName(d))] } : d));
   const patchWake = (i: number, p: Partial<Wake>) => patchPolicyList("wakes", i, p);
@@ -761,6 +886,9 @@ export function TeamsWindow() {
                         <SourceMark source={seat.cli} />
                         <span className="text-xs font-semibold tracking-wider text-[var(--graph-4)] uppercase">seat {i + 1}</span>
                         {seat.label.trim() && <Dim className="min-w-0 truncate text-xs">{seat.label}</Dim>}
+                        <span className="min-w-0 truncate font-mono text-xs text-[var(--fg-dim)]" data-testid={`seat-${i}-model`}>
+                          {modelLine(seatModels, seat)}
+                        </span>
                         {live && live.alive && (
                           <Chip color="var(--green)" title={`running in ${live.tmux_session}`}>
                             running
@@ -793,7 +921,7 @@ export function TeamsWindow() {
                           <Segmented
                             size="md"
                             value={seat.cli}
-                            onChange={(v) => patchSeat(i, { cli: v })}
+                            onChange={(v) => changeSeat(i, { cli: v })}
                             options={CLIS.map((c) => ({
                               value: c,
                               title: `start ${sourceLabel(c)} in this seat`,
@@ -806,17 +934,19 @@ export function TeamsWindow() {
                             }))}
                           />
                         </Field>
+                        <Field label="model" hint={modelsFor(seatModels, seat.cli)?.source ?? "blank for the CLI's default"}>
+                          <ModelPicker
+                            key={seat.cli}
+                            seat={seat}
+                            index={i}
+                            models={modelsFor(seatModels, seat.cli)}
+                            onChange={(model) => changeSeat(i, { model })}
+                          />
+                        </Field>
+                        <Field label="thinking" hint="how hard the model thinks">
+                          <EffortPicker seat={seat} models={modelsFor(seatModels, seat.cli)} onChange={(effort) => patchSeat(i, { effort })} />
+                        </Field>
                         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                          <Field label="model" hint="blank for the CLI's default">
-                            <Input
-                              value={seat.model ?? ""}
-                              onChange={(v) => patchSeat(i, { model: v.trim() ? v : undefined })}
-                              ariaLabel={`seat ${i + 1} model`}
-                              mono
-                              placeholder="the CLI's default"
-                              className="w-44"
-                            />
-                          </Field>
                           <Field label="works in">
                             <Segmented
                               size="md"

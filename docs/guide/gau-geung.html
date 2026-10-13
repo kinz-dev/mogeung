@@ -159,7 +159,8 @@
     <h3>The seat layer</h3>
     <ul>
       <li><strong>name</strong>: lower-case letters, digits and dashes. It names the worktree, the tmux session and the address a teammate sends to.</li>
-      <li><strong>cli</strong> and <strong>model</strong> (the CLI's own spelling, or its default).</li>
+      <li><strong>cli</strong> and <strong>model</strong>: picked from the list the daemon reads for that CLI — Claude Code's aliases such as <code>opus</code>, which follow the newest model, and pinned ids such as <code>claude-opus-5-5</code>; Codex's own model list — or typed in the CLI's own spelling under <em>another model…</em>. Blank is the CLI's default. Qwen Code and opencode have no list, so their box is free text; opencode spells a model <code>provider/model</code>.</li>
+      <li><strong>thinking</strong>: how hard the model thinks — <em>default</em>, or a level the CLI takes. Claude Code takes <code>low</code> to <code>max</code> through <code>--effort</code>; Codex takes the levels each listed model names, through <code>model_reasoning_effort</code>; opencode takes its model's variant, and only once a model is named; Qwen Code takes none at launch and the form says so. Saving refuses a level the CLI cannot take, by name.</li>
       <li><strong>works in</strong>: a fresh worktree on branch <code>geung/&lt;team&gt;/&lt;seat&gt;</code>, or the team's own checkout, where nothing of mogeung's is ever written.</li>
       <li><strong>permission</strong>: inherit the team's, or override it. Codex has no plan mode and is refused that one by name.</li>
       <li><strong>guidance</strong>: added after the team's.</li>

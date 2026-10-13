@@ -29,7 +29,8 @@
 //! which it was.
 
 use anyhow::{bail, Result};
-use mogeung_core::team::{Seat, Team};
+use mogeung_core::session::SessionSource;
+use mogeung_core::team::{Effort, Seat, Team};
 use std::path::{Path, PathBuf};
 
 /// Where the mirror lives.
@@ -65,6 +66,30 @@ pub fn valid_seat_name(name: &str) -> bool {
     name.len() <= 32 && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// Why a seat's thinking level cannot be handed to its CLI, or `None`.
+/// `R-P16`. The window's `firstProblem` says the same words.
+pub fn effort_problem(s: &Seat) -> Option<String> {
+    let e = s.effort?;
+    let taken = Effort::taken_by(s.cli);
+    if taken.is_empty() {
+        return Some(format!(
+            "seat `{}`: {} takes no thinking level at launch — leave it at the CLI's default",
+            s.name,
+            s.cli.label()
+        ));
+    }
+    if !taken.contains(&e) {
+        return Some(format!("seat `{}`: {} has no `{}` thinking level", s.name, s.cli.label(), e.as_str()));
+    }
+    if s.cli == SessionSource::OpenCode && s.model.as_deref().is_none_or(|m| m.trim().is_empty()) {
+        return Some(format!(
+            "seat `{}`: opencode honours a thinking level only on a model it is told — name the model too",
+            s.name
+        ));
+    }
+    None
+}
+
 /// Refuse what could not be addressed or counted. The reason names the field.
 pub fn validate(team: &Team) -> Result<()> {
     if team.name.trim().is_empty() {
@@ -98,6 +123,9 @@ pub fn validate(team: &Team) -> Result<()> {
         }
         if !seen.insert(s.name.as_str()) {
             bail!("two seats are named `{}`", s.name);
+        }
+        if let Some(problem) = effort_problem(s) {
+            bail!("{problem}");
         }
     }
     for w in &team.policy.wakes {
@@ -188,6 +216,9 @@ pub fn render(t: &Team) -> String {
         let _ = writeln!(out, "- cli: {}", s.cli.label());
         if let Some(m) = &s.model {
             let _ = writeln!(out, "- model: {m}");
+        }
+        if let Some(e) = s.effort {
+            let _ = writeln!(out, "- thinking: {}", e.as_str());
         }
         let _ = writeln!(out, "- works in: {:?}", s.works_in);
         let _ = writeln!(
@@ -281,6 +312,40 @@ mod tests {
         let d = std::env::temp_dir().join(format!("mogeung-teams-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// `R-P16`: a level the CLI cannot be handed is refused in words, at
+    /// save, rather than dropped at boot.
+    #[test]
+    fn a_thinking_level_its_cli_cannot_take_is_refused_by_name() {
+        let mut t = team();
+        let mut editor = Seat::new("editor", SessionSource::ClaudeCode);
+        editor.model = Some("opus".into());
+        editor.effort = Some(Effort::High);
+        let mut translator = Seat::new("translator", SessionSource::ClaudeCode);
+        translator.model = Some("claude-sonnet-5".into());
+        translator.effort = Some(Effort::Medium);
+        let report = Seat::new("report", SessionSource::OpenCode);
+        t.seats = vec![editor, translator, report];
+        validate(&t).expect("the asked-for team");
+
+        t.seats[0].effort = Some(Effort::Ultra);
+        let why = validate(&t).unwrap_err().to_string();
+        assert!(why.contains("`editor`") && why.contains("ultra"), "{why}");
+        t.seats[0].effort = Some(Effort::High);
+
+        let mut qwen = Seat::new("tester", SessionSource::QwenCode);
+        qwen.effort = Some(Effort::Low);
+        t.seats.push(qwen);
+        let why = validate(&t).unwrap_err().to_string();
+        assert!(why.contains("takes no thinking level"), "{why}");
+        t.seats.pop();
+
+        t.seats[2].effort = Some(Effort::High);
+        let why = validate(&t).unwrap_err().to_string();
+        assert!(why.contains("name the model too"), "{why}");
+        t.seats[2].model = Some("anthropic/claude-opus-5-5".into());
+        validate(&t).expect("opencode with a model and a level");
     }
 
     #[test]

@@ -25,6 +25,12 @@
 //! | Codex | none — the pane is the key | `-a` and `-s workspace-write`; no plan mode, refused | a marked block in the worktree's `AGENTS.md`, removed at stop; in a home of its own, that home's `AGENTS.md` | `CODEX_HOME` |
 //! | opencode | none | `--agent plan`, `--auto`, or a `permission` in the inline config | `instructions` in `OPENCODE_CONFIG_CONTENT`, pointing under `~/.mogeung` | the XDG pair |
 //!
+//! A seat's **thinking level** (`R-P16`) goes by `--effort` to Claude Code,
+//! by `-c model_reasoning_effort="…"` to Codex, and to opencode as `variant`
+//! on the agent the seat runs as (`build`, or `plan`) beside its model, since
+//! opencode applies a variant only to that agent's own model. Qwen Code takes
+//! none at launch, and `team::validate` refuses one there before a boot.
+//!
 //! The Codex row is the one that writes into a worktree, and it is allowed
 //! by [ADR-0019](../../../docs/decisions/0019-a-viewer-not-an-editor.md)'s
 //! amendment — a generated file in a marked block, in a worktree the daemon
@@ -390,6 +396,10 @@ pub fn compose(
                 a.push("--model".into());
                 a.push(m.clone());
             }
+            if let Some(e) = seat.effort {
+                a.push("--effort".into());
+                a.push(e.as_str().into());
+            }
             if seat.own_home {
                 env.push(("CLAUDE_CONFIG_DIR".into(), home.to_string_lossy().into_owned()));
             }
@@ -456,6 +466,12 @@ pub fn compose(
                 a.push("-m".into());
                 a.push(m.clone());
             }
+            // A config override rather than a flag: Codex has no flag for it.
+            // The value is TOML, so it goes quoted.
+            if let Some(e) = seat.effort {
+                a.push("-c".into());
+                a.push(format!("model_reasoning_effort=\"{}\"", e.as_str()));
+            }
             if seat.own_home {
                 env.push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
                 if !guidance.is_empty() {
@@ -500,6 +516,17 @@ pub fn compose(
                     a.push("plan".into());
                 }
                 PermissionMode::BypassPermissions => a.push("--auto".into()),
+            }
+            // `R-P16`: opencode's TUI has no flag for a level. Its agent
+            // config has `variant`, which it honours only when that agent
+            // also names the model the session runs — so both go on the agent
+            // the seat runs as, and `validate` refuses a level with no model.
+            if let (Some(e), Some(m)) = (seat.effort, &seat.model) {
+                let agent = if mode == PermissionMode::Plan { "plan" } else { "build" };
+                config.insert(
+                    "agent".into(),
+                    serde_json::json!({ agent: { "model": m, "variant": e.as_str() } }),
+                );
             }
             // `R-P5`: a plugin file under `~/.mogeung`, named in the inline
             // config by file URL — the form opencode's own documentation
@@ -889,7 +916,7 @@ pub fn remove_worktree(team: &Team, seat: &Seat) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mogeung_core::team::Policy;
+    use mogeung_core::team::{Effort, Policy};
 
     fn bins() -> Binaries {
         Binaries {
@@ -1028,6 +1055,49 @@ mod tests {
         s.permission = None;
         let c = compose(&t, &s, &d.join("files"), &d, None, &bins(), None).unwrap();
         assert_eq!(&c.argv[1..], &["--auto"]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// `R-P16`: one level, three spellings of where it goes.
+    #[test]
+    fn each_cli_is_told_its_thinking_level_its_own_way() {
+        let d = scratch("effort");
+        let t = team();
+        let files = d.join("files");
+
+        let mut s = Seat::new("editor", SessionSource::ClaudeCode);
+        s.model = Some("opus".into());
+        s.effort = Some(Effort::High);
+        let a = compose(&t, &s, &files, &d, Some("abc"), &bins(), None).unwrap().argv;
+        assert!(a.join(" ").contains("--model opus --effort high"), "{a:?}");
+
+        let mut s = Seat::new("builder", SessionSource::Codex);
+        s.model = Some("gpt-5.6-terra".into());
+        s.effort = Some(Effort::Xhigh);
+        let a = compose(&t, &s, &files, &d, None, &bins(), None).unwrap().argv;
+        let at = a.iter().position(|x| x == "-c").expect("a config override");
+        assert_eq!(a[at + 1], r#"model_reasoning_effort="xhigh""#, "TOML, so quoted: {a:?}");
+
+        // opencode: on the agent the seat runs as, beside the model, since
+        // opencode applies a variant only to the agent's own model.
+        let mut s = Seat::new("report", SessionSource::OpenCode);
+        s.model = Some("anthropic/claude-sonnet-5-5".into());
+        s.effort = Some(Effort::Max);
+        let c = compose(&t, &s, &files, &d, None, &bins(), None).unwrap();
+        let cfg: serde_json::Value =
+            serde_json::from_str(&c.env.iter().find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT").unwrap().1).unwrap();
+        assert_eq!(cfg["agent"]["build"]["model"], "anthropic/claude-sonnet-5-5");
+        assert_eq!(cfg["agent"]["build"]["variant"], "max");
+        s.permission = Some(PermissionMode::Plan);
+        let c = compose(&t, &s, &files, &d, None, &bins(), None).unwrap();
+        let cfg: serde_json::Value =
+            serde_json::from_str(&c.env.iter().find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT").unwrap().1).unwrap();
+        assert_eq!(cfg["agent"]["plan"]["variant"], "max", "{cfg}");
+
+        // None anywhere is the CLI's default, and nothing is passed.
+        let s = Seat::new("plain", SessionSource::ClaudeCode);
+        let a = compose(&t, &s, &files, &d, Some("abc"), &bins(), None).unwrap().argv;
+        assert!(!a.iter().any(|x| x == "--effort"), "{a:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 

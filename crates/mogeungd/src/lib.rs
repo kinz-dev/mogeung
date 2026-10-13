@@ -3,6 +3,7 @@
 
 pub mod adapter;
 pub mod api;
+pub mod catalogue;
 pub mod codex;
 pub mod complete;
 pub mod detect;

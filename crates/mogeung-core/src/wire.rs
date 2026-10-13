@@ -1595,6 +1595,10 @@ pub enum ServerMsg {
     /// sent, to whom, why and what became of it. The whole set, after every
     /// change, and in answer to `TeamList`.
     Sends { teams: Vec<crate::team::TeamSends> },
+    /// The models and thinking levels each CLI offers a seat. `R-P16`. To
+    /// the asker, in answer to `TeamList`: read from what the CLIs leave on
+    /// this machine, so it is the daemon's to say and not the window's.
+    SeatModels { clis: Vec<crate::team::CliModels> },
 
     /// Every scratch file's name, newest first. `R-L5`.
     ///

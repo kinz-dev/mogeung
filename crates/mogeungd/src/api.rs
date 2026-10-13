@@ -2571,6 +2571,13 @@ async fn handle(
                 );
                 send_reply(reply, state.seats_msg().await);
                 send_reply(reply, state.sends_msg().await);
+                // `R-P16`: what each CLI can be started on, read off disk.
+                send_reply(
+                    reply,
+                    ServerMsg::SeatModels {
+                        clis: crate::catalogue::seat_models(&crate::codex::default_home()),
+                    },
+                );
             }
             Err(e) => err(e),
         },

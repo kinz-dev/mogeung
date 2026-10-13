@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { bootLine, useStore } from "@/store";
-import type { ClientMsg, Team } from "@/wire/types";
+import type { ClientMsg, CliModels, Team } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
 import { TeamsWindow } from "./TeamsWindow";
 
@@ -46,7 +46,92 @@ const lastSave = (): Team => {
 describe("the Teams window", () => {
   beforeEach(() => {
     sent.length = 0;
-    useStore.setState({ showTeams: true, teams: [], teamsAllowed: true, send: (m) => void sent.push(m) });
+    useStore.setState({ showTeams: true, teams: [], teamsAllowed: true, seatModels: [], send: (m) => void sent.push(m) });
+  });
+
+  // `R-P16`, asked 2026-10-13 with this team as the example.
+  describe("a seat's model and thinking level", () => {
+    const catalogue: CliModels[] = [
+      {
+        cli: "claude_code",
+        models: [
+          { id: "opus", label: "Opus — the latest" },
+          { id: "claude-opus-5-5", label: "Opus 5.5" },
+          { id: "claude-sonnet-5", label: "Sonnet 5" },
+        ],
+        source: "Claude Code's aliases and the current model ids",
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        cli: "codex",
+        models: [{ id: "gpt-5.6-luna", label: "GPT-5.6-Luna", efforts: ["low", "medium", "high"], default_effort: "medium" }],
+        source: "Codex's own list, as its /model shows it",
+        efforts: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+      { cli: "qwen_code", models: [], source: "type the model as Qwen Code spells it", efforts: [] },
+      { cli: "opencode", models: [], source: "type it as provider/model", efforts: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] },
+    ];
+    const newsroom = () =>
+      team({
+        name: "newsroom",
+        seats: [newSeat("chief-editor"), newSeat("translator"), newSeat("report", "opencode")],
+      });
+    const seat = (i: number) => within(screen.getByTestId(`seat-${i}`));
+
+    it("starts each seat on the model and level picked, and the CLI's defaults where none is", () => {
+      render(<TeamsWindow />);
+      act(() => useStore.setState({ seatModels: catalogue }));
+      arrives([newsroom()]);
+
+      fireEvent.change(screen.getByLabelText("seat 1 model choice"), { target: { value: "claude-opus-5-5" } });
+      fireEvent.click(seat(0).getByText("high"));
+      fireEvent.change(screen.getByLabelText("seat 2 model choice"), { target: { value: "claude-sonnet-5" } });
+      fireEvent.click(seat(1).getByText("medium"));
+      expect(seat(0).getByTestId("seat-0-model").textContent).toBe("Opus 5.5 · high");
+
+      // opencode has no list: the box alone, and its levels grey until a
+      // model is named, with the reason on them.
+      expect(screen.queryByLabelText("seat 3 model choice")).toBeNull();
+      expect(screen.getByLabelText("seat 3 model")).toHaveValue("");
+      expect(seat(2).getByText("high")).toBeDisabled();
+      expect(seat(2).getByText("high").title).toContain("name the model first");
+
+      fireEvent.click(screen.getByText("Save"));
+      const [editor, translator, report] = lastSave().seats;
+      expect(editor).toMatchObject({ model: "claude-opus-5-5", effort: "high" });
+      expect(translator).toMatchObject({ model: "claude-sonnet-5", effort: "medium" });
+      expect(report.model).toBeUndefined();
+      expect(report.effort).toBeUndefined();
+    });
+
+    it("offers a listed Codex model's own levels, and another model opens the box", () => {
+      render(<TeamsWindow />);
+      act(() => useStore.setState({ seatModels: catalogue }));
+      arrives([team()]);
+      fireEvent.change(screen.getByLabelText("seat 2 model choice"), { target: { value: "gpt-5.6-luna" } });
+      expect(seat(1).getByText("default (medium)")).toBeInTheDocument();
+      expect(seat(1).queryByText("ultra")).toBeNull();
+      fireEvent.click(seat(1).getByText("high"));
+
+      // A name not on the list: the box opens empty, and a model the
+      // daemon does not know is offered every level its CLI takes.
+      fireEvent.change(screen.getByLabelText("seat 2 model choice"), { target: { value: "\u0000another" } });
+      fireEvent.change(screen.getByLabelText("seat 2 model"), { target: { value: "gpt-next" } });
+      expect(seat(1).getByText("ultra")).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Save"));
+      expect(lastSave().seats[1]).toMatchObject({ model: "gpt-next", effort: "high" });
+    });
+
+    it("drops a level the new CLI cannot take, and says Qwen takes none", () => {
+      render(<TeamsWindow />);
+      act(() => useStore.setState({ seatModels: catalogue }));
+      arrives([team()]);
+      fireEvent.click(seat(0).getByText("max"));
+      fireEvent.click(seat(0).getByText("qwen"));
+      expect(seat(0).getByText(/takes no thinking level at launch/)).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Save"));
+      expect(lastSave().seats[0].effort).toBeUndefined();
+    });
   });
 
   it("asks the daemon for the teams every time it opens", () => {

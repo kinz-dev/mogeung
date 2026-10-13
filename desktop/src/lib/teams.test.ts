@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WIND_DOWN, countersLine, firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, sendBy, sendLine, sendsFor, signalsLine, teamSummary, validSeatName, windDownLine } from "./teams";
+import { DEFAULT_WIND_DOWN, countersLine, effortProblem, effortsFor, firstProblem, freeSeatName, newSeat, newTeam, permissionFor, seatSignals, sendBy, sendLine, sendsFor, signalsLine, teamSummary, validSeatName, windDownLine, withModel } from "./teams";
 
 describe("team helpers", () => {
   it("starts a team with the owner's numbers", () => {
@@ -121,5 +121,29 @@ describe("team helpers", () => {
     expect(sendLine(hand, now)).toMatch(/^handover \(qwen3 @ localhost\) → builder/);
     expect(sendsFor([agent, held, wake, dog], "builder").map((e) => e.id)).toEqual(["s1", "s2", "s3", "s5"]);
     expect(sendsFor([agent, held, wake, dog], "planner").map((e) => e.id)).toEqual(["s1", "s2", "s3"]);
+  });
+});
+
+// `R-P16`: the same refusals the daemon makes, before a click fails.
+describe("a seat's thinking level", () => {
+  it("is refused where its CLI cannot take it, in the daemon's words", () => {
+    expect(effortProblem({ ...newSeat("editor"), effort: "high" })).toBeNull();
+    expect(effortProblem({ ...newSeat("editor"), effort: "ultra" })).toContain("has no `ultra` thinking level");
+    expect(effortProblem({ ...newSeat("tester", "qwen_code"), effort: "low" })).toContain("takes no thinking level at launch");
+    expect(effortProblem({ ...newSeat("report", "opencode"), effort: "high" })).toContain("name the model too");
+    expect(effortProblem({ ...newSeat("report", "opencode"), effort: "high", model: "anthropic/claude-opus-5-5" })).toBeNull();
+    const t = { ...newTeam(), name: "newsroom", seats: [{ ...newSeat("tester", "qwen_code"), effort: "low" as const }] };
+    expect(firstProblem(t)).toContain("qwen takes no thinking level");
+  });
+
+  it("falls back to the CLI's levels when the catalogue has not come", () => {
+    expect(effortsFor([], newSeat("editor"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(effortsFor([], newSeat("tester", "qwen_code"))).toEqual([]);
+  });
+
+  it("is dropped by a switch to a CLI that cannot take it, and kept by one that can", () => {
+    const s = { ...newSeat("editor"), effort: "max" as const };
+    expect(withModel([], s, { cli: "qwen_code" }).effort).toBeUndefined();
+    expect(withModel([], s, { cli: "codex" }).effort).toBe("max");
   });
 });

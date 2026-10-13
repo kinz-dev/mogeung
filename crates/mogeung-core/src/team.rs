@@ -227,6 +227,105 @@ pub enum Workplace {
     Checkout,
 }
 
+/// How hard a seat's model thinks, in the words the CLIs share. `R-P16`.
+///
+/// Asked 2026-10-13: *"start an agent with different model and thinking
+/// level"*. Every CLI that takes one at launch spells the common levels the
+/// same way, so the stored value is that spelling and the launcher only
+/// chooses the flag: `--effort` for Claude Code, `-c model_reasoning_effort`
+/// for Codex, an agent `variant` in opencode's inline config. Qwen Code takes
+/// none at launch, and a seat that asks for one there is refused in words
+/// rather than started without it. `None` on a seat is the CLI's default.
+///
+/// `Minimal` and `Ultra` are Codex's alone; Claude Code takes `Low` to `Max`.
+/// [`Effort::taken_by`] is the table, and both the daemon's check and the
+/// window's picker read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Effort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    Ultra,
+}
+
+impl Effort {
+    pub const ALL: [Effort; 7] = [
+        Effort::Minimal,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+        Effort::Ultra,
+    ];
+
+    /// The spelling every CLI that takes a level uses for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::Minimal => "minimal",
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::Xhigh => "xhigh",
+            Effort::Max => "max",
+            Effort::Ultra => "ultra",
+        }
+    }
+
+    /// Read a CLI's own spelling back; `None` for a word not in the set.
+    pub fn parse(s: &str) -> Option<Effort> {
+        Effort::ALL.into_iter().find(|e| e.as_str() == s)
+    }
+
+    /// The levels `cli` takes at launch, from its own `--help` and config
+    /// (Claude Code 2.1.296, Codex 0.154.0, opencode 1.18.35, Qwen Code
+    /// 0.23.0). Empty is a CLI with no way to be told one.
+    ///
+    /// opencode's levels are its models' *variants*, named by each provider;
+    /// it is offered the whole set and ignores a name its model has none of.
+    pub fn taken_by(cli: SessionSource) -> &'static [Effort] {
+        match cli {
+            SessionSource::ClaudeCode => &[Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max],
+            SessionSource::Codex | SessionSource::OpenCode => &Effort::ALL,
+            SessionSource::QwenCode => &[],
+        }
+    }
+}
+
+/// A model a seat can be started on, as the daemon found it. `R-P16`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    /// What goes after the CLI's model flag, in its own spelling.
+    pub id: String,
+    /// How the picker names it. Empty means the id.
+    #[serde(default)]
+    pub label: String,
+    /// The levels this model takes, when its CLI says per model (Codex
+    /// does); empty means whatever its CLI takes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<Effort>,
+    /// The level it runs at when none is given, when its CLI says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<Effort>,
+}
+
+/// One CLI's models and levels, for the seat form. `R-P16`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliModels {
+    pub cli: SessionSource,
+    /// The models offered by name. Empty leaves the box free text, which it
+    /// always is anyway: a model not listed is still the CLI's to accept.
+    pub models: Vec<ModelChoice>,
+    /// Where the list came from, said on the form.
+    pub source: String,
+    /// The levels the CLI takes at launch — [`Effort::taken_by`].
+    pub efforts: Vec<Effort>,
+}
+
 /// One seat in a team: an agent the daemon will start, in Gau Geung mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seat {
@@ -243,6 +342,9 @@ pub struct Seat {
     /// The model, in the CLI's own spelling, or `None` for the CLI's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// How hard it thinks, or `None` for the CLI's default. `R-P16`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
     #[serde(default)]
     pub works_in: Workplace,
     /// `None` is the team's default — see the module note on two layers.
@@ -268,6 +370,7 @@ impl Seat {
             label: String::new(),
             cli,
             model: None,
+            effort: None,
             works_in: Workplace::default(),
             permission: None,
             guidance: String::new(),

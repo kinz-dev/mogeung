@@ -1,7 +1,7 @@
 ---
 title: Gau Geung — a team of agents
 status: draft
-updated: 2026-10-11
+updated: 2026-10-13
 roadmap: [R-P1, R-P2, R-P3, R-P4, R-P5, R-P6, R-P7, R-P8, R-P9, R-P10, R-P11, R-P12, R-P13]
 depends_on: [A1, A24, A39, A51, A52, A53, A54]
 ---
@@ -106,8 +106,9 @@ rule it changed.
 - **Two layers for guidance and permission mode; one for the rest.** *"agree
   per your recommendation for the two layers approach."* A team carries a
   guidance every seat gets and a default permission mode; a seat adds its own
-  guidance and may override the mode. CLI, model and worktree are per seat
-  only, since they are never shared.
+  guidance and may override the mode. CLI, model, thinking level and
+  worktree are per seat only, since they are never shared. (The thinking
+  level arrived with `R-P16`, 2026-10-13.)
 - **A seat talks only to its own team.** *"ok, a seat only talks to its own
   team."* A team is the unit of policy, so a delivery between teams would be
   a delivery between two budgets and two pause switches; it is refused, and

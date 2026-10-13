@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-12
+updated: 2026-10-13
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -368,7 +368,7 @@ amendment.
 
 | Command | Carries | Answered by | Hop |
 |---|---|---|---|
-| `TeamList` | — | `Teams`, to the asker, with `allowed` | here |
+| `TeamList` | — | `Teams`, to the asker, with `allowed`; then `Seats`, `Sends` and `SeatModels` | here |
 | `TeamSave` | `team` — whole; an empty `id` mints one, and the daemon stamps `created` and `updated` whatever was sent | `Teams`, broadcast | here |
 | `TeamDelete` | `id` — refused while a seat of the team is running, naming the seats (`R-J134`); otherwise the definition and its mirror, the exited seats' records and the files made for its seats go, and the worktrees stay | `Seats` and `Teams`, broadcast | here |
 | `TeamBoot` | `id` — starts every seat not running; *running* is read off tmux, so a seat whose pane has gone is forgotten and started again (`R-P14`); a refusal names the seat and comes after the ones before it are on record | `Seats`, broadcast; the seat rows at once; then `TeamBooted` to the asker | here |
@@ -388,6 +388,7 @@ amendment.
 | `Seats` | every launch record — team, seat, CLI, the chosen session id, the pane, the tmux session, the directory, and since `R-P5` `signals` (the kind, the count, the last event and its line, the context fill and the model), and since `R-J134` `alive` — whether the seat's own tmux session stands, read off the pane listing every scan, so a record with `alive: false` is a seat that exited and a client counts it as such; **never the seat's token** — after a boot, stop or delete, with every `TeamList` answer, after a hook event or a status reading that moved something, and when any seat's `alive` flips | theirs |
 | `TeamExported` | `team_id`, the `path` written (`R-P12`) | theirs |
 | `TeamBooted` | what a `TeamBoot` did, seat by seat (`R-P14`): `started` by this boot, `revived` among them had a record but no pane, `skipped` were running and left alone; all three empty is a team already up. After the `Seats` broadcast, so the window closes on an answer and not on rows it cannot tell from the ones already there | theirs |
+| `SeatModels` | each CLI's `models` (`id`, `label`, and for a CLI that says per model its `efforts` and `default_effort`), the `efforts` the CLI takes at launch, and the `source` the list came from — Claude Code's aliases and current ids, Codex's own `models_cache.json` read as it is; none for Qwen Code or opencode, whose box stays free text. A seat's `effort` is one of `minimal` · `low` · `medium` · `high` · `xhigh` · `max` · `ultra`, absent for the CLI's default, and `TeamSave` refuses one its CLI cannot take (`R-P16`) | theirs |
 | `TeamDraft` | a `team` with no id and no stamps, for the window to show as an unsaved draft, and the import's `notes` — what was and was not carried (`R-P12`) | theirs |
 | `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop; a `wind_down` (`R-P15`) is your press with declared words, neither hop nor automatic — oldest first, the last two hundred; and `wind_down` while a team is being wound down or lately was: `started`, `deadline`, a seat each as `asked` / `noted` / `stopped` / `timed_out` / `gone` with the note's excerpt, kept until the next boot; with every `TeamList` answer and after every change | theirs |
 

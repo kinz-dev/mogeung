@@ -7,8 +7,8 @@
  * daemon will say about them, so a form can show it before a click fails.
  */
 
-import type { PermissionMode, Policy, Seat, SeatSignals, SendEntry, SessionSource, Team, TeamSends, WindDown, WindDownStatus } from "@/wire/types";
-import { PERMISSION_LABEL } from "@/wire/types";
+import type { CliModels, Effort, ModelChoice, PermissionMode, Policy, Seat, SeatSignals, SendEntry, SessionSource, Team, TeamSends, WindDown, WindDownStatus } from "@/wire/types";
+import { EFFORTS_TAKEN, PERMISSION_LABEL, sourceLabel } from "@/wire/types";
 
 /**
  * The wind-down message a new team starts with (`R-P15`) — the daemon's
@@ -212,6 +212,8 @@ export function firstProblem(team: Team): string | null {
     if (!validSeatName(s.name)) return `seat name \`${s.name}\` must be lower-case letters, digits and dashes, starting with a letter`;
     if (seen.has(s.name)) return `two seats are named \`${s.name}\``;
     seen.add(s.name);
+    const effort = effortProblem(s);
+    if (effort) return effort;
   }
   for (const w of team.policy.wakes) {
     if (!seen.has(w.on_seat)) return `a wake watches \`${w.on_seat}\`, which is not a seat of this team`;
@@ -225,6 +227,63 @@ export function firstProblem(team: Team): string | null {
     if (!d.text.trim()) return "a watchdog has no text to send";
   }
   return null;
+}
+
+// --- model and thinking level (`R-P16`) ----------------------------------------
+
+/** The catalogue entry the daemon sent for `cli`, if one came. */
+export function modelsFor(catalogue: readonly CliModels[], cli: SessionSource): CliModels | undefined {
+  return catalogue.find((c) => c.cli === cli);
+}
+
+/** The listed model a seat names, if it names one the daemon listed. */
+export function listedModel(catalogue: readonly CliModels[], seat: Pick<Seat, "cli" | "model">): ModelChoice | undefined {
+  if (!seat.model) return undefined;
+  return modelsFor(catalogue, seat.cli)?.models.find((m) => m.id === seat.model);
+}
+
+/**
+ * The levels a seat may pick: its listed model's own, when its CLI says per
+ * model (Codex does), else every level its CLI takes at launch.
+ */
+export function effortsFor(catalogue: readonly CliModels[], seat: Pick<Seat, "cli" | "model">): readonly Effort[] {
+  const own = listedModel(catalogue, seat)?.efforts;
+  if (own && own.length > 0) return own;
+  return modelsFor(catalogue, seat.cli)?.efforts ?? EFFORTS_TAKEN[seat.cli];
+}
+
+/**
+ * Why a seat's level cannot be handed to its CLI, in the daemon's words
+ * (`team::effort_problem`), or `null`.
+ */
+export function effortProblem(seat: Seat): string | null {
+  const e = seat.effort;
+  if (!e) return null;
+  const taken = EFFORTS_TAKEN[seat.cli];
+  const cli = sourceLabel(seat.cli);
+  if (taken.length === 0) return `seat \`${seat.name}\`: ${cli} takes no thinking level at launch — leave it at the CLI's default`;
+  if (!taken.includes(e)) return `seat \`${seat.name}\`: ${cli} has no \`${e}\` thinking level`;
+  if (seat.cli === "opencode" && !seat.model?.trim()) {
+    return `seat \`${seat.name}\`: opencode honours a thinking level only on a model it is told — name the model too`;
+  }
+  return null;
+}
+
+/**
+ * A seat with its model or CLI changed, and its level dropped when the new
+ * one cannot take it — so a switch never leaves a seat the daemon refuses.
+ */
+export function withModel(catalogue: readonly CliModels[], seat: Seat, patch: Partial<Pick<Seat, "cli" | "model">>): Seat {
+  const next = { ...seat, ...patch };
+  if (next.effort && !effortsFor(catalogue, next).includes(next.effort)) next.effort = undefined;
+  return next;
+}
+
+/** A seat's model and level in a few words, for its card's header. */
+export function modelLine(catalogue: readonly CliModels[], seat: Seat): string {
+  const listed = listedModel(catalogue, seat);
+  const model = listed?.label || seat.model || "default model";
+  return seat.effort ? `${model} · ${seat.effort}` : model;
 }
 
 /** One line for a team's row: seats and their CLIs, and whether it is paused. */

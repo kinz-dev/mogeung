@@ -1107,12 +1107,43 @@ export interface Policy {
   /** How long a seat has to answer before it is stopped anyway. */
   wind_down_minutes: number;
 }
+/** How hard a seat's model thinks, in the words the CLIs share. `R-P16`.
+ *  Absent on a seat is the CLI's default. */
+export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+export const EFFORTS: readonly Effort[] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+/** The levels each CLI takes at launch — the daemon's `Effort::taken_by`. */
+export const EFFORTS_TAKEN: Record<SessionSource, readonly Effort[]> = {
+  claude_code: ["low", "medium", "high", "xhigh", "max"],
+  codex: EFFORTS,
+  qwen_code: [],
+  opencode: EFFORTS,
+};
+/** A model a seat can be started on, as the daemon found it. `R-P16`. */
+export interface ModelChoice {
+  /** What goes after the CLI's model flag. */
+  id: string;
+  /** How the picker names it; empty means the id. */
+  label: string;
+  /** The levels this model takes, when its CLI says per model; absent is the CLI's. */
+  efforts?: Effort[];
+  default_effort?: Effort;
+}
+/** One CLI's models and levels, for the seat form. `R-P16`. */
+export interface CliModels {
+  cli: SessionSource;
+  models: ModelChoice[];
+  /** Where the list came from, said on the form. */
+  source: string;
+  efforts: Effort[];
+}
 export interface Seat {
   /** Lower-case letters, digits, dashes; unique in the team. An address. */
   name: string;
   label: string;
   cli: SessionSource;
   model?: string;
+  /** Absent is the CLI's default. `R-P16`. */
+  effort?: Effort;
   works_in: Workplace;
   /** Absent is the team's default, not none. */
   permission?: PermissionMode;
@@ -1775,6 +1806,8 @@ export type ServerMsg =
   | { ev: "seats"; launches: SeatLaunch[] }
   /** Every team's counters and send log, after every change. `R-P6`. */
   | { ev: "sends"; teams: TeamSends[] }
+  /** The models and levels each CLI offers a seat, on `team_list`. `R-P16`. */
+  | { ev: "seat_models"; clis: CliModels[] }
   /** A definition was written as a file; a file came in as a draft with notes. `R-P12`. To the asker. */
   | { ev: "team_exported"; team_id: string; path: string }
   | { ev: "team_draft"; team: Team; notes: string[] }

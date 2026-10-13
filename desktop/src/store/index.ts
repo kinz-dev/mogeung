@@ -49,6 +49,7 @@ import type {
   Team,
   SeatLaunch,
   TeamSends,
+  CliModels,
   PromptCluster,
   FailureCluster,
   RecurringFailure,
@@ -719,6 +720,9 @@ export interface AppState {
   seatLaunches: SeatLaunch[];
   /** Every team's counters and send log. `R-P6`. Replaced whole on `sends`. */
   teamSends: TeamSends[];
+  /** The models and levels each CLI offers a seat, read by the daemon off
+   *  its own disk and sent on `team_list`. `R-P16`. Empty until then. */
+  seatModels: CliModels[];
   /** A team that came in from a file, for the Teams window to show as an
    *  unsaved draft with the import's notes. `R-P12`. Taken by the window. */
   teamDraft: { team: Team; notes: string[] } | null;
@@ -1248,6 +1252,7 @@ export const useStore = create<AppState>((set, get) => ({
   teamsAllowed: true,
   seatLaunches: [],
   teamSends: [],
+  seatModels: [],
   teamDraft: null,
   teamBooted: null,
   peers: null,
@@ -1979,6 +1984,9 @@ export const useStore = create<AppState>((set, get) => ({
         break;
       case "sends":
         set({ teamSends: msg.teams });
+        break;
+      case "seat_models":
+        set({ seatModels: msg.clis });
         break;
       case "team_draft":
         set({ teamDraft: { team: msg.team, notes: msg.notes }, showTeams: true });
