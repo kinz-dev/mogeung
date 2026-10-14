@@ -21,9 +21,10 @@ import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
 import { popInGroup, popOutPane } from "@/lib/popout";
 import { parseScratchPaneId, scratchPath } from "@/lib/scratch";
-import { sessionLabel } from "@/wire/types";
+import { reasonLabel, sessionLabel } from "@/wire/types";
 import { tagLabel } from "@/lib/tags";
-import { Chip, Dim, IconButton } from "@/ui/primitives";
+import { Badge, Chip, Dim, IconButton } from "@/ui/primitives";
+import { darkInk, reasonColor } from "@/ui/QueuePanel";
 import { IntellijGlyph } from "@/ui/IdeGlyphs";
 import { hostLabel, reachForSession, tmuxSessionOf } from "@/lib/tmux";
 import { closeFile, revealInFiles } from "@/lib/explorer";
@@ -178,7 +179,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
     const id = tabSession ? s.scoped().tags[tabSession] : undefined;
     return tagLabel(id) ? (id as string) : null;
   });
-  const hint = tag ? `${title.hint} · tagged ${tagLabel(tag)}` : title.hint;
+  // **What the session is doing, after its name.** Asked 2026-10-14: *"show
+  // the status as well after the name. [RUNNING, STALLED, WAITING, etc]"*.
+  // The queue's own verdict — the same word and colour its badge wears — so
+  // the tab and the row never disagree. Only on an Agent pane: a file or diff
+  // tab names a file, and a status after `lib.rs` would read as the file's.
+  // A session the queue does not rank, an ended one, says nothing.
+  const reason = useStore((s) => {
+    if (paneKind(props.api.id) !== "agent" || !title.session) return null;
+    return s.queue.find((q) => q.session_id === title.session)?.reason ?? null;
+  });
+  const tagged = tag ? `${title.hint} · tagged ${tagLabel(tag)}` : title.hint;
+  const hint = reason ? `${tagged} · ${reasonLabel(reason)}` : tagged;
   const root = useStore((s) => {
     if (!file) return null;
     const owner = s.sessions[file.session];
@@ -189,6 +201,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps) {
     <div className="dv-default-tab" title={hint} data-tag={tag ?? undefined}>
       {held && <Anchor className="mr-1 h-3 w-3 shrink-0 text-[var(--blue)]" aria-label="held" />}
       <span className="dv-default-tab-content">{text}</span>
+      {reason && (
+        <Badge color={reasonColor(reason)} dark={darkInk(reason)} className="ml-1.5 shrink-0">
+          {reasonLabel(reason)}
+        </Badge>
+      )}
       {/*
         **Only a file closes.** Every other pane in the centre is permanent —
         a view you can lose is a view you have to rediscover, which is why

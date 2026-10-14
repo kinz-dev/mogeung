@@ -19,7 +19,7 @@ import { scratchPaneId } from "@/lib/scratch";
 import { useStore } from "@/store";
 import { defaultPrefs, emptyScoped } from "@/store/prefs";
 import { PaneTab } from "@/ui/PaneChrome";
-import type { Session } from "@/wire/types";
+import type { AttentionItem, Session } from "@/wire/types";
 
 const session = (id: string): Session =>
   ({
@@ -49,7 +49,7 @@ function tab(id: string) {
 
 beforeEach(() => {
   cleanup();
-  useStore.setState({ selected: "s1", sessions: { s1: session("s1"), s2: session("s2") } });
+  useStore.setState({ selected: "s1", sessions: { s1: session("s1"), s2: session("s2") }, queue: [] });
   tagged({});
 });
 
@@ -109,5 +109,30 @@ describe("the stylesheet paints every tag", () => {
       if (!rule.test(css)) missing.push(t.id);
     }
     expect(missing).toEqual([]);
+  });
+});
+
+describe("an Agent tab says what its session is doing, after its name", () => {
+  const ranked = (session_id: string, reason: AttentionItem["reason"]): AttentionItem =>
+    ({ session_id, reason, score: 50, detail: "" }) as AttentionItem;
+
+  it("the queue's own word, and it follows the queue and the selection", () => {
+    useStore.setState({ queue: [ranked("s1", "stalled"), ranked("s2", "awaiting_input")] });
+    const el = tab("agent");
+    expect(el().textContent).toBe("session s1STALLED");
+    expect(el().getAttribute("title")).toMatch(/· STALLED$/);
+    act(() => useStore.setState({ queue: [ranked("s1", "running"), ranked("s2", "awaiting_input")] }));
+    expect(el().textContent).toBe("session s1running");
+    act(() => useStore.setState({ selected: "s2" }));
+    expect(el().textContent).toBe("session s2WAITING");
+  });
+
+  it("nothing for a session the queue does not rank, or on a file's tab", () => {
+    useStore.setState({ queue: [ranked("s2", "failed")] });
+    const agent = tab("agent");
+    expect(agent().textContent).toBe("session s1");
+    cleanup();
+    const file = tab(filePaneId("s2", "src/lib.rs", null));
+    expect(file().textContent).not.toMatch(/FAILED/);
   });
 });

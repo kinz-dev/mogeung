@@ -63,7 +63,7 @@ export function reasonColor(reason: AttentionReason): string {
 }
 
 /** Amber and green fills want dark lettering — white on amber is 2.36:1. */
-function darkInk(reason: AttentionReason): boolean {
+export function darkInk(reason: AttentionReason): boolean {
   return reason === "rate_limited" || reason === "stalled" || reason === "running";
 }
 
