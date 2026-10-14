@@ -350,7 +350,22 @@ describe("starting on a followed machine", () => {
       send: (m: unknown) => useStore.setState({ sent: [...launches(), m] } as never),
     } as never);
   });
-  afterEach(() => useStore.setState({ peers: null, sessions: {} }));
+  afterEach(() => useStore.setState({ peers: null, sessions: {}, savedConnections: [] }));
+
+  // `R-J140`, asked 2026-10-14 after `R-J139`: the picker said the host the
+  // machine announces, not the name its saved connection was given.
+  it("names a followed machine as you named its connection, the host only in the title", () => {
+    useStore.setState({
+      peers: [peer({ name: "ws://devbox:7717/ws", host: "Kinz-Mac-mini.local" })],
+      savedConnections: [{ id: "p1", name: "mac-m4p", url: "ws://devbox:7717/ws" }],
+    });
+    open();
+    expect(screen.queryByText("Kinz-Mac-mini.local")).toBeNull();
+    const choice = screen.getByText("mac-m4p").closest("button")!;
+    expect(choice.title).toContain("start on mac-m4p (Kinz-Mac-mini.local)");
+    fireEvent.click(choice);
+    expect(screen.getByText(/it starts on mac-m4p and joins the queue/)).toBeInTheDocument();
+  });
 
   it("offers no machine picker without a follow that is up", () => {
     useStore.setState({ peers: [peer({ state: "down" })] });

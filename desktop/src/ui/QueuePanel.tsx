@@ -15,7 +15,7 @@ import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
-import { machineNames } from "@/lib/federation";
+import { useMachineNames } from "@/lib/useMachineNames";
 import { TEAM_KEY, groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
@@ -139,13 +139,6 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
  * strip and the ambient board want the rows and have nowhere to put a number
  * — and this one is only ever read by the panel that can turn the rule off.
  */
-/** Your names for followed machines, by machine id. `R-J139`. */
-function useMachineNames(): Record<string, string> {
-  const peers = useStore((s) => s.peers);
-  const saved = useStore((s) => s.savedConnections);
-  return useMemo(() => machineNames(peers, saved), [peers, saved]);
-}
-
 function useHiddenByTmux(): number {
   const queue = useStore((s) => s.queue);
   const sessions = useStore((s) => s.sessions);

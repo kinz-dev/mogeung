@@ -97,13 +97,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { FolderOpen, Rocket, Star, TriangleAlert, X } from "lucide-react";
 import { useStore } from "@/store";
+import { useMachineNames } from "@/lib/useMachineNames";
 import { chooseFolder } from "@/lib/tauri";
 import { addFavourite, isFavourite, normaliseDir, removeFavourite } from "@/lib/favourites";
 import { Dialog } from "@/ui/Dialog";
 import { Callout, Field, Section } from "@/ui/Form";
 import { Button, Checkbox, Dim, IconButton, Input, Mono, Row, Segmented } from "@/ui/primitives";
 import { SourceMark } from "@/ui/SourceMark";
-import { sourceLabel, type SessionSource } from "@/wire/types";
+import { sourceLabel, type PeerState, type SessionSource } from "@/wire/types";
 
 /**
  * The CLIs this window can start, and the flag each one's yolo mode is spelled
@@ -156,7 +157,10 @@ export function LaunchWindow() {
   const [machine, setMachine] = useState<string | null>(null);
   const remotes = useMemo(() => (peers ?? []).filter((p) => p.state === "up" && !!p.machine_id), [peers]);
   const remote = machine ? (remotes.find((p) => p.machine_id === machine) ?? null) : null;
-  const remoteName = remote ? (remote.host ?? remote.name) : null;
+  // The name you gave its connection, else its host (`R-J140`).
+  const names = useMachineNames();
+  const nameOf = (p: PeerState) => (p.machine_id && names[p.machine_id]) || p.host || p.name;
+  const remoteName = remote ? nameOf(remote) : null;
   // A follow that went down while this was open falls back to here, rather
   // than starting nowhere on the click.
   useEffect(() => {
@@ -300,13 +304,14 @@ export function LaunchWindow() {
                     options={[
                       { value: "", label: "this machine", title: "the daemon you are watching — its machine, as before" },
                       ...remotes.map((p) => {
-                        const name = p.host ?? p.name;
+                        const name = nameOf(p);
+                        const where = p.host && p.host !== name ? ` (${p.host})` : "";
                         return {
                           value: p.machine_id ?? "",
                           label: name,
                           disabled: !p.allow_writes,
                           title: p.allow_writes
-                            ? `start on ${name} — headless, a detached tmux session there; it joins the queue as that machine's`
+                            ? `start on ${name}${where} — headless, a detached tmux session there; it joins the queue as that machine's`
                             : `changes on ${name} are off for this follow — turn on “allow changes” for it in Connections`,
                         };
                       }),

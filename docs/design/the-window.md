@@ -360,7 +360,8 @@ column so a section's controls start on one edge; a `Callout` is the tinted
 sentence not to skim. New session is two cards since `R-J136`: a blue one
 with no header strip — the CLI, then *on* which machine when a follow is up
 (`R-J135`: the watched daemon first, a follow with changes off grey with the
-reason), the two checkboxes on one row and the yolo flag on one line — above
+reason; each named as the Attention list names it, the host in its title since
+`R-J140`), the two checkboxes on one row and the yolo flag on one line — above
 the green *where* card with its lists, and the one verb in a footer that
 stays while the lists scroll. A launch on another machine is always headless,
 the checkbox says so, and the footer says the session comes back as that
@@ -425,7 +426,8 @@ reads now, since a rename does not re-send the follow), else the follow's own
 unless that is only an address, else the host the machine announces (`R-J139`).
 The store keeps the saved list's ids, names and addresses, never its tokens,
 from every load and save, and reads it once when the daemon first reports a
-follow.
+follow. `useMachineNames` (`lib/useMachineNames.ts`) is the one hook both the
+Attention list and New session's machine picker (`R-J140`) read it through.
 `lib/federation.ts` renders a follow's state and the sentence beside it; the
 follow itself is the daemon's ([architecture.md](architecture.md#one-daemon-following-others-r-i18-feature-0047-2026-09-23)).
 
