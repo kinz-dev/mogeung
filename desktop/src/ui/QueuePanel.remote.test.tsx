@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeAll, afterEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { Session } from "@/wire/types";
 
 class FakeSocket {
@@ -100,7 +100,7 @@ async function board(stale = false) {
 
 afterEach(async () => {
   const { useStore } = await import("@/store");
-  useStore.setState({ sessions: {}, queue: [], firstSnapshot: false, selected: null, daemon: null });
+  useStore.setState({ sessions: {}, queue: [], firstSnapshot: false, selected: null, daemon: null, peers: null, savedConnections: [] });
   localStorage.clear();
 });
 
@@ -115,6 +115,27 @@ describe("a remote session in the queue", () => {
     expect(remote.textContent).toContain("on mac");
     expect(local.textContent).not.toContain("on ");
     expect(remote.dataset.stale).toBeUndefined();
+  });
+
+  // `R-J139`, reported 2026-10-14: the heading was the host the Mac
+  // announces, not the name its saved connection was given.
+  it("is headed by the name you gave its connection, and follows a rename", async () => {
+    const { useStore } = await import("@/store");
+    const { saveConnections } = await import("@/lib/connections");
+    useStore.setState({
+      peers: [
+        { id: "c1", name: "ws://192.168.1.20:7717/ws", url: "ws://192.168.1.20:7717/ws", state: "up", machine_id: "mac-id", host: "mac", sessions: 1, allow_writes: false, since_ms: 0 },
+      ],
+    });
+    await board();
+    await act(() => saveConnections([{ id: "c1", name: "mac-m4p", url: "ws://192.168.1.20:7717/ws" }]));
+    expect(screen.getByText("mac-m4p")).toBeInTheDocument();
+    expect(screen.queryByText("mac")).toBeNull();
+    const remote = screen.getAllByRole("option").find((el) => el.textContent?.includes("the remote one"))!;
+    expect(remote.textContent).toContain("on mac-m4p");
+
+    await act(() => saveConnections([{ id: "c1", name: "studio", url: "ws://192.168.1.20:7717/ws" }]));
+    expect(screen.getByText("studio")).toBeInTheDocument();
   });
 
   it("greys out when its machine goes quiet", async () => {

@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { groupQueue, hiddenByTmux, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
+import { groupQueue, hiddenByTmux, machineName, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 import { emptyScoped, type ScopedPrefs } from "@/store/prefs";
 import type { AttentionItem, Session } from "@/wire/types";
 
@@ -286,6 +286,24 @@ describe("grouping by machine", () => {
     ]);
     const mac = lines.find((l) => l.kind === "header" && l.label === "mac");
     expect(mac).toMatchObject({ count: 1, needing: 1 });
+  });
+
+  // `R-J139`, reported 2026-10-14: a connection saved as *mac-m4p* headed its
+  // group as the host the Mac announces.
+  it("heads a followed machine with the name you gave its connection, and its row says so too", () => {
+    const rows = rowsOf([session("a"), remote("w", "Kinz-Mac-mini.local"), remote("x", "mini")]);
+    const names = { "Kinz-Mac-mini.local-id": "mac-m4p" };
+    const lines = groupQueue(rows, { byRepo: false, byMachine: true, collapsed: [], here: "ubuntu", names });
+    expect(shape(lines)).toEqual([
+      "# this machine · ubuntu",
+      "a",
+      "# mac-m4p",
+      "@Kinz-Mac-mini.local-id:w",
+      "# mini",
+      "@mini-id:x",
+    ]);
+    expect(machineName(rows[1].session, names)).toBe("mac-m4p");
+    expect(machineName(rows[2].session, names)).toBe("mini");
   });
 
   it("nests repositories under their machine, keyed apart so one fold does not fold both", () => {

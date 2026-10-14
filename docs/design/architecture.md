@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-12
+updated: 2026-10-14
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
@@ -263,7 +263,10 @@ starts itself from a team definition it holds, in Gau Geung mode
 ([ADR-0003](../decisions/0003-observe-do-not-spawn.md)'s amendment). `seat.rs`
 composes each CLI's argv and environment from the definition through one
 match per `SessionSource` — session id where the CLI takes one, permission
-mode in the CLI's own flag, the two layers of guidance by a flag or a file
+mode in the CLI's own flag, the model and since `R-P16` the thinking level
+(`--effort`, Codex's `model_reasoning_effort` override, opencode's agent
+`variant` beside its model; Qwen takes none, and `validate` refuses one there),
+the two layers of guidance by a flag or a file
 under `~/.mogeung`, a home of its own only when asked
 ([ADR-0043](../decisions/0043-a-seat-is-configured-at-launch-never-in-your-home.md))
 — and starts it in a tmux session of its own, in a worktree cut on

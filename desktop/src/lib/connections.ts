@@ -114,7 +114,29 @@ export function storageKind(): "file" | "browser" {
  * dropped the key would lose the list, and one that kept it would overwrite
  * later edits on the next start.
  */
+/**
+ * Who hears the saved list whenever it is read or written — the store, which
+ * keeps each entry's name for the Attention list's machine headings
+ * (`R-J139`). The names only matter; a listener must not keep the tokens.
+ */
+type Listener = (list: Connection[]) => void;
+const listeners = new Set<Listener>();
+
+export function onConnectionsChanged(listen: Listener): () => void {
+  listeners.add(listen);
+  return () => listeners.delete(listen);
+}
+
+function tell(list: Connection[]): Connection[] {
+  for (const listen of listeners) listen(list);
+  return list;
+}
+
 export async function loadConnections(): Promise<Connection[]> {
+  return tell(await readConnections());
+}
+
+async function readConnections(): Promise<Connection[]> {
   if (!isTauri()) return readLocal();
 
   const core = await shell();
@@ -134,6 +156,7 @@ export async function loadConnections(): Promise<Connection[]> {
 }
 
 export async function saveConnections(list: Connection[]): Promise<void> {
+  tell(list);
   if (!isTauri()) {
     localStorage.setItem(KEY, JSON.stringify(list));
     return;

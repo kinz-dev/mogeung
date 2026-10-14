@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-12
+updated: 2026-10-14
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -418,7 +418,14 @@ Three things are per session rather than per daemon: where a pane attaches
 switch's warning names (the switched session's machine only), and whether the
 screen-acting buttons are offered (never for another machine's). The Attention
 list groups by machine, this machine first (`groupQueue` in `lib/queue.ts`,
-which the keyboard walks too), and marks every remote row *on HOST*.
+which the keyboard walks too), and marks every remote row *on NAME*. The name
+is the saved connection's that follows the machine (`machineNames` in
+`lib/federation.ts`, matched by the follow's id or address and read as the list
+reads now, since a rename does not re-send the follow), else the follow's own
+unless that is only an address, else the host the machine announces (`R-J139`).
+The store keeps the saved list's ids, names and addresses, never its tokens,
+from every load and save, and reads it once when the daemon first reports a
+follow.
 `lib/federation.ts` renders a follow's state and the sentence beside it; the
 follow itself is the daemon's ([architecture.md](architecture.md#one-daemon-following-others-r-i18-feature-0047-2026-09-23)).
 

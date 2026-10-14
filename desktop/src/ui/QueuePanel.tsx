@@ -15,6 +15,7 @@ import { ContextMenu, MenuItem, MenuLabel, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { ZoomPane } from "@/ui/ZoomPane";
 import { TAGS, tagBg, tagColor, tagLabel } from "@/lib/tags";
+import { machineNames } from "@/lib/federation";
 import { TEAM_KEY, groupQueue, hiddenByTmux, machineName, matchesFilter, queueDetail, visibleQueue, type QueueLine } from "@/lib/queue";
 // Clicking a queue row means *put that session on screen*, which is not the
 // same as `select` once a pane can be held — see `revealSession`. `R-J31`.
@@ -138,6 +139,13 @@ export function useVisibleQueue(): { item: AttentionItem; session: Session }[] {
  * strip and the ambient board want the rows and have nowhere to put a number
  * — and this one is only ever read by the panel that can turn the rule off.
  */
+/** Your names for followed machines, by machine id. `R-J139`. */
+function useMachineNames(): Record<string, string> {
+  const peers = useStore((s) => s.peers);
+  const saved = useStore((s) => s.savedConnections);
+  return useMemo(() => machineNames(peers, saved), [peers, saved]);
+}
+
 function useHiddenByTmux(): number {
   const queue = useStore((s) => s.queue);
   const sessions = useStore((s) => s.sessions);
@@ -249,7 +257,8 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
   const live = liveText(session);
   const now = Date.now();
   // Another machine's, mirrored from a daemon this one follows. `R-I21`.
-  const remote = machineName(session);
+  const names = useMachineNames();
+  const remote = machineName(session, names);
   const stale = !!session.origin?.stale;
 
   // A live session cannot be hidden: it is still doing things, and hiding one
@@ -519,7 +528,7 @@ function QueueRow({ item, session }: { item: AttentionItem; session: Session }) 
         disabled={!!session.origin}
         onSelect={() => send({ cmd: "focus_terminal", session_id: session.id })}
       >
-        {session.origin ? `Its terminal window is on ${machineName(session)}` : "Raise its terminal window"}
+        {session.origin ? `Its terminal window is on ${machineName(session, names)}` : "Raise its terminal window"}
       </MenuItem>
       <MenuItem onSelect={() => void navigator.clipboard?.writeText(session.id)}>
         Copy session id
@@ -566,6 +575,7 @@ export function QueuePanel() {
   const latest = useRef(width);
   const folded = useStore((s) => s.foldedGroups);
   const here = useStore((s) => s.daemon?.host ?? null);
+  const names = useMachineNames();
   // Whether any row is another machine's — the machine toggle is offered only
   // then, since with none it would do nothing.
   const anyRemote = useStore((s) => Object.values(s.sessions).some((x) => x.origin));
@@ -579,8 +589,9 @@ export function QueuePanel() {
         byMachine: prefs.groupByMachine,
         collapsed: folded,
         here,
+        names,
       }),
-    [rows, prefs.groupByRepo, prefs.groupByMachine, folded, here],
+    [rows, prefs.groupByRepo, prefs.groupByMachine, folded, here, names],
   );
 
   // Follow the selection with the viewport. Arrowing down a long queue that

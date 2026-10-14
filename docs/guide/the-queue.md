@@ -1,7 +1,7 @@
 ---
 title: The attention queue
 status: active
-updated: 2026-10-08
+updated: 2026-10-14
 ---
 
 # The attention queue
@@ -134,7 +134,9 @@ badge or a tag in any card filters to it. An unknown prefix (`todo:`) stays
 plain text rather than matching nothing.
 
 **group** collapses the queue by repository — and by machine first, when you
-follow other daemons ([remote.md](remote.md)). Repos are ordered by their most
+follow other daemons ([remote.md](remote.md)). A followed machine's heading is
+the name you gave its connection in **Manage connections**, and changes when you
+rename it; an entry with no name shows the host the machine announces. Repos are ordered by their most
 urgent session, so the top of the panel is still the top of the queue. Click a
 repo header to fold it.
 

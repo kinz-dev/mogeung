@@ -45,6 +45,28 @@ export function followMsg(c: Connection, allowWrites = false): ClientMsg {
   };
 }
 
+/**
+ * What to call each followed machine, by its machine id: the name you gave
+ * the saved connection that follows it, as it reads **now** — renaming an
+ * entry does not re-send its follow — else the follow's own name, unless
+ * that is only its address, in which case nothing, and the caller falls back
+ * to the host the machine announces. `R-J139`, reported 2026-10-14: a
+ * connection named *mac-m4p* headed its group as *Kinz-Mac-mini.local*.
+ */
+export function machineNames(
+  peers: readonly PeerState[] | null,
+  saved: readonly Pick<Connection, "id" | "name" | "url">[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of peers ?? []) {
+    if (!p.machine_id) continue;
+    const c = saved.find((x) => x.id === p.id) ?? saved.find((x) => sameDaemon(x.url, p.url));
+    const given = c?.name?.trim() || (sameDaemon(p.name, p.url) ? "" : p.name.trim());
+    if (given) out[p.machine_id] = given;
+  }
+  return out;
+}
+
 /** Where a follow stands, in words. */
 export function peerLine(p: PeerState): string {
   const n = `${p.sessions} session${p.sessions === 1 ? "" : "s"}`;

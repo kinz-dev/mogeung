@@ -78,7 +78,7 @@ import {
   machineId as machineIdFromShell,
   type DaemonStatus,
 } from "@/lib/tauri";
-import { loadConnections } from "@/lib/connections";
+import { loadConnections, onConnectionsChanged } from "@/lib/connections";
 import { composeDial, LOCAL_URL, rememberable } from "@/lib/dial";
 import { applyAppZoom } from "@/lib/zoom";
 import { answerFor, attachError, attachResult, gitSessionOf, pushCmd, type ConsoleEntry } from "@/lib/gitConsole";
@@ -742,6 +742,12 @@ export interface AppState {
    */
   peers: PeerState[] | null;
   /**
+   * The saved connections' ids, names and addresses — never their tokens —
+   * as last read or written, so a followed machine is headed by the name you
+   * gave it. `R-J139`. Read once the daemon first says it follows anything.
+   */
+  savedConnections: { id: string; name: string; url: string }[];
+  /**
    * Which Attention-list headings are folded, by `groupQueue`'s keys. In the
    * store rather than the panel so the keyboard walks what is drawn (`R-J13`)
    * — and not persisted, because which groups you folded is a property of
@@ -1232,6 +1238,9 @@ function lowerBound(list: TranscriptEvent[], seq: number): number {
   return lo;
 }
 
+/** Whether the saved connections have been read for their names. `R-J139`. */
+let savedConnectionsRead = false;
+
 export const useStore = create<AppState>((set, get) => ({
   conn: "connecting",
   connDetail: null,
@@ -1256,6 +1265,7 @@ export const useStore = create<AppState>((set, get) => ({
   teamDraft: null,
   teamBooted: null,
   peers: null,
+  savedConnections: [],
   foldedGroups: [],
   noteOpenId: null,
   tasks: [],
@@ -2004,6 +2014,12 @@ export const useStore = create<AppState>((set, get) => ({
       }
       case "peers":
         set({ peers: msg.peers });
+        // The names you gave these machines live in the saved list, which
+        // nothing has read yet unless a connections panel was opened.
+        if (msg.peers.length > 0 && !savedConnectionsRead) {
+          savedConnectionsRead = true;
+          void loadConnections().catch(() => (savedConnectionsRead = false));
+        }
         break;
       case "tasks":
         set({ tasks: msg.tasks, closedToday: msg.closed_today });
@@ -2827,3 +2843,9 @@ export function bootLine(team: string, o: { started: string[]; revived: string[]
   const left = o.skipped.length > 0 ? ` · ${o.skipped.join(", ")} already running` : "";
   return `${team} booted — started ${o.started.join(", ")}${again}${left}`;
 }
+
+// `R-J139`: the names you gave saved connections, kept as they are read and
+// written, without their tokens.
+onConnectionsChanged((list) =>
+  useStore.setState({ savedConnections: list.map(({ id, name, url }) => ({ id, name, url })) }),
+);

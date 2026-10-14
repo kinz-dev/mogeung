@@ -186,10 +186,14 @@ export function machineOf(s: Session): string {
   return s.origin?.machine_id ?? "";
 }
 
-/** Where to say a remote session is: its host, or its machine id. */
-export function machineName(s: Session): string | null {
+/**
+ * Where to say a remote session is: the name you gave the connection that
+ * follows its machine (`names`, from `machineNames`), else its host, else its
+ * machine id.
+ */
+export function machineName(s: Session, names?: Readonly<Record<string, string>>): string | null {
   if (!s.origin) return null;
-  return s.origin.host || s.origin.machine_id;
+  return names?.[s.origin.machine_id] || s.origin.host || s.origin.machine_id;
 }
 
 /** One line of the Attention list: a heading, or a session. */
@@ -216,6 +220,8 @@ export interface Grouping {
   collapsed: string[];
   /** This machine's host, for its own heading. */
   here?: string | null;
+  /** Your names for followed machines, by machine id. `R-J139`. */
+  names?: Readonly<Record<string, string>>;
 }
 
 function bucket<K>(rows: VisibleRow[], key: (r: VisibleRow) => K): [K, VisibleRow[]][] {
@@ -315,7 +321,7 @@ function groupOwn(rows: VisibleRow[], g: Grouping): QueueLine[] {
   for (const [machine, items] of groups) {
     const first = items[0].session;
     const label =
-      machine === "" ? (g.here ? `this machine · ${g.here}` : "this machine") : (machineName(first) ?? machine);
+      machine === "" ? (g.here ? `this machine · ${g.here}` : "this machine") : (machineName(first, g.names) ?? machine);
     const stale = machine !== "" && items.every((r) => r.session.origin?.stale);
     const h = header(`machine:${machine}`, label, 0, items, g.collapsed, stale);
     out.push(h);
