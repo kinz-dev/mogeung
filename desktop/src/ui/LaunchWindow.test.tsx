@@ -14,8 +14,8 @@
  * row you were pointing at.
  */
 
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LaunchWindow } from "@/ui/LaunchWindow";
 import { useStore } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
@@ -28,15 +28,6 @@ function open(favourites: string[] = []) {
   useStore.getState().setScoped({ favouriteDirs: favourites });
   render(<LaunchWindow />);
 }
-
-// The OS picker, which has no OS here. Mocked at the module rather than at the
-// plugin, because `chooseFolder` is the seam: it already decides between a
-// shell picker and a typed prompt, and this window only has to ask it.
-const picked = vi.hoisted(() => ({ value: null as string | null }));
-vi.mock("@/lib/tauri", async (orig) => ({
-  ...(await orig<typeof import("@/lib/tauri")>()),
-  chooseFolder: vi.fn(async () => picked.value),
-}));
 
 beforeEach(() => localStorage.clear());
 afterEach(() => {
@@ -287,35 +278,107 @@ describe("headless into a directory codex has not been trusted in", () => {
 });
 
 /**
- * Typing an absolute path was the slowest part of this window. `R-J78`.
+ * Typing an absolute path was the slowest part of this window (`R-J78`), and
+ * the picker that fixed it showed the wrong disk (`R-J142`).
  *
- * Two properties, and the second is the one that fails quietly: the picked
- * folder has to land in the box *and* a declined picker has to leave what was
- * already there alone — a cancel that blanks the field is worse than no picker,
- * because it destroys work in the act of doing nothing.
+ * Asked 2026-10-16: with a followed machine chosen, the browse button still
+ * opened the OS picker on this computer. The browser is now drawn here and
+ * asked of the daemon whose disk it is, so these pin the wire as much as the
+ * screen: the question names the chosen machine, an answer for another
+ * machine or an older question is not shown, stepping in asks again, and a
+ * daemon too old to know the verb is said to be — not left spinning.
  */
 describe("browsing for the folder", () => {
-  it("puts what you picked into the box", async () => {
-    picked.value = "/home/you/projects/foo";
-    open();
-    await act(async () => {
-      fireEvent.click(screen.getByTitle("browse for a folder"));
-    });
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText("~/projects/foo")).toHaveValue("/home/you/projects/foo"),
+  const sent = (): unknown[] => (useStore.getState() as unknown as { sent: unknown[] }).sent ?? [];
+  const peer: PeerState = {
+    id: "p1",
+    name: "devbox",
+    url: "ws://devbox:7717/ws",
+    state: "up",
+    machine_id: "m2",
+    host: "devbox",
+    version: "0.1.0",
+    sessions: 0,
+    allow_writes: true,
+    detail: null,
+    since_ms: 0,
+  };
+  const answer = (over: Record<string, unknown>) =>
+    act(() =>
+      useStore.getState().ingest({ ev: "folders", asked: "~", path: "/home/you", parent: "/home", dirs: [], ...over } as never),
     );
+
+  beforeEach(() => {
+    useStore.setState({
+      browse: null,
+      send: (m: unknown) => useStore.setState({ sent: [...sent(), m] } as never),
+    } as never);
+  });
+  afterEach(() => useStore.setState({ peers: null }));
+
+  it("asks the watched daemon, at what is typed, and puts the folder you use into the box", () => {
+    open();
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "~/proj" } });
+    fireEvent.click(screen.getByTitle("browse for a folder on this machine"));
+    expect(sent()).toEqual([{ cmd: "browse_folders", path: "~/proj" }]);
+
+    answer({ asked: "~/proj", path: "/home/you", dirs: ["projects", ".config", "notes"] });
+    // Hidden folders wait for the checkbox.
+    expect(screen.queryByText(".config")).toBeNull();
+    fireEvent.click(screen.getByText("projects"));
+    expect(sent()[1]).toEqual({ cmd: "browse_folders", path: "/home/you/projects" });
+
+    answer({ asked: "/home/you/projects", path: "/home/you/projects", parent: "/home/you", dirs: ["mogeung"] });
+    fireEvent.click(screen.getByText("use this folder"));
+    expect(screen.getByPlaceholderText("~/projects/foo")).toHaveValue("/home/you/projects");
+    expect(screen.queryByTestId("folder-browser")).toBeNull();
   });
 
-  it("leaves the box alone when you cancel", async () => {
-    picked.value = null;
+  it("asks the followed machine you chose, and shows only that machine's answer", () => {
+    useStore.setState({ peers: [peer] });
     open();
-    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), {
-      target: { value: "/half/typed" },
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByTitle("browse for a folder"));
-    });
+    fireEvent.click(screen.getByText("devbox"));
+    fireEvent.click(screen.getByTitle("browse for a folder on devbox"));
+    expect(sent()).toEqual([{ cmd: "browse_folders", path: "~", machine: "m2" }]);
+
+    // This machine's disk, late: the wrong picker's answer.
+    answer({ dirs: ["local-only"] });
+    expect(screen.queryByText("local-only")).toBeNull();
+    answer({ machine: "m2", dirs: ["remote-repo"] });
+    expect(screen.getByText("remote-repo")).toBeInTheDocument();
+  });
+
+  it("drops an answer to a folder you have already left", () => {
+    open();
+    fireEvent.click(screen.getByTitle("browse for a folder on this machine"));
+    answer({ dirs: ["a"] });
+    fireEvent.click(screen.getByText("a"));
+    answer({ asked: "~", dirs: ["stale"] });
+    expect(screen.queryByText("stale")).toBeNull();
+  });
+
+  it("says a daemon too old to browse is too old, rather than waiting on it", () => {
+    useStore.setState({ peers: [peer] });
+    open();
+    fireEvent.click(screen.getByText("devbox"));
+    fireEvent.click(screen.getByTitle("browse for a folder on devbox"));
+    act(() =>
+      useStore.getState().ingest({
+        ev: "error",
+        message: "bad command: unknown variant `browse_folders`, expected one of `subscribe`, …",
+      } as never),
+    );
+    expect(screen.getByText(/devbox's mogeung is older than this window/)).toBeInTheDocument();
+  });
+
+  it("leaves the box alone when you close the browser without choosing", () => {
+    open();
+    fireEvent.change(screen.getByPlaceholderText("~/projects/foo"), { target: { value: "/half/typed" } });
+    fireEvent.click(screen.getByTitle("browse for a folder on this machine"));
+    answer({ asked: "/half/typed", path: "/half", dirs: ["x"] });
+    fireEvent.click(screen.getByTitle("close the folder browser"));
     expect(screen.getByPlaceholderText("~/projects/foo")).toHaveValue("/half/typed");
+    expect(useStore.getState().browse).toBeNull();
   });
 });
 

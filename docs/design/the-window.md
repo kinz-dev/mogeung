@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-14
+updated: 2026-10-16
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -368,7 +368,11 @@ the checkbox says so, and the footer says the session comes back as that
 machine's; both lists are the chosen machine's — the recent repos from the
 sessions mirrored from it, the favourites a starred list of its own, since
 `scoped()` takes a machine and a path kept for one box is not a path on
-another;
+another; and the folder button opens `FolderBrowser` under the box rather
+than the OS picker (`R-J142`) — the picker could show only this computer's
+disk, the browser is answered by the chosen machine's daemon, and a late
+answer for another machine or a folder already left is dropped by `browse`
+in the store;
 Teams is team, policy, sends and seats, in blue, purple, green and teal, the
 list of teams down the left with the chosen one marked, and the verdict — what
 is wrong, unsaved, or saved — in a footer of its own. The two layers keep

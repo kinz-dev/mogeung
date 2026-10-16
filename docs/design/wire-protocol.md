@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-13
+updated: 2026-10-16
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -284,6 +284,7 @@ that can edit it (pillar K), and sending is the one fenced exception.
 | Command | Carries | Answered by | Hop |
 |---|---|---|---|
 | `LaunchTerminal` | `dir`, `worktree`, `source` (which CLI, `R-J51`), `headless` (`R-J61`), `machine` (a followed daemon's machine id, `R-J135`) | a session appears on the board — mirrored, when it was started elsewhere | here; write, to that machine, when `machine` names a followed one |
+| `BrowseFolders` | `path` (absolute, `~` or `~/…`), `machine` (`R-J142`) | `Folders`, to the asker | write — behind the guard here, and across the hop, as a launch's |
 | `FocusTerminal` | `session_id` | the terminal app comes forward | desktop |
 | `OpenFolder` | `session_id` | the file manager opens there (`R-J34`) | desktop |
 | `ProbeIntellij` | `session_id` | `IntellijProbe` (`R-J92`) | desktop |
@@ -293,6 +294,7 @@ that can edit it (pillar K), and sending is the one fenced exception.
 | Event | Carries | Relay |
 |---|---|---|
 | `IntellijProbe` | `root`, `project`, `launcher` — once per session, so a dead button can say why | theirs |
+| `Folders` | `machine` (stamped by the relay), `asked`, `path`, `parent`, `dirs`, `truncated`, `error` | pass |
 | `SentToSession` | `session_id`, `target` — an ack, because the gesture is invisible | pass |
 
 `LaunchTerminal` starts a real interactive CLI, unmodified, under tmux; the
@@ -308,6 +310,14 @@ machine off it, the hop is a write — the follow must allow changes — and
 because a terminal window on a machine where nobody is looking is the desktop
 act the hop refuses; the session then arrives through the follow, mirrored
 as that machine's.
+`BrowseFolders` (`R-J142`) answers *where could a launch start* from the
+daemon whose disk it is, because the window's OS picker could only show the
+window's: folder names only, at `path` or its nearest folder that exists.
+It reads further than anything else here — any folder's names, not a
+session's workspace — so `is_write` gates it beside `AddWorkspaceDir` and
+`hop` makes one that names a machine a write, routed by `machine_of` and
+stripped by `outbound` as a launch is. The relay stamps the answer with the
+follow's machine so a window can drop one meant for a picker it has closed.
 `SendToSession` delivers exactly the text, once, into the session's own pane,
 and the gate takes no token and no flag; the mechanics are in the same
 document.

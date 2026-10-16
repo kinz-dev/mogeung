@@ -310,6 +310,28 @@ export interface FileTab {
   reload: boolean;
 }
 
+/**
+ * The New session window's folder browser (`R-J142`): the question in flight
+ * and the last answer, for whichever machine it is browsing.
+ *
+ * The OS picker this replaces could only show the window's own disk; this is
+ * asked of the daemon whose disk it is, so the answer is keyed by `machine`
+ * and `asked` — a late answer about another machine or another folder is the
+ * wrong picker's and is dropped.
+ */
+export interface BrowseState {
+  /** `null` is the watched daemon; otherwise a followed machine's id. */
+  machine: string | null;
+  asked: string;
+  pending: boolean;
+  /** The last folder listed on this machine — kept while the next is asked,
+   *  so stepping into a folder does not flash the list empty. */
+  listing: { path: string; parent?: string; dirs: string[]; truncated: boolean } | null;
+  error: string | null;
+  /** The daemon refused the verb by name: older than this window. */
+  outdated: boolean;
+}
+
 export interface ExplorerState {
   dirs: Record<string, DirEntry[]>;
   expanded: string[];
@@ -1010,6 +1032,10 @@ export interface AppState {
   ambient: boolean;
   /** Start a session in a terminal. `R-B2`. */
   showLaunch: boolean;
+  /** The New session window's folder browser, while it is open. `R-J142`. */
+  browse: BrowseState | null;
+  /** Ask a machine for the folders in `path`, and open the browser on it. */
+  browseFolders: (machine: string | null, path: string) => void;
   /** The Teams window: definitions, edited here first (`R-P3`). */
   showTeams: boolean;
   /**
@@ -1325,6 +1351,7 @@ export const useStore = create<AppState>((set, get) => ({
   diffAnswers: {},
   ambient: false,
   showLaunch: false,
+  browse: null,
   showTeams: false,
   teamBoardOpen: false,
   gauTeam: null,
@@ -1343,6 +1370,19 @@ export const useStore = create<AppState>((set, get) => ({
   revealedEnv: {},
   url: defaultUrl(),
 
+  browseFolders: (machine, path) => {
+    set((s) => ({
+      browse: {
+        machine,
+        asked: path,
+        pending: true,
+        listing: s.browse?.machine === machine ? s.browse.listing : null,
+        error: null,
+        outdated: false,
+      },
+    }));
+    get().send({ cmd: "browse_folders", path, ...(machine ? { machine } : {}) });
+  },
   send: (msg) => {
     client?.send(msg);
     // The Console tab's ledger (`R-D29`): every git command is a row the
@@ -2268,6 +2308,23 @@ export const useStore = create<AppState>((set, get) => ({
           };
         });
         break;
+      case "folders":
+        set((s) => {
+          const b = s.browse;
+          // Another machine's, or a folder asked before the one on screen.
+          if (!b || (msg.machine ?? null) !== b.machine || msg.asked !== b.asked) return {};
+          return {
+            browse: {
+              ...b,
+              pending: false,
+              error: msg.error ?? null,
+              listing: msg.error
+                ? b.listing
+                : { path: msg.path, parent: msg.parent, dirs: msg.dirs, truncated: !!msg.truncated },
+            },
+          };
+        });
+        break;
       case "dir_listing":
         set((s) => {
           const st = s.explorer[msg.session_id] ?? emptyExplorer();
@@ -2661,6 +2718,18 @@ export const useStore = create<AppState>((set, get) => ({
         break;
 
       case "error": {
+        // A browse still waiting claims the error (`R-J142`) — by name when
+        // the daemon is too old to know the verb, which serde words as an
+        // unknown variant `browse_folders`; otherwise by the same heuristic
+        // as git's below, but only for a followed machine, where the relay's
+        // refusals (changes off, not answering) are the likely answer.
+        const b = get().browse;
+        if (b?.pending && (msg.message.includes("browse_folders") || b.machine !== null)) {
+          const outdated = msg.message.includes("browse_folders");
+          set({ browse: { ...b, pending: false, error: msg.message, outdated } });
+          get().pushNotice(msg.message, "error", { quiet: true });
+          break;
+        }
         // The wire's error carries no address, so it lands on the latest git
         // command still waiting, in whichever session sent it most recently —
         // a heuristic, and the Console row says so. `R-D29`.

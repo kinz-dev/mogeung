@@ -1492,6 +1492,10 @@ fn is_write(cmd: &ClientMsg) -> bool {
             // able to extend the read surface of the daemon it is watching.
             | ClientMsg::AddWorkspaceDir { .. }
             | ClientMsg::RemoveWorkspaceDir { .. }
+            // The same rule once more (`R-J142`): any folder's names on this
+            // disk is the widest read on the wire, and is asked only to pick
+            // where a launch starts — itself behind this guard's twin, `hop`.
+            | ClientMsg::BrowseFolders { .. }
             // The one write into a worktree (`R-P9`, ADR-0019's amendment):
             // a repository write by the plainest definition.
             | ClientMsg::FileWrite { .. }
@@ -2207,6 +2211,21 @@ async fn handle(
             if let Err(e) = state.open_in_intellij(&session_id).await {
                 err(e);
             }
+        }
+        // Where a launch starts (`R-J142`). `machine` is spent before this
+        // arm, as a launch's is: one naming a followed machine went there.
+        // To the asker only — another window's picker is not waiting for it.
+        ClientMsg::BrowseFolders { path, machine: _ } => {
+            let reply = reply.clone();
+            // Off the reactor: a folder on a network mount can take its time.
+            tokio::spawn(async move {
+                let answer = tokio::task::spawn_blocking(move || crate::browse::folders(&path, crate::browse::home().as_deref()))
+                    .await;
+                match answer {
+                    Ok(msg) => send_reply(&reply, msg),
+                    Err(e) => send_reply(&reply, ServerMsg::Error { message: format!("browsing did not run: {e}") }),
+                }
+            });
         }
         ClientMsg::ListDir { session_id, path } => {
             match state.list_dir(&session_id, &path).await {

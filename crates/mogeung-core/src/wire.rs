@@ -80,6 +80,25 @@ pub enum ClientMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
+    /// The folders inside one folder of a machine, for choosing where a
+    /// launch starts (`R-J142`). The OS picker the window used could only
+    /// ever show the window's own disk, so on a followed machine — or a
+    /// watched daemon on another box — it showed the wrong one.
+    ///
+    /// `path` is absolute, `~`, `~/…` or empty for the home folder; a path
+    /// that does not exist is answered at its nearest folder that does, so a
+    /// half-typed one opens somewhere useful. Folder names only, never files.
+    ///
+    /// **Gated as a write** (`api::is_write`), with `AddWorkspaceDir`: it
+    /// widens what the daemon reads out to anywhere on its disk. `machine`
+    /// routes it as a launch's does — a write across the hop, so a follow
+    /// with changes off cannot browse, which is also a follow that could not
+    /// start anything in what it found.
+    BrowseFolders {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+    },
     /// Rescan for sessions immediately instead of waiting for the next poll.
     Rescan,
     /// Ask what mogeung can and cannot currently see.
@@ -1367,6 +1386,30 @@ pub enum ServerMsg {
         session_id: SessionId,
         path: String,
         entries: Vec<DirEntry>,
+    },
+    /// The answer to [`ClientMsg::BrowseFolders`], to the asker only.
+    Folders {
+        /// The machine that listed them: `None` from the daemon itself, the
+        /// follow's machine id once a relay has stamped it — so a window that
+        /// switched machines mid-question can drop the late answer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+        /// What was asked, verbatim, for the same reason.
+        asked: String,
+        /// The folder actually listed, absolute: `asked` resolved, or its
+        /// nearest ancestor that exists. Empty only with `error`.
+        path: String,
+        /// One level up; `None` at the root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+        /// Folder names, sorted, hidden ones included — the window decides.
+        dirs: Vec<String>,
+        /// More folders than the cap; `dirs` is the first of them.
+        #[serde(default)]
+        truncated: bool,
+        /// Why nothing could be listed, in words.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     /// One worktree file. `truncated` means the file went on past the size cap
     /// and the client is looking at the head of it, not all of it.

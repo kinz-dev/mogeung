@@ -875,7 +875,8 @@ fn open_relay(route: Route, machine: String, reply: tokio::sync::mpsc::Sender<Se
 /// A run panel's *will it run* is the one answer rewritten on the way: the
 /// peer says whether **it** would run for a socket from another machine (its
 /// `--allow-run`), and a run crossing this hop also needs this follow's
-/// consent (`R-I23`) — so the window is shown both, as one flag.
+/// consent (`R-I23`) — so the window is shown both, as one flag. A folder
+/// listing gains the machine it came from.
 pub fn relayed(txt: &str, machine: &str, allow_writes: bool) -> Option<ServerMsg> {
     use mogeung_core::federation::{inbound, relay_class, Relay};
     let msg: ServerMsg = serde_json::from_str(txt).ok()?;
@@ -886,6 +887,12 @@ pub fn relayed(txt: &str, machine: &str, allow_writes: bool) -> Option<ServerMsg
     let mut out: ServerMsg = serde_json::from_value(inbound(value, machine)).ok()?;
     if let ServerMsg::RunConfigs { allowed, .. } = &mut out {
         *allowed = *allowed && allow_writes;
+    }
+    // The peer listed its own disk and says so with no machine; here it is
+    // that machine's, which is how a window that has since switched machines
+    // knows the answer is not for the picker it is showing (`R-J142`).
+    if let ServerMsg::Folders { machine: m, .. } = &mut out {
+        *m = Some(machine.to_string());
     }
     Some(out)
 }
@@ -922,6 +929,23 @@ mod relay_tests {
         assert!(flag(true, true));
         assert!(!flag(true, false));
         assert!(!flag(false, true));
+    }
+
+    /// `R-J142`: the peer lists its own disk and names no machine; the window
+    /// needs to know whose folders these are, and the follow is who says —
+    /// not a peer that put some other machine's name on it.
+    #[test]
+    fn a_relayed_folder_listing_is_stamped_with_the_follow_it_came_up() {
+        for claim in ["", r#","machine":"elsewhere""#] {
+            let txt = format!(r#"{{"ev":"folders","asked":"~","path":"/home/k","dirs":["a"]{claim}}}"#);
+            match relayed(&txt, "m1", true) {
+                Some(ServerMsg::Folders { machine, path, dirs, .. }) => {
+                    assert_eq!(machine.as_deref(), Some("m1"));
+                    assert_eq!((path.as_str(), dirs), ("/home/k", vec!["a".to_string()]));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
     }
 
     #[test]

@@ -57,6 +57,14 @@
  * path is not the same length as entering one, and it degrades to a prompt in
  * a browser tab where there is no shell to ask.
  *
+ * **The daemon's picker, not the OS's, since `R-J142`**, asked 2026-10-16:
+ * *"if I selected the remote machine that I follow. And when I click the
+ * "open" directory button. It always show my own local machine folder."* An
+ * OS picker can only show the disk the window runs on, so it was wrong for a
+ * followed machine and for a watched daemon on another box alike. The button
+ * now opens `FolderBrowser` under the box, answered by the chosen machine's
+ * daemon — still opening at whatever is half-typed.
+ *
  * **Headless since `R-J61`**, asked 2026-08-26: starting from here always
  * opened a terminal window too, and for a session you mean to drive from a
  * mogeung pane that window is a thing to go and close. Headless is `yolomo
@@ -98,9 +106,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { FolderOpen, Rocket, Star, TriangleAlert, X } from "lucide-react";
 import { useStore } from "@/store";
 import { useMachineNames } from "@/lib/useMachineNames";
-import { chooseFolder } from "@/lib/tauri";
 import { addFavourite, isFavourite, normaliseDir, removeFavourite } from "@/lib/favourites";
 import { Dialog } from "@/ui/Dialog";
+import { FolderBrowser } from "@/ui/FolderBrowser";
 import { Callout, Field, Section } from "@/ui/Form";
 import { Button, Checkbox, Dim, IconButton, Input, Mono, Row, Segmented } from "@/ui/primitives";
 import { SourceMark } from "@/ui/SourceMark";
@@ -147,6 +155,8 @@ export function LaunchWindow() {
   const setScoped = useStore((s) => s.setScoped);
   const send = useStore((s) => s.send);
   const [dir, setDir] = useState("");
+  // The folder browser under the box (`R-J142`), open or not.
+  const [browsing, setBrowsing] = useState(false);
   const [worktree, setWorktree] = useState(false);
   // Where it starts (`R-J135`): here — the daemon you are watching — or a
   // daemon this one follows, by machine id. Offered only while the follow is
@@ -212,7 +222,10 @@ export function LaunchWindow() {
   const headlessNow = machine !== null || (headless && !untrusted);
 
   if (!open) return null;
-  const close = () => useStore.setState({ showLaunch: false });
+  const close = () => {
+    setBrowsing(false);
+    useStore.setState({ showLaunch: false });
+  };
 
   const keep = (path: string) => setScoped({ favouriteDirs: addFavourite(favourites, path) }, machine);
   const drop = (path: string) => setScoped({ favouriteDirs: removeFavourite(favourites, path) }, machine);
@@ -379,11 +392,9 @@ export function LaunchWindow() {
                   that is the only way in makes that route longer.
                 */}
                 <IconButton
-                  title="browse for a folder"
-                  onClick={async () => {
-                    const picked = await chooseFolder("Folder to start the session in", dir);
-                    if (picked) setDir(picked);
-                  }}
+                  title={browsing ? "close the folder browser" : `browse for a folder on ${remoteName ?? "this machine"}`}
+                  active={browsing}
+                  onClick={() => setBrowsing((b) => !b)}
                 >
                   <FolderOpen className="h-3.5 w-3.5" />
                 </IconButton>
@@ -408,6 +419,24 @@ export function LaunchWindow() {
                 </IconButton>
               </div>
             </Field>
+
+            {/* The daemon's disk, not the window's (`R-J142`): the OS picker
+                here could only show this computer's, which is not where a
+                session on a followed machine starts — nor, when the watched
+                daemon is on another box, where one "here" does. */}
+            {browsing && (
+              <Field label="browse" hint={`${remoteName ?? "this machine"}'s folders`} align="start">
+                <FolderBrowser
+                  machine={machine}
+                  machineName={remoteName ?? "this machine"}
+                  start={dir}
+                  onChoose={(path) => {
+                    setDir(path);
+                    setBrowsing(false);
+                  }}
+                />
+              </Field>
+            )}
 
             <Field label="favourites" hint="kept with the star" align="start">
               {/* An empty list that says nothing looks like a list that failed to

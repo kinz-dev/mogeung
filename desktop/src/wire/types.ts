@@ -1464,6 +1464,9 @@ export type ClientMsg =
   /** `machine`, since `R-J135`: a followed daemon's machine id, to start it
    *  there — forwarded headless, as a write across the hop. Absent is here. */
   | { cmd: "launch_terminal"; dir: string; worktree: boolean; source: SessionSource; headless: boolean; machine?: string }
+  /** The folders in one folder of a machine — this one, or a followed one by
+   *  `machine` — for picking where a launch starts. `R-J142`. */
+  | { cmd: "browse_folders"; path: string; machine?: string }
   | { cmd: "rescan" }
   | { cmd: "fetch_health" }
   | { cmd: "snooze"; session_id: SessionId; minutes: number }
@@ -1715,6 +1718,19 @@ export type ServerMsg =
   | { ev: "review_debt"; debt: ReviewDebt }
   | { ev: "blast_radius"; radius: BlastRadius }
   | { ev: "dir_listing"; session_id: SessionId; path: string; entries: DirEntry[] }
+  /** The answer to `browse_folders`, to the asker. `machine` is set by a relay
+   *  for a followed machine's disk; `path` is what was listed — `asked`, or
+   *  its nearest folder that exists. `R-J142`. */
+  | {
+      ev: "folders";
+      machine?: string;
+      asked: string;
+      path: string;
+      parent?: string;
+      dirs: string[];
+      truncated?: boolean;
+      error?: string;
+    }
   | { ev: "file_content"; session_id: SessionId; path: string; content: string; truncated: boolean; hash?: string }
   /** A save landed; the new `file_content` follows as a broadcast. `R-P9`. */
   | { ev: "file_written"; session_id: SessionId; path: string; hash: string }

@@ -81,6 +81,11 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         // it would otherwise open is the desktop act the hop refuses.
         LaunchTerminal { machine: Some(_), .. } => Hop::Write,
         LaunchTerminal { machine: None, .. } => Hop::Here,
+        // Browsing for where a launch starts (`R-J142`) goes where the launch
+        // would, under the launch's consent: it widens what that daemon reads
+        // out, which is what `AddWorkspaceDir` is a write for.
+        BrowseFolders { machine: Some(_), .. } => Hop::Write,
+        BrowseFolders { machine: None, .. } => Hop::Here,
         SetHunkReviewed { .. } | ReviewAll { .. } | Snooze { .. } => Hop::Judge,
         RefreshChange { .. } | FetchEvents { .. } | FetchBlastRadius { .. } => Hop::Read,
         ForgetSession { .. } => Hop::Write,
@@ -178,6 +183,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         Health { .. } | ReviewDebt { .. } => Relay::Theirs,
         BlastRadius { .. }
         | DirListing { .. }
+        | Folders { .. }
         | FileContent { .. }
         | FileWritten { .. }
         | FileWriteRefused { .. }
@@ -242,9 +248,9 @@ pub fn target(cmd: &ClientMsg) -> Option<String> {
 
 /// The machine a command is for, when it is not this one: the one in its
 /// mirrored session or run id, or — for a launch, which names no session —
-/// the one it names outright (`R-J135`). `None` is this daemon's to handle.
+/// the one it names outright (`R-J135`), as a browse for one does (`R-J142`). `None` is this daemon's to handle.
 pub fn machine_of(cmd: &ClientMsg) -> Option<String> {
-    if let ClientMsg::LaunchTerminal { machine: Some(m), .. } = cmd {
+    if let ClientMsg::LaunchTerminal { machine: Some(m), .. } | ClientMsg::BrowseFolders { machine: Some(m), .. } = cmd {
         return Some(m.clone());
     }
     let t = target(cmd)?;
@@ -266,6 +272,11 @@ pub fn outbound(cmd: &ClientMsg) -> Option<(String, Value)> {
     if let ClientMsg::LaunchTerminal { machine: Some(m), .. } = cmd {
         obj.remove("machine");
         obj.insert("headless".to_string(), Value::Bool(true));
+        return Some((m.clone(), v));
+    }
+    // A browse goes as one there would be asked: about its own disk.
+    if let ClientMsg::BrowseFolders { machine: Some(m), .. } = cmd {
+        obj.remove("machine");
         return Some((m.clone(), v));
     }
     for key in ["session_id", "run_id"] {
@@ -428,6 +439,36 @@ mod tests {
         assert_eq!(json["dir"], "/r");
         assert_eq!(json["worktree"], true);
         assert!(outbound(&launch(None, true)).is_none(), "a launch here never crosses");
+    }
+
+    /// `R-J142`: browsing for where a launch starts goes where the launch
+    /// would, as that machine's own question about its disk, and under the
+    /// launch's consent — and its answer comes back to the asker.
+    #[test]
+    fn a_browse_crosses_where_a_launch_would_and_under_its_consent() {
+        let browse = |machine: Option<&str>| ClientMsg::BrowseFolders {
+            path: "~/projects".into(),
+            machine: machine.map(str::to_string),
+        };
+        assert_eq!(hop(&browse(Some("mac"))), Hop::Write, "it widens what that daemon reads out");
+        assert_eq!(hop(&browse(None)), Hop::Here);
+        assert_eq!(machine_of(&browse(Some("mac"))).as_deref(), Some("mac"));
+        assert_eq!(machine_of(&browse(None)), None);
+        let (machine, json) = outbound(&browse(Some("mac"))).expect("it crosses");
+        assert_eq!(machine, "mac");
+        assert!(json.get("machine").is_none(), "there it asks about its own disk: {json}");
+        assert_eq!(json["path"], "~/projects");
+        assert!(outbound(&browse(None)).is_none());
+        let answer = ServerMsg::Folders {
+            machine: None,
+            asked: "~".into(),
+            path: "/home/k".into(),
+            parent: Some("/home".into()),
+            dirs: vec![],
+            truncated: false,
+            error: None,
+        };
+        assert_eq!(relay_class(&answer), Relay::Pass);
     }
 
     #[test]

@@ -165,9 +165,9 @@ export async function chooseFile(prompt: string, extensions: string[], startIn?:
  * makes the second use as long as the first, which is most of what is annoying
  * about typing the path instead.
  *
- * The prompt text is a parameter because this is asked from two places now and
- * they are asking for different things: one adds a folder to a workspace, the
- * other picks where a session starts.
+ * The prompt text is a parameter because more than one place may ask. Where a
+ * session starts is no longer one of them (`R-J142`): this shows the window's
+ * own disk, and a session starts on the daemon's — `ui/FolderBrowser` asks it.
  */
 export async function chooseFolder(
   prompt = "Absolute path of the folder to add to this workspace",
