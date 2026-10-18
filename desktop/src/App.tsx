@@ -47,7 +47,7 @@ import { AmbientWindow } from "@/ui/AmbientWindow";
 import { LabelWindow } from "@/ui/LabelWindow";
 import { SearchOverlay } from "@/ui/SearchOverlay";
 import { WallOverlay } from "@/ui/WallOverlay";
-import { SeatDetail, SeatTerminal, TeamBoard } from "@/ui/GauGeungMode";
+import { SeatTerminal, TeamBoard } from "@/ui/GauGeungMode";
 import { BOARD_PANE, SEAT_PANE, TERM_KIND } from "@/lib/teamMode";
 import { FileDrop } from "@/ui/FileDrop";
 import { GitOpsPopup } from "@/ui/GitOpsPopup";
@@ -154,6 +154,11 @@ export const pane =
     );
   };
 
+/** A pane id that is no longer a pane: registered so a layout naming it still restores, then closed. */
+function RetiredPane() {
+  return null;
+}
+
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
   // A terminal is scaled by its font, never by CSS — same reason as Monaco
   // below, and a stored zoom from before this rule must not still apply.
@@ -169,12 +174,14 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   // One file of one commit, out of the Git tool window. `R-D30`. Its id
   // names a sha, so it is stripped on restore with the `file:` panes.
   diff: pane("diff", DiffPane),
-  // Gau Geung, as panes since `R-J132`: the team board and the seat pane are
-  // one each, and a seat's terminal is one per seat, keyed by it in the id
-  // (`seat-term:<team>/<seat>`). A terminal is scaled by its font, as the
-  // Agent pane is; the board and the seat pane take the CSS zoom.
+  // Gau Geung, as panes since `R-J132`: the team board is one, and a seat's
+  // terminal is one per seat, keyed by it in the id (`seat-term:<team>/<seat>`).
+  // A terminal is scaled by its font, as the Agent pane is; the board takes
+  // the CSS zoom. The seat pane became a card on the board in `R-P19`; its id
+  // stays registered, empty, so a layout saved with it still restores, and is
+  // closed straight after.
   [BOARD_PANE]: pane(BOARD_PANE, TeamBoard),
-  [SEAT_PANE]: pane(SEAT_PANE, SeatDetail),
+  [SEAT_PANE]: pane(SEAT_PANE, RetiredPane),
   [TERM_KIND]: pane(TERM_KIND, SeatTerminal, { scale: false }),
 };
 
@@ -308,6 +315,8 @@ export default function App() {
     // Before anything else: drop tabs for panes that have moved out of the
     // centre, or a saved layout resurrects them as empty groups.
     for (const id of MOVED_TO_DOCK) event.api.getPanel(id)?.api.close();
+    // And the seat pane, now a card on the board (`R-P19`).
+    event.api.getPanel(SEAT_PANE)?.api.close();
 
     if (!restored) defaultLayout(event.api);
 

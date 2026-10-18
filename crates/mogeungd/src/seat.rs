@@ -129,7 +129,11 @@ pub fn guidance_text(team: &Team, seat: &Seat) -> String {
 /// appended after the two layers of guidance, only when the command works
 /// here (a receiver and `curl`). `R-P6`. Declared text, like everything the
 /// seat is started with; the file it lands in is under `~/.mogeung`.
-pub fn team_tools_text(team: &Team, seat: &Seat) -> String {
+///
+/// `bin` is named whole (`R-P17`): the seat's `PATH` is set at launch, but a
+/// CLI's shell tool may rebuild `PATH` from the user's rc files, and a seat
+/// that cannot find the command by name can still run it by its path.
+pub fn team_tools_text(team: &Team, seat: &Seat, bin: &Path) -> String {
     let others: Vec<String> = team
         .seats
         .iter()
@@ -145,6 +149,8 @@ pub fn team_tools_text(team: &Team, seat: &Seat) -> String {
         "# Your team (mogeung)\n\n\
          You are seat `{seat}` of team `{team}`, started by mogeung. The other seats: {others}.\n\n\
          To tell a teammate something, run in your shell:\n\n    {cmd} <seat> \"<message>\"\n\n\
+         Both commands named here live in `{bin}`; if your shell does not find one by name, run it by that \
+         path.\n\n\
          The message is typed into that seat's terminal once, as a person would. The reply says whether it was \
          delivered or held for a human: the team allows {hops} agent-to-agent hop{hs} in a row before a person \
          must weigh in, and {cap} automatic sends an hour. Exit code 0 is delivered, 2 is held, 1 is refused. \
@@ -156,6 +162,7 @@ pub fn team_tools_text(team: &Team, seat: &Seat) -> String {
          the latest replaces the last.\n",
         seat = seat.name,
         team = team.name,
+        bin = bin.display(),
         cmd = crate::hooks::SEND_COMMAND,
         note = crate::hooks::NOTE_COMMAND,
         hops = team.policy.hop_budget,
@@ -188,6 +195,7 @@ fn write_send_command(files: &Path) -> Result<PathBuf> {
 
 pub fn claude_mode(m: PermissionMode) -> &'static str {
     match m {
+        PermissionMode::Auto => "auto",
         PermissionMode::Default => "default",
         PermissionMode::AcceptEdits => "acceptEdits",
         PermissionMode::Plan => "plan",
@@ -197,6 +205,10 @@ pub fn claude_mode(m: PermissionMode) -> &'static str {
 
 pub fn qwen_mode(m: PermissionMode) -> &'static str {
     match m {
+        // The classifier `qwenmo` names as the alternative to `yolo`: risky
+        // calls are blocked for you, and the blind spot of feature 0036 — a
+        // block written nowhere on disk — comes back with it.
+        PermissionMode::Auto => "auto",
         PermissionMode::Default => "default",
         PermissionMode::AcceptEdits => "auto-edit",
         PermissionMode::Plan => "plan",
@@ -209,6 +221,9 @@ pub fn qwen_mode(m: PermissionMode) -> &'static str {
 /// already use, and the sandbox is not something a definition gets to drop.
 pub fn codex_approval(m: PermissionMode) -> Result<&'static str> {
     match m {
+        // Codex has no classifier. `on-request` — *"the model decides when to
+        // ask"* — is the nearest it has, and what `default` already was here.
+        PermissionMode::Auto => Ok("on-request"),
         PermissionMode::Default => Ok("on-request"),
         PermissionMode::AcceptEdits => Ok("on-failure"),
         PermissionMode::Plan => {
@@ -355,7 +370,7 @@ pub fn compose(
         if !guidance.is_empty() {
             guidance.push('\n');
         }
-        guidance.push_str(&team_tools_text(team, seat));
+        guidance.push_str(&team_tools_text(team, seat, &files.join("bin")));
     }
     let guidance_path = files.join("guidance.md");
     std::fs::write(&guidance_path, &guidance)?;
@@ -507,7 +522,9 @@ pub fn compose(
                 );
             }
             match mode {
-                PermissionMode::Default => {}
+                // opencode has no classifier either; its own permission
+                // config, which asks for little by default, is the nearest.
+                PermissionMode::Auto | PermissionMode::Default => {}
                 PermissionMode::AcceptEdits => {
                     config.insert("permission".into(), serde_json::json!({ "edit": "allow" }));
                 }
@@ -604,6 +621,12 @@ fn ensure_worktree(repo: &Path, team: &Team, seat: &Seat) -> Result<PathBuf> {
 /// The argv for the tmux start, pure so a test can pin its shape. `-P -F`
 /// prints the pane id and the target so the record is exact from birth; `-e`
 /// sets the seat's own environment without touching the server's.
+///
+/// All but `PATH`. tmux (3.5a, seen 2026-10-18) gives a new session's process
+/// the `PATH` of the client that asked for it — here, the daemon's — over a
+/// `-e PATH=…`, while every other `-e` arrives. So a seat's `PATH`, the one
+/// that puts `mogeung-send` first, is set again on the command itself through
+/// `env`, which nothing between tmux and the CLI can override. `R-P17`.
 pub fn tmux_argv(name: &str, window: &str, dir: &Path, env: &[(String, String)], argv: &[String]) -> Vec<String> {
     let mut cmd = vec![
         "new-session".to_string(),
@@ -623,6 +646,10 @@ pub fn tmux_argv(name: &str, window: &str, dir: &Path, env: &[(String, String)],
     for (k, v) in env {
         cmd.push("-e".into());
         cmd.push(format!("{k}={v}"));
+    }
+    if let Some((_, path)) = env.iter().find(|(k, _)| k == "PATH") {
+        cmd.push("/usr/bin/env".into());
+        cmd.push(format!("PATH={path}"));
     }
     cmd.extend(argv.iter().cloned());
     cmd
@@ -994,6 +1021,25 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// `R-P18`. A team that names no mode starts every seat in auto, each
+    /// CLI by its own word for it: Claude Code's and Qwen Code's classifier,
+    /// Codex's `on-request`, and opencode with no permission flag at all.
+    #[test]
+    fn a_team_that_names_no_mode_starts_every_seat_in_auto() {
+        let d = scratch("auto");
+        let mut t = team();
+        t.permission = PermissionMode::default();
+        let claude = compose(&t, &Seat::new("a", SessionSource::ClaudeCode), &d.join("f1"), &d, Some("c"), &bins(), None).unwrap();
+        assert!(claude.argv.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "auto"), "{:?}", claude.argv);
+        let qwen = compose(&t, &Seat::new("b", SessionSource::QwenCode), &d.join("f2"), &d, Some("q"), &bins(), None).unwrap();
+        assert!(qwen.argv.windows(2).any(|w| w[0] == "--approval-mode" && w[1] == "auto"), "{:?}", qwen.argv);
+        let codex = compose(&t, &Seat::new("c", SessionSource::Codex), &d.join("f3"), &d, None, &bins(), None).unwrap();
+        assert_eq!(&codex.argv[..5], &["/bin/codex", "-a", "on-request", "-s", "workspace-write"]);
+        let oc = compose(&t, &Seat::new("e", SessionSource::OpenCode), &d.join("f4"), &d, None, &bins(), None).unwrap();
+        assert!(!oc.argv.iter().any(|x| x == "--auto" || x == "--agent"), "{:?}", oc.argv);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn a_qwen_seat_takes_the_guidance_as_argv_and_the_teams_mode() {
         let d = scratch("qwen");
@@ -1132,6 +1178,28 @@ mod tests {
         let e = argv.iter().position(|x| x == "-e").unwrap();
         assert_eq!(argv[e + 1], "CLAUDE_CONFIG_DIR=/h");
         assert_eq!(argv[argv.len() - 3..], ["/bin/claude", "--name", "t/s"]);
+        // No `PATH` handed, no `env` in front: the CLI is the command.
+        assert!(!argv.contains(&"/usr/bin/env".to_string()));
+    }
+
+    /// `R-P17`. tmux hands a new session's process the asking client's `PATH`
+    /// over `-e PATH=…`, so the seat's `PATH` is set again by `env` in front
+    /// of the CLI — the last word before it runs. `tests/seat_tmux.rs` asks a
+    /// real tmux whether that is what arrives.
+    #[test]
+    fn a_seats_path_is_set_on_the_command_because_tmux_overrides_its_e() {
+        let argv = tmux_argv(
+            "geung-t-s",
+            "s",
+            Path::new("/w"),
+            &[("PATH".into(), "/seat/bin:/usr/bin".into()), ("MOGEUNG_SEAT_URL".into(), "u".into())],
+            &["/bin/claude".into(), "--name".into(), "t/s".into()],
+        );
+        assert_eq!(
+            argv[argv.len() - 5..],
+            ["/usr/bin/env", "PATH=/seat/bin:/usr/bin", "/bin/claude", "--name", "t/s"]
+        );
+        assert!(argv.windows(2).any(|w| w[0] == "-e" && w[1] == "MOGEUNG_SEAT_URL=u"));
     }
 
     /// `R-P8`. The team session is built around the seats, never from them:
@@ -1295,6 +1363,8 @@ mod tests {
         assert!(team_at < tools_at, "after the layers");
         assert!(guidance.contains("`builder` (codex)"), "{guidance}");
         assert!(guidance.contains("mogeung-send <seat>"));
+        // `R-P17`: the directory is named whole, for a shell that rebuilt `PATH`.
+        assert!(guidance.contains(&format!("`{}`", bin.display())), "{guidance}");
         assert!(guidance.contains("3 agent-to-agent hops"));
         assert!(guidance.contains("60 automatic sends an hour"));
         // The two layers themselves are untouched.

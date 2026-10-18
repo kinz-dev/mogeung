@@ -1,6 +1,7 @@
 /**
- * Gau Geung: the team board, the seat pane and a seat's terminal, as panes
- * of the main tile tree. `R-P7`, feature 0051; panes since `R-J132`.
+ * Gau Geung: the team board and a seat's terminal, as panes of the main tile
+ * tree, and the picked seat as a card on the board. `R-P7`, feature 0051;
+ * panes since `R-J132`, the seat a card since `R-P19`.
  *
  * Every design question was decided on 2026-10-09 from the wireframes, and
  * one of them was reversed by the first use on 2026-10-11:
@@ -24,10 +25,14 @@
  *   — the last send between two seats, a held edge a message waiting for you
  *   — beside a table of the same seats with context, tokens and a state that
  *   names its source. No toggle.
- * - **The seat pane follows the pick.** A pick on the board opens the seat
- *   pane beside it when it is not there and raises it when it is a background
- *   tab; a terminal pane per seat arrives on *Attach terminal*, keyed by the
- *   seat so a second attach raises the first (`lib/panes.ts`).
+ * - **The seat is a card under its team.** A pick on the board opens the
+ *   seat's card just below the team's header, and a second pick of the same
+ *   seat closes it. It was a pane of its own until `R-P19` — *"the seat panel
+ *   doesn't need to be a separate panel, it could just sit below the team as
+ *   a card"* — which put a column beside the board for something the board
+ *   already had room for. A terminal pane per seat still arrives on *Attach
+ *   terminal*, keyed by the seat so a second attach raises the first
+ *   (`lib/panes.ts`).
  * - **Two teams at once.** Tabs on the board pick one team or all of them;
  *   each team keeps its own counters and its own pause switch, and a seat
  *   addresses only its own team.
@@ -39,21 +44,22 @@
  */
 
 import { useEffect, useMemo } from "react";
-import { Anchor, Ban, Check, Copy, Moon, Pause, Play, RotateCcw, Square, SquareTerminal, Users } from "lucide-react";
+import { Anchor, Ban, Check, Copy, Moon, Pause, Play, RotateCcw, Square, SquareTerminal, Users, X } from "lucide-react";
 import { useStore } from "@/store";
 import { Badge, Button, Chip, Dim, Empty, IconButton, Mono } from "@/ui/primitives";
 import { TerminalView } from "@/ui/Terminal";
 import { usePaneId } from "@/lib/paneScope";
-import { attachSeatTerminal, showSeatPane } from "@/lib/panes";
+import { attachSeatTerminal } from "@/lib/panes";
+import { SourceMark } from "@/ui/SourceMark";
 import { cn } from "@/lib/cn";
 import { interactive } from "@/ui/styles";
 import { compact, shortDir } from "@/lib/format";
 import { copyPath } from "@/lib/clipboard";
 import { showDialog } from "@/lib/dialogWindow";
 import { attachArgs, reachFor, spawnAs } from "@/lib/tmux";
-import { WIND_DOWN_LABEL, countersLine, sendLine, sendsFor, signalsLine, windDownLine } from "@/lib/teams";
+import { WIND_DOWN_LABEL, countersLine, permissionColor, permissionFor, sendLine, sendsFor, signalsLine, windDownLine } from "@/lib/teams";
 import { LANES, agoShort, edges, parseSeatKey, ring, seatKey, seatViews, teamTab, termOfPane, type Lane, type SeatView } from "@/lib/teamMode";
-import { SCREEN_LABEL, isScreenGate, needsHuman, sourceLabel, type AttentionReason, type Team, type TeamSends } from "@/wire/types";
+import { PERMISSION_LABEL, SCREEN_LABEL, isScreenGate, needsHuman, sourceColor, sourceLabel, type AttentionReason, type Team, type TeamSends } from "@/wire/types";
 
 const now = () => Date.now() / 1000;
 
@@ -365,10 +371,13 @@ function TeamSection({ team }: { team: Team }) {
   const running = useStore((s) => s.seatLaunches.some((l) => l.team_id === team.id && l.alive));
   const onRecord = useStore((s) => s.seatLaunches.some((l) => l.team_id === team.id));
   const winding = sends?.wind_down?.seats.some((x) => x.status === "asked") ?? false;
+  // A pick opens the seat's card under the header; the same pick again
+  // closes it. `R-P19`.
   const pick = (v: SeatView) => {
-    useStore.setState({ gauSeat: seatKey(v.team.id, v.seat.name) });
-    showSeatPane();
+    const key = seatKey(v.team.id, v.seat.name);
+    useStore.setState({ gauSeat: selected === key ? null : key });
   };
+  const picked = views.find((v) => seatKey(team.id, v.seat.name) === selected);
   return (
     <div className="flex flex-col gap-2 rounded border border-[var(--line)] p-2" data-testid={`team-${team.id}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -422,6 +431,7 @@ function TeamSection({ team }: { team: Team }) {
           ))}
         </div>
       )}
+      {picked && <SeatPanel team={team} view={picked} onClose={() => useStore.setState({ gauSeat: null })} />}
       <Pulse views={views} sends={sends} selected={selected} pick={pick} />
       <div className="flex flex-wrap gap-2">
         <Graph views={views} sends={sends} selected={selected} pick={pick} />
@@ -461,27 +471,14 @@ export function TeamBoard() {
   );
 }
 
-// -- The seat pane. -----------------------------------------------------------
+// -- The picked seat, as a card under its team. `R-P19`. ---------------------
 
-export function SeatDetail() {
-  const key = useStore((s) => s.gauSeat);
-  const teams = useTeams();
-  const launches = useStore((s) => s.seatLaunches);
-  const sessions = useStore((s) => s.sessions);
-  const queue = useStore((s) => s.queue);
+function SeatPanel({ team, view, onClose }: { team: Team; view: SeatView; onClose: () => void }) {
+  const key = seatKey(team.id, view.seat.name);
   const sends = useStore((s) => s.teamSends);
   const select = useStore((s) => s.select);
   const allowed = useStore((s) => s.teamsAllowed);
   const send = useStore((s) => s.send);
-  const parsed = key ? parseSeatKey(key) : null;
-  const team = parsed ? teams.find((t) => t.id === parsed.teamId) : undefined;
-  const view = useMemo(() => {
-    if (!team || !parsed) return undefined;
-    return seatViews(team, launches, sessions, queue, sends.find((t) => t.team_id === team.id)).find((v) => v.seat.name === parsed.seat);
-  }, [team, parsed, launches, sessions, queue, sends]);
-  if (!team || !parsed || !view) {
-    return <Empty hint="pick a seat in the pulse, the graph or the table — this pane follows the pick">no seat picked</Empty>;
-  }
   const teamLog = sends.find((t) => t.team_id === team.id)?.log ?? [];
   const log = sendsFor(teamLog, view.seat.name).slice(-20).reverse();
   // The last handover for this seat, whole. `R-P10`: shown in full, never a
@@ -489,20 +486,42 @@ export function SeatDetail() {
   const handover = [...teamLog].reverse().find((e) => e.kind === "handover" && e.to === view.seat.name);
   const tone = badgeColor(view.item?.reason);
   const l = view.launch;
+  // The CLI's own colour carries the seat and its model; the mode has one
+  // of its own (`R-P19`: *"make it a bit more colorful"*).
+  const cli = sourceColor(view.seat.cli);
+  const mode = permissionFor(team, view.seat);
   return (
-    <div className="flex h-full flex-col gap-2 overflow-y-auto p-2 text-xs" data-testid="seat-detail">
+    <div
+      className="flex flex-col gap-2 rounded border border-l-2 bg-[var(--bg-panel)] p-2 text-xs"
+      style={{ borderColor: "var(--line)", borderLeftColor: cli }}
+      data-testid="seat-detail"
+    >
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-sm font-semibold text-[var(--text-strong)]">{view.seat.name}</span>
-        <Chip>seat</Chip>
-        <Chip>
+        <SourceMark source={view.seat.cli} />
+        <span className="text-sm font-semibold" style={{ color: cli }}>
+          {view.seat.name}
+        </span>
+        <Chip color={cli} fill>
+          seat
+        </Chip>
+        <Chip color={cli} fill title="the CLI and the model it runs">
           {sourceLabel(view.seat.cli)} · {l?.signals.model ?? view.seat.model ?? "default"}
         </Chip>
-        <Chip>{(view.seat.permission ?? team.permission).replace("_", " ")}</Chip>
+        <Chip
+          color={permissionColor(mode)}
+          fill
+          title={view.seat.permission ? "this seat's own permission mode" : "the team's permission mode, which this seat inherits"}
+        >
+          {PERMISSION_LABEL[mode]}
+        </Chip>
         {view.badge && (
           <Badge color={tone.color} dark={tone.dark}>
             {view.badge}
           </Badge>
         )}
+        <IconButton className="ml-auto" title="close the seat's card — pick it again to open it" onClick={onClose}>
+          <X size={12} />
+        </IconButton>
       </div>
       <Dim className="text-2xs">
         {l ? `${l.dir} · started ${agoShort(l.started, now())} ago by mogeung · ${l.tmux_session}` : "not running — boot the team in the Teams window"}
@@ -538,7 +557,7 @@ export function SeatDetail() {
           variant="outline"
           disabled={!view.session?.tmux_target && !l}
           title="a terminal pane beside this one, attached to the seat's own tmux pane — typing goes to the seat"
-          onClick={() => attachSeatTerminal(key!, `${team.name}/${view.seat.name}`)}
+          onClick={() => attachSeatTerminal(key, `${team.name}/${view.seat.name}`)}
         >
           <SquareTerminal size={12} /> Attach terminal
         </Button>

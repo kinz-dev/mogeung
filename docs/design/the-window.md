@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-16
+updated: 2026-10-18
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -84,9 +84,8 @@ third cache of the family (`R-P6`): every team's counters and send log,
 replaced whole on `sends`, shown in the Teams window and in the mode.
 
 **Gau Geung, the team board** (`R-P7`, `ui/GauGeungMode.tsx`, `lib/teamMode.ts`;
-panes since `R-J132`) is three kinds of pane in the main tile tree: the
-**board** (`team-board`, one), the **seat pane** (`team-seat`, one, following
-the pick), and a **terminal pane per seat** you attach
+panes since `R-J132`) is two kinds of pane in the main tile tree: the
+**board** (`team-board`, one) and a **terminal pane per seat** you attach
 (`seat-term:<team>/<seat>`, a `tmux attach` of its own like the Agent pane,
 scaled by its font). The bare `Alt+g` (`Alt+KeyG` on a Mac, where `⌥g`
 composes `©`) raises the board, or closes it when it is the pane in front;
@@ -100,8 +99,15 @@ underneath it and its panels unable to dock with anything else, and the
 owner asked for *"a normal UI"* — so the second dockview, its per-machine
 layout and the overlay went, and the three panes dock, split, tab and pop
 out as every other pane does, in the one saved layout. A pick on the board
-opens the seat pane beside it when it is not there and raises it when it is a
-background tab (`showSeatPane`); an attach adds the terminal pane beside
+opens the **seat's card** inside its team, just under the team's header and
+above the lanes, and the same pick again — or the card's own close button —
+puts it away (`R-P19`). It was a third pane, `team-seat`, until the owner
+asked for it to *"just sit below the team as a card"*; the id stays
+registered to an empty component so a layout saved with it still restores,
+and `App` closes it on the way in. The card's identity line is in colour: the
+seat's name, its *seat* chip and its *CLI · model* chip in the CLI's own
+`sourceColor`, with a tinted fill (`Chip`'s `fill`), and the permission mode
+in `permissionColor` — green for auto, red for bypass. An attach adds the terminal pane beside
 whatever is in front, keyed by the seat so a second attach raises the first
 (`attachSeatTerminal`). Nothing is fetched beyond `team_list` when the board
 mounts — teams, launches, sessions, the queue and the send logs are read as
@@ -138,7 +144,7 @@ theirs; *busy* names the seat and offers *save anyway*, the one override.
 `Ctrl+S` is the editor's own chord, as the scratch pane's is.
 
 **What a seat's pane showed** (`R-P11`) rides on its row as `screen` — the
-shape, the lines it was read from, when — and the mode's seat pane shows all
+shape, the lines it was read from, when — and the seat's card on the board shows all
 three, so a misread is visible rather than silent; the topology names
 `(screen)` as a state's source only when the queue's reason is that reading,
 because a hook's fact outranks it. The window never answers a gate: the

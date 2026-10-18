@@ -86,11 +86,14 @@ export function Badge({
 export function Chip({
   children,
   color = "var(--dim)",
+  fill = false,
   className,
   title,
 }: {
   children: React.ReactNode;
   color?: string;
+  /** A wash of the colour behind the text, for a chip that should read at a glance. */
+  fill?: boolean;
   className?: string;
   title?: string;
 }) {
@@ -101,7 +104,7 @@ export function Chip({
         "inline-flex items-center rounded-sm border px-1 py-px text-2xs whitespace-nowrap",
         className,
       )}
-      style={{ borderColor: color, color }}
+      style={{ borderColor: color, color, ...(fill ? { backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` } : {}) }}
     >
       {children}
     </span>

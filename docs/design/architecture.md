@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-14
+updated: 2026-10-18
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
@@ -336,7 +336,8 @@ is fence 1 at the type level; `send.rs`'s three tmux invocations are still
 the only code below it that reaches a pane, and a test seam over them is the
 only thing a test replaces. Three things reach the judge: a seat's own words,
 through `mogeung-send` — a generated command first on every seat's `PATH`
-under its files, posting to `POST /api/seat/send` with the seat's token, the
+under its files (set by `env` on the command, since tmux overrides a
+`-e PATH`; the guidance names the directory too — `R-P17`), posting to `POST /api/seat/send` with the seat's token, the
 recipient resolved within the sender's team only; a declared wake, fired by a
 `Stop` or `SessionEnd` hook (`hooks::seat_event`), by a plain seat's registry
 going busy to idle, or by its pane going; and a declared watchdog, on the
@@ -405,7 +406,7 @@ built so the shape rides on them), skips an unchanged capture by its hash,
 raises an unknown screen as `screen:<cli>` through Health, and makes the one
 press — Enter, for *press Enter*, under the team's `readiness_press` — once
 per screen as a logged automatic send. A gate ranks the row with *(screen)*
-in the detail, after the registry's facts; the mode's seat pane shows the
+in the detail, after the registry's facts; the seat's card on the board shows the
 shape, when it was read and the lines it was read from.
 
 **And a team crosses a file boundary** (`R-P12`, since 2026-10-10): `rig.rs`

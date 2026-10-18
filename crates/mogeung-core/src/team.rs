@@ -39,8 +39,8 @@
 use crate::session::SessionSource;
 use serde::{Deserialize, Serialize};
 
-/// The four permission modes a seat can be started in, spelled the way Claude
-/// Code spells them because that CLI has all four and names them best.
+/// The five permission modes a seat can be started in, spelled the way Claude
+/// Code spells them because that CLI has all five and names them best.
 ///
 /// The launcher maps each to every CLI's own flag — `--permission-mode` for
 /// Claude Code, `--approval-mode` for Qwen Code, `--ask-for-approval` and
@@ -50,9 +50,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
-    /// Ask before every edit and command. The safe default for a definition
-    /// nobody has thought about yet.
+    /// A classifier allows what is safe and asks about what is not — Claude
+    /// Code's `auto`, Qwen Code's. The default since `R-P18`: *"can you
+    /// change the default to auto mode please"* (2026-10-18), from an owner
+    /// whose own Claude Code starts in it and whose seats, started in
+    /// `default`, stopped to ask about everything. Codex and opencode have no
+    /// classifier and get the nearest thing they do have.
     #[default]
+    Auto,
+    /// Ask before every edit and command — what Claude Code now calls
+    /// `manual`, and still accepts as `default`.
     Default,
     /// Edit files without asking; still ask before a command.
     AcceptEdits,
@@ -63,7 +70,8 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    pub const ALL: [PermissionMode; 4] = [
+    pub const ALL: [PermissionMode; 5] = [
+        PermissionMode::Auto,
         PermissionMode::Default,
         PermissionMode::AcceptEdits,
         PermissionMode::Plan,
@@ -73,6 +81,7 @@ impl PermissionMode {
     /// Claude Code's own word, which is also the wire spelling's camel form.
     pub fn label(self) -> &'static str {
         match self {
+            PermissionMode::Auto => "auto",
             PermissionMode::Default => "default",
             PermissionMode::AcceptEdits => "acceptEdits",
             PermissionMode::Plan => "plan",
@@ -1013,7 +1022,20 @@ mod tests {
             serde_json::to_string(&PermissionMode::BypassPermissions).unwrap(),
             r#""bypass_permissions""#
         );
+        assert_eq!(serde_json::to_string(&PermissionMode::Auto).unwrap(), r#""auto""#);
         let back: Seat = serde_json::from_str(&json).unwrap();
         assert_eq!(back, seat);
+    }
+
+    /// `R-P18`. A team with no mode said — a new one, an import, a stored
+    /// definition from before the field — starts its seats in auto, and a
+    /// definition that said `default` keeps it.
+    #[test]
+    fn a_team_that_names_no_mode_is_auto_and_one_that_did_keeps_it() {
+        assert_eq!(PermissionMode::default(), PermissionMode::Auto);
+        let t: Team = serde_json::from_str(r#"{"id":"t","name":"t"}"#).unwrap();
+        assert_eq!(t.permission, PermissionMode::Auto);
+        let t: Team = serde_json::from_str(r#"{"id":"t","name":"t","permission":"default"}"#).unwrap();
+        assert_eq!(t.permission, PermissionMode::Default);
     }
 }

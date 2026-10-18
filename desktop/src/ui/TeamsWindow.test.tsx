@@ -149,7 +149,7 @@ describe("the Teams window", () => {
     expect(screen.getByLabelText("seat 2 name")).toHaveValue("builder");
     // The inherited mode reads as the team's; the override as its own.
     const starts = screen.getAllByText(/starts as/);
-    expect(starts[0].textContent).toContain("default");
+    expect(starts[0].textContent).toContain("auto");
     expect(starts[1].textContent).toContain("plan");
   });
 
@@ -164,7 +164,7 @@ describe("the Teams window", () => {
     expect(t.name).toBe("docs sweep");
     expect(t.policy).toMatchObject({ hop_budget: 3, hourly_cap: 60, handover: "after_read", readiness_press: false, wind_down_minutes: 3 });
     expect(t.policy.wind_down).toContain("{note}");
-    expect(t.permission).toBe("default");
+    expect(t.permission).toBe("auto");
     expect(t.repo).toBe("/home/you/docs");
   });
 

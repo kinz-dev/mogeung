@@ -1067,11 +1067,13 @@ export interface Task {
 // `team.rs`: a definition the daemon holds, never a command line (ADR-0025's
 // 2026-10-09 amendment). Snake case on the wire throughout.
 
-/** Claude Code's four words for how much a seat may do; the daemon maps each
- *  to every CLI's own flag at launch (`R-P4`). */
-export type PermissionMode = "default" | "accept_edits" | "plan" | "bypass_permissions";
-export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "accept_edits", "plan", "bypass_permissions"];
+/** Claude Code's five words for how much a seat may do; the daemon maps each
+ *  to every CLI's own flag at launch (`R-P4`). `auto` is the default since
+ *  `R-P18`, first in the picker for that reason. */
+export type PermissionMode = "auto" | "default" | "accept_edits" | "plan" | "bypass_permissions";
+export const PERMISSION_MODES: readonly PermissionMode[] = ["auto", "default", "accept_edits", "plan", "bypass_permissions"];
 export const PERMISSION_LABEL: Record<PermissionMode, string> = {
+  auto: "auto",
   default: "default",
   accept_edits: "acceptEdits",
   plan: "plan",

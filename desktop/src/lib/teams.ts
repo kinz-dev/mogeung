@@ -68,7 +68,7 @@ export function newTeam(): Team {
     name: "",
     repo: "",
     guidance: "",
-    permission: "default",
+    permission: "auto",
     policy: defaultPolicy(),
     seats: [],
     paused: false,
@@ -296,4 +296,19 @@ export function teamSummary(team: Team): string {
 /** The label a permission picker shows, with the team's own marked. */
 export function permissionLabel(mode: PermissionMode): string {
   return PERMISSION_LABEL[mode];
+}
+
+/** A colour per mode, so a seat's reads at a glance: green for auto, the
+ *  default since `R-P18`; red for bypass, which asks nothing; the three
+ *  between in the graph palette. */
+export const PERMISSION_COLOR: Record<PermissionMode, string> = {
+  auto: "var(--green)",
+  default: "var(--graph-0)",
+  accept_edits: "var(--graph-4)",
+  plan: "var(--graph-3)",
+  bypass_permissions: "var(--red)",
+};
+
+export function permissionColor(mode: PermissionMode): string {
+  return PERMISSION_COLOR[mode] ?? "var(--dim)";
 }

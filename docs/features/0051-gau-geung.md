@@ -1,7 +1,7 @@
 ---
 title: Gau Geung — a team of agents
 status: draft
-updated: 2026-10-13
+updated: 2026-10-18
 roadmap: [R-P1, R-P2, R-P3, R-P4, R-P5, R-P6, R-P7, R-P8, R-P9, R-P10, R-P11, R-P12, R-P13]
 depends_on: [A1, A24, A39, A51, A52, A53, A54]
 ---
@@ -785,3 +785,32 @@ gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
   board mounts. The thesis holds a different way — the board is a pane
   among the panes that describe the queue's selection, not a mode above
   them.
+- 2026-10-18, `R-P17`. A seat said *"The mogeung-send command isn't on my
+  PATH"*, and it was right: no seat ever had it. tmux hands a new session's
+  process the asking client's `PATH` over `-e PATH=…` and passes every other
+  `-e` through, so the token and URL arrived and the command did not; the
+  session's own environment, which `tmux show-environment` reads, held the
+  right value and hid the fault. `R-P6`'s test checked the environment
+  `compose` built, which was never wrong. The fix sets `PATH` on the command
+  with `env`, and the guidance names the `bin/` directory so a shell that
+  rebuilds `PATH` cannot lose the command again. The test that would have
+  caught it starts a real tmux session (`tests/seat_tmux.rs`).
+- 2026-10-18, `R-P18`. *"why it is 'manual mode on' by default?"* The safe
+  default — ask about everything — was chosen for *a definition nobody has
+  thought about yet*, and it turned out to be a choice nobody wanted: the
+  owner's Claude Code starts in auto, so a seat was the one session on the
+  machine that did not, and the explicit `--permission-mode default` beat
+  their own setting rather than deferring to it. Auto became a fifth mode
+  and the default, not a reinterpretation of `default`, so a team that
+  chose `default` keeps meaning it and the mode a seat starts in is still
+  written in its definition rather than borrowed from a home mogeung only
+  reads (ADR-0043).
+- 2026-10-18, `R-P19`, a second line of `R-P7`'s design reversed by use.
+  *A seat's detail is a pane in the mode's tile tree, holdable, not a
+  drawer* was decided against a drawer; the choice in use was between a pane
+  and the board itself, and the board won: *"it could just sit below the
+  team as a card"*. A card under the team keeps the seat beside the lanes it
+  was picked from, and costs no column. The same request asked for colour,
+  which the board had used only for urgency: the CLI's colour, already the
+  queue's source mark, now carries the seat and its model, and each
+  permission mode has one, so a bypass seat is visibly not an auto one.

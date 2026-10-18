@@ -13,13 +13,13 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useStore } from "@/store";
 import type { AttentionItem, ClientMsg, SeatLaunch, Session, Team, TeamSends } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
 import { getDock, toggleTeamBoard } from "@/lib/panes";
 import { BOARD_PANE, SEAT_PANE } from "@/lib/teamMode";
-import { SeatDetail, TeamBoard } from "./GauGeungMode";
+import { TeamBoard } from "./GauGeungMode";
 
 vi.mock("@/ui/Terminal", () => ({
   TerminalView: ({ id }: { id: string }) => <div data-testid={`terminal-${id}`} />,
@@ -153,12 +153,7 @@ function seed() {
 /** The board on its own, as the dock renders it in a pane. */
 function board() {
   seed();
-  render(
-    <>
-      <TeamBoard />
-      <SeatDetail />
-    </>,
-  );
+  render(<TeamBoard />);
 }
 
 beforeEach(() => {
@@ -237,10 +232,55 @@ describe("the Gau Geung board", () => {
     expect(screen.getByTestId("tab-t1").textContent).toContain("paused");
   });
 
-  it("fills the seat pane with the picked seat", async () => {
+  /** `R-P19`. The picked seat is a card inside its team, under the header —
+   *  not a pane of its own — and a second pick of it, or its close button,
+   *  puts it away. */
+  it("opens the picked seat as a card under its team, and closes it again", async () => {
     board();
     await screen.findByTestId("pulse");
-    expect(screen.getByText("no seat picked")).toBeInTheDocument();
+    expect(screen.queryByTestId("seat-detail")).toBeNull();
+    fireEvent.click(screen.getByTestId("card-planner"));
+    expect(useStore.getState().gauSeat).toBe("t1/planner");
+    const detail = await screen.findByTestId("seat-detail");
+    const team = screen.getByTestId("team-t1");
+    expect(team.contains(detail)).toBe(true);
+    // Under the header, above the lanes.
+    expect(detail.compareDocumentPosition(screen.getByTestId("pulse")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The same pick again closes it; so does its own button.
+    fireEvent.click(screen.getByTestId("card-planner"));
+    expect(useStore.getState().gauSeat).toBeNull();
+    expect(screen.queryByTestId("seat-detail")).toBeNull();
+    fireEvent.click(screen.getByTestId("card-planner"));
+    fireEvent.click(await screen.findByTitle(/close the seat's card/));
+    expect(useStore.getState().gauSeat).toBeNull();
+  });
+
+  /** `R-P19`: *"make it a bit more colorful"*. The seat and its model wear
+   *  the CLI's colour, the permission mode one of its own. */
+  it("colours the seat and its model by the CLI and the mode by the mode", async () => {
+    board();
+    await screen.findByTestId("pulse");
+    fireEvent.click(screen.getByTestId("card-planner"));
+    const detail = await screen.findByTestId("seat-detail");
+    expect(within(detail).getByText("claude · Opus 5.5").style.color).toBe("var(--blue)");
+    const mode = within(detail).getByText("auto");
+    expect(mode.style.color).toBe("var(--green)");
+    expect(mode.style.backgroundColor).toContain("var(--green)");
+    // An override wears its own: the builder, a Codex seat, put in plan.
+    act(() =>
+      useStore.setState((st) => ({
+        teams: st.teams.map((t) => ({ ...t, seats: t.seats.map((x) => (x.name === "builder" ? { ...x, permission: "plan" as const } : x)) })),
+      })),
+    );
+    fireEvent.click(screen.getByTestId("card-builder"));
+    const b = await screen.findByTestId("seat-detail");
+    expect(within(b).getByText("plan").style.color).toBe("var(--graph-3)");
+    expect(within(b).getByText(/^codex · /).style.color).toBe("var(--purple)");
+  });
+
+  it("fills the seat's card with what the board knows of it", async () => {
+    board();
+    await screen.findByTestId("pulse");
     fireEvent.click(screen.getByTestId("card-planner"));
     expect(useStore.getState().gauSeat).toBe("t1/planner");
     const detail = await screen.findByTestId("seat-detail");
@@ -262,7 +302,7 @@ describe("the Gau Geung board", () => {
     expect(sc.textContent).toContain("shape: permission menu");
     expect(sc.textContent).toContain("Do you want to proceed?");
     expect(sc.textContent).toContain("never answered by mogeung");
-    // The row picks too, and the pane follows.
+    // The row picks too, and the card follows.
     fireEvent.click(screen.getByTestId("row-builder"));
     expect(useStore.getState().gauSeat).toBe("t1/builder");
     expect((await screen.findByTestId("seat-detail")).textContent).toContain("builder");
@@ -309,9 +349,10 @@ describe("the Gau Geung board", () => {
   });
 
   /** `R-J132`. The board is a pane of the main dock, raised or closed by the
-   *  chord's action; a pick opens the seat pane beside it; an attach adds a
-   *  terminal pane; the Attention list stays, and so does the selection. */
-  it("lives in the main tile tree: the chord raises or closes it, a pick opens the seat pane, an attach adds a terminal", async () => {
+   *  chord's action; a pick opens the seat's card on it, and no pane
+   *  (`R-P19`); an attach adds a terminal pane; the Attention list stays, and
+   *  so does the selection. */
+  it("lives in the main tile tree: the chord raises or closes it, a pick opens a card, an attach adds a terminal", async () => {
     seed();
     useStore.setState({ selected: "elsewhere", firstSnapshot: true });
     const { default: App } = await import("@/App");
@@ -329,7 +370,7 @@ describe("the Gau Geung board", () => {
     expect(screen.getByRole("listbox", { name: "Attention" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("card-planner"));
-    expect(dock.getPanel(SEAT_PANE)).toBeDefined();
+    expect(dock.getPanel(SEAT_PANE)).toBeUndefined();
     expect((await screen.findByTestId("seat-detail")).textContent).toContain("planner");
     expect(useStore.getState().selected).toBe("elsewhere");
 
@@ -347,8 +388,27 @@ describe("the Gau Geung board", () => {
     act(() => toggleTeamBoard());
     expect(dock.getPanel(BOARD_PANE)).toBeUndefined();
     expect(useStore.getState().teamBoardOpen).toBe(false);
-    // The seat pane and the terminal are panes of their own and stay.
-    expect(dock.getPanel(SEAT_PANE)).toBeDefined();
+    // The terminal is a pane of its own and stays.
+    expect(dock.getPanel("seat-term:t1/planner")).toBeDefined();
+  });
+
+  /** `R-P19`. A layout saved while the seat was a pane still restores — the
+   *  id stays registered — and the retired pane is closed on the way in. */
+  it("restores a layout saved with the old seat pane, without the pane", async () => {
+    seed();
+    const { default: App } = await import("@/App");
+    render(<App />);
+    const dock = getDock()!;
+    act(() => {
+      dock.addPanel({ id: SEAT_PANE, component: SEAT_PANE, title: "Seat" });
+    });
+    const saved = JSON.stringify(dock.toJSON());
+    cleanup();
+    localStorage.setItem("mogeung.layout", saved);
+    render(<App />);
+    const again = getDock()!;
+    expect(again.getPanel(SEAT_PANE)).toBeUndefined();
+    expect(again.panels.length).toBeGreaterThan(0);
   });
 
   /** `R-P15`. The quick way down is on the board, per team: Wind down asks

@@ -1,5 +1,5 @@
 import type { DockviewApi, DockviewGroupPanel } from "dockview";
-import { BOARD_PANE, SEAT_PANE, TERM_KIND, termPaneId } from "@/lib/teamMode";
+import { BOARD_PANE, TERM_KIND, termPaneId } from "@/lib/teamMode";
 import { useStore } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { pickNeighbour, type Box, type Direction } from "@/lib/spatial";
@@ -586,31 +586,6 @@ export function toggleTeamBoard(): void {
 
 export function showTeamBoard(): void {
   focusPane(dock, BOARD_PANE, "Team board");
-}
-
-/**
- * The seat pane, beside the board. Opened by a pick when it is not there,
- * raised when it is a background tab, and left alone when it is already
- * showing — a pick is made on the board, and stealing the focus from under
- * the click would make the next pick a two-step.
- */
-export function showSeatPane(): void {
-  if (!dock) return;
-  const existing = dock.getPanel(SEAT_PANE);
-  if (existing) {
-    if (!existing.api.isVisible) existing.api.setActive();
-    return;
-  }
-  const board = dock.getPanel(BOARD_PANE);
-  dock.addPanel({
-    id: SEAT_PANE,
-    component: SEAT_PANE,
-    title: "Seat",
-    ...(board ? { position: { referenceGroup: board.group, direction: "right" } } : {}),
-  });
-  // The board keeps the room; the seat pane is a column beside it.
-  const group = dock.getPanel(SEAT_PANE)?.group;
-  if (board && group && group !== board.group) group.api.setSize({ width: 380 });
 }
 
 /**

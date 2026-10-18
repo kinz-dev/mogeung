@@ -153,7 +153,7 @@
     <ul>
       <li><strong>name</strong> and <strong>repository</strong>: an absolute path. Worktrees are made from it.</li>
       <li><strong>team guidance</strong>: every seat gets this, before its own.</li>
-      <li><strong>default permission mode</strong>: <code>default</code>, <code>acceptEdits</code>, <code>plan</code> or <code>bypassPermissions</code>, in Claude Code's words. The launcher maps each to every CLI's own flag.</li>
+      <li><strong>default permission mode</strong>: <code>auto</code> (what a new team starts with), <code>default</code>, <code>acceptEdits</code>, <code>plan</code> or <code>bypassPermissions</code>, in Claude Code's words. The launcher maps each to every CLI's own flag. <code>auto</code> is Claude Code's and Qwen Code's classifier — safe actions go ahead, risky ones ask; Codex, which has none, gets <code>on-request</code>, and opencode its own permission config. <code>default</code> asks about everything (Claude Code now calls it <em>manual</em>); <code>bypassPermissions</code> asks about nothing, as <code>yolomo</code> does.</li>
       <li><strong>policy</strong>: the hop budget (3), sends per hour (60), the handover rule, the readiness press, and the declared wakes and watchdogs. Every automatic send a team can make is written here, in text you can read before it ever fires.</li>
     </ul>
     <h3>The seat layer</h3>
@@ -208,7 +208,7 @@
     <p>Below the pulse, the <strong>topology</strong> shows the graph and the table of the same seats, together. An edge is the last send between two seats; a held edge is a message waiting for you, with the hop number on it. The table names each seat's CLI and model, worktree and branch, state and its <em>source</em>, context fill, tokens, sends in and out, and when anything last happened. Every state says where it came from: <code>(hook)</code>, <code>(plugin)</code>, <code>(transcript)</code> or <code>(screen)</code>, and a Codex seat's context reads <em>unknown · no hooks</em> rather than a guess.</p>
 
     <h2 id="seatpane">A seat's pane</h2>
-    <p>Click a card, a node or a row and the seat pane shows that seat: its identity line, its state, what its hooks have said, what its pane showed, its last sends, its tokens and diff, and what it was launched with. The buttons:</p>
+    <p>Click a card, a node or a row and that seat opens as a card under its team's header — click it again, or its <strong>×</strong>, to put it away. The card shows its identity line, coloured by the seat's CLI with the permission mode in a colour of its own (green for <code>auto</code>, red for <code>bypassPermissions</code>), its state, what its hooks have said, what its pane showed, its last sends, its tokens and diff, and what it was launched with. The buttons:</p>
     <ul>
       <li><strong>Attach terminal</strong>: a terminal pane in the mode, attached to the seat's own tmux pane. Typing goes to the seat.</li>
       <li><strong>Select underneath</strong>: select the seat's session in the window below, for its transcript, diff and Agent pane.</li>
@@ -220,7 +220,7 @@
     <p>Each seat terminal is a pane of its own, attached on its own, like the Agent pane. Keys go to the pane you clicked; every pane keeps rendering. For a terminal of your own, <code>tmux attach -t geung-&lt;team&gt;</code> gives the daemon's grouped layout: window <code>all</code> with every seat tiled, then a window per seat for the full screen. The window does not mirror that layout; the two pictures differ on purpose.</p>
 
     <h2 id="sends">How seats talk</h2>
-    <p>Every seat with curl is handed <code>mogeung-send</code> on its <code>PATH</code> and a paragraph at the end of its guidance naming its team, its teammates and the command. A seat runs:</p>
+    <p>Every seat with curl is handed <code>mogeung-send</code> on its <code>PATH</code> and a paragraph at the end of its guidance naming its team, its teammates, the command and the folder it lives in, <code>~/.mogeung/seats/&lt;team-id&gt;/&lt;seat&gt;/bin/</code>, so a seat whose shell cannot find it by name can run it by its path. A seat runs:</p>
 <pre><code>mogeung-send reviewer "tests pass on wt/builder — please review src/seat.rs"
 echo "done" | mogeung-send planner</code></pre>
     <p>The daemon judges the message against the team's policy and types it into the teammate's pane, once, as a person would. The one line it answers is printed, and the exit code says which:</p>
@@ -259,7 +259,7 @@ echo "done" | mogeung-send planner</code></pre>
       <tr><td>deliver automatically</td><td>composed and typed as an automatic send, a hop, counted against the cap</td></tr>
       <tr><td>none</td><td>nothing is composed; the seat starts cold</td></tr>
     </table></div>
-    <p>The entry is logged <em>composed by &lt;model&gt; @ &lt;host&gt;</em> and shown whole in the seat pane. With no model endpoint configured, or a host you have not consented to, a refusal entry says the seat started without one. A cold boot, where nobody has done anything yet, hands over nothing. A seat's own note, left with <code>mogeung-note</code> when the team was wound down, is the first thing the handover quotes for that seat — and a team booted after a wind-down hands each seat its own earlier session as well as its teammates'.</p>
+    <p>The entry is logged <em>composed by &lt;model&gt; @ &lt;host&gt;</em> and shown whole in the seat's card. With no model endpoint configured, or a host you have not consented to, a refusal entry says the seat started without one. A cold boot, where nobody has done anything yet, hands over nothing. A seat's own note, left with <code>mogeung-note</code> when the team was wound down, is the first thing the handover quotes for that seat — and a team booted after a wind-down hands each seat its own earlier session as well as its teammates'.</p>
 
     <h2 id="screen">What the screen says</h2>
     <p>A seat's pane is read each scan into a closed set of shapes, and only a seat's: the capture takes a pane from the launch record and nowhere else, so no pane you opened yourself is ever captured. The capture is never kept; what reaches the row is the shape, the few lines it was read from, and when.</p>
@@ -316,6 +316,7 @@ echo "done" | mogeung-send planner</code></pre>
     <div class="tablewrap"><table>
       <tr><th>you see</th><th>why, and what to do</th></tr>
       <tr><td>a seat says <em>plain</em></td><td>its CLI carries no hooks (Codex), or it is Qwen without a home of its own, or <code>curl</code> is missing. A plain seat still works; it cannot run <code>mogeung-send</code> without curl</td></tr>
+      <tr><td>a seat says <code>mogeung-send</code> is not on its <code>PATH</code></td><td>it was started before 2026-10-18, when tmux silently replaced the <code>PATH</code> a seat was handed (<code>R-P17</code>). Restart the seat, or tell it to run <code>~/.mogeung/seats/&lt;team-id&gt;/&lt;seat&gt;/bin/mogeung-send</code> by its path; <code>mogeung-note</code> is beside it</td></tr>
       <tr><td>no <code>geung-&lt;team&gt;</code> session</td><td>tmux refused the layout; the seats are up and the daemon logged why. The window reaches each seat regardless</td></tr>
       <tr><td>a seat sits <em>asked</em> through the whole wind-down</td><td>it never read the message — a permission menu or a login in front of it, or a plain seat with no hooks whose turn end was not seen. It is stopped at the deadline without a note; attach its terminal next time and answer the gate first, or press <strong>Stop now</strong></td></tr>
       <tr><td>a handover entry reads <em>refused</em></td><td>no model endpoint is configured, the host is not consented to, or the endpoint failed; the note says which. Set <code>model_url</code> and <code>allow_remote_model</code> in <code>~/.mogeung/config.toml</code></td></tr>

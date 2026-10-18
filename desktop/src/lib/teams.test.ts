@@ -15,7 +15,8 @@ describe("team helpers", () => {
     const t = newTeam();
     expect(t.policy.hop_budget).toBe(3);
     expect(t.policy.hourly_cap).toBe(60);
-    expect(t.permission).toBe("default");
+    // `R-P18`: auto, the daemon's default too.
+    expect(t.permission).toBe("auto");
     expect(t.id).toBe("");
     // `R-P15`: three minutes to answer a wind-down, and a message that names the command.
     expect(t.policy.wind_down_minutes).toBe(3);
