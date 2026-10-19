@@ -1,7 +1,7 @@
 ---
 title: Gau Geung — a team of agents
 status: draft
-updated: 2026-10-18
+updated: 2026-10-19
 roadmap: [R-P1, R-P2, R-P3, R-P4, R-P5, R-P6, R-P7, R-P8, R-P9, R-P10, R-P11, R-P12, R-P13]
 depends_on: [A1, A24, A39, A51, A52, A53, A54]
 ---
@@ -489,6 +489,17 @@ gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
 `TeamsWindow.tsx` (*Import…*, *Export…*, the draft's notes). Docs:
 `wire-protocol.md`, `architecture.md`, `the-window.md`, `data-model.md`.
 
+`R-P20`, built: `schemars` added to the workspace; `mogeung-core/src/team.rs`
+(`JsonSchema` derived on `Team`, `Seat`, `Policy`, `Wake`, `Watchdog` and the
+enums, `schema()`, doc comments on the fields that had none),
+`session.rs` (`SessionSource`), `wire.rs` (`TeamSchema` both ways),
+`federation.rs`; `api.rs` answers it open. Tests in `team.rs` (the walk),
+`tests/team_file.rs`, `tests/local_client_gates.rs`. The window's `types.ts`,
+`store/index.ts` (`teamSchema`), `TeamsWindow.tsx` (*Team file schema…*,
+`saveSchema`). Docs: `wire-protocol.md`, `the-window.md`, `data-model.md`,
+`guide/gau-geung.html`.
+
+
 ### Risks and unknowns
 
 - `A51` and `A52` are the whole of ADR-0043's default, and neither has been
@@ -814,3 +825,14 @@ gate. The window's `types.ts`, `store/index.ts` (`teamDraft`),
   which the board had used only for urgency: the CLI's colour, already the
   queue's source mark, now carries the seat and its model, and each
   permission mode has one, so a bypass seat is visibly not an auto one.
+- 2026-10-19, `R-P20`. *"Is that in json format? if there is a json spec for
+  it?"* `R-P12` wrote JSON and called the struct the spec, which is true and
+  unreadable from outside the source. The honest answer was *there is none*,
+  so one was made that cannot drift: a JSON Schema derived from `Team`
+  through the serde attributes the file is already written with, answered on
+  the wire and saved from the Teams window. Nothing about the file changed —
+  it only gained a description of itself. Choosing a derived schema over a
+  hand-written one was the whole decision: a hand-written spec is a second
+  thing to keep true, and `R-J12`'s lesson is that a format nobody
+  re-reads is the one that moves.
+

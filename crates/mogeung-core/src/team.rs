@@ -37,6 +37,7 @@
 //! numbers, with the defaults the owner set: three hops, sixty an hour.
 
 use crate::session::SessionSource;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The five permission modes a seat can be started in, spelled the way Claude
@@ -47,7 +48,7 @@ use serde::{Deserialize, Serialize};
 /// `--sandbox` for Codex, `--auto` for opencode — in `R-P4`'s exhaustive
 /// match. A CLI with no equivalent of one (Codex has no plan mode) is refused
 /// there, in words, rather than started in something else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     /// A classifier allows what is safe and asks about what is not — Claude
@@ -92,7 +93,7 @@ impl PermissionMode {
 
 /// What happens to a model-composed handover when a seat restarts or passes
 /// the baton. `R-P10`, ADR-0003's later amendment of 2026-10-09.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Handover {
     /// Composed and shown on the seat's row; delivered after you have read it.
@@ -106,7 +107,7 @@ pub enum Handover {
 }
 
 /// A seat's event a wake can be declared on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SeatEvent {
     /// The seat finished a turn (Claude Code's `Stop`, or the equivalent).
@@ -125,10 +126,11 @@ impl SeatEvent {
 }
 
 /// A declared send: when `on_seat` does `on`, `to` is told `text`. `R-P6`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Wake {
     /// The seat whose event fires this, by [`Seat::name`].
     pub on_seat: String,
+    /// Which of that seat's events.
     pub on: SeatEvent,
     /// The seat that receives the text, by name. Must be a different seat.
     pub to: String,
@@ -137,16 +139,18 @@ pub struct Wake {
 }
 
 /// A declared nudge: a seat silent for `silent_minutes` is told `text`. `R-P6`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Watchdog {
     /// Which seat, by name; `None` is every seat in the team.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seat: Option<String>,
+    /// How long the seat has said nothing before it is nudged.
     pub silent_minutes: u32,
     /// Only while the seat is mid-turn. A seat idle at its prompt is waiting
     /// for a person, and nudging that is noise.
     #[serde(default = "yes")]
     pub while_busy: bool,
+    /// What is typed, verbatim.
     pub text: String,
 }
 
@@ -155,7 +159,7 @@ fn yes() -> bool {
 }
 
 /// One team's rules. Per team, never per seat.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Policy {
     /// Agent-to-agent deliveries allowed in a row with no human between.
     /// Zero means every message goes through you. ADR-0003 amendment, fence 4.
@@ -164,14 +168,17 @@ pub struct Policy {
     /// Automatic sends per hour, across the team. The owner's sixty.
     #[serde(default = "default_hourly_cap")]
     pub hourly_cap: u32,
+    /// What becomes of a composed handover when a seat restarts (`R-P10`).
     #[serde(default)]
     pub handover: Handover,
     /// Press Enter for the one screen shape that asks for it (ADR-0044). Off
     /// until `R-P11`'s week of captures says the shape is read reliably.
     #[serde(default)]
     pub readiness_press: bool,
+    /// Declared sends: when one seat does something, another is told.
     #[serde(default)]
     pub wakes: Vec<Wake>,
+    /// Declared nudges for a seat that has gone quiet mid-turn.
     #[serde(default)]
     pub watchdogs: Vec<Watchdog>,
     /// What every running seat is told when you wind the team down
@@ -225,7 +232,7 @@ impl Default for Policy {
 }
 
 /// Where a seat works.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Workplace {
     /// A fresh worktree of the team's repository, made at boot and left behind
@@ -249,7 +256,7 @@ pub enum Workplace {
 /// `Minimal` and `Ultra` are Codex's alone; Claude Code takes `Low` to `Max`.
 /// [`Effort::taken_by`] is the table, and both the daemon's check and the
 /// window's picker read it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
     Minimal,
@@ -336,7 +343,7 @@ pub struct CliModels {
 }
 
 /// One seat in a team: an agent the daemon will start, in Gau Geung mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Seat {
     /// The seat's identity within its team: `reviewer`, `builder`. Lower-case,
     /// digits and dashes, unique in the team — it names a worktree directory
@@ -354,6 +361,7 @@ pub struct Seat {
     /// How hard it thinks, or `None` for the CLI's default. `R-P16`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
+    /// A fresh worktree of the team's repository, or its checkout.
     #[serde(default)]
     pub works_in: Workplace,
     /// `None` is the team's default — see the module note on two layers.
@@ -399,11 +407,12 @@ impl Seat {
 
 /// A named set of seats with one policy. The unit of policy, of pause, and of
 /// address: a seat talks only to seats of its own team.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Team {
     /// Minted by the daemon on first save; empty on the wire means *new*.
     #[serde(default)]
     pub id: String,
+    /// What the team is called on the board and in its tmux session.
     pub name: String,
     /// The repository the team works in, absolute. Worktrees are made from
     /// it; a seat in the checkout works in it directly.
@@ -427,6 +436,7 @@ pub struct Team {
     /// Unix seconds. Zero on the wire from a client; the daemon stamps both.
     #[serde(default)]
     pub created: i64,
+    /// Unix seconds of the last save; the daemon's to stamp, like `created`.
     #[serde(default)]
     pub updated: i64,
 }
@@ -442,6 +452,29 @@ impl Team {
         seat.permission.unwrap_or(self.permission)
     }
 }
+
+/// The JSON Schema a team file follows — what *Export…* writes and *Import…*
+/// reads (`R-P12`), as a spec you can hand to a person or a tool. `R-P20`.
+///
+/// Derived from [`Team`] and everything under it, through the same serde
+/// attributes the file is written with, so the field names, the enum
+/// spellings, the defaults and the doc comments here are the schema's and it
+/// cannot say one thing while the daemon writes another. Draft 2020-12, as
+/// schemars emits it. The daemon answers it to `TeamSchema` on the wire; the
+/// window saves it where you choose.
+pub fn schema() -> serde_json::Value {
+    let mut root = schemars::schema_for!(Team).to_value();
+    root["title"] = "mogeung team definition".into();
+    let about = root["description"].as_str().unwrap_or("").to_string();
+    root["description"] = format!(
+        "{about} This is the file Export… writes and Import… reads, whole. \
+         On import the daemon drops `id`, zeroes `created` and `updated` and clears `paused`, \
+         so a file always arrives as a new, unpaused team here; `repo` is checked against this machine."
+    )
+    .into();
+    root
+}
+
 
 /// A session's membership: which team, which seat. `R-P4`, ADR-0038's
 /// amendment. On the daemon's own row from birth, and carried over onto the
@@ -1038,4 +1071,120 @@ mod tests {
         let t: Team = serde_json::from_str(r#"{"id":"t","name":"t","permission":"default"}"#).unwrap();
         assert_eq!(t.permission, PermissionMode::Default);
     }
+
+    /// Follow a `$ref` into `$defs`, and an optional's `anyOf` to the branch
+    /// that is not `null`.
+    fn resolve<'a>(node: &'a serde_json::Value, root: &'a serde_json::Value) -> &'a serde_json::Value {
+        if let Some(r) = node["$ref"].as_str() {
+            let name = r.strip_prefix("#/$defs/").unwrap_or_else(|| panic!("a ref outside $defs: {r}"));
+            return resolve(&root["$defs"][name], root);
+        }
+        if let Some(branches) = node["anyOf"].as_array() {
+            if let Some(b) = branches.iter().find(|b| b["type"] != "null") {
+                return resolve(b, root);
+            }
+        }
+        node
+    }
+
+    /// The strings a node admits, from `enum` or a `oneOf` of `const`s and
+    /// `enum`s — the two shapes schemars gives a unit-variant enum, with and
+    /// without doc comments. `None` for a free string.
+    fn admitted(node: &serde_json::Value) -> Option<Vec<String>> {
+        let mut out = Vec::new();
+        let mut any = false;
+        let mut take = |n: &serde_json::Value| {
+            if let Some(e) = n["enum"].as_array() {
+                any = true;
+                out.extend(e.iter().filter_map(|v| v.as_str().map(str::to_string)));
+            }
+            if let Some(c) = n["const"].as_str() {
+                any = true;
+                out.push(c.to_string());
+            }
+        };
+        take(node);
+        for b in node["oneOf"].as_array().into_iter().flatten() {
+            take(b);
+        }
+        any.then_some(out)
+    }
+
+    /// Every key and every enum spelling in `data` is declared where the
+    /// schema says it is. A small walk, not a validator: it answers the one
+    /// question the file raises — is everything Export writes in the spec?
+    fn declared(node: &serde_json::Value, root: &serde_json::Value, data: &serde_json::Value, at: &str) {
+        use serde_json::Value;
+        let node = resolve(node, root);
+        match data {
+            Value::Object(map) => {
+                let props = node["properties"].as_object().unwrap_or_else(|| panic!("{at}: an object, but the schema has no properties here: {node}"));
+                for (k, v) in map {
+                    let sub = props.get(k).unwrap_or_else(|| panic!("{at}.{k} is written and not declared"));
+                    declared(sub, root, v, &format!("{at}.{k}"));
+                }
+            }
+            Value::Array(items) => {
+                for (i, v) in items.iter().enumerate() {
+                    declared(&node["items"], root, v, &format!("{at}[{i}]"));
+                }
+            }
+            Value::String(s) => {
+                if let Some(allowed) = admitted(node) {
+                    assert!(allowed.contains(s), "{at}: `{s}` is not one of {allowed:?}");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `R-P20`. The schema is the file: every key an export writes, and every
+    /// spelling, is declared — through `$defs`, arrays and optionals — and
+    /// only `name` is required, because `import_json` relies on the rest
+    /// defaulting. The import rule is in the schema's own words.
+    #[test]
+    fn the_file_schema_declares_everything_an_export_writes() {
+        let s = schema();
+        assert_eq!(s["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        assert_eq!(s["title"], "mogeung team definition");
+        assert_eq!(s["required"], serde_json::json!(["name"]));
+        let about = s["description"].as_str().unwrap();
+        assert!(about.contains("drops `id`") && about.contains("clears `paused`"), "{about}");
+        // Defaults travel: a hand-written file may leave them out and know what it gets.
+        assert_eq!(s["properties"]["permission"]["default"], "auto");
+        assert_eq!(s["$defs"]["Policy"]["properties"]["hop_budget"]["default"], 3);
+        assert_eq!(s["$defs"]["Seat"]["required"], serde_json::json!(["name"]));
+        assert_eq!(admitted(&s["$defs"]["PermissionMode"]).unwrap()[0], "auto", "auto first, as the window offers it");
+        assert!(admitted(&s["$defs"]["SessionSource"]).unwrap().contains(&"opencode".to_string()), "the renamed variant keeps its wire spelling");
+        // A definition with every optional set, written as Export writes it.
+        let mut team = Team {
+            id: "abc".into(),
+            name: "Port OpenRig".into(),
+            repo: "/home/you/mogeung".into(),
+            guidance: "Read the spec.".into(),
+            permission: PermissionMode::Plan,
+            policy: Policy {
+                wakes: vec![Wake { on_seat: "planner".into(), on: SeatEvent::Stop, to: "builder".into(), text: "go".into() }],
+                watchdogs: vec![Watchdog { seat: Some("builder".into()), silent_minutes: 10, while_busy: true, text: "still there?".into() }],
+                handover: Handover::Automatic,
+                ..Policy::default()
+            },
+            seats: vec![Seat::new("planner", SessionSource::ClaudeCode), Seat::new("builder", SessionSource::OpenCode)],
+            paused: true,
+            created: 10,
+            updated: 20,
+        };
+        team.seats[0].model = Some("opus".into());
+        team.seats[0].effort = Some(Effort::High);
+        team.seats[0].permission = Some(PermissionMode::BypassPermissions);
+        team.seats[1].own_home = true;
+        let written = serde_json::to_value(&team).unwrap();
+        declared(&s, &s, &written, "team");
+        // And the walk is not vacuous: a key the struct does not have is caught.
+        let mut stray = written.clone();
+        stray["seats"][0]["colour"] = "red".into();
+        let caught = std::panic::catch_unwind(|| declared(&s, &s, &stray, "team"));
+        assert!(caught.is_err(), "an undeclared key must fail the walk");
+    }
 }
+

@@ -46,7 +46,7 @@
  * order: the team's guidance and mode come before any seat's.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Armchair,
   Ban,
@@ -54,6 +54,7 @@ import {
   CircleCheck,
   Download,
   Eraser,
+  FileJson,
   FolderOpen,
   Pause,
   Play,
@@ -71,7 +72,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/store";
 import { cn } from "@/lib/cn";
-import { chooseFile, chooseFolder, chooseSavePath } from "@/lib/tauri";
+import { chooseFile, chooseFolder, chooseSavePath, exportText, isTauri } from "@/lib/tauri";
 import {
   countersLine,
   firstProblem,
@@ -312,6 +313,11 @@ export function TeamsWindow() {
   const [importNotes, setImportNotes] = useState<string[]>([]);
   const incoming = useStore((s) => s.teamDraft);
   const booted = useStore((s) => s.teamBooted);
+  // Where the file's schema goes once the daemon answers (`R-P20`): the
+  // path the picker gave, or none for the shell's downloads folder. Set by
+  // the click, taken by the answer.
+  const schemaTarget = useRef<{ path: string | undefined } | null>(null);
+  const schemaIn = useStore((s) => s.teamSchema);
 
   // A file came in: it becomes the draft, unsaved, with its notes. Taken
   // from the store so a second import replaces the first.
@@ -323,6 +329,18 @@ export function TeamsWindow() {
     setImportNotes(incoming.notes);
     useStore.setState({ teamDraft: null });
   }, [incoming]);
+
+  // The daemon answered with the team file's schema (`R-P20`): written
+  // where the click said, through the shell — a browser tab downloads it.
+  // Taken from the store like a draft is; an answer no click here asked for
+  // is dropped rather than saved somewhere surprising.
+  useEffect(() => {
+    if (!schemaIn) return;
+    useStore.setState({ teamSchema: null });
+    const target = schemaTarget.current;
+    schemaTarget.current = null;
+    if (target) void saveSchema(schemaIn, target.path);
+  }, [schemaIn]);
 
   // The daemon answered a Boot of the team on screen (`R-P14`): the window
   // has done its job and closes, whatever the boot found to do. The notice
@@ -394,6 +412,15 @@ export function TeamsWindow() {
   const importFile = () => {
     void chooseFile("A team definition to import — mogeung's .json, or an OpenRig rig.yaml", ["json", "yaml", "yml"]).then((path) => {
       if (path) send({ cmd: "team_import", path });
+    });
+  };
+  const downloadSchema = () => {
+    void chooseSavePath(SCHEMA_FILE, "json").then((picked) => {
+      // Declined: nothing. No picker (a browser tab, or a shell without the
+      // plugin): the answer is downloaded, or saved where the shell saves.
+      if (picked === null) return;
+      schemaTarget.current = { path: picked };
+      send({ cmd: "team_schema" });
     });
   };
   const exportFile = (t: Team) => {
@@ -533,9 +560,24 @@ export function TeamsWindow() {
               );
             })}
           </div>
+          {/* The spec of the file Import… reads and Export… writes (`R-P20`):
+              a JSON Schema the daemon derives from its own types. Not gated —
+              nothing of yours is in it. */}
+          <div className="flex shrink-0 border-t border-[var(--border)] p-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="flex-1"
+              onClick={downloadSchema}
+              title="save the JSON Schema a team file follows — what Export… writes and Import… reads, generated from the daemon's own types"
+            >
+              <FileJson size={12} /> Team file schema…
+            </Button>
+          </div>
         </aside>
 
         {/* The editor. */}
+
         {draft === null ? (
           <div className="flex flex-1 items-center justify-center">
             <Dim className="text-sm">Pick a team, or make a new one.</Dim>
@@ -1109,4 +1151,36 @@ export function TeamsWindow() {
       </div>
     </Dialog>
   );
+}
+
+/** The name the team file's schema is saved under. `R-P20`. */
+export const SCHEMA_FILE = "mogeung-team.schema.json";
+
+/**
+ * Write the schema the daemon answered where the click said. `R-P20`.
+ *
+ * Through the shell when there is one — `exportText` takes the picked path,
+ * or chooses the downloads folder when there was no picker — and by the
+ * anchor trick in a browser tab, which has no shell to write through, the
+ * way the transcript's export does. Either way the notice says where it
+ * went, because a save you cannot find is a save that did not happen.
+ */
+async function saveSchema(schema: Record<string, unknown>, path: string | undefined): Promise<void> {
+  const text = `${JSON.stringify(schema, null, 2)}\n`;
+  const { pushNotice, pushError } = useStore.getState();
+  if (!isTauri()) {
+    const url = URL.createObjectURL(new Blob([text], { type: "application/schema+json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = SCHEMA_FILE;
+    a.click();
+    URL.revokeObjectURL(url);
+    pushNotice(`team file schema downloaded — ${SCHEMA_FILE}`);
+    return;
+  }
+  try {
+    pushNotice(`team file schema saved — ${await exportText(SCHEMA_FILE, text, path)}`);
+  } catch (e) {
+    pushError(`could not save the team file schema: ${String(e)}`);
+  }
 }

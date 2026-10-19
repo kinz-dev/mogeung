@@ -227,8 +227,25 @@ async fn pause_is_judged_like_a_save_and_a_release_like_a_send() {
     assert!(why.contains("no held send"), "{why}");
 }
 
+/// `R-P20`: the team file's schema is open like `TeamList` — it describes
+/// the format and carries nothing of yours — so a daemon bound beyond
+/// loopback answers it to anyone who may connect, with no `--allow-run`.
+#[tokio::test]
+async fn the_team_file_schema_is_open_like_the_team_list() {
+    let url = lan_bound_daemon("schema-lan", false).await;
+    let schema = ask(&url, ClientMsg::TeamSchema, |m| match m {
+        ServerMsg::TeamSchema { schema } => Some(schema),
+        ServerMsg::Error { message } => panic!("refused: {message}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(schema["title"], "mogeung team definition");
+    assert!(schema["properties"]["seats"].is_object());
+}
+
 /// `R-P9`: the one write into a worktree is judged like the seat verbs and
 /// sits behind the write guard; past both, the lookup refuses in words.
+
 #[tokio::test]
 async fn a_worktree_write_is_judged_like_a_seat_verb_and_the_write_guard() {
     let write = || ClientMsg::FileWrite {

@@ -748,6 +748,9 @@ export interface AppState {
   /** A team that came in from a file, for the Teams window to show as an
    *  unsaved draft with the import's notes. `R-P12`. Taken by the window. */
   teamDraft: { team: Team; notes: string[] } | null;
+  /** The team file's JSON Schema, answered to `team_schema`, for the Teams
+   *  window to save where you chose. `R-P20`. Taken by the window. */
+  teamSchema: Record<string, unknown> | null;
   /**
    * The last boot's answer, for the Teams window to close on. `R-P14`.
    * `at` tells two boots of the same team apart.
@@ -1289,6 +1292,7 @@ export const useStore = create<AppState>((set, get) => ({
   teamSends: [],
   seatModels: [],
   teamDraft: null,
+  teamSchema: null,
   teamBooted: null,
   peers: null,
   savedConnections: [],
@@ -2044,6 +2048,10 @@ export const useStore = create<AppState>((set, get) => ({
       case "team_exported":
         get().pushNotice(`team exported — ${msg.path}`);
         break;
+      case "team_schema":
+        set({ teamSchema: msg.schema });
+        break;
+
       case "team_booted": {
         // `R-P14`: one line saying what the boot did, and the answer kept
         // for the Teams window, which closes on a boot that did something.

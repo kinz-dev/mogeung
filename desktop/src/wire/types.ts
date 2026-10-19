@@ -1578,6 +1578,10 @@ export type ClientMsg =
    *  Judged like `team_save`. */
   | { cmd: "team_export"; id: string; path?: string }
   | { cmd: "team_import"; path: string }
+  /** The JSON Schema a team file follows — the spec of what `team_export`
+   *  writes and `team_import` reads, derived from the daemon's own types.
+   *  `R-P20`. Open, like `team_list`. */
+  | { cmd: "team_schema" }
   /**
    * Scratch files. `R-L5`, ADR-0035.
    *
@@ -1829,6 +1833,9 @@ export type ServerMsg =
   /** A definition was written as a file; a file came in as a draft with notes. `R-P12`. To the asker. */
   | { ev: "team_exported"; team_id: string; path: string }
   | { ev: "team_draft"; team: Team; notes: string[] }
+  /** The JSON Schema (draft 2020-12) a team file follows, whole. `R-P20`. To the asker. */
+  | { ev: "team_schema"; schema: Record<string, unknown> }
+
   /**
    * What a `team_boot` did, seat by seat. `R-P14`. To the asker, after the
    * `seats` broadcast: `started` by this boot, `revived` among them had a

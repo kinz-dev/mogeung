@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-16
+updated: 2026-10-19
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -391,6 +391,7 @@ amendment.
 | `SeatRestart` | `team_id`, `seat` — stop one seat and start it again; a handover follows as the policy says (`R-P10`) | `Seats`, broadcast; the seat rows at once; a `Sends` when the handover is composed | here |
 | `TeamExport` | `id`, `path` (absolute, optional) — the definition whole as JSON, where you say or beside the markdown mirror (`R-P12`) | `TeamExported`, to the asker | here |
 | `TeamImport` | `path` (absolute) — mogeung's own `.json`, or an OpenRig `rig.yaml` read as other people's configuration (`R-P12`) | `TeamDraft`, to the asker; **nothing stored** | here |
+| `TeamSchema` | nothing — the JSON Schema a team file follows, derived from the daemon's own types (`R-P20`); open like `TeamList` | `TeamSchema`, to the asker | here |
 
 | Event | Carries | Relay |
 |---|---|---|
@@ -400,6 +401,7 @@ amendment.
 | `TeamBooted` | what a `TeamBoot` did, seat by seat (`R-P14`): `started` by this boot, `revived` among them had a record but no pane, `skipped` were running and left alone; all three empty is a team already up. After the `Seats` broadcast, so the window closes on an answer and not on rows it cannot tell from the ones already there | theirs |
 | `SeatModels` | each CLI's `models` (`id`, `label`, and for a CLI that says per model its `efforts` and `default_effort`), the `efforts` the CLI takes at launch, and the `source` the list came from — Claude Code's aliases and current ids, Codex's own `models_cache.json` read as it is; none for Qwen Code or opencode, whose box stays free text. A seat's `effort` is one of `minimal` · `low` · `medium` · `high` · `xhigh` · `max` · `ultra`, absent for the CLI's default, and `TeamSave` refuses one its CLI cannot take (`R-P16`) | theirs |
 | `TeamDraft` | a `team` with no id and no stamps, for the window to show as an unsaved draft, and the import's `notes` — what was and was not carried (`R-P12`) | theirs |
+| `TeamSchema` | the `schema`, whole — draft 2020-12, every field with its description and its default, the enum spellings as the wire has them, and the import rule in its own description (`R-P20`) | theirs |
 | `Sends` | every team's counters and log (`R-P6`): `chain` against `hop_budget`, `this_hour` against `hourly_cap`, `paused`, `held`, and the `log` of entries — who (`kind`, `from`), whom (`to`), the `text`, `why`, `status`, the `hop` it took, and for a `handover` (`R-P10`) `composed_by` as *<model> @ <host>*; a `press` (`R-P11`) is the readiness Enter, not a hop; a `wind_down` (`R-P15`) is your press with declared words, neither hop nor automatic — oldest first, the last two hundred; and `wind_down` while a team is being wound down or lately was: `started`, `deadline`, a seat each as `asked` / `noted` / `stopped` / `timed_out` / `gone` with the note's excerpt, kept until the next boot; with every `TeamList` answer and after every change | theirs |
 
 **A save is judged like a run is started.** `TeamList` is open; `TeamSave`
@@ -504,6 +506,17 @@ team's guidance, the edges appended as declared text rather than invented
 wakes, and profiles, skills, plugins and startup actions listed as not
 carried. The repository arrives empty in both cases and the window asks for
 it. Both verbs are judged like `TeamSave`.
+
+**The spec of that file** (`R-P20`, `team::schema`). `TeamSchema` answers a
+JSON Schema (draft 2020-12) generated from `Team` and every type under it
+through the same serde attributes the file is written with — field names,
+enum spellings, defaults and doc comments — so the spec is the struct and
+cannot say one thing while the daemon writes another. Its own description
+states the import rule: `id` dropped, `created` and `updated` zeroed, `paused`
+cleared. Open like `TeamList`, because it describes the format and carries
+nothing of yours; the window saves it as `mogeung-team.schema.json` where you
+choose.
+
 
 **The one write into a worktree** (`R-P9`, `write.rs`). ADR-0019 refused an
 editor for the concurrent writer it could not see; its 2026-10-09 amendment

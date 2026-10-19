@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-18
+updated: 2026-10-19
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -158,7 +158,14 @@ with the import's notes shown above the verdict row until you press Save or
 start another. *Export…* on a saved team asks where (`chooseSavePath` with a
 `.json` filter) and sends `team_export`; with no picker the daemon writes
 beside the mirror, and either way a notice names the path. `teamDraft` in the
-store is a hand-off the window takes and clears, not state it keeps.
+store is a hand-off the window takes and clears, not state it keeps. *Team
+file schema…* at the foot of the list (`R-P20`) asks where first, then sends
+`team_schema`, and writes the daemon's answer there through the shell's
+`export_text` — the downloads folder when there was no picker, the anchor
+trick in a browser tab — as `mogeung-team.schema.json`; `teamSchema` is the
+same kind of hand-off as `teamDraft`, and an answer no click asked for is
+dropped rather than saved somewhere surprising.
+
 
 **A notice is a warning or a toast, never both** (`R-J114`). Only an `error`
 is a warning — counted in the status bar, listed in the Warnings window, kept

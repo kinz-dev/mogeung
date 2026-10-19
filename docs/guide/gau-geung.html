@@ -283,7 +283,8 @@ echo "done" | mogeung-send planner</code></pre>
     <p>Your draft stays on screen while the file reloads under you, and the save carries the version you began from, so the daemon catches the race rather than you.</p>
 
     <h2 id="files">Import and export</h2>
-    <p><strong>Export…</strong> on a saved team writes its definition whole as JSON where you choose, or beside the markdown mirror under <code>~/.mogeung/teams/</code>. <strong>Import…</strong> reads a file and answers a draft, never a save: review it, set the repository, press Save.</p>
+    <p><strong>Export…</strong> on a saved team writes its definition whole as JSON where you choose, or beside the markdown mirror under <code>~/.mogeung/teams/</code>. <strong>Import…</strong> reads a file and answers a draft, never a save: review it, set the repository, press Save. <strong>Team file schema…</strong> at the foot of the list saves the JSON Schema that file follows, generated from the daemon's own types, so a person or a tool can write a team by hand and check it.</p>
+
     <div class="tablewrap"><table>
       <tr><th>file</th><th>becomes</th></tr>
       <tr><td>mogeung's <code>.json</code></td><td>a new team: the id is dropped, the stamps zeroed, the pause cleared</td></tr>

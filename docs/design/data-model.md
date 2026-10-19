@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-14
+updated: 2026-10-19
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -170,7 +170,11 @@ warning rather than refusing to start.
   started with, the inherited mode marked as the team's; since `R-P12` an
   export may put the same definition beside it as `<id>-<slug>.json`, whole
   and also never read back on its own — importing a file is the explicit
-  act, and it answers a draft rather than writing the store; and the daemon
+  act, and it answers a draft rather than writing the store; since `R-P20`
+  the shape of that file is published as a JSON Schema derived from `Team`
+  itself (`team::schema`), so the spec is the struct and cannot drift from
+  what is written; and the daemon
+
   stamps `created` and `updated` and mints the id, whatever a client sent. `session_id` and `seq`
   on a note are tags, not a location, so a note outlives the session being
   forgotten. `note_tasks` and `task_events` are the opposite case on purpose:

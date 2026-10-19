@@ -2678,6 +2678,10 @@ async fn handle(
                 Err(e) => err(e),
             }
         }
+        // The spec of that file, derived from the types that write it.
+        // `R-P20`. Open like `TeamList`: nothing of yours is in it.
+        ClientMsg::TeamSchema => send_reply(reply, ServerMsg::TeamSchema { schema: mogeung_core::team::schema() }),
+
         // Stop one seat and start it again, then the handover its policy
         // says, composed in the background with the earlier session as its
         // predecessor. `R-P10`. Judged like a boot.

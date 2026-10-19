@@ -1,6 +1,8 @@
 use crate::verify::{Claim, VerifyRun};
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
 
 /// Claude Code's own session id. mogeung does not mint identifiers any more —
 /// it observes sessions you started yourself, so their identity is theirs.
@@ -10,9 +12,10 @@ pub type SessionId = String;
 /// Session model generalises (A23) — and `R-I15`, which is the first source to
 /// put real sessions through it. `R-I25` added the fourth, and the first whose
 /// sessions live in a database rather than files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionSource {
+
     #[default]
     ClaudeCode,
     Codex,

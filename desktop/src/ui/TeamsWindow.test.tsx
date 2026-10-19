@@ -13,12 +13,15 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { bootLine, useStore } from "@/store";
 import type { ClientMsg, CliModels, Team } from "@/wire/types";
 import { newSeat, newTeam } from "@/lib/teams";
-import { TeamsWindow } from "./TeamsWindow";
+import { exportText } from "@/lib/tauri";
+import { SCHEMA_FILE, TeamsWindow } from "./TeamsWindow";
 
 vi.mock("@/lib/tauri", () => ({
   chooseFolder: vi.fn(async () => null),
   chooseFile: vi.fn(async () => "/home/you/rigs/demo/rig.yaml"),
-  chooseSavePath: vi.fn(async () => "/home/you/exports/port-openrig.json"),
+  chooseSavePath: vi.fn(async (suggested: string) => `/home/you/exports/${suggested}`),
+  exportText: vi.fn(async (name: string, _text: string, path?: string) => path ?? `/home/you/Downloads/${name}`),
+  isTauri: () => true,
 }));
 
 const sent: ClientMsg[] = [];
@@ -411,8 +414,32 @@ describe("the Teams window", () => {
     expect(sent).toContainEqual({ cmd: "team_export", id: "t1", path: "/home/you/exports/port-openrig.json" });
   });
 
+  /** `R-P20`. *"can you add in the UI to let me download the json spec"*:
+   *  the schema is asked of the daemon and written where the picker said;
+   *  an answer no click asked for is dropped, not saved somewhere. */
+  it("saves the team file's JSON Schema where you choose", async () => {
+    render(<TeamsWindow />);
+    arrives([team()]);
+    const schema = { $schema: "https://json-schema.org/draft/2020-12/schema", title: "mogeung team definition", type: "object" };
+    // Unasked: taken and dropped.
+    act(() => useStore.setState({ teamSchema: schema }));
+    await act(async () => {});
+    expect(exportText).not.toHaveBeenCalled();
+    expect(useStore.getState().teamSchema).toBeNull();
+    // Asked: the picker first, then the daemon, then the file.
+    fireEvent.click(screen.getByText("Team file schema…"));
+    await act(async () => {});
+    expect(sent).toContainEqual({ cmd: "team_schema" });
+    act(() => useStore.setState({ teamSchema: schema }));
+    await act(async () => {});
+    expect(exportText).toHaveBeenCalledWith(SCHEMA_FILE, `${JSON.stringify(schema, null, 2)}\n`, `/home/you/exports/${SCHEMA_FILE}`);
+    expect(useStore.getState().teamSchema).toBeNull();
+    expect(useStore.getState().notices.at(-1)?.text).toContain(`saved — /home/you/exports/${SCHEMA_FILE}`);
+  });
+
   /** `R-P6`. Fence 4 on screen: the counters, the switch that acts at once,
    *  a held send with release and drop, and the log. */
+
   it("shows the policy's counters, pauses at once, and releases or drops a held send", () => {
     render(<TeamsWindow />);
     arrives([team()]);

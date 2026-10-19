@@ -16,7 +16,11 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The JSON Schema a team file follows (R-P20), derived from the same structs
+# serde writes, so the spec cannot drift from the file.
+schemars = "1.2"
 # The config file (R-J3). A real parser rather than a hand-rolled one: the
+
 # format is the user's to write, so its error messages are part of the product.
 toml = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }

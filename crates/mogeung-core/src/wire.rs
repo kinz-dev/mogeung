@@ -453,6 +453,11 @@ pub enum ClientMsg {
     /// window to show and you to save, never stored by itself. `R-P12`.
     /// Judged like `TeamSave`.
     TeamImport { path: String },
+    /// The JSON Schema a team file follows — the spec of what `TeamExport`
+    /// writes and `TeamImport` reads, derived from the daemon's own types.
+    /// `R-P20`. Open, like `TeamList`: it describes the format and carries
+    /// nothing of yours.
+    TeamSchema,
     /// Stop one seat and start it again, with a handover composed from what
     /// its earlier session and its teammates did, as the team's policy says
     /// (`after_read` holds it for you, `automatic` delivers it, `none` starts
@@ -1633,6 +1638,10 @@ pub enum ServerMsg {
     /// A file came in as a draft for review: the team, unsaved, and what the
     /// import had to say about it. `R-P12`. To the asker.
     TeamDraft { team: crate::team::Team, notes: Vec<String> },
+    /// The JSON Schema (draft 2020-12) a team file follows, whole. `R-P20`.
+    /// To the asker; the window saves it as a file where you choose.
+    TeamSchema { schema: serde_json::Value },
+
     /// Every team's counters and send log. `R-P6`, fence 4's *visible*: the
     /// chain, the hour, the pause, what is held, and the log of what was
     /// sent, to whom, why and what became of it. The whole set, after every

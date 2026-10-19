@@ -5,7 +5,9 @@
 //! the mirror when you say nothing; the file re-imports as a new draft with
 //! its id dropped and nothing stored; an OpenRig `rig.yaml` beside its agents
 //! comes in as a draft with the seats, the guidance and the notes; and a path
-//! that is not absolute, not there or not a team is refused in words.
+//! that is not absolute, not there or not a team is refused in words. Since
+//! `R-P20`, the spec of that file comes back on `TeamSchema`, and the file an
+//! export wrote has no key the spec does not name.
 //!
 //! Costs nothing: no agent is launched.
 
@@ -123,8 +125,35 @@ async fn an_export_is_the_definition_whole_and_imports_back_as_a_new_draft() {
     std::fs::remove_dir_all(&d.dir).ok();
 }
 
+/// `R-P20`. *"if there is a json spec for it?"* There is, and it is the
+/// daemon's own: asked over the wire, it names every key the export wrote.
+#[tokio::test]
+async fn the_schema_the_daemon_answers_covers_the_file_it_exports() {
+    let d = daemon("schema").await;
+    let schema = ask(&d.url, ClientMsg::TeamSchema, |m| match m {
+        ServerMsg::TeamSchema { schema } => Some(schema),
+        ServerMsg::Error { message } => panic!("refused: {message}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
+    assert_eq!(schema["title"], "mogeung team definition");
+    let path = ask(&d.url, ClientMsg::TeamExport { id: "t1".into(), path: None }, exported).await;
+    let on_disk: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let declared = schema["properties"].as_object().unwrap();
+    for key in on_disk.as_object().unwrap().keys() {
+        assert!(declared.contains_key(key), "the export writes `{key}`, which the schema does not name");
+    }
+    let seat = schema["$defs"]["Seat"]["properties"].as_object().unwrap();
+    for key in on_disk["seats"][0].as_object().unwrap().keys() {
+        assert!(seat.contains_key(key), "a seat has `{key}`, which the schema does not name");
+    }
+    std::fs::remove_dir_all(&d.dir).ok();
+}
+
 #[tokio::test]
 async fn an_openrig_rig_beside_its_agents_comes_in_as_a_draft_with_notes() {
+
     let d = daemon("rig").await;
     let rig_dir = d.dir.join("rig");
     std::fs::create_dir_all(rig_dir.join("agents/lead/guidance")).unwrap();
