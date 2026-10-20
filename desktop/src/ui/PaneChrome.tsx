@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import type { IDockviewHeaderActionsProps, IDockviewPanelHeaderProps } from "dockview";
-import { Anchor, FolderOpen, GitBranch, Info, PictureInPicture2, SquareArrowDownLeft, SquarePlus, X } from "lucide-react";
+import { Anchor, FolderOpen, GitBranch, Info, PictureInPicture2, SquareArrowDownLeft, SquarePlus, SquareTerminal, X } from "lucide-react";
 import { useStore, togglePaneHold } from "@/store";
 import { paneKind } from "@/lib/paneScope";
 import { addAgentPane, closeAgentPane, parseDiffPaneId, parseFilePaneId } from "@/lib/panes";
@@ -450,6 +450,31 @@ export function PaneActions(props: IDockviewHeaderActionsProps) {
         onClick={() => session && send({ cmd: "open_folder", session_id: session.id })}
       >
         <FolderOpen className="h-3.5 w-3.5" />
+      </IconButton>
+      {/*
+        **A terminal, in the same folder.** Asked 2026-10-20: *"in the per
+        session top right corner, can we add an icon for opening the terminal
+        (platform specific) and allow user to choose which terminal
+        application"*. `R-J143`. The folder button's twin: same `cwd`, same
+        daemon command, same reason — the terminal opens on the machine the
+        folder is on, so it is that machine's `config.toml` that names the
+        application (terminator on Linux, iTerm2 on a Mac until it says
+        otherwise), **not a choice on this button**, as asked. A shell there,
+        not an attach: a session under tmux is already in a pane, and the `i`
+        beside it says how to attach by hand.
+      */}
+      <IconButton
+        title={
+          away
+            ? `that folder is on ${away} — open a terminal from a window there`
+            : session?.cwd
+              ? `open a terminal in ${session.cwd}\nwhich terminal is the \`terminal\` key in the daemon's config.toml`
+              : "no folder to open a terminal in — this pane has no session"
+        }
+        disabled={!session?.cwd || !!away}
+        onClick={() => session && send({ cmd: "open_terminal", session_id: session.id })}
+      >
+        <SquareTerminal className="h-3.5 w-3.5" />
       </IconButton>
       {/*
         **The project, in IntelliJ.** Asked 2026-09-11: *"a button at the top

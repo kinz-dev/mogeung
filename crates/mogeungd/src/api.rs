@@ -1708,12 +1708,16 @@ async fn handle(
                     // is the truth, and a save that half-worked must not be
                     // reported by showing the text that did not land.
                     Ok(()) => {
-                        // The three keys a hosted daemon reads are re-applied
-                        // now, so fixing the model endpoint here does not need
-                        // a restart. Everything else does, and the window says
-                        // so — this is not a general live-reload and pretending
+                        // The three model keys a hosted daemon reads are
+                        // re-applied now, so fixing the model endpoint here
+                        // does not need a restart — and so is `terminal`
+                        // (`R-J143`), because the way you find the right
+                        // name is to save one and press the button.
+                        // Everything else does, and the window says so — this
+                        // is not a general live-reload and pretending
                         // otherwise would be worse than not doing it at all.
                         if let Ok(c) = mogeung_core::config::Config::check(&text) {
+                            state.set_terminal(c.terminal.clone());
                             let mut settings = state.model.settings();
                             settings.url = c.model_url.clone();
                             settings.model = c.model_name.clone();
@@ -2209,6 +2213,11 @@ async fn handle(
         },
         ClientMsg::OpenInIntellij { session_id } => {
             if let Err(e) = state.open_in_intellij(&session_id).await {
+                err(e);
+            }
+        }
+        ClientMsg::OpenTerminal { session_id } => {
+            if let Err(e) = state.open_terminal(&session_id).await {
                 err(e);
             }
         }

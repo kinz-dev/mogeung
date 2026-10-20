@@ -1479,6 +1479,9 @@ export type ClientMsg =
   | { cmd: "open_folder"; session_id: SessionId }
   | { cmd: "probe_intellij"; session_id: SessionId }
   | { cmd: "open_in_intellij"; session_id: SessionId }
+  /** Open a terminal window in the session's folder, on the daemon's
+   *  machine, in the terminal its `config.toml` names. `R-J143`. */
+  | { cmd: "open_terminal"; session_id: SessionId }
   /** The folders added to this session's workspace by hand. `R-J40`. */
   | { cmd: "fetch_workspace"; session_id: SessionId }
   | { cmd: "add_workspace_dir"; session_id: SessionId; path: string }

@@ -131,6 +131,19 @@ pub enum ClientMsg {
     /// that is where the project is. Refused, in words, when there is no
     /// `.idea` folder or no launcher. `R-J92`.
     OpenInIntellij { session_id: SessionId },
+    /// Open a terminal window in the session's folder, on the daemon's
+    /// machine — the third handoff beside [`ClientMsg::OpenFolder`] and
+    /// [`ClientMsg::OpenInIntellij`], for their reason: that is where the
+    /// folder is. `R-J143`.
+    ///
+    /// Which terminal is the `terminal` key in that machine's `config.toml`
+    /// (terminator on Linux, iTerm2 on a Mac when unset), never the
+    /// button's: a window dialled into another machine has no business
+    /// choosing that machine's terminal. **A shell in `cwd`, not an attach**:
+    /// a session under tmux is already hosted in a pane, and a second head on
+    /// it is the resize churn `yolomo -d` exists to avoid. Refused in words
+    /// when the program is not there, naming the key to change.
+    OpenTerminal { session_id: SessionId },
     /// The folders added to this session's workspace by hand. `R-J40`.
     FetchWorkspace { session_id: SessionId },
     /// Add a folder to this session's workspace, so the tree and the file

@@ -155,6 +155,11 @@ fn resolve(args: Args, cfg: mogeung_core::config::Config) -> (String, Options) {
             // invocation, and a run that quietly stopped recording would be
             // the confusing half of the pair. `R-O9`.
             chat_history: cfg.chat_history.unwrap_or(true),
+            // File only, and absent means the platform's own default. No
+            // flag, for `chat_history`'s reason: which terminal opens on this
+            // machine is a standing preference, not a property of one run.
+            // `R-J143`.
+            terminal: cfg.terminal.clone(),
             // File only, and off unless asked for. No flag: this starts a
             // long-lived child process, which is a standing arrangement rather
             // than a property of one invocation — and a daemon that spawned a

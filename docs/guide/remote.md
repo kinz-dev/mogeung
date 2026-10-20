@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-10-08
+updated: 2026-10-20
 ---
 
 # Watching a remote machine
@@ -330,7 +330,7 @@ see below.
 | Action | What it says |
 |---|---|
 | Jump to terminal | its terminals are on `devbox` |
-| Open in IntelliJ / the file manager | runs on `devbox`, where the folder is — the window opens there, not here |
+| Open in IntelliJ / the file manager / a terminal | runs on `devbox`, where the folder is — the window opens there, not here |
 | Launch terminal | would open a terminal on `devbox` |
 | Screenshot / image preview | the image lives on the other machine |
 

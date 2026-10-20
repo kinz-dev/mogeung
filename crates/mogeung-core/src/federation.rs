@@ -89,7 +89,7 @@ pub fn hop(cmd: &ClientMsg) -> Hop {
         SetHunkReviewed { .. } | ReviewAll { .. } | Snooze { .. } => Hop::Judge,
         RefreshChange { .. } | FetchEvents { .. } | FetchBlastRadius { .. } => Hop::Read,
         ForgetSession { .. } => Hop::Write,
-        FocusTerminal { .. } | OpenFolder { .. } | ProbeIntellij { .. } | OpenInIntellij { .. } => Hop::Desktop,
+        FocusTerminal { .. } | OpenFolder { .. } | ProbeIntellij { .. } | OpenInIntellij { .. } | OpenTerminal { .. } => Hop::Desktop,
         FetchWorkspace { .. } | ListDir { .. } | FetchFile { .. } | ListTree { .. } | SearchContent { .. } => Hop::Read,
         AddWorkspaceDir { .. } | RemoveWorkspaceDir { .. } => Hop::Write,
         GitLog { .. } | GitShow { .. } | GitStatus { .. } => Hop::Read,
@@ -409,6 +409,7 @@ mod tests {
         assert_eq!(hop(&ClientMsg::ForgetSession { session_id: s() }), Hop::Write);
         assert_eq!(hop(&ClientMsg::FocusTerminal { session_id: s() }), Hop::Desktop);
         assert_eq!(hop(&ClientMsg::OpenInIntellij { session_id: s() }), Hop::Desktop);
+        assert_eq!(hop(&ClientMsg::OpenTerminal { session_id: s() }), Hop::Desktop);
         assert_eq!(hop(&ClientMsg::FetchFile { session_id: s(), path: "p".into() }), Hop::Read);
         assert_eq!(hop(&ClientMsg::GitLog { session_id: s(), repo: None, skip: 0, limit: 10, rev: None, grep: None, author: None, path: None, pickaxe: None, all: false, since: None, until: None }), Hop::Read);
         assert_eq!(hop(&ClientMsg::SetHunkReviewed { session_id: s(), anchor: "a".into(), reviewed: true }), Hop::Judge);

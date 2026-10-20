@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-19
+updated: 2026-10-20
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -289,6 +289,7 @@ that can edit it (pillar K), and sending is the one fenced exception.
 | `OpenFolder` | `session_id` | the file manager opens there (`R-J34`) | desktop |
 | `ProbeIntellij` | `session_id` | `IntellijProbe` (`R-J92`) | desktop |
 | `OpenInIntellij` | `session_id` | IntelliJ opens there; refused in words without `.idea` or a launcher | desktop |
+| `OpenTerminal` | `session_id` | a terminal window opens in the session's `cwd`, in the application the daemon's `terminal` key names — terminator on Linux, iTerm2 on a Mac when unset; refused in words, naming the key, when it is not there (`R-J143`) | desktop |
 | `SendToSession` | `session_id`, `text` | `SentToSession`, to the asker (`R-B54`) | write |
 
 | Event | Carries | Relay |
@@ -647,11 +648,12 @@ rest — consent, streaming, provenance, the guide's rule, the index as a cache
 Whole-file because the file has comments in it. The daemon validates with the
 parser that will read it — `Config` is `deny_unknown_fields`, so a mistyped
 key is refused rather than ignored for ever. Reading is open; editing is
-loopback-only, because the file holds outbound URLs. The three model keys are
-re-applied on save and a save wakes the pricing task; everything else needs a
-restart, and the window says which is which. The keys: `listen`, `addr`,
-`url`, `db`, `poll_ms`, `notify`, `push_url`, `token`, `ssh_target`,
-`advertise`, `beacon`, `model_url`, `model_name`, `embed_model`,
+loopback-only, because the file holds outbound URLs. The three model keys and
+`terminal` are re-applied on save and a save wakes the pricing task;
+everything else needs a restart, and the window says which is which. The
+keys: `listen`, `addr`, `url`, `db`, `poll_ms`, `notify`, `push_url`,
+`token`, `ssh_target`, `advertise`, `beacon`, `terminal` (`R-J143`),
+`model_url`, `model_name`, `embed_model`,
 `allow_remote_model`, `chat_history`, `llmproxy`, `llmproxy_bin`,
 `llmproxy_config`, `llmproxy_port`, `hotkey`, `update_check`, `update_branch`,
 `update_interval`, `update_source`, `refresh_pricing`; a flag always beats the

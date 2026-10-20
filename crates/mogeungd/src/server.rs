@@ -44,6 +44,12 @@ pub struct Options {
     /// `chat_history = false` in the file is the way back to `R-O5`'s
     /// keep-nothing behaviour.
     pub chat_history: bool,
+    /// The terminal application the Agent pane's terminal button opens a
+    /// session's folder in. `R-J143`. File-only, like `chat_history`: a
+    /// standing preference about this machine's desktop, not a property of
+    /// one invocation. `None` is the platform's default — terminator on
+    /// Linux, iTerm2 on a Mac.
+    pub terminal: Option<String>,
     /// The local model seam. `R-O1`, ADR-0031 — including the consent,
     /// which is clause 3's flag: an endpoint that is not this machine is
     /// publishing, and has to be asked for.
@@ -66,6 +72,9 @@ impl Default for Options {
             // On, matching the file's absent-means-yes: the history is the
             // ordinary behaviour and turning it off is the deliberate act.
             chat_history: true,
+            // Unset: the platform's own default, decided where the button
+            // is pressed. `R-J143`.
+            terminal: None,
             model: mogeung_core::model::ModelSettings::default(),
         }
     }
@@ -248,6 +257,11 @@ where
     // this door needs a person at this machine.
     let _ = state.send_allowed.set(crate::send::allowed(&addr));
     let _ = state.chat_history.set(opts.chat_history);
+    // A lock rather than a `OnceLock`, because a config save re-applies it
+    // (`R-J143`): which terminal opens is the kind of thing you change and
+    // try at once, and a restart between the two is the cost that stops
+    // people changing it.
+    state.set_terminal(opts.terminal.clone());
 
     // The proxy, once the port is known — it is derived from this one.
     //

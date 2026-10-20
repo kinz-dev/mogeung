@@ -476,6 +476,11 @@ fn host(listener: TcpListener, cfg: mogeung_core::config::Config, hosting: Hosti
                 // other three — a hosted daemon has no argv, so a preference
                 // it cannot be told is a preference that does not exist.
                 chat_history: cfg.chat_history.unwrap_or(true),
+                // `R-J143`: the terminal the Agent pane's button opens, read
+                // here for the same reason again — the window that hosts its
+                // own daemon is the shape mogeung is normally run in, and a
+                // key only `mogeungd` read would be unset on it for ever.
+                terminal: cfg.terminal.clone(),
                 // `R-O10`. The hosted daemon owns the proxy the same way a
                 // standalone one does — and stops it the same way, which is
                 // the case ADR-0033's adopt-on-restart exists for: this

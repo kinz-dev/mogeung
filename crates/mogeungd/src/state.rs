@@ -236,6 +236,11 @@ pub struct AppState {
     /// file's absent-means-yes — the callers that never set it are tests and
     /// the window's own hosted daemon before it has been told otherwise.
     pub chat_history: std::sync::OnceLock<bool>,
+    /// The terminal application the Agent pane's terminal button opens a
+    /// session's folder in — the `terminal` key, re-applied on every config
+    /// save. `R-J143`. `None` is the platform's default; see
+    /// [`default_terminal`].
+    pub terminal: std::sync::RwLock<Option<String>>,
     /// Whether this daemon may write to a repository at all. `R-D19`.
     ///
     /// A `OnceLock` for the same reason `ssh_target` is one: only the code
@@ -857,6 +862,7 @@ impl AppState {
             config_editable: std::sync::OnceLock::new(),
             send_allowed: std::sync::OnceLock::new(),
             chat_history: std::sync::OnceLock::new(),
+            terminal: std::sync::RwLock::new(None),
             claude_home,
             codex_home,
             qwen_home,
@@ -6166,6 +6172,71 @@ impl AppState {
         spawn_handoff(program, args, shown, "a project")
     }
 
+    /// Which terminal the button opens, from the config file — set at start
+    /// and again on every save. `R-J143`. An empty or blank value reads as
+    /// unset, so clearing the line in the editor goes back to the default
+    /// rather than trying to run a program called nothing.
+    pub fn set_terminal(&self, choice: Option<String>) {
+        let choice = choice.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+        if let Ok(mut t) = self.terminal.write() {
+            *t = choice;
+        }
+    }
+
+    /// The terminal the button will open, as a name to show: the configured
+    /// one, or the platform's default.
+    pub fn terminal_choice(&self) -> String {
+        self.terminal
+            .read()
+            .ok()
+            .and_then(|t| t.clone())
+            .unwrap_or_else(|| default_terminal(cfg!(target_os = "macos")).to_string())
+    }
+
+    /// Open a terminal window in a session's folder, here, where the folder
+    /// is. `R-J143`, asked 2026-10-20 — the third handoff beside
+    /// [`Self::open_folder`] and [`Self::open_in_intellij`].
+    ///
+    /// **`cwd`, not `repo_root`**, as the folder button chooses and for its
+    /// reason: the question is where this session is working. **A shell,
+    /// not `tmux attach`**: a session under tmux is already hosted in a
+    /// pane, and a second head on one tmux session is the resize churn
+    /// (`R-J132`) that `yolomo -d` exists to avoid. The `i` in the header
+    /// still says how to attach by hand, for the times that is wanted.
+    ///
+    /// Which terminal is this daemon's `terminal` key, never the client's
+    /// idea: the window may be on another machine, and the terminal opens
+    /// on this one. Unset, it is terminator on Linux and iTerm2 on a Mac —
+    /// the two asked for — and a program that is not here is refused in
+    /// words that name the key to change.
+    pub async fn open_terminal(&self, id: &str) -> Result<()> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow!("no such session"))?;
+        let dir = PathBuf::from(shellexpand(&session.cwd));
+        if !dir.is_dir() {
+            return Err(anyhow!("that folder is gone: {}", dir.display()));
+        }
+        let shown = dir.display().to_string();
+        let choice = self.terminal_choice();
+        let macos = cfg!(target_os = "macos");
+        // `x-terminal-emulator` is a Debian symlink, not a terminal: the
+        // flags belong to whatever it points at, as the launch table already
+        // knows. Resolved here, at the edge, so the table stays pure.
+        let choice = if !macos && choice == "x-terminal-emulator" {
+            resolved_alternative().unwrap_or(choice)
+        } else {
+            choice
+        };
+        let (program, args, cwd) = terminal_open_command(&choice, &shown, macos);
+        if macos {
+            open_terminal_macos(&choice, &program, &args, &shown)
+        } else {
+            open_terminal_linux(&choice, &program, &args, cwd, &shown)
+        }
+    }
+
     /// Open a terminal running an interactive agent CLI in `dir`.
     ///
     /// This is the one thing mogeung starts, and note what it starts: the real
@@ -6298,6 +6369,138 @@ fn spawn_handoff(program: String, args: Vec<String>, shown: String, what: &str) 
         )),
         Err(e) => Err(anyhow!("could not open {shown}: {e}")),
     }
+}
+
+/// The terminal the button opens when the config file does not say. `R-J143`:
+/// *"default terminator in ubuntu, iterm2 in mac"*.
+fn default_terminal(macos: bool) -> &'static str {
+    if macos {
+        "iTerm2"
+    } else {
+        "terminator"
+    }
+}
+
+/// How to open `terminal` with a shell in `dir` — no command, which is what
+/// sets this apart from [`linux_terminal_attempts`]: that table starts an
+/// agent and has to carry its argv, where this opens a window and leaves.
+/// `R-J143`.
+///
+/// Pure and given the platform, like [`file_manager_command`], so both
+/// shapes are pinned by tests on whichever machine runs them.
+///
+/// **Linux** is a program name and a per-program *start here* flag — the
+/// flags the launch table already learnt the hard way (terminator's `-u`,
+/// which stops it handing the request to the instance you are sitting in
+/// and dropping the arguments). A name the table does not know is run with
+/// `dir` as its working directory, which xterm, urxvt, st and most others
+/// inherit; it is the launch table's own fallback and the commonest shape.
+///
+/// **macOS** is an application name for `open -a`. The usual spellings are
+/// mapped to the bundle `open` actually finds — `iTerm2` ships as
+/// `iTerm.app` — and the three that take no folder argument are given
+/// their own flag after `--args`. (`open` passes `--args` only to an
+/// application it is starting; one already running is activated and
+/// opens where it likes. That is the platform's rule, not a row here.)
+fn terminal_open_command(terminal: &str, dir: &str, macos: bool) -> LaunchAttempt {
+    if macos {
+        let open = |app: &str, rest: Vec<String>| -> LaunchAttempt {
+            let mut args = vec!["-a".to_string(), app.to_string()];
+            args.extend(rest);
+            ("open".to_string(), args, None)
+        };
+        let at = |app: &str| open(app, vec![dir.to_string()]);
+        let with = |app: &str, flags: &[&str]| {
+            let mut rest = vec!["--args".to_string()];
+            rest.extend(flags.iter().map(|f| f.to_string()));
+            rest.push(dir.to_string());
+            open(app, rest)
+        };
+        return match terminal.to_ascii_lowercase().as_str() {
+            "iterm2" | "iterm" => at("iTerm"),
+            "terminal" | "terminal.app" => at("Terminal"),
+            "ghostty" => at("Ghostty"),
+            "warp" => at("Warp"),
+            "alacritty" => with("Alacritty", &["--working-directory"]),
+            "kitty" => with("kitty", &["--directory"]),
+            "wezterm" => with("WezTerm", &["start", "--cwd"]),
+            _ => at(terminal),
+        };
+    }
+    let name = Path::new(terminal)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| terminal.to_string());
+    let program = terminal.to_string();
+    let flag = |args: Vec<String>| -> LaunchAttempt { (program.clone(), args, None) };
+    match name.as_str() {
+        "terminator" => flag(vec!["-u".into(), format!("--working-directory={dir}")]),
+        "gnome-terminal" | "gnome-terminal.real" | "xfce4-terminal" | "tilix" | "ghostty" | "foot" => {
+            flag(vec![format!("--working-directory={dir}")])
+        }
+        "konsole" => flag(vec!["--workdir".into(), dir.into()]),
+        "alacritty" => flag(vec!["--working-directory".into(), dir.into()]),
+        "kitty" => flag(vec!["--directory".into(), dir.into()]),
+        "wezterm" => flag(vec!["start".into(), "--cwd".into(), dir.into()]),
+        _ => (program.clone(), vec![], Some(dir.to_string())),
+    }
+}
+
+/// The Linux half of [`AppState::open_terminal`]: resolve the program on the
+/// repaired PATH (`R-J87`), start it, and reap it off-frame as the other
+/// handoffs are. Not installed is said in words that name the key.
+fn open_terminal_linux(
+    choice: &str,
+    program: &str,
+    args: &[String],
+    cwd: Option<String>,
+    shown: &str,
+) -> Result<()> {
+    let resolved = crate::env::which(program);
+    let mut c = std::process::Command::new(&resolved);
+    c.args(args);
+    if let Some(d) = &cwd {
+        c.current_dir(d);
+    }
+    match c.spawn() {
+        Ok(mut child) => {
+            let program = resolved.clone();
+            let shown = shown.to_string();
+            std::thread::spawn(move || match child.wait() {
+                Ok(status) if !status.success() => {
+                    tracing::warn!("{program} exited {status} opening a terminal in {shown}");
+                }
+                Err(e) => tracing::warn!("{program} could not be waited on: {e}"),
+                _ => {}
+            });
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(anyhow!(
+            "{choice} is not installed here, so there is nothing to open a terminal with — \
+             `terminal = \"…\"` in config.toml names the one to use"
+        )),
+        Err(e) => Err(anyhow!("could not open a terminal in {shown}: {e}")),
+    }
+}
+
+/// The macOS half: `open -a`, **waited for**, unlike the Linux spawn. `open`
+/// is a launcher that returns at once either way, and when the application
+/// is not there its one line of stderr — *Unable to find application named
+/// 'X'* — is the whole diagnosis, so it is read rather than logged.
+fn open_terminal_macos(choice: &str, program: &str, args: &[String], shown: &str) -> Result<()> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| anyhow!("could not run {program}: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&out.stderr);
+    let first = why.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message");
+    Err(anyhow!(
+        "{choice} did not open a terminal in {shown} — {first}. \
+         `terminal = \"…\"` in config.toml names the application to use"
+    ))
 }
 
 /// One way IntelliJ might be started on this machine. `R-J92`.
@@ -8220,6 +8423,84 @@ mod terminal_tests {
         assert_eq!(resolve_intellij(&linux, |_| false), None);
         let app = resolve_intellij(&mac, |p| p == "/Applications/IntelliJ IDEA CE.app").unwrap();
         assert_eq!(app, ("open".to_string(), vec!["-a".to_string(), "IntelliJ IDEA CE".to_string()]));
+    }
+
+    /// The two asked for, by platform: *"default terminator in ubuntu,
+    /// iterm2 in mac"*. `R-J143`.
+    #[test]
+    fn the_default_terminal_is_terminator_on_linux_and_iterm2_on_a_mac() {
+        assert_eq!(default_terminal(false), "terminator");
+        assert_eq!(default_terminal(true), "iTerm2");
+    }
+
+    /// Each Linux terminal gets its own *start here* flag, terminator keeps
+    /// the `-u` the launch table paid for, and a name the table does not
+    /// know is started in the folder rather than refused — with no command
+    /// anywhere, because this opens a shell and leaves. `R-J143`.
+    #[test]
+    fn a_linux_terminal_opens_in_the_folder_by_its_own_flag() {
+        let (p, args, cwd) = terminal_open_command("terminator", "/some/repo", false);
+        assert_eq!(p, "terminator");
+        assert_eq!(args, vec!["-u".to_string(), "--working-directory=/some/repo".to_string()]);
+        assert_eq!(cwd, None);
+
+        let (_, args, _) = terminal_open_command("gnome-terminal", "/some/repo", false);
+        assert_eq!(args, vec!["--working-directory=/some/repo".to_string()]);
+        let (_, args, _) = terminal_open_command("konsole", "/some/repo", false);
+        assert_eq!(args, vec!["--workdir".to_string(), "/some/repo".to_string()]);
+        let (_, args, _) = terminal_open_command("kitty", "/some/repo", false);
+        assert_eq!(args, vec!["--directory".to_string(), "/some/repo".to_string()]);
+        let (_, args, _) = terminal_open_command("wezterm", "/some/repo", false);
+        assert_eq!(args, vec!["start".to_string(), "--cwd".to_string(), "/some/repo".to_string()]);
+
+        // A path to a program is run as given, and its flags follow its name.
+        let (p, args, _) = terminal_open_command("/opt/alacritty/bin/alacritty", "/some/repo", false);
+        assert_eq!(p, "/opt/alacritty/bin/alacritty");
+        assert_eq!(args, vec!["--working-directory".to_string(), "/some/repo".to_string()]);
+
+        // Unknown: inherit the folder as the working directory, xterm's way.
+        let (p, args, cwd) = terminal_open_command("st", "/some/repo", false);
+        assert_eq!(p, "st");
+        assert!(args.is_empty());
+        assert_eq!(cwd.as_deref(), Some("/some/repo"));
+
+        // Never macOS-speak on Linux — `open` here is `openvt`.
+        for name in ["terminator", "kitty", "st", "iTerm2"] {
+            let (p, _, _) = terminal_open_command(name, "/some/repo", false);
+            assert_ne!(p, "open", "{name}");
+        }
+    }
+
+    /// On a Mac every choice is `open -a`: the folder as the argument for the
+    /// applications that take one, `--args` and their own flag for the three
+    /// that do not, and `iTerm2` spelt the way its bundle is. `R-J143`.
+    #[test]
+    fn a_mac_terminal_opens_through_open_a() {
+        let (p, args, cwd) = terminal_open_command("iTerm2", "/some/repo", true);
+        assert_eq!(p, "open");
+        assert_eq!(args, vec!["-a".to_string(), "iTerm".to_string(), "/some/repo".to_string()]);
+        assert_eq!(cwd, None);
+        // Case does not matter, and the bundle's own name is accepted.
+        assert_eq!(terminal_open_command("iterm2", "/r", true).1[1], "iTerm");
+        assert_eq!(terminal_open_command("iTerm", "/r", true).1[1], "iTerm");
+
+        let (_, args, _) = terminal_open_command("Terminal", "/some/repo", true);
+        assert_eq!(args, vec!["-a".to_string(), "Terminal".to_string(), "/some/repo".to_string()]);
+
+        let (_, args, _) = terminal_open_command("alacritty", "/some/repo", true);
+        assert_eq!(
+            args,
+            vec!["-a", "Alacritty", "--args", "--working-directory", "/some/repo"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+        let (_, args, _) = terminal_open_command("WezTerm", "/some/repo", true);
+        assert_eq!(args[2..], ["--args", "start", "--cwd", "/some/repo"].map(String::from));
+
+        // An application the table does not know is handed the folder as is.
+        let (_, args, _) = terminal_open_command("Tabby", "/some/repo", true);
+        assert_eq!(args, vec!["-a".to_string(), "Tabby".to_string(), "/some/repo".to_string()]);
     }
 
     /// A path is argv, never a string a shell gets to look at — a directory

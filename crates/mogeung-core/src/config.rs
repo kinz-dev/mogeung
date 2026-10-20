@@ -54,6 +54,23 @@ pub struct Config {
     /// because it says presence and never access. `false` is the standing
     /// way to be quiet; `--no-beacon` is the one-run way.
     pub beacon: Option<bool>,
+    /// Daemon: the terminal application the Agent pane's terminal button
+    /// opens a session's folder in. `R-J143`. Absent means **terminator** on
+    /// Linux and **iTerm2** on a Mac.
+    ///
+    /// On Linux it is a program name — `terminator`, `gnome-terminal`,
+    /// `konsole`, `xfce4-terminal`, `alacritty`, `kitty`, `wezterm`,
+    /// `ghostty`, `foot`, `tilix`, `xterm` — each started with its own
+    /// *start in this directory* flag; `x-terminal-emulator` means whatever
+    /// the Debian alternative points at; any other name is run with the
+    /// folder as its working directory, which most terminals inherit. On a
+    /// Mac it is an application name for `open -a`: `iTerm2`, `Terminal`,
+    /// `Ghostty`, `Warp`, `Alacritty`, `kitty`, `WezTerm`.
+    ///
+    /// Here, in the daemon's file, because the button is a daemon command:
+    /// the terminal opens on the machine the folder is on, so the choice
+    /// belongs to that machine. Re-applied on save, no restart needed.
+    pub terminal: Option<String>,
     /// Daemon: base URL of an OpenAI-compatible model API — the part before
     /// `/chat/completions`, e.g. `http://spark-7ecc:8000/v1`. `R-O1`.
     ///
@@ -308,7 +325,7 @@ mod tests {
     #[test]
     fn the_known_keys_are_the_struct_s_own() {
         let keys = Config::known_keys();
-        for expected in ["listen", "model_url", "model_name", "allow_remote_model", "hotkey"] {
+        for expected in ["listen", "model_url", "model_name", "allow_remote_model", "hotkey", "terminal"] {
             assert!(keys.contains(&expected.to_string()), "{expected} missing from {keys:?}");
         }
     }

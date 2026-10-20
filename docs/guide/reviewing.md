@@ -1,7 +1,7 @@
 ---
 title: Reviewing changes
 status: active
-updated: 2026-10-08
+updated: 2026-10-20
 ---
 
 # Reviewing changes
@@ -73,12 +73,17 @@ contains, and a run you started is shown beside the claim the same way
 
 ## Handing off
 
-Two buttons beside the anchor in an Agent pane's header hand the session's
+Three buttons beside the anchor in an Agent pane's header hand the session's
 folder to another program, on the machine the daemon runs on: the **file
-manager** (Finder on a Mac, your desktop's handler elsewhere), and
-**IntelliJ IDEA**. The IntelliJ button is live when the project has a `.idea`
-folder and a launcher was found there; otherwise it is dead and its hover
-says which. Editing properly is not mogeung's job and is not planned to be.
+manager** (Finder on a Mac, your desktop's handler elsewhere), a **terminal**
+in that folder, and **IntelliJ IDEA**. Which terminal is the `terminal` key
+in that machine's `~/.mogeung/config.toml` — the Configuration window edits
+it, and a save takes effect at once — and until it is set, terminator on
+Linux and iTerm2 on a Mac. It opens a shell in the folder, not an attach to
+the session's tmux; the `i` beside it says how to attach by hand. The
+IntelliJ button is live when the project has a `.idea` folder and a launcher
+was found there; otherwise it is dead and its hover says which. Editing
+properly is not mogeung's job and is not planned to be.
 
 ## The transcript
 

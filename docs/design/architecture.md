@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-18
+updated: 2026-10-20
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
@@ -200,9 +200,9 @@ refusal rather than a kill when the port is held by a window.
 refuses a bind beyond loopback with no token, checked on the bound address
 before anything is served, and the window asks it before serving on the socket
 it just won. The hosted daemon reads `listen`, `token`, `ssh_target`,
-`advertise`, `beacon`, and the three model keys from `config.toml`, so a plain
-launch can be LAN-connectable or model-equipped from the file alone; it takes
-the defaults for `db`, `poll_ms` and the rest. It is acquired at **every**
+`advertise`, `beacon`, `terminal` (`R-J143`) and the three model keys from
+`config.toml`, so a plain launch can be LAN-connectable or model-equipped from
+the file alone; it takes the defaults for `db`, `poll_ms` and the rest. It is acquired at **every**
 launch, whatever board the window shows (`R-J102`): which daemon runs and
 which one is watched are separate choices.
 

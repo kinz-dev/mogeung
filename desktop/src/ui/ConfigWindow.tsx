@@ -23,9 +23,10 @@
  *
  * **What takes effect, said plainly.** The daemon reads this file at start-up.
  * The three model keys are re-applied on save, because those are the three the
- * window's hosted daemon reads and the reason this window exists; everything
- * else needs a restart. A dialog that implied otherwise would be worse than
- * one that says nothing.
+ * window's hosted daemon reads and the reason this window exists — and so is
+ * `terminal` (`R-J143`), because the way to find the right name is to save
+ * one and press the button; everything else needs a restart. A dialog that
+ * implied otherwise would be worse than one that says nothing.
  *
  * **Read anywhere, edited on loopback only.** The file holds `push_url` and
  * `model_url`, both outbound, so a daemon a second machine can reconfigure is
@@ -118,8 +119,8 @@ export function ConfigWindow() {
     >
       <div className="flex min-h-[24rem] w-[46rem] max-w-full flex-col">
         <Dim className="block text-2xs">
-          The daemon reads this at start-up. The model keys are re-applied when you save;
-          everything else needs the daemon restarted.
+          The daemon reads this at start-up. The model keys and <Mono>terminal</Mono> are re-applied
+          when you save; everything else needs the daemon restarted.
         </Dim>
 
         {readonly && (

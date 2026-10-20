@@ -313,6 +313,46 @@ describe("showing a session's folder", () => {
     header();
 
     expect(screen.getByTitle(/no folder to show/)).toBeDisabled();
+    expect(screen.getByTitle(/no folder to open a terminal in/)).toBeDisabled();
+  });
+
+  /**
+   * A terminal in the same folder, beside it. `R-J143`. The same two halves
+   * as the folder button's: the pane's **own** session, and nothing about
+   * *which* terminal — that is the daemon's config, so the message carries
+   * only the session.
+   */
+  it("asks the daemon to open a terminal in the pane's own session's folder", () => {
+    const sent: unknown[] = [];
+    useStore.setState({
+      prefs: { ...defaultPrefs(), scoped: { unknown: { ...emptyScoped(), paneHold: { agent: "s2" } } } },
+      selected: "s1",
+      sessions: { s1: session("s1", { cwd: "/tmp/one" }), s2: session("s2", { cwd: "/tmp/two" }) },
+      send: (msg: unknown) => sent.push(msg),
+    } as never);
+    header();
+
+    fireEvent.click(screen.getByTitle(/^open a terminal in \/tmp\/two/));
+
+    expect(sent.filter((m) => (m as { cmd: string }).cmd === "open_terminal")).toEqual([{ cmd: "open_terminal", session_id: "s2" }]);
+  });
+
+  /** A session mirrored from another machine has its folder there, and a
+   *  terminal opened here would be in the wrong place — dead, with the
+   *  machine named, like the folder and IntelliJ buttons beside it. */
+  it("is dead, naming the machine, for a session mirrored from elsewhere", () => {
+    const sent: unknown[] = [];
+    useStore.setState({
+      selected: "s1",
+      sessions: { s1: session("s1", { cwd: "/tmp/one", origin: { machine_id: "m2", host: "devbox" } }) },
+      send: (msg: unknown) => sent.push(msg),
+    } as never);
+    header();
+
+    const button = screen.getByTitle("that folder is on devbox — open a terminal from a window there");
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(sent.filter((m) => (m as { cmd: string }).cmd === "open_terminal")).toEqual([]);
   });
 });
 
