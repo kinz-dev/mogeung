@@ -1,7 +1,7 @@
 ---
 title: The read boundary
 status: active
-updated: 2026-10-12
+updated: 2026-10-21
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/workspace.rs
@@ -106,6 +106,14 @@ at.
   [ADR-0035](../decisions/0035-the-editor-writes-scratch-files-and-nothing-else.md)).
 - **The doc inventory** (`R-H1`) answers for watched repositories only; the
   daemon refuses a path no session lives in.
+- **The three desktop handoffs** — the file manager (`R-J34`), IntelliJ
+  (`R-J92`) and, since `R-J143`, a terminal — take the session's `cwd` as
+  their one path, check the folder is still there, and read nothing under it:
+  they hand the path to the desktop on the machine the folder is on and
+  leave. Each verb carries a session id and nothing else, so a client names
+  no path and no program through them; which terminal opens is the daemon's
+  own `terminal` key
+  ([cross-session-signals.md](cross-session-signals.md#handing-a-folder-to-the-desktop-r-j34)).
 - **A seat's files** (`R-P4`, feature 0051) live under `~/.mogeung/seats/`
   — a guidance file, a home of its own when asked, since `R-P5` the hook
   script, the Claude `settings.json`, the opencode plugin and the

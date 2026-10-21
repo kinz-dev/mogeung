@@ -1,7 +1,7 @@
 ---
 title: Cross-session signals
 status: active
-updated: 2026-10-12
+updated: 2026-10-21
 covers:
   - crates/mogeungd/src/state.rs
   - crates/mogeungd/src/notify.rs
@@ -231,6 +231,34 @@ connection until a desktop had started Nautilus would stall the socket — but
 it reaps, on a thread of its own, so a click meant to be clicked often leaves
 no zombie. `open_in_intellij` and the probe beside it (`R-J92`) are the same
 shape.
+
+`open_terminal` (`R-J143`, 2026-10-20) is the third handoff, and it is the
+daemon's for the same reason again: the terminal opens on the machine the
+folder is on, so **which terminal is this daemon's `terminal` key**, never the
+client's idea — read at start (`server.rs`) and again on every config save
+(`api.rs`) into `AppState.terminal`, a blank value reading as unset so that
+clearing the line goes back to the default rather than running a program
+called nothing. Unset, it is terminator on Linux and iTerm2 on a Mac.
+`terminal_open_command` is pure and given the platform, like
+`file_manager_command`, so both shapes are pinned on whichever machine runs
+the tests. On Linux it is a program name and that program's own *start here*
+flag — terminator keeps the `-u` the launch table paid for, so the request is
+not handed to the instance you are sitting in and dropped — and a name the
+table does not know is started with the folder as its working directory, the
+launch table's own fallback and the commonest shape; `x-terminal-emulator` is
+resolved at the edge to what the Debian alternative points at, so the flags
+belong to the real program. On a Mac it is an application for `open -a`, the
+usual spellings mapped to the bundle `open` finds (`iTerm2` ships as
+`iTerm.app`), and the three that take no folder argument — Alacritty, kitty,
+WezTerm — given their own flag after `--args`. **A shell, not `tmux attach`**:
+a session under tmux is already hosted in a pane, and a second head is the
+resize churn `R-J132` describes; the `i` beside the button still says how to
+attach by hand. It takes `cwd`, as the folder button does, refuses a folder
+that is gone, and otherwise differs from the two above only at the end: Linux
+spawns and reaps off-frame, with *not installed* said in words that name the
+key; macOS waits on `open`, because `open` returns at once either way and its
+one line of stderr — *Unable to find application named …* — is the whole
+diagnosis.
 
 ## Jump to terminal (`R-B2`)
 
