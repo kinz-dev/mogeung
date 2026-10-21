@@ -135,10 +135,15 @@ fn targets(limited: bool) -> Result<Vec<Target>> {
 
 /// The identity the daemon would publish, and the config it would read.
 fn who() -> (mogeung_core::wire::DaemonIdentity, mogeung_core::config::Config) {
-    let (cfg, warning) = mogeung_core::config::Config::load();
-    if let Some(w) = warning {
-        eprintln!("{w}");
-    }
+    // A file that cannot be read whole stops this too (ADR-0045): a tool that
+    // reported what the daemon would read, from the defaults, would mislead.
+    let cfg = match mogeung_core::config::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
     let identity = mogeungd::machine::identity(&mogeungd::watcher::default_home(), cfg.ssh_target.clone());
     (identity, cfg)
 }

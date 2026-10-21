@@ -113,14 +113,31 @@ impl Status {
 
 /// Attach to a running daemon, or take the port and host one.
 pub fn acquire(addr: &str) -> Status {
-    // A broken file costs its settings, never the daemon — `R-J3`'s rule,
-    // and the warning goes to stderr because there is no window to complain
-    // into yet.
-    let (cfg, cfg_warning) = mogeung_core::config::Config::load();
-    if let Some(w) = cfg_warning {
-        eprintln!("{w}");
+    // A file that cannot be read whole hosts nothing — `R-J145`, ADR-0045.
+    // Until 2026-10-21 a broken file cost its settings and never the daemon
+    // (`R-J3`), which here meant a hosted daemon on the defaults — loopback,
+    // no token — with the warning on a stderr nobody sees. The window is the
+    // one place to say so, so the refusal goes back to it as the reason
+    // nothing is serving.
+    match mogeung_core::config::Config::load() {
+        Ok(cfg) => acquire_with(cfg, addr),
+        Err(e) => {
+            eprintln!("{e}");
+            refused_config(&e)
+        }
     }
-    acquire_with(cfg, addr)
+}
+
+/// The status a broken file earns: nothing hosted, and in the window the
+/// line, the key and what it was probably meant to be.
+pub fn refused_config(e: &mogeung_core::config::ConfigError) -> Status {
+    Status::None {
+        reason: Some(format!(
+            "{} — the window does not host a daemon on a config file it cannot read whole \
+             (ADR-0045); fix the line, or move the file aside, and reopen the window",
+            e.headline()
+        )),
+    }
 }
 
 /// [`acquire`], with the file's answers handed in — so a test can ask what a
@@ -345,6 +362,26 @@ mod tests {
         };
         let h = hosting_for(&blank, "127.0.0.1:7717");
         assert_eq!((h.bind.as_str(), h.token), ("127.0.0.1:7717", None));
+    }
+
+    /// `R-J145`, ADR-0045: a file the window cannot read whole hosts nothing,
+    /// and the window is told which line and what it probably meant.
+    #[test]
+    fn a_broken_config_file_hosts_nothing_and_says_which_line() {
+        let dir = std::env::temp_dir().join(format!("mogeung-shell-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "listen = \"0.0.0.0:7717\"\nNotify = true\n").unwrap();
+        let e = mogeung_core::config::Config::load_from(&path).expect_err("a bad key must be refused");
+        let _ = std::fs::remove_file(&path);
+        match refused_config(&e) {
+            Status::None { reason: Some(r) } => {
+                assert!(r.contains("line 2:"), "{r}");
+                assert!(r.contains("did you mean `notify`?"), "{r}");
+                assert!(r.contains("does not host"), "{r}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
     }
 
     /// A file that asks for a public bind and names no token is refused the

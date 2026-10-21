@@ -178,7 +178,12 @@ async fn fetch(url: &str) -> Result<String, String> {
 
 /// One check: read the consent, and read the pages if a reading is due.
 pub async fn check(state: &crate::state::AppState, dir: &Path) {
-    let (config, _) = mogeung_core::config::Config::load();
+    // The daemon refused to start on a file it could not read whole
+    // (ADR-0045); one broken *after* start reads as no consent, and says so.
+    let config = mogeung_core::config::Config::load().unwrap_or_else(|e| {
+        tracing::warn!("config: {} — reading the pricing consent as absent", e.headline());
+        mogeung_core::config::Config::default()
+    });
     let consent = consent(config.refresh_pricing.as_deref());
     let now = Utc::now();
     let wanted = {

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: active
-updated: 2026-10-20
+updated: 2026-10-21
 covers:
   - crates/mogeungd/src/main.rs
   - crates/mogeungd/src/server.rs
@@ -202,7 +202,10 @@ before anything is served, and the window asks it before serving on the socket
 it just won. The hosted daemon reads `listen`, `token`, `ssh_target`,
 `advertise`, `beacon`, `terminal` (`R-J143`) and the three model keys from
 `config.toml`, so a plain launch can be LAN-connectable or model-equipped from
-the file alone; it takes the defaults for `db`, `poll_ms` and the rest. It is acquired at **every**
+the file alone; it takes the defaults for `db`, `poll_ms` and the rest. A file
+it cannot read whole hosts nothing, and the window shows the line and the key
+as the reason nothing is serving
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)). It is acquired at **every**
 launch, whatever board the window shows (`R-J102`): which daemon runs and
 which one is watched are separate choices.
 
@@ -522,6 +525,6 @@ merge; no TLS of its own; no timer that sends anything to anyone.
 | `insight.rs` · `docscan.rs` | search, digests, failures, prompts, blame; the markdown inventory | [cross-session-signals.md](cross-session-signals.md#the-insight-layer); [wire-protocol.md](wire-protocol.md#insight-usage-and-docs) |
 | `lan.rs` (both) · `discovery.rs` · `machine.rs` · `version.rs` | the beacon, the mDNS advert, identity, the build stamp | this document |
 | `bin/sweep.rs` · `bin/runconfigs.rs` · `bin/beacon.rs` · `bin/judge.rs` · `bin/why.rs` | the instruments: corpus sweep, run-config sweep, the LAN probe, the two model harnesses | [claude-code-formats.md](claude-code-formats.md); [run-and-debug.md](run-and-debug.md); this document; [model-and-proxy.md](model-and-proxy.md) |
-| `crates/mogeung-core/src/config.rs` | `~/.mogeung/config.toml`, every key, `deny_unknown_fields` | [wire-protocol.md](wire-protocol.md#the-config-file-r-j79) |
+| `crates/mogeung-core/src/config.rs` | `~/.mogeung/config.toml`, every key, `deny_unknown_fields`; a file that cannot be read whole is a `ConfigError` with the line, the key and the fix, and stops the daemon rather than starting it on the defaults (ADR-0045) | [wire-protocol.md](wire-protocol.md#the-config-file-r-j79) |
 | `crates/mogeung-tray` | the tray: one socket, the waiting count, the daemon it counts for | this document |
 | `desktop/` | the window | [the-window.md](the-window.md) |

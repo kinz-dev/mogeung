@@ -172,29 +172,36 @@ impl Config {
         PathBuf::from(home).join(".mogeung").join("config.toml")
     }
 
-    /// Load, tolerating everything. Returns the defaults and a complaint
-    /// rather than an error: a typo in a preferences file must not stop the
-    /// daemon starting, because the daemon is how you find out anything is
-    /// wrong at all.
-    pub fn load() -> (Self, Option<String>) {
+    /// Load, and refuse a file that cannot be read whole. `R-J145`,
+    /// [ADR-0045](../../../docs/decisions/0045-a-broken-config-file-stops-the-daemon.md).
+    ///
+    /// Until 2026-10-21 this tolerated everything — a broken file cost you
+    /// your settings, never the daemon (`R-J3`) — and the day it mattered the
+    /// rule read the other way: one key spelt `Notify` on a LAN daemon, and
+    /// the daemon came up on defaults, loopback only and no token, with the
+    /// one warning in a log nobody was reading. From the other machine that
+    /// is indistinguishable from a dead daemon. So a file that does not parse
+    /// is an error with the line, the key and the fix in it, and the caller
+    /// decides what not to start. A missing file is still the defaults: not
+    /// having one is the ordinary state of a fresh install.
+    pub fn load() -> Result<Self, ConfigError> {
         Self::load_from(&Self::path())
     }
 
-    pub fn load_from(path: &std::path::Path) -> (Self, Option<String>) {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return (Self::default(), None);
+    pub fn load_from(path: &std::path::Path) -> Result<Self, ConfigError> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => {
+                return Err(ConfigError {
+                    path: Some(path.to_path_buf()),
+                    line: None,
+                    problem: format!("could not be read: {e}"),
+                    suggestion: None,
+                })
+            }
         };
-        match toml::from_str::<Config>(&text) {
-            Ok(c) => (c, None),
-            Err(e) => (
-                Self::default(),
-                Some(format!(
-                    "{} is unreadable ({}) — using defaults",
-                    path.display(),
-                    e.message()
-                )),
-            ),
-        }
+        toml::from_str::<Config>(&text).map_err(|e| ConfigError::describe(Some(path.to_path_buf()), &text, &e))
     }
 
     /// Read the file as text, for showing it. `R-J79`.
@@ -221,7 +228,7 @@ impl Config {
     /// here rather than silently ignored until someone wonders why a setting
     /// does nothing.
     pub fn check(text: &str) -> Result<Self, String> {
-        toml::from_str::<Config>(text).map_err(|e| e.to_string())
+        toml::from_str::<Config>(text).map_err(|e| ConfigError::describe(None, text, &e).headline())
     }
 
     /// Validate, keep a copy of what was there, and write.
@@ -283,6 +290,136 @@ impl Config {
     }
 }
 
+/// Why a config file could not be read whole, written for the person who has
+/// to fix it. `R-J145`, ADR-0045.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigError {
+    /// The file, when a file was read; `None` for text checked before a save.
+    pub path: Option<PathBuf>,
+    /// 1-based, when the parser could place the fault.
+    pub line: Option<usize>,
+    /// The fault — mogeung's words for an unknown key, the parser's otherwise.
+    pub problem: String,
+    /// The known key an unknown one was probably meant to be.
+    pub suggestion: Option<String>,
+}
+
+impl ConfigError {
+    /// From the parser's complaint. An unknown key is the likeliest mistake and
+    /// serde's sentence for it — *unknown field `Notify`, expected one of …* —
+    /// is written for a programmer, so it is replaced: the key, whether it is
+    /// a known one spelt differently, and otherwise the list.
+    pub fn describe(path: Option<PathBuf>, text: &str, e: &toml::de::Error) -> Self {
+        let line = e
+            .span()
+            .map(|s| text[..s.start.min(text.len())].matches('\n').count() + 1);
+        let msg = e.message();
+        if let Some(rest) = msg.strip_prefix("unknown field `") {
+            let key = rest.split('`').next().unwrap_or(rest).to_string();
+            let suggestion = nearest_key(&key);
+            return ConfigError {
+                path,
+                line,
+                problem: format!("`{key}` is not a key this file knows"),
+                suggestion,
+            };
+        }
+        ConfigError {
+            path,
+            line,
+            problem: msg.to_string(),
+            suggestion: None,
+        }
+    }
+
+    /// One line: where, and what.
+    pub fn headline(&self) -> String {
+        let mut s = String::new();
+        if let Some(p) = &self.path {
+            s.push_str(&p.display().to_string());
+        }
+        if let Some(n) = self.line {
+            if self.path.is_some() {
+                s.push(' ');
+            }
+            s.push_str(&format!("line {n}: "));
+        } else if self.path.is_some() {
+            s.push_str(": ");
+        }
+        s.push_str(&self.problem);
+        if let Some(k) = &self.suggestion {
+            s.push_str(&format!(" — did you mean `{k}`? Keys are lower-case"));
+        }
+        s
+    }
+
+    /// What to do: fix the line, or move the file aside to run on defaults —
+    /// and the keys, when no single one was the likely intent.
+    pub fn fix(&self) -> String {
+        let path = self
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "~/.mogeung/config.toml".to_string());
+        let mut s = format!(
+            "Fix the line and try again, or move the file aside to run on defaults:\n  mv {path} {path}.broken"
+        );
+        if self.unknown_key() && self.suggestion.is_none() {
+            s.push_str(&format!(
+                "\nThe keys this build knows: {}",
+                Config::known_keys().join(", ")
+            ));
+        }
+        s
+    }
+
+    /// Whether the fault is a key this file does not know, as opposed to a
+    /// value or the syntax — the one case the list of keys helps with.
+    pub fn unknown_key(&self) -> bool {
+        self.problem.ends_with("is not a key this file knows")
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}\n{}", self.headline(), self.fix())
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+/// The known key an unknown one was probably meant to be: the same letters in
+/// another case or with dashes for underscores, or within two edits — enough
+/// for `Notify`, `notifyy` and `push-url`, not enough to guess at `foo`.
+fn nearest_key(key: &str) -> Option<String> {
+    let norm = |s: &str| s.trim().to_ascii_lowercase().replace('-', "_");
+    let wanted = norm(key);
+    let keys = Config::known_keys();
+    if let Some(k) = keys.iter().find(|k| norm(k) == wanted) {
+        return Some(k.clone());
+    }
+    keys.iter()
+        .map(|k| (edit_distance(&norm(k), &wanted), k))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, k)| k.clone())
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,7 +469,7 @@ mod tests {
 
     /// One file per call. Tests run in parallel, and a shared path made three
     /// of them fail by reading each other's config.
-    fn parse(text: &str) -> (Config, Option<String>) {
+    fn parse(text: &str) -> Result<Config, ConfigError> {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!("mogeung-cfg-{}", std::process::id()));
@@ -346,38 +483,74 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_not_an_error() {
-        let (c, warning) = Config::load_from(std::path::Path::new("/nonexistent/mogeung.toml"));
+        let c = Config::load_from(std::path::Path::new("/nonexistent/mogeung.toml"))
+            .expect("not having a config is the normal case");
         assert_eq!(c, Config::default());
-        assert!(warning.is_none(), "not having a config is the normal case");
     }
 
     #[test]
     fn one_setting_is_a_valid_config() {
-        let (c, warning) = parse("poll_ms = 400\n");
-        assert!(warning.is_none());
+        let c = parse("poll_ms = 400\n").unwrap();
         assert_eq!(c.poll_ms, Some(400));
         assert_eq!(c.listen, None, "everything else stays at its default");
     }
 
-    /// The rule the whole file rests on: a broken config costs you your
-    /// settings, never the daemon. If this ever throws, a stray character
-    /// stops mogeung starting and the only way to find out is that nothing
-    /// happens.
+    /// The rule the whole file rests on, since 2026-10-21 (ADR-0045): a file
+    /// that cannot be read whole is refused with the line named, never read as
+    /// the defaults. Until then this test asserted the opposite — a broken
+    /// file cost you your settings, never the daemon — and on the day it
+    /// mattered that put a LAN daemon on loopback with the one warning in a
+    /// log nobody was reading.
     #[test]
-    fn a_broken_file_yields_defaults_and_a_complaint() {
-        let (c, warning) = parse("poll_ms = = 12\nlisten = \n");
-        assert_eq!(c, Config::default());
-        let w = warning.expect("a broken file must say so");
-        assert!(w.contains("using defaults"), "{w}");
+    fn a_broken_file_is_refused_naming_the_line() {
+        let e = parse("listen = \"0.0.0.0:7717\"\npoll_ms = = 12\n").expect_err("a broken file must be refused");
+        assert_eq!(e.line, Some(2), "{e}");
+        assert!(e.suggestion.is_none());
+        let shown = e.to_string();
+        assert!(shown.contains("line 2:"), "{shown}");
+        assert!(shown.contains(".broken"), "the way out is in the message: {shown}");
+        assert!(!shown.contains("The keys this build knows"), "a syntax fault is not about a key: {shown}");
     }
 
-    /// A misspelled key is the likeliest mistake, and silently ignoring it is
-    /// the worst response: the setting appears to be applied and is not.
+    /// A misspelled key is the likeliest mistake, and the one that happened:
+    /// `Notify = true` on 2026-10-21. The refusal names the key and the key it
+    /// was probably meant to be, in the file's own case.
     #[test]
-    fn an_unknown_key_is_reported_rather_than_ignored() {
-        let (c, warning) = parse("poll_ms = 400\nnotifyy = true\n");
-        assert!(warning.is_some(), "a typo must not pass silently");
-        assert_eq!(c, Config::default());
+    fn an_unknown_key_is_refused_with_the_key_it_probably_meant() {
+        let e = parse("poll_ms = 400\nNotify = true\n").expect_err("a typo must not pass");
+        assert_eq!(e.line, Some(2), "{e}");
+        assert_eq!(e.problem, "`Notify` is not a key this file knows");
+        assert_eq!(e.suggestion.as_deref(), Some("notify"));
+        assert!(e.headline().contains("did you mean `notify`?"), "{}", e.headline());
+        assert!(!e.to_string().contains("The keys this build knows"), "a guess replaces the list");
+
+        // Two edits away, or dashes for underscores, still guessed; nonsense is
+        // not, and nonsense gets the list.
+        assert_eq!(parse("notifyy = true\n").unwrap_err().suggestion.as_deref(), Some("notify"));
+        assert_eq!(parse("push-url = \"x\"\n").unwrap_err().suggestion.as_deref(), Some("push_url"));
+        let banana = parse("banana = 1\n").unwrap_err();
+        assert_eq!(banana.suggestion, None);
+        let shown = banana.to_string();
+        assert!(shown.contains("The keys this build knows") && shown.contains("notify") && shown.contains("listen"), "{shown}");
+    }
+
+    /// A known key with a value of the wrong shape is the parser's complaint,
+    /// verbatim, with the line — `"true"` in quotes is a string, not a flag.
+    #[test]
+    fn a_wrong_type_is_refused_in_the_parsers_words() {
+        let e = parse("listen = \"0.0.0.0:7717\"\nnotify = \"true\"\n").expect_err("a string is not a bool");
+        assert_eq!(e.line, Some(2), "{e}");
+        assert!(e.problem.contains("boolean"), "{}", e.problem);
+        assert!(e.suggestion.is_none());
+    }
+
+    /// The editor's check says the same thing, so a save and a start refuse a
+    /// file in one voice. `R-J79`.
+    #[test]
+    fn the_editors_check_names_the_line_and_the_key() {
+        let why = Config::check("Notify = true\n").unwrap_err();
+        assert!(why.starts_with("line 1: `Notify` is not a key this file knows"), "{why}");
+        assert!(why.contains("did you mean `notify`?"), "{why}");
     }
 
     /// An empty hotkey is how the file says "off", which has to be
@@ -385,11 +558,11 @@ mod tests {
     /// global shortcut is impossible without a flag on every launch.
     #[test]
     fn an_empty_hotkey_disables_it_and_an_absent_one_does_not() {
-        assert_eq!(parse("hotkey = \"\"\n").0.hotkey_setting(), Some(None));
+        assert_eq!(parse("hotkey = \"\"\n").unwrap().hotkey_setting(), Some(None));
         assert_eq!(
-            parse("hotkey = \"Ctrl+Alt+M\"\n").0.hotkey_setting(),
+            parse("hotkey = \"Ctrl+Alt+M\"\n").unwrap().hotkey_setting(),
             Some(Some("Ctrl+Alt+M".to_string()))
         );
-        assert_eq!(parse("poll_ms = 1\n").0.hotkey_setting(), None);
+        assert_eq!(parse("poll_ms = 1\n").unwrap().hotkey_setting(), None);
     }
 }

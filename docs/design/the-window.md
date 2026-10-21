@@ -283,9 +283,12 @@ The Tauri process keeps a small native half, native for one reason each:
   hands that daemon every key `mogeungd` would read — `terminal` (`R-J143`)
   joined the list on 2026-10-20 — because a window hosting its own daemon is
   the shape mogeung is normally run in, and a key only `mogeungd` read would
-  be unset on it for ever. It stops the llmproxy it started on exit, because
-  the hosted daemon's own shutdown path is unreachable
-  ([model-and-proxy.md](model-and-proxy.md)).
+  be unset on it for ever. A `config.toml` it cannot read whole hosts
+  nothing: `acquire` returns the refusal as the reason nothing is serving, with
+  the line and the key named
+  ([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)). It
+  stops the llmproxy it started on exit, because the hosted daemon's own
+  shutdown path is unreachable ([model-and-proxy.md](model-and-proxy.md)).
 - **It opens exactly two kinds of URL**: `open_local_url` takes `http://` on
   a parsed loopback host (the proxy's admin page), `open_artifact_url` takes
   `https://claude.ai/artifact/` plus 22 base58 characters (`R-J115`). Neither

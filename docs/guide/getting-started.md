@@ -1,7 +1,7 @@
 ---
 title: Getting started
 status: active
-updated: 2026-10-12
+updated: 2026-10-21
 ---
 
 # Getting started
@@ -136,7 +136,11 @@ mogeungd --listen 127.0.0.1:7717 --db <path> --poll-ms 1500   # mogeungd --help 
 
 `--notify`, `--push-url`, `--token`, `--ssh-target`, `--no-beacon`,
 `--allow-run` and the model flags are the ones you will meet; every flag has a
-`config.toml` twin except `--allow-run`. The window takes no flags: which
+`config.toml` twin except `--allow-run`. Keys are lower-case, and a file the
+daemon cannot read whole stops it with the line and the key named, rather than
+starting it on the defaults
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)); move
+the file aside to run on the defaults on purpose. The window takes no flags: which
 daemon it talks to is a setting, the connection dot in the top bar. In a
 browser (`npm run dev`) `?url=ws://host:7717/ws` points one visit somewhere else.
 

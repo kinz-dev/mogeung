@@ -647,7 +647,12 @@ rest — consent, streaming, provenance, the guide's rule, the index as a cache
 
 Whole-file because the file has comments in it. The daemon validates with the
 parser that will read it — `Config` is `deny_unknown_fields`, so a mistyped
-key is refused rather than ignored for ever. Reading is open; editing is
+key is refused rather than ignored for ever — and since 2026-10-21 it reads the
+file the same way at start: one it cannot read whole stops the daemon, with
+the line and the key named, rather than starting it on the defaults
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md));
+`Config::check` and `Config::load` describe a fault in one sentence, so the
+editor's refusal and the start's read alike. Reading is open; editing is
 loopback-only, because the file holds outbound URLs. The three model keys and
 `terminal` are re-applied on save and a save wakes the pricing task;
 everything else needs a restart, and the window says which is which. The

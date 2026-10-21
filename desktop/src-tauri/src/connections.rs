@@ -234,7 +234,7 @@ pub fn liveness(id: &str, url: &str, token: Option<&str>, timeout: std::time::Du
 /// no token in the list — it lives in `config.toml` — so a loopback entry with
 /// none is asked with that one.
 fn status_all(list: Vec<Connection>) -> Vec<Liveness> {
-    let local_token = mogeung_core::config::Config::load().0.token;
+    let local_token = mogeung_core::config::Config::load().ok().and_then(|c| c.token);
     let timeout = std::time::Duration::from_millis(1500);
     let handles: Vec<_> = list
         .into_iter()

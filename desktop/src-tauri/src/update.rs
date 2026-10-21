@@ -141,7 +141,10 @@ pub fn choose_source(configured: Option<&Path>, record: Option<&InstallRecord>) 
 }
 
 fn settings() -> (mogeung_core::config::Config, Option<InstallRecord>) {
-    let (cfg, _) = mogeung_core::config::Config::load();
+    // The window's own update settings fall back to the defaults on a file
+    // that cannot be read whole; the fault is shown where it matters, as the
+    // reason the window hosts no daemon (`daemon::acquire`, ADR-0045).
+    let cfg = mogeung_core::config::Config::load().unwrap_or_default();
     (cfg, read_record(&record_path()))
 }
 

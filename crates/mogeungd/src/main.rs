@@ -202,12 +202,25 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // Flags beat the file, the file beats the defaults, and a broken file
-    // costs you your settings rather than the daemon (`R-J3`).
-    let (cfg, cfg_warning) = mogeung_core::config::Config::load();
-    if let Some(w) = cfg_warning {
-        tracing::warn!("{w}");
-    }
+    // Flags beat the file, the file beats the defaults — and a file that
+    // cannot be read whole stops the daemon here, with the line and the fix
+    // (`R-J145`, ADR-0045). Until 2026-10-21 it cost you your settings and not
+    // the daemon (`R-J3`), and the day it mattered that put a LAN daemon on
+    // loopback with no token, saying so only here, where nobody was reading.
+    let cfg = match mogeung_core::config::Config::load() {
+        Ok(c) => c,
+        Err(e) => anyhow::bail!(
+            "{}\n\n\
+             mogeungd does not start on a config file it cannot read whole. On the defaults it\n\
+             would bind 127.0.0.1 with no token and none of your settings, and the only sign\n\
+             would be a line in this log — from another machine that looks like a dead daemon.\n\
+             \n\
+             {}\n\
+             See docs/decisions/0045-a-broken-config-file-stops-the-daemon.md.",
+            e.headline(),
+            e.fix()
+        ),
+    };
     let (listen, options) = resolve(args, cfg);
 
     let listener = std::net::TcpListener::bind(&listen)

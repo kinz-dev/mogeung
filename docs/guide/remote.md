@@ -224,7 +224,10 @@ ssh_target = "you@devbox"
 ```
 
 Copy the token it printed. Leave `--token` off and the daemon will not start —
-it prints what to do instead and exits. Set it and the daemon still warns at
+it prints what to do instead and exits. A file it cannot read whole — a key
+spelt `Notify`, a YAML colon — stops it the same way, with the line named,
+rather than starting it on loopback with none of this
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)). Set it and the daemon still warns at
 startup that the token is travelling in clear text; that warning is not
 boilerplate.
 

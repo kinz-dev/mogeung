@@ -368,6 +368,13 @@ status() {
         return 0
     fi
     echo "○ mogeungd is not running (none started by this script)"
+    # A start the daemon itself refused leaves its reason at the end of the
+    # log — since ADR-0045 a config file it cannot read whole is one.
+    if [ -f "$LOG" ] && grep -q 'does not start on a config file' "$LOG" 2>/dev/null; then
+        echo "  the last start was refused:"
+        grep -m1 -E 'config\.toml( line [0-9]+)?: ' "$LOG" | sed 's/^/    /'
+        echo "  the whole message: scripts/mogeungd logs"
+    fi
     local addr port holder
     addr=$(listen_addr)
     port="${addr##*:}"

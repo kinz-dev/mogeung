@@ -63,10 +63,15 @@ fn main() {
     let question = flag("--question")
         .unwrap_or_else(|| "Why was this file changed at this point?".to_string());
 
-    let (cfg, warning) = mogeung_core::config::Config::load();
-    if let Some(w) = warning {
-        eprintln!("{w}");
-    }
+    // A file that cannot be read whole stops this too (ADR-0045): a tool that
+    // reported what the daemon would read, from the defaults, would mislead.
+    let cfg = match mogeung_core::config::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
 
     let moments = corpus(only_session.as_deref(), limit, per_session);
     if moments.is_empty() {

@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting
 status: active
-updated: 2026-10-08
+updated: 2026-10-21
 ---
 
 # Troubleshooting
@@ -113,6 +113,28 @@ The window was launched from the Dock or a launcher and inherited a `PATH`
 without `tmux` on it. Fixed on 2026-09-06 (`R-J87`); if it recurs, `which
 tmux` from a login shell versus from the window's environment is the
 comparison to make.
+
+## The daemon will not start, or the window says *nothing is serving*, naming `config.toml`
+
+The file has a line the parser rejects, and since 2026-10-21 that stops the
+daemon instead of starting it on the defaults
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)). The
+message names the line and the key, and what the key was probably meant to be.
+Keys are lower-case — `notify`, not `Notify` — and values are TOML:
+`notify = true`, not `notify: true` and not `"true"`. `scripts/mogeungd status`
+repeats the refusal while nothing runs, and `scripts/mogeungd logs` has the
+whole message. Fix the line and start again, or move the file aside to run on
+the defaults:
+
+```sh
+mv ~/.mogeung/config.toml ~/.mogeung/config.toml.broken
+```
+
+Before that date a broken file started the daemon on the defaults — loopback
+only, no token — and from another machine that looked like a dead one: *refused
+— unreachable, or the token was wrong* in the Connections probe, and *access
+this machine only* from `status`. On a daemon older than 2026-10-21 that pair
+means: read its log for *is unreadable*.
 
 ## Port already in use
 
