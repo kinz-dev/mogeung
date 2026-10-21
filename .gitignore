@@ -34,3 +34,4 @@ QODER.md
 
 # Browser-automation output, written when the app is driven for a check.
 .playwright-mcp/
+.impeccable/

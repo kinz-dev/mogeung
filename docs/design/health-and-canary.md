@@ -1,7 +1,7 @@
 ---
 title: Health and the format canary
 status: active
-updated: 2026-10-10
+updated: 2026-10-21
 covers:
   - crates/mogeung-core/src/health.rs
   - crates/mogeungd/src/health.rs
@@ -213,7 +213,12 @@ attempt and success, the models read, the `differences`, and the names that
 mapped to no id. Like the model row it is **never a probe**. The fields are the
 residue of readings that happened, on the task's own schedule, and the record
 is kept in `pricing/state.json` beside the database so a restart reports the
-last outcome rather than *not read yet*. `PricesDiffer` is raised from
+last outcome rather than *not read yet*. The weekly check re-reads
+`config.toml` for the consent, and since 2026-10-21 a file that no longer
+parses reads as *no consent*, with a log line
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)):
+the daemon refused that file at start, and a file broken later must not stop
+a running daemon. `PricesDiffer` is raised from
 `differences`. The reading is compare-only, so the alert means *the build's
 table is out of date*, not *a price changed on screen*.
 

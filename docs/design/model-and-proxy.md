@@ -1,7 +1,7 @@
 ---
 title: The model and the proxy
 status: active
-updated: 2026-10-12
+updated: 2026-10-21
 covers:
   - crates/mogeung-core/src/model.rs
   - crates/mogeung-core/src/llmproxy.rs
@@ -145,7 +145,11 @@ programs rather than tests because their corpus is **this machine's**, which
 no fixture can stand in for and no CI can carry. Each reads the same `Config`
 the daemon reads, resolves the same endpoint including mogeung's own llmproxy,
 and exits non-zero when nothing answered — a broken setup that reads as *no
-findings* is the failure that costs a year. Neither owns a prompt of its own:
+findings* is the failure that costs a year — and since 2026-10-21 each exits
+the same way, with the fault named, on a `config.toml` it cannot read whole
+([ADR-0045](../decisions/0045-a-broken-config-file-stops-the-daemon.md)),
+because a harness reporting what the daemon would read, from the defaults, is
+that failure one step earlier. Neither owns a prompt of its own:
 `judge` calls `mogeungd::guide` and `why` calls `mogeungd::why`, which is what
 the shipping panels call, because a harness grading a different prompt than
 the one that ships measures a feature that does not exist. `why` also holds
