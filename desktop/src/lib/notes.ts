@@ -519,3 +519,58 @@ export function addTask(text: string, dest: Destination): boolean {
   }, ADD_TIMEOUT_MS);
   return true;
 }
+
+/**
+ * Take the `ord`-th task out of a document, with the lines nested under it.
+ * `R-L18`.
+ *
+ * The sub-tasks go with it on purpose: a nested checkbox left behind would
+ * attach to whatever list item is now above it, or turn into an indented code
+ * block, and either is a line the user did not write. The menu says how many
+ * are going. `null` when the document has no such task any more.
+ */
+export function removeTask(body: string, ord: number): string | null {
+  const lines = body.split("\n");
+  const kinds = scanLines(body);
+  const at = taskLine(body, ord);
+  if (at === null) return null;
+  const indent = kinds[at].indent;
+  let end = at;
+  for (let i = at + 1; i < kinds.length; i++) {
+    const k = kinds[i];
+    if (k.kind === "blank") continue;
+    if (k.indent > indent && k.kind !== "heading" && k.kind !== "fence") {
+      end = i;
+      continue;
+    }
+    break;
+  }
+  const out = [...lines.slice(0, at), ...lines.slice(end + 1)];
+  // The seam: two blank lines where the block was is one too many.
+  if (at > 0 && at < out.length && out[at].trim() === "" && out[at - 1].trim() === "") out.splice(at, 1);
+  const joined = out.join("\n").replace(/\n*$/, "");
+  return joined ? `${joined}\n` : "";
+}
+
+/**
+ * Delete a task from the Tasks panel: rewrite its document without the line.
+ * `R-L18`. The same direction as a tick — the document changes and the daemon
+ * re-derives — and the only one there is (ADR-0015). History keeps the words.
+ */
+export function deleteTask(noteId: string, ord: number): boolean {
+  const { notes, send } = useStore.getState();
+  const n = notes.find((x) => x.id === noteId);
+  if (!n) return false;
+  const body = removeTask(n.body, ord);
+  if (body === null) return false;
+  send({
+    cmd: "note_save",
+    id: n.id,
+    body,
+    session_id: n.session_id ?? null,
+    seq: n.seq ?? null,
+    repo: n.repo ?? null,
+  });
+  return true;
+}
+

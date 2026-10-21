@@ -12,6 +12,7 @@ import {
   CONVERSATION_LIMIT,
   destinationFor,
   insertTask,
+  removeTask,
   taskLine,
   noteFromConversation,
   noteFromTurn,
@@ -268,6 +269,31 @@ describe("where the box aims", () => {
   it("aims at the plain Tasks note with nothing selected", () => {
     const d = destinationFor({ notes: [n("t", "# Tasks")], sessions: {}, selected: null, target: null });
     expect(d).toMatchObject({ label: "Tasks", noteId: "t" });
+  });
+});
+
+/** `R-L18`: a task goes out of its document with the lines nested under it. */
+describe("taking a task out", () => {
+  it("removes a leaf and leaves its neighbours", () => {
+    expect(removeTask("# T\n\n- [ ] a\n- [ ] b\n- [ ] c\n", 1)).toBe("# T\n\n- [ ] a\n- [ ] c\n");
+  });
+
+  it("takes the nested sub-tasks with a parent, two spaces or four", () => {
+    expect(removeTask("- [ ] a\n  - [ ] a1\n    - [ ] a1x\n- [ ] b\n", 0)).toBe("- [ ] b\n");
+    expect(removeTask("- [ ] a\n    - [ ] a1\n- [ ] b\n", 0)).toBe("- [ ] b\n");
+  });
+
+  it("stops at the next task of the same depth", () => {
+    expect(removeTask("- [ ] a\n  - [ ] a1\n  - [ ] a2\n- [ ] b\n", 1)).toBe("- [ ] a\n  - [ ] a2\n- [ ] b\n");
+  });
+
+  it("does not leave two blank lines where the block was", () => {
+    expect(removeTask("## H\n\n- [ ] a\n\n## I\n\n- [ ] b\n", 0)).toBe("## H\n\n## I\n\n- [ ] b\n");
+  });
+
+  it("empties a document that held only that task, and refuses an ord it does not have", () => {
+    expect(removeTask("- [ ] only\n", 0)).toBe("");
+    expect(removeTask("- [ ] only\n", 3)).toBeNull();
   });
 });
 

@@ -24,17 +24,26 @@
  *
  * **Ticking a parent does not tick its children.** Each line is its own
  * checkbox in the document, and a cascade would write lines you never ticked.
+ *
+ * **The right-click menu** (`R-L18`, asked 2026-10-21: *"how can I delete a
+ * task? how can I navigate to the source where I define the task"*) holds the
+ * actions a row has: open in Notes, mark done or open, copy the words, and
+ * delete — which turns the row into its own confirmation, the way the scratch
+ * panel's delete does, and takes the nested sub-tasks with the line because a
+ * nested checkbox left behind would attach to whatever is above it.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, NotebookPen, Plus } from "lucide-react";
 import type { Task } from "@/wire/types";
 import { sessionLabel } from "@/wire/types";
-import { foldersOf, keyOf, openUnder, rowsOf, type TaskFolder, type TaskGroup, type TaskRow } from "@/lib/taskTree";
-import { addTask, destinationFor, openNote, type Target } from "@/lib/notes";
+import { foldersOf, keyOf, openUnder, rowsOf, totalUnder, type TaskFolder, type TaskGroup, type TaskRow } from "@/lib/taskTree";
+import { addTask, deleteTask, destinationFor, openNote, type Target } from "@/lib/notes";
 import { repoName } from "@/lib/gitSync";
+import { copyText } from "@/lib/gitActions";
 import { useStore } from "@/store";
-import { Dim, IconButton, Segmented } from "@/ui/primitives";
+import { Button, Dim, IconButton, Segmented } from "@/ui/primitives";
+import { ContextMenu, MenuItem, MenuSeparator } from "@/ui/Menu";
 import { cn } from "@/lib/cn";
 import { interactive, motion } from "@/ui/styles";
 
@@ -70,6 +79,8 @@ export function TasksTool() {
   const [showClosed, setShowClosed] = useState(false);
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<Target | null>(null);
+  // The task whose row is asking "delete?" — one at a time, in place.
+  const [asking, setAsking] = useState<string | null>(null);
   const box = useRef<HTMLInputElement>(null);
   // One set for folders, sections and tasks, keyed differently. They never
   // collide and they behave identically, so two pieces of state would be two
@@ -198,10 +209,48 @@ export function TasksTool() {
     const t: Task = row.node.task;
     const key = keyOf(t);
     const kids = row.node.children.length > 0;
+    const under = totalUnder(row.node) - 1;
     const at = t.done ? closedAt.get(`${t.note_id}\u001f${t.text}`) : undefined;
-    return (
+    const tick = () => {
+      keep(key);
+      tickTask(t.note_id, t.ord, !t.done);
+    };
+
+    if (asking === key) {
+      return (
+        <div
+          key={key}
+          data-task-key={key}
+          className="flex min-h-7 items-center gap-2 rounded-sm bg-[var(--state-focus)] py-0.5 pr-1"
+          style={{ paddingLeft: `${base + row.node.depth * 16 + 8}px` }}
+        >
+          <span className="min-w-0 flex-1 truncate text-sm">
+            delete “{t.text || "an empty checkbox"}”
+            {under > 0 && (
+              <Dim className="ml-1 text-xs">
+                and {under} sub-task{under === 1 ? "" : "s"}
+              </Dim>
+            )}
+            ?
+          </span>
+          <Button
+            variant="outline"
+            onClick={() => {
+              deleteTask(t.note_id, t.ord);
+              setAsking(null);
+            }}
+          >
+            delete
+          </Button>
+          <Button variant="outline" onClick={() => setAsking(null)}>
+            keep
+          </Button>
+        </div>
+      );
+    }
+
+    const body = (
       <div
-        key={key}
         data-task-key={key}
         className={cn(
           "group flex min-h-7 items-start gap-0.5 rounded-sm pr-1 hover:bg-[var(--state-hover)]",
@@ -231,10 +280,7 @@ export function TasksTool() {
           aria-checked={t.done}
           aria-label={`${t.done ? "mark open" : "mark done"}: ${t.text || "an empty checkbox"}`}
           className={cn("grid h-6 w-6 shrink-0 place-items-center rounded-sm", interactive)}
-          onClick={() => {
-            keep(key);
-            tickTask(t.note_id, t.ord, !t.done);
-          }}
+          onClick={tick}
         >
           <span
             className={cn(
@@ -267,6 +313,21 @@ export function TasksTool() {
         </IconButton>
       </div>
     );
+
+    return (
+      <ContextMenu key={key} trigger={body}>
+        <>
+          <MenuItem onSelect={() => openNote(t.note_id, t.ord)}>Open in Notes</MenuItem>
+          <MenuItem onSelect={tick}>{t.done ? "Mark open" : "Mark done"}</MenuItem>
+          <MenuSeparator />
+          <MenuItem onSelect={() => copyText(t.text)}>Copy task text</MenuItem>
+          <MenuSeparator />
+          <MenuItem danger onSelect={() => setAsking(key)}>
+            {under > 0 ? `Delete with ${under} sub-task${under === 1 ? "" : "s"}…` : "Delete…"}
+          </MenuItem>
+        </>
+      </ContextMenu>
+    );
   };
 
   const sectionBlock = (f: TaskFolder, g: TaskGroup, i: number) => {
@@ -280,8 +341,7 @@ export function TasksTool() {
     const folded = shut.has(key);
     const sectionDone = g.total - g.open;
     const chosen = isTarget(f.noteId, g.name, occurrenceOf(f, i));
-    return (
-      <div key={key}>
+    const header = (
         <div className="flex items-center gap-0.5 pr-2 pl-5">
           <button
             type="button"
@@ -305,6 +365,16 @@ export function TasksTool() {
             {g.open === 0 ? `all ${g.total} done` : `${g.open} open${showDone && sectionDone > 0 ? ` · ${sectionDone} done` : ""}`}
           </Dim>
         </div>
+    );
+    const firstOrd = g.nodes[0]?.task.ord;
+    return (
+      <div key={key}>
+        <ContextMenu trigger={header}>
+          <>
+            <MenuItem onSelect={() => openNote(f.noteId, firstOrd)}>Open in Notes</MenuItem>
+            <MenuItem onSelect={() => pick(f, i)}>{chosen ? "Stop sending new tasks here" : "New tasks go here"}</MenuItem>
+          </>
+        </ContextMenu>
         {!folded && rows.map((r) => taskRow(r, 36))}
       </div>
     );
@@ -316,8 +386,7 @@ export function TasksTool() {
     const chosen = isTarget(f.noteId, null, 0);
     const owner = f.note?.session_id ? sessions[f.note.session_id] : undefined;
     const tag = f.note?.repo ? repoName(f.note.repo) : null;
-    return (
-      <div key={key} className="pt-1.5">
+    const header = (
         <div className="flex items-center gap-1 pr-2 pl-1">
           <button
             type="button"
@@ -353,6 +422,17 @@ export function TasksTool() {
             {f.open === 0 ? `all ${f.total} done` : `${f.open} open${showDone && f.done > 0 ? ` · ${f.done} done` : ""}`}
           </Dim>
         </div>
+    );
+    return (
+      <div key={key} className="pt-1.5">
+        <ContextMenu trigger={header}>
+          <>
+            <MenuItem onSelect={() => openNote(f.noteId)}>Open note in Notes</MenuItem>
+            <MenuItem onSelect={() => pick(f, null)}>{chosen ? "Stop sending new tasks here" : "New tasks go here"}</MenuItem>
+            <MenuSeparator />
+            <MenuItem onSelect={() => copyText(f.title)}>Copy note title</MenuItem>
+          </>
+        </ContextMenu>
         {!folded && f.sections.map((g, i) => sectionBlock(f, g, i))}
       </div>
     );

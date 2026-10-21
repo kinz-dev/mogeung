@@ -1,7 +1,7 @@
 ---
 title: Data model
 status: active
-updated: 2026-10-19
+updated: 2026-10-21
 covers:
   - crates/mogeung-core/src/session.rs
   - crates/mogeung-core/src/change.rs
@@ -111,7 +111,10 @@ SQLite at `~/.mogeung/mogeung.db`:
   `- [ ]` lines in each document are, how deeply each is nested, and the
   heading above it (`R-L3`, `R-L10`)
 - `task_events(note_id, text, done, at)` — append-only, the history a checkbox
-  cannot keep (`R-L3`)
+  cannot keep (`R-L3`). Read two ways since `R-L17`: `closed_since` counts
+  the closures since local midnight, distinct on the words, and
+  `closures_since` lists them newest first with the latest `at` per task, so
+  the panel's footer can open the list behind its count; `at` is Unix seconds
 - `teams(id, created, updated, json)` — a team of seats and its policy, the
   whole struct as a JSON blob with the seats inside it (`R-P3`, feature 0051);
   a blob for the reason sessions are one, so a seat gaining a field needs no

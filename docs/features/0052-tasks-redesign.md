@@ -2,7 +2,7 @@
 title: The Tasks panel, redesigned — the document is the folder
 status: active
 updated: 2026-10-21
-roadmap: [R-L12, R-L13, R-L14, R-L15, R-L16, R-L17]
+roadmap: [R-L12, R-L13, R-L14, R-L15, R-L16, R-L17, R-L18]
 depends_on: [A6, A27]
 ---
 
@@ -127,6 +127,9 @@ are not tasks. Notes stay daemon-owned and mirrored one way.
 - A second task model: ids, due dates, assignees, priorities, drag to
   reorder. None can be written on the line.
 - Editing a task's words in the panel; that is the Notes editor's job.
+  Deleting one is in, since `R-L18` (asked the day the panel shipped): the
+  right-click menu's *Delete…* rewrites the document without the line and
+  its sub-tasks, after asking in place.
 - Merging tasks across notes, or a task belonging to more than one session.
 - Tasks in the Attention list beside a session. A question for after this
   has been used: the chip and the filter are the first step towards it.
@@ -235,6 +238,13 @@ the document, and a task's session is its note's tag.
   the same note. The task-line reader in the window (`scanLines`) mirrors the
   daemon's rules for fences, quotes and indented code; a line it reads
   differently would scroll the editor to the wrong line, nothing worse.
+- 2026-10-21, later. The first use asked two things the brief had not:
+  *how do I delete a task* and *how do I get to where I wrote it*. Both
+  existed only as tricks — the hover-revealed *open in Notes* button, and
+  editing the line in Notes — so `R-L18` gives a row a right-click menu with
+  both, plus mark and copy; the folder and section headers get one for
+  opening the note and aiming the add box. A deleted parent takes its
+  sub-tasks, named in the menu, for the reason `removeTask` states.
 - 2026-10-21. The critique's score and findings are kept under
   `.impeccable/critique/` (gitignored); the mock is a design canvas the owner
   holds. The owner's real corpus at the time of the review: two notes with

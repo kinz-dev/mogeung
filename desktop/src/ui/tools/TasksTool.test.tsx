@@ -403,3 +403,79 @@ describe("nesting and grouping", () => {
     expect(screen.queryByText("milk")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * `R-L18`, asked 2026-10-21: *"how can I delete a task? how can I navigate to
+ * the source where I define the task, we need to enhance the right-click
+ * menu"*. The menu holds what a row can do; the delete asks in place, the way
+ * the scratch panel's does, and takes the nested sub-tasks with the line.
+ */
+describe("the right-click menu", () => {
+  const nested = () =>
+    useStore.setState({
+      notes: [note("n1", "# Plan\n\n- [ ] ship it\n  - [ ] write it\n- [ ] milk\n")],
+      tasks: [task({ ord: 0, text: "ship it" }), task({ ord: 1, text: "write it", depth: 1 }), task({ ord: 2, text: "milk" })],
+    });
+
+  it("offers open, mark, copy and delete on a task", async () => {
+    nested();
+    render(<TasksTool />);
+    fireEvent.contextMenu(screen.getByText("milk"));
+    for (const label of ["Open in Notes", "Mark done", "Copy task text", "Delete…"]) {
+      expect(await screen.findByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("opens the note at the task's line from the menu", async () => {
+    nested();
+    render(<TasksTool />);
+    fireEvent.contextMenu(screen.getByText("milk"));
+    fireEvent.click(await screen.findByText("Open in Notes"));
+    expect(useStore.getState().noteOpenId).toBe("n1");
+    expect(useStore.getState().noteReveal).toEqual({ id: "n1", ord: 2 });
+  });
+
+  it("asks before deleting, names the sub-tasks that go with it, and rewrites the document", async () => {
+    nested();
+    render(<TasksTool />);
+    fireEvent.contextMenu(screen.getByText("ship it"));
+    fireEvent.click(await screen.findByText("Delete with 1 sub-task…"));
+
+    expect(saves()).toEqual([]);
+    expect(screen.getByText(/and 1 sub-task/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("delete"));
+    expect(saves()[0]).toMatchObject({ id: "n1", body: "# Plan\n\n- [ ] milk\n" });
+  });
+
+  it("keeps the task when the confirmation is declined", async () => {
+    nested();
+    render(<TasksTool />);
+    fireEvent.contextMenu(screen.getByText("milk"));
+    fireEvent.click(await screen.findByText("Delete…"));
+    fireEvent.click(screen.getByText("keep"));
+    expect(saves()).toEqual([]);
+    expect(screen.getByText("milk")).toBeInTheDocument();
+  });
+
+  it("marks a task done from the menu", async () => {
+    nested();
+    render(<TasksTool />);
+    fireEvent.contextMenu(screen.getByText("milk"));
+    fireEvent.click(await screen.findByText("Mark done"));
+    expect(sent).toContainEqual({ cmd: "task_set", note_id: "n1", ord: 2, done: true });
+  });
+
+  it("lets a folder open its note and take new tasks", async () => {
+    nested();
+    render(<TasksTool />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Plan" }));
+    fireEvent.click(await screen.findByText("New tasks go here"));
+    expect(screen.getByLabelText("where a new task goes: Plan")).toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Plan" }));
+    fireEvent.click(await screen.findByText("Open note in Notes"));
+    expect(useStore.getState().noteOpenId).toBe("n1");
+  });
+});
+
