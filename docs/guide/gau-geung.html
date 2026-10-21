@@ -121,7 +121,7 @@
   <main>
     <h1>Gau Geung, the team mode</h1>
     <p class="sub">Run a team of agents from mogeung: four CLIs in four worktrees, telling each other what they did, with you holding the budget and the switch.</p>
-    <div class="status"><span class="dot"></span> built 2026-10-10 on branch <code>gau-geung</code> · every part is awaiting its first real boot</div>
+    <div class="status"><span class="dot"></span> built 2026-10-10 · on <code>main</code> since 2026-10-12 · first real team booted 2026-10-11; every row stays ⏳ until it is seen to work in use</div>
 
     <h2 id="what">What Gau Geung is</h2>
     <p>mogeung watches the sessions you run and tells you which one needs you. It never starts, steers or stops an agent it did not start itself. Gau Geung is the one place it does start them: a <strong>team</strong> is a named set of <strong>seats</strong>, each seat an agent CLI the daemon launches in a tmux pane of its own, in a worktree of its own, configured by flags at launch. A seat is <em>owned</em>: mogeung may send to it, wake it, watch it, restart it and stop it. Every session you start by hand stays exactly as it was: observed, never touched.</p>
@@ -144,7 +144,7 @@
       <li>At least one of the four CLIs on <code>PATH</code>: Claude Code, Codex, Qwen Code, opencode.</li>
       <li>For handovers only: a model endpoint in <code>~/.mogeung/config.toml</code> (<code>model_url</code>, and <code>allow_remote_model</code> if it is not on this machine). Without one, seats start without a handover and the log says so.</li>
     </ul>
-    <div class="note"><span class="lbl">Running the branch</span>Gau Geung lives on branch <code>gau-geung</code> until it is merged. Run <code>./scripts/install.sh</code> from a checkout of that branch, or set <code>update_branch = "gau-geung"</code> in <code>~/.mogeung/config.toml</code> so the updater follows it.</div>
+    <div class="note"><span class="lbl">Where it lives</span>Gau Geung is on <code>main</code> since 2026-10-12 (PR #7); the branch <code>gau-geung</code> is history. Run <code>./scripts/install.sh</code> from a checkout of <code>main</code>, and an installed window updates itself from there. If you set <code>update_branch = "gau-geung"</code> in <code>~/.mogeung/config.toml</code> while it lived on its branch, set it to <code>"main"</code> or remove the line, or the updater will wait on a branch that no longer moves.</div>
     <div class="note"><span class="lbl">Your homes are never written</span>Nothing is written under <code>~/.claude</code>, <code>~/.claude.json</code>, <code>~/.codex</code>, <code>~/.qwen</code> or opencode's directories, ever. A seat is configured through its CLI's own flags at launch; everything it needs kept lives under <code>~/.mogeung</code>. A seat that needs a home of its own gets one there, opt-in, per seat.</div>
 
     <h2 id="define">Define a team</h2>
