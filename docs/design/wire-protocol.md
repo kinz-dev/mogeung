@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-20
+updated: 2026-10-21
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -672,7 +672,7 @@ address guess rather than refusing everything; pinned both ways.
 
 | Command | Carries | Answered by | Hop |
 |---|---|---|---|
-| `Follow` | `id` (the window's connection id; the same again replaces), `name`, `url`, `token` (its own field, never in the URL), `allow_writes` | `Peers` | here |
+| `Follow` | `id` (the window's connection id; the same again replaces), `name`, `url`, `token` (its own field, never in the URL), `allow_writes` — absent, off; the window asks for it **on** for a new follow since 2026-10-21 (`R-J144`, ADR-0013's amendment of that date) | `Peers` | here |
 | `Unfollow` | `id` | `Peers` | here |
 | `SetPeerWrites` | `id`, `allow` — the per-follow *allow changes* consent | `Peers` | here |
 | `FetchPeers` | — | `Peers`, to the asker; **nothing** to a client from another machine | here |
