@@ -211,7 +211,7 @@ export function Rail() {
                       {/* A heading rather than a styled span: the rail holds
                           several of these now, and the only thing telling you
                           where one tool ends and the next begins is this line. */}
-                      <h2 className="text-2xs font-semibold tracking-wider text-[var(--dim)] uppercase">
+                      <h2 className="text-xs font-semibold tracking-wider text-[var(--dim)] uppercase">
                         {TOOLS[tool].label}
                       </h2>
                       <div className="ml-auto">

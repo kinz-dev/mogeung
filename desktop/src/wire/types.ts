@@ -1063,6 +1063,17 @@ export interface Task {
   group?: string;
 }
 
+/**
+ * One closure since local midnight. `R-L17`. A task's identity is its words,
+ * so a line ticked twice today is one entry carrying the later time.
+ */
+export interface Closure {
+  note_id: string;
+  text: string;
+  /** Unix seconds. */
+  at: number;
+}
+
 // -- Teams. `R-P3`, feature 0051, pillar P. A hand-mirror of `mogeung-core`'s
 // `team.rs`: a definition the daemon holds, never a command line (ADR-0025's
 // 2026-10-09 amendment). Snake case on the wire throughout.
@@ -1846,7 +1857,7 @@ export type ServerMsg =
    */
   | { ev: "team_booted"; team_id: string; started: string[]; revived: string[]; skipped: string[] }
   /** Every scratch file's name, newest first. `R-L5`. Broadcast. */
-  | { ev: "tasks"; tasks: Task[]; closed_today: number }
+  | { ev: "tasks"; tasks: Task[]; closed_today: number; closed?: Closure[] }
   | { ev: "scratches"; names: string[]; folders?: string[] }
   /**
    * One scratch file, to the asker. `fresh` is true exactly once, in answer

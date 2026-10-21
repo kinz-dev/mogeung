@@ -1,6 +1,6 @@
 ---
 title: The Tasks panel, redesigned — the document is the folder
-status: draft
+status: active
 updated: 2026-10-21
 roadmap: [R-L12, R-L13, R-L14, R-L15, R-L16, R-L17]
 depends_on: [A6, A27]
@@ -222,6 +222,19 @@ the document, and a task's session is its note's tag.
 
 *Filled during implementation. Surprises, dead ends, things the plan got wrong.*
 
+- 2026-10-21, built, the same day the brief was confirmed. Three things the
+  plan did not say, decided while building: **folders sort by the note's
+  creation, not its last edit** — the acceptance list says *the order the
+  Notes list uses*, and that order moves a folder every time you tick inside
+  it, which is the panel moving under your hand; the owner can reverse this
+  with one comparator. **A row you just ticked stays three seconds**, checked
+  and struck, before it folds away: the first build hid it at once, which was
+  the old panel's vanishing row in a new coat, and a test caught it. **The
+  repository's note is titled `Tasks — <repo>`** and found again by that
+  title and its `repo` tag, so a second session in the same checkout lands in
+  the same note. The task-line reader in the window (`scanLines`) mirrors the
+  daemon's rules for fences, quotes and indented code; a line it reads
+  differently would scroll the editor to the wrong line, nothing worse.
 - 2026-10-21. The critique's score and findings are kept under
   `.impeccable/critique/` (gitignored); the mock is a design canvas the owner
   holds. The owner's real corpus at the time of the review: two notes with

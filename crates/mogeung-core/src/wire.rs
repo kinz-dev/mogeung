@@ -1233,6 +1233,18 @@ pub struct Task {
     pub group: Option<String>,
 }
 
+/// One closure since local midnight: the words, the document, and when.
+/// `R-L17`. A task's identity is its words (`R-L3`), so a line ticked,
+/// unticked and ticked again is one entry carrying the later time — the list
+/// behind the count the footer always had.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Closure {
+    pub note_id: String,
+    pub text: String,
+    /// Unix seconds, like `task_events.at`.
+    pub at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
@@ -1679,6 +1691,10 @@ pub enum ServerMsg {
         /// Closures since local midnight — the question a checkbox cannot
         /// answer, which is why the derived half exists at all.
         closed_today: u32,
+        /// The same closures as a list, newest first. `R-L17`. `default` so a
+        /// window from before the field still parses the event.
+        #[serde(default)]
+        closed: Vec<Closure>,
     },
     Scratches {
         names: Vec<String>,

@@ -25,7 +25,8 @@
  * to it is the one thing this panel must not do.
  */
 
-import type { Task } from "@/wire/types";
+import type { Note, Task } from "@/wire/types";
+import { noteTitle } from "@/lib/notes";
 
 export interface TaskNode {
   task: Task;
@@ -111,12 +112,18 @@ export interface TaskRow {
  */
 export function rowsOf(
   nodes: readonly TaskNode[],
-  opts: { showDone: boolean; collapsed: ReadonlySet<string> },
+  opts: {
+    showDone: boolean;
+    collapsed: ReadonlySet<string>;
+    /** Keys that stay on screen done or not — a row just ticked, kept a
+     *  moment so a slip can be unticked. `R-L13`. */
+    keep?: ReadonlySet<string>;
+  },
 ): TaskRow[] {
   const out: TaskRow[] = [];
 
   const visible = (n: TaskNode): boolean =>
-    (!n.task.done || opts.showDone) || n.children.some(visible);
+    (!n.task.done || opts.showDone || opts.keep?.has(keyOf(n.task)) === true) || n.children.some(visible);
 
   const walk = (list: readonly TaskNode[]) => {
     for (const n of list) {
@@ -139,3 +146,67 @@ export function openUnder(n: TaskNode): number {
 export function totalUnder(n: TaskNode): number {
   return 1 + n.children.reduce((sum, c) => sum + totalUnder(c), 0);
 }
+
+/**
+ * A document as a folder: its title, the note behind it, and its headings as
+ * sections inside it. `R-L12`.
+ *
+ * Until 2026-10-21 the panel grouped by heading across every document at
+ * once, in the daemon's `note_id` order — so a headingless note's tasks drew
+ * flush under the previous note's last heading, two notes whose adjacent
+ * sections shared a name merged, and the order was one nobody could predict.
+ * With the owner's own two notes, *Open this panel with Alt+T* read as a
+ * Mogeung task. The document is the unit now: two notes never merge, whatever
+ * their headings say.
+ */
+export interface TaskFolder {
+  noteId: string;
+  /** `null` when the note has gone and only its history keeps the tasks. */
+  note: Note | null;
+  title: string;
+  /** The headings inside the note, in document order; `name: null` first
+   *  when tasks sit above the first heading. */
+  sections: TaskGroup[];
+  open: number;
+  done: number;
+  total: number;
+}
+
+/**
+ * Fold a flat task list into folders, one per document, in the order the
+ * notes were **created**, newest first.
+ *
+ * Creation rather than the Notes list's *updated* order, on purpose: a tick
+ * rewrites the note and bumps `updated`, and a folder that jumped to the top
+ * every time you ticked inside it would be the panel moving under your hand.
+ * A note the list no longer holds sorts last, under a name that says so.
+ */
+export function foldersOf(tasks: readonly Task[], notes: readonly Note[]): TaskFolder[] {
+  const byNote = new Map<string, Task[]>();
+  for (const t of tasks) {
+    const list = byNote.get(t.note_id);
+    if (list) list.push(t);
+    else byNote.set(t.note_id, [t]);
+  }
+  const created = new Map(notes.map((n) => [n.id, n]));
+  const out: TaskFolder[] = [];
+  for (const [noteId, list] of byNote) {
+    const note = created.get(noteId) ?? null;
+    const done = list.filter((t) => t.done).length;
+    out.push({
+      noteId,
+      note,
+      title: note ? noteTitle(note.body) || "untitled" : "a note that was deleted",
+      sections: groupsOf(list),
+      open: list.length - done,
+      done,
+      total: list.length,
+    });
+  }
+  out.sort((a, b) => {
+    if (!a.note || !b.note) return a.note ? -1 : b.note ? 1 : a.noteId.localeCompare(b.noteId);
+    return b.note.created - a.note.created || a.noteId.localeCompare(b.noteId);
+  });
+  return out;
+}
+

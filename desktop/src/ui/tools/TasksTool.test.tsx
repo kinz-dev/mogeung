@@ -1,26 +1,25 @@
 /**
  * The task list is a **view**, and the document is the thing. `R-L3`,
- * ADR-0015.
+ * ADR-0015 — and since 2026-10-21 the panel of feature 0052 (`R-L12`–`R-L17`).
  *
- * The assertion that matters most is the one about direction: ticking a box
- * here sends `task_set`, which rewrites the markdown, and the derived table is
- * rebuilt from what the document then says. There is deliberately no path that
- * marks a row locally — a list that could disagree with its documents is the
- * second source of truth the ADR exists to refuse, and it would look right on
- * screen while being wrong on disk.
+ * The assertion that matters most is still the one about direction: ticking a
+ * box sends `task_set`, which rewrites the markdown, and the derived table is
+ * rebuilt from what the document then says. The box now flips at once, but
+ * the store's list is untouched until the broadcast: a drawing, never a second
+ * record.
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useStore } from "@/store";
 import { defaultPrefs } from "@/store/prefs";
 import { TasksTool } from "@/ui/tools/TasksTool";
-import type { Note, Task } from "@/wire/types";
+import type { Note, Session, Task } from "@/wire/types";
 
 const sent: unknown[] = [];
 
-const note = (id: string, body: string): Note =>
-  ({ id, body, created: 1, updated: 1 }) as Note;
+const note = (id: string, body: string, over: Partial<Note> = {}): Note =>
+  ({ id, body, created: 1, updated: 1, ...over }) as Note;
 
 const task = (over: Partial<Task> = {}): Task => ({
   note_id: "n1",
@@ -30,6 +29,9 @@ const task = (over: Partial<Task> = {}): Task => ({
   ...over,
 });
 
+const saves = () => sent.filter((m) => (m as { cmd?: string }).cmd === "note_save") as { id: string; body: string; session_id: string | null; repo: string | null }[];
+const sets = () => sent.filter((m) => (m as { cmd?: string }).cmd === "task_set");
+
 beforeEach(() => {
   cleanup();
   sent.length = 0;
@@ -37,8 +39,17 @@ beforeEach(() => {
     prefs: defaultPrefs(),
     notes: [note("n1", "# Plan\n\n- [ ] write the thing\n")],
     tasks: [],
+    tasksLoaded: true,
     closedToday: 0,
+    closed: [],
+    pendingTicks: {},
+    pendingAdd: null,
+    justAdded: null,
     noteOpenId: null,
+    noteReveal: null,
+    sessions: {},
+    selected: null,
+    focusRail: null,
     send: ((m: unknown) => sent.push(m)) as never,
   });
 });
@@ -49,76 +60,144 @@ describe("the tasks panel", () => {
     expect(sent).toContainEqual({ cmd: "task_list" });
   });
 
-  it("says there are none, and what makes one", () => {
+  /** *Not asked yet* must not look like *none*: the old panel flashed the empty state on every open. */
+  it("shows only the box until the list has arrived", () => {
+    useStore.setState({ tasksLoaded: false });
     render(<TasksTool />);
-    expect(screen.getByText(/no tasks/i)).toBeInTheDocument();
-    expect(screen.getByText(/a checkbox in a document/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("add a task")).toBeInTheDocument();
+    expect(screen.queryByText(/no tasks yet/i)).not.toBeInTheDocument();
   });
 
-  it("lists the open ones with the document they are in", () => {
-    useStore.setState({ tasks: [task()] });
+  it("says there are none, and what to do, in plain words", () => {
     render(<TasksTool />);
+    expect(screen.getByText(/no tasks yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/press Enter/)).toBeInTheDocument();
+  });
 
-    expect(screen.getByText("write the thing")).toBeInTheDocument();
-    // The document's first line, with the heading marker off: a label is not a
-    // rendering, and a document has no title field to read instead.
-    expect(screen.getByText("Plan")).toBeInTheDocument();
+  /** `R-L12`: the document is the folder, and its headings sit inside it. */
+  it("draws each note as a folder with its headings inside, newest note first", () => {
+    useStore.setState({
+      notes: [note("n1", "# Plan\n\n## Work\n\n- [ ] filed", { created: 2 }), note("n2", "Dentist on Thursday\n\n- [ ] loose", { created: 1 })],
+      tasks: [task({ note_id: "n1", text: "filed", group: "Work" }), task({ note_id: "n2", text: "loose" })],
+    });
+    const { container } = render(<TasksTool />);
+
+    expect(screen.getByRole("button", { name: "Plan" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Work" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dentist on Thursday" })).toBeInTheDocument();
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Plan")).toBeLessThan(text.indexOf("Dentist"));
+    // The headingless note's task sits under its own folder, after it.
+    expect(text.indexOf("Dentist on Thursday")).toBeLessThan(text.indexOf("loose"));
+  });
+
+  it("keeps two notes with the same heading as two folders", () => {
+    useStore.setState({
+      notes: [note("n1", "# A"), note("n2", "# B")],
+      tasks: [task({ note_id: "n1", text: "one", group: "Work" }), task({ note_id: "n2", text: "two", group: "Work" })],
+    });
+    render(<TasksTool />);
+    expect(screen.getAllByRole("button", { name: "Work" })).toHaveLength(2);
+  });
+
+  it("shows the note's repository on the folder", () => {
+    useStore.setState({ notes: [note("n1", "# Plan", { repo: "/home/me/proj" })], tasks: [task()] });
+    render(<TasksTool />);
+    expect(screen.getByText("proj")).toBeInTheDocument();
+  });
+
+  it("survives a task whose document has gone", () => {
+    useStore.setState({ tasks: [task({ note_id: "vanished" })], notes: [] });
+    render(<TasksTool />);
+    expect(screen.getByRole("button", { name: "a note that was deleted" })).toBeInTheDocument();
   });
 
   /**
    * **The direction that matters.** A tick is a request to rewrite the
-   * document; nothing here marks the row itself.
+   * document. The box flips at once (`R-L13`), the store's list does not.
    */
-  it("ticking sends task_set and changes nothing locally", () => {
+  it("ticking sends task_set, flips the box at once, keeps the row a moment, and changes the list not at all", () => {
     useStore.setState({ tasks: [task()] });
     render(<TasksTool />);
 
-    fireEvent.click(screen.getByLabelText("close write the thing"));
+    const box = screen.getByRole("checkbox", { name: "mark done: write the thing" });
+    expect(box).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(box);
 
-    expect(sent).toContainEqual({
-      cmd: "task_set",
-      note_id: "n1",
-      ord: 0,
-      done: true,
-    });
+    expect(sent).toContainEqual({ cmd: "task_set", note_id: "n1", ord: 0, done: true });
+    expect(screen.getByRole("checkbox", { name: "mark open: write the thing" })).toHaveAttribute("aria-checked", "true");
     expect(useStore.getState().tasks[0].done).toBe(false);
   });
 
-  it("unticking a closed one asks for the opposite", () => {
-    useStore.setState({ tasks: [task({ done: true })] });
+  it("goes back to what the document says when the daemon refuses", () => {
+    useStore.setState({ tasks: [task()] });
     render(<TasksTool />);
-    fireEvent.click(screen.getByText(/show 1 done/i));
+    fireEvent.click(screen.getByRole("checkbox", { name: "mark done: write the thing" }));
+    expect(useStore.getState().pendingTicks).toEqual({ "n1:0": true });
 
-    fireEvent.click(screen.getByLabelText("reopen write the thing"));
-
-    expect(sent).toContainEqual({
-      cmd: "task_set",
-      note_id: "n1",
-      ord: 0,
-      done: false,
-    });
+    act(() => useStore.setState({ pendingTicks: {} }));
+    expect(screen.getByRole("checkbox", { name: "mark done: write the thing" })).toHaveAttribute("aria-checked", "false");
   });
 
-  /**
-   * A checklist that keeps its corpses at eye level stops being a list of what
-   * to do.
-   */
-  it("keeps closed tasks behind a count rather than in the list", () => {
+  /** The P0 of the critique: a near miss on the tick used to open the note. */
+  it("does nothing when the words are clicked", () => {
+    useStore.setState({ tasks: [task()] });
+    render(<TasksTool />);
+    fireEvent.click(screen.getByText("write the thing"));
+    expect(useStore.getState().noteOpenId).toBeNull();
+    expect(sets()).toEqual([]);
+  });
+
+  /** *"Where did I write this"* is one explicit click, and it names the line. */
+  it("opens the document a task lives in, at its line, with the Notes tool", () => {
+    useStore.setState({ tasks: [task({ ord: 3 })] });
+    useStore.getState().setPrefs({ rail: [] });
+    render(<TasksTool />);
+
+    fireEvent.click(screen.getAllByLabelText("open in Notes")[0]);
+
+    expect(useStore.getState().noteOpenId).toBe("n1");
+    expect(useStore.getState().noteReveal).toEqual({ id: "n1", ord: 3 });
+    expect(useStore.getState().prefs.rail).toContain("notes");
+  });
+
+  it("keeps done tasks behind the count in the footer, shown in place on request", () => {
     useStore.setState({ tasks: [task(), task({ ord: 1, text: "done one", done: true })] });
     render(<TasksTool />);
 
     expect(screen.queryByText("done one")).not.toBeInTheDocument();
-    expect(screen.getByText(/show 1 done/i)).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "1 done" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
 
-    fireEvent.click(screen.getByText(/show 1 done/i));
+    fireEvent.click(toggle);
     expect(screen.getByText("done one")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(within(screen.getByRole("status")).getByText("1 open")).toBeInTheDocument();
   });
 
-  /** The one thing the markdown cannot say, so the one number worth the strip. */
-  it("says how many were closed today", () => {
-    useStore.setState({ tasks: [task()], closedToday: 3 });
+  it("unticking a done one asks for the opposite", () => {
+    useStore.setState({ tasks: [task({ done: true })] });
     render(<TasksTool />);
-    expect(screen.getByText("3 closed today")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "1 done" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "mark open: write the thing" }));
+    expect(sent).toContainEqual({ cmd: "task_set", note_id: "n1", ord: 0, done: false });
+  });
+
+  /** `R-L17`: the one thing the markdown cannot say, and now a list rather than only a count. */
+  it("opens the closures of the day with their notes", () => {
+    useStore.setState({
+      tasks: [task(), task({ ord: 1, text: "shipped", done: true })],
+      closedToday: 1,
+      closed: [{ note_id: "n1", text: "shipped", at: 1_760_000_000 }],
+    });
+    render(<TasksTool />);
+
+    const btn = screen.getByRole("button", { name: "1 closed today" });
+    expect(btn).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(btn);
+    const list = screen.getByLabelText("closed today");
+    expect(within(list).getByText("shipped")).toBeInTheDocument();
+    expect(within(list).getByText(/Plan ·/)).toBeInTheDocument();
   });
 
   it("says so plainly when nothing was closed", () => {
@@ -127,53 +206,15 @@ describe("the tasks panel", () => {
     expect(screen.getByText("nothing closed today")).toBeInTheDocument();
   });
 
-  /**
-   * *"Where did I write this"* has to be one click, and it must not set state
-   * behind a panel that is shut — the `R-J31` failure, one panel over.
-   */
-  it("opens the document a task lives in, and the Notes tool with it", () => {
-    useStore.setState({ tasks: [task()] });
-    useStore.getState().setPrefs({ rail: [] });
+  it("puts the cursor in the box when the panel is opened by its chord", () => {
     render(<TasksTool />);
-
-    fireEvent.click(screen.getByText("write the thing"));
-
-    expect(useStore.getState().noteOpenId).toBe("n1");
-    expect(useStore.getState().prefs.rail).toContain("notes");
-  });
-
-  /** The box and the row are different questions and must not be one target. */
-  it("ticking does not also open the document", () => {
-    useStore.setState({ tasks: [task()] });
-    render(<TasksTool />);
-
-    fireEvent.click(screen.getByLabelText("close write the thing"));
-
-    expect(useStore.getState().noteOpenId).toBeNull();
-  });
-
-  /** A note can be deleted while its history keeps the closure. */
-  it("survives a task whose document has gone", () => {
-    useStore.setState({ tasks: [task({ note_id: "vanished" })], notes: [] });
-    render(<TasksTool />);
-    expect(screen.getByText(/a document that has gone/)).toBeInTheDocument();
+    act(() => useStore.setState({ focusRail: "tasks" }));
+    expect(screen.getByLabelText("add a task")).toHaveFocus();
+    expect(useStore.getState().focusRail).toBeNull();
   });
 });
 
 describe("making a task", () => {
-  /**
-   * Reported 2026-09-10: *"I can't get any task display. it always show no
-   * tasks"* — and the panel was right, because none of the user's fourteen
-   * notes held a checkbox and **nothing in the window could put one there**.
-   * A list of checkboxes you can only fill by knowing markdown and finding
-   * another panel first is a list that reads as broken.
-   */
-  it("offers a box even when there is nothing to list", () => {
-    render(<TasksTool />);
-    expect(screen.getByLabelText("add a task")).toBeInTheDocument();
-    expect(screen.getByText(/no tasks yet/i)).toBeInTheDocument();
-  });
-
   /**
    * **It writes a document**, because ADR-0015 says there is no task outside a
    * `- [ ]` line. An add that did anything else would be a second kind of task.
@@ -186,207 +227,179 @@ describe("making a task", () => {
     fireEvent.change(box, { target: { value: "buy milk" } });
     fireEvent.keyDown(box, { key: "Enter" });
 
-    const save = sent.find((m) => (m as { cmd?: string }).cmd === "note_save") as {
-      id: string;
-      body: string;
-    };
-    expect(save.id).toBe("");
-    expect(save.body).toBe("# Tasks\n\n- [ ] buy milk\n");
+    expect(saves()[0]).toMatchObject({ id: "", body: "# Tasks\n\n- [ ] buy milk\n", session_id: null, repo: null });
   });
 
-  it("appends to the Tasks document once it exists", () => {
-    useStore.setState({ notes: [note("t1", "# Tasks\n\n- [ ] first\n")] });
+  /** `R-L14`: the top of the list, not under whatever heading was last. */
+  it("puts a new task under the title, before the first heading", () => {
+    useStore.setState({ notes: [note("t1", "# Tasks\n\n## Work\n\n- [ ] first\n")] });
     render(<TasksTool />);
 
     const box = screen.getByLabelText("add a task");
     fireEvent.change(box, { target: { value: "second" } });
     fireEvent.keyDown(box, { key: "Enter" });
 
-    const save = sent.find((m) => (m as { cmd?: string }).cmd === "note_save") as {
-      id: string;
-      body: string;
-    };
-    expect(save.id).toBe("t1");
-    expect(save.body).toBe("# Tasks\n\n- [ ] first\n- [ ] second\n");
+    expect(saves()[0]).toMatchObject({ id: "t1", body: "# Tasks\n\n- [ ] second\n\n## Work\n\n- [ ] first\n" });
   });
 
-  /** A document that ends mid-line after every addition is one you notice. */
-  it("keeps the document ending in a single newline", () => {
-    useStore.setState({ notes: [note("t1", "# Tasks\n\n- [ ] first\n\n\n")] });
+  it("puts it at the end of the section you picked, and says so on the box", () => {
+    useStore.setState({
+      notes: [note("t1", "# Tasks\n\n## Work\n\n- [ ] first\n")],
+      tasks: [task({ note_id: "t1", text: "first", group: "Work" })],
+    });
     render(<TasksTool />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Work" }));
+    expect(screen.getByLabelText("where a new task goes: Tasks › Work")).toBeInTheDocument();
 
     const box = screen.getByLabelText("add a task");
     fireEvent.change(box, { target: { value: "second" } });
     fireEvent.keyDown(box, { key: "Enter" });
 
-    const save = sent.find((m) => (m as { cmd?: string }).cmd === "note_save") as { body: string };
-    expect(save.body).toBe("# Tasks\n\n- [ ] first\n- [ ] second\n");
+    expect(saves()[0]).toMatchObject({ id: "t1", body: "# Tasks\n\n## Work\n\n- [ ] first\n- [ ] second\n" });
+  });
+
+  /** The text is the one thing not to lose: it stays until the broadcast carries it. */
+  it("keeps the text, disabled, until the task comes back, then clears", () => {
+    useStore.setState({ notes: [] });
+    render(<TasksTool />);
+
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "buy milk" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(box).toHaveValue("buy milk");
+    expect(box).toBeDisabled();
+    expect(useStore.getState().pendingAdd).toEqual({ text: "buy milk", noteId: null });
+
+    // The broadcast arrives with the task in it.
+    act(() => useStore.setState({ tasks: [task({ note_id: "t1", text: "buy milk" })], pendingAdd: null, justAdded: "t1:0" }));
+    expect(box).toHaveValue("");
+    expect(box).not.toBeDisabled();
+  });
+
+  it("gives the text back when the add came back refused", () => {
+    useStore.setState({ notes: [] });
+    render(<TasksTool />);
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "buy milk" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    act(() => useStore.setState({ pendingAdd: null }));
+    expect(box).toHaveValue("buy milk");
+    expect(box).not.toBeDisabled();
   });
 
   it("sends nothing for an empty box", () => {
     render(<TasksTool />);
     fireEvent.keyDown(screen.getByLabelText("add a task"), { key: "Enter" });
-    expect(sent.some((m) => (m as { cmd?: string }).cmd === "note_save")).toBe(false);
+    expect(saves()).toEqual([]);
+  });
+});
+
+/** `R-L16`: tasks know their session — tagged on add, shown, and filterable. */
+describe("tasks and the selected session", () => {
+  const s1 = { id: "s1", repo_root: "/r/proj", title: "proj work" } as Session;
+
+  it("aims the box at the repository's own note, created tagged the first time", () => {
+    useStore.setState({ notes: [], sessions: { s1 }, selected: "s1" });
+    render(<TasksTool />);
+    expect(screen.getByLabelText("where a new task goes: Tasks — proj")).toBeInTheDocument();
+
+    const box = screen.getByLabelText("add a task");
+    fireEvent.change(box, { target: { value: "x" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(saves()[0]).toMatchObject({ id: "", body: "# Tasks — proj\n\n- [ ] x\n", session_id: "s1", repo: "/r/proj" });
   });
 
-  it("clears the box so the next task can be typed straight away", () => {
+  it("filters to the notes tagged with the selected session's repository", () => {
+    useStore.setState({
+      notes: [note("a", "# A", { repo: "/r/proj" }), note("b", "# B")],
+      tasks: [task({ note_id: "a", text: "mine" }), task({ note_id: "b", text: "other" })],
+      sessions: { s1 },
+      selected: "s1",
+    });
     render(<TasksTool />);
-    const box = screen.getByLabelText("add a task");
-    fireEvent.change(box, { target: { value: "one" } });
-    fireEvent.keyDown(box, { key: "Enter" });
-    expect(box).toHaveValue("");
+
+    fireEvent.click(screen.getByRole("tab", { name: "this session" }));
+    expect(screen.getByText("mine")).toBeInTheDocument();
+    expect(screen.queryByText("other")).not.toBeInTheDocument();
+    expect(screen.getByText(/1 note without this session/)).toBeInTheDocument();
+    expect(within(screen.getByRole("status")).getByText("1 open")).toBeInTheDocument();
+  });
+
+  it("offers the filter only while a session is selected", () => {
+    useStore.setState({ tasks: [task()] });
+    render(<TasksTool />);
+    expect(screen.getByRole("tab", { name: "this session" })).toBeDisabled();
   });
 });
 
 describe("nesting and grouping", () => {
-  /**
-   * `R-L10`, asked 2026-09-10: *"how to have indented tasks?"* and *"or
-   * grouping of tasks?"* Both are the document's, not the panel's — markdown
-   * already has nesting and headings, so neither needed new syntax.
-   */
   it("indents a nested task by its depth", () => {
-    useStore.setState({
-      tasks: [task({ ord: 0, text: "parent" }), task({ ord: 1, text: "child", depth: 1 })],
-    });
+    useStore.setState({ tasks: [task({ ord: 0, text: "parent" }), task({ ord: 1, text: "child", depth: 1 })] });
     render(<TasksTool />);
 
-    const pad = (label: string) =>
-      screen.getByText(label).closest("[role=option]")!.getAttribute("style") ?? "";
-
-    expect(pad("parent")).toContain("padding-left: 8px");
-    expect(pad("child")).toContain("padding-left: 22px");
-  });
-
-  it("puts each heading above the tasks under it", () => {
-    useStore.setState({
-      tasks: [
-        task({ ord: 0, text: "milk", group: "Groceries" }),
-        task({ ord: 1, text: "the thing", group: "Work" }),
-      ],
-    });
-    render(<TasksTool />);
-
-    expect(screen.getByText("Groceries")).toBeInTheDocument();
-    expect(screen.getByText("Work")).toBeInTheDocument();
-  });
-
-  /**
-   * A task above the first heading is not filed under "nothing" — it is simply
-   * above the first heading, and sweeping it into an *(other)* bucket would
-   * invent a group the document does not have.
-   */
-  it("leaves an ungrouped task ungrouped", () => {
-    useStore.setState({
-      tasks: [task({ ord: 0, text: "loose" }), task({ ord: 1, text: "milk", group: "Groceries" })],
-    });
-    render(<TasksTool />);
-
-    expect(screen.getByText("loose")).toBeInTheDocument();
-    expect(screen.queryByText(/other|ungrouped/i)).not.toBeInTheDocument();
+    const pad = (label: string) => screen.getByText(label).closest("[data-task-key]")!.getAttribute("style") ?? "";
+    expect(pad("parent")).toContain("padding-left: 20px");
+    expect(pad("child")).toContain("padding-left: 36px");
   });
 
   /** Document order, not alphabetical — the order you wrote them in. */
   it("keeps the headings in the order the document has them", () => {
     useStore.setState({
-      tasks: [
-        task({ ord: 0, text: "z-first", group: "Zebra" }),
-        task({ ord: 1, text: "a-second", group: "Apple" }),
-      ],
+      tasks: [task({ ord: 0, text: "z-first", group: "Zebra" }), task({ ord: 1, text: "a-second", group: "Apple" })],
     });
     const { container } = render(<TasksTool />);
-
     const text = container.textContent ?? "";
     expect(text.indexOf("Zebra")).toBeLessThan(text.indexOf("Apple"));
   });
-});
-
-describe("folders and sub-tasks", () => {
-  /** `R-L11`, asked 2026-09-10: show grouping as a folder, and sub-tasks. */
-  const nested = () =>
-    useStore.setState({
-      tasks: [
-        task({ ord: 0, text: "ship it", group: "Work" }),
-        task({ ord: 1, text: "write it", group: "Work", depth: 1 }),
-        task({ ord: 2, text: "test it", group: "Work", depth: 1 }),
-        task({ ord: 3, text: "milk", group: "Groceries" }),
-      ],
-    });
-
-  it("draws a heading as a folder that says what is inside", () => {
-    nested();
-    render(<TasksTool />);
-    expect(screen.getByLabelText("close Work")).toBeInTheDocument();
-    expect(screen.getByText("3 of 3")).toBeInTheDocument();
-  });
-
-  it("shuts a folder, hiding its tasks but not itself", () => {
-    nested();
-    render(<TasksTool />);
-
-    fireEvent.click(screen.getByLabelText("close Work"));
-
-    expect(screen.queryByText("ship it")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("open Work")).toBeInTheDocument();
-    // The other folder is untouched.
-    expect(screen.getByText("milk")).toBeInTheDocument();
-  });
-
-  it("gives a task with children a twisty, and a leaf none", () => {
-    nested();
-    render(<TasksTool />);
-    expect(screen.getByLabelText("fold ship it")).toBeInTheDocument();
-    expect(screen.queryByLabelText("fold milk")).not.toBeInTheDocument();
-  });
 
   it("folds a sub-task away and says what is left under it", () => {
-    nested();
+    useStore.setState({ tasks: [task({ ord: 0, text: "ship it" }), task({ ord: 1, text: "write it", depth: 1 })] });
     render(<TasksTool />);
 
-    fireEvent.click(screen.getByLabelText("fold ship it"));
+    fireEvent.click(screen.getByLabelText("fold the sub-tasks of ship it"));
 
     expect(screen.queryByText("write it")).not.toBeInTheDocument();
-    expect(screen.getByText("ship it")).toBeInTheDocument();
-    expect(screen.getByText(/3 of 3 left/)).toBeInTheDocument();
+    expect(screen.getByText(/1 open under/)).toBeInTheDocument();
+  });
+
+  it("shuts a section, hiding its tasks but not itself", () => {
+    useStore.setState({ tasks: [task({ ord: 0, text: "ship it", group: "Work" }), task({ ord: 1, text: "milk", group: "Groceries" })] });
+    render(<TasksTool />);
+
+    fireEvent.click(screen.getByLabelText("fold Work"));
+
+    expect(screen.queryByText("ship it")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("unfold Work")).toBeInTheDocument();
+    expect(screen.getByText("milk")).toBeInTheDocument();
   });
 
   /**
    * **No cascade.** Each line is its own checkbox in the document, and ticking
-   * a parent's children would write lines the user never ticked — ADR-0015
-   * says the document is the truth, and inventing edits to it is the one thing
-   * this panel must not do.
+   * a parent's children would write lines the user never ticked.
    */
   it("ticking a parent does not tick its children", () => {
-    nested();
+    useStore.setState({ tasks: [task({ ord: 0, text: "ship it" }), task({ ord: 1, text: "write it", depth: 1 })] });
     render(<TasksTool />);
-
-    fireEvent.click(screen.getByLabelText("close ship it"));
-
-    const sets = sent.filter((m) => (m as { cmd?: string }).cmd === "task_set");
-    expect(sets).toEqual([{ cmd: "task_set", note_id: "n1", ord: 0, done: true }]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "mark done: ship it" }));
+    expect(sets()).toEqual([{ cmd: "task_set", note_id: "n1", ord: 0, done: true }]);
   });
 
-  /** Hiding a ticked parent would orphan its open children. */
   it("keeps a ticked parent while an open child needs it", () => {
-    useStore.setState({
-      tasks: [
-        task({ ord: 0, text: "parent", done: true }),
-        task({ ord: 1, text: "child", depth: 1 }),
-      ],
-    });
+    useStore.setState({ tasks: [task({ ord: 0, text: "parent", done: true }), task({ ord: 1, text: "child", depth: 1 })] });
     render(<TasksTool />);
-
     expect(screen.getByText("parent")).toBeInTheDocument();
     expect(screen.getByText("child")).toBeInTheDocument();
   });
 
-  /** A folder whose whole contents are ticked draws nothing at all. */
-  it("hides a folder with nothing left to show", () => {
-    useStore.setState({
-      tasks: [task({ ord: 0, text: "milk", group: "Groceries", done: true })],
-    });
+  /** A folder with everything done says so rather than vanishing. */
+  it("says a folder is all done rather than hiding it", () => {
+    useStore.setState({ tasks: [task({ ord: 0, text: "milk", group: "Groceries", done: true })] });
     render(<TasksTool />);
-
-    expect(screen.queryByLabelText(/Groceries/)).not.toBeInTheDocument();
-    expect(screen.getByText(/show 1 done/i)).toBeInTheDocument();
+    expect(screen.getAllByText("all 1 done").length).toBeGreaterThan(0);
+    expect(screen.queryByText("milk")).not.toBeInTheDocument();
   });
 });

@@ -2543,7 +2543,7 @@ async fn handle(
         // handlers below broadcast both — a checkbox typed into a document has
         // to appear in the list without asking for it.
         ClientMsg::TaskList => match state.tasks() {
-            Ok((tasks, closed_today)) => state.broadcast(ServerMsg::Tasks { tasks, closed_today }),
+            Ok((tasks, closed_today, closed)) => state.broadcast(ServerMsg::Tasks { tasks, closed_today, closed }),
             Err(e) => err(e),
         },
         ClientMsg::TaskSet { note_id, ord, done } => {
@@ -2552,8 +2552,8 @@ async fn handle(
                     // Both, and in this order: the document changed, and the
                     // derived view of it changed with it.
                     state.broadcast(ServerMsg::Notes { notes });
-                    if let Ok((tasks, closed_today)) = state.tasks() {
-                        state.broadcast(ServerMsg::Tasks { tasks, closed_today });
+                    if let Ok((tasks, closed_today, closed)) = state.tasks() {
+                        state.broadcast(ServerMsg::Tasks { tasks, closed_today, closed });
                     }
                 }
                 Err(e) => err(e),
@@ -2568,8 +2568,8 @@ async fn handle(
         } => match state.save_note(id, body, session_id, seq, repo).await {
             Ok(notes) => {
                 state.broadcast(ServerMsg::Notes { notes });
-                if let Ok((tasks, closed_today)) = state.tasks() {
-                    state.broadcast(ServerMsg::Tasks { tasks, closed_today });
+                if let Ok((tasks, closed_today, closed)) = state.tasks() {
+                    state.broadcast(ServerMsg::Tasks { tasks, closed_today, closed });
                 }
             }
             Err(e) => err(e),
@@ -2577,8 +2577,8 @@ async fn handle(
         ClientMsg::NoteDelete { id } => match state.delete_note(&id).await {
             Ok(notes) => {
                 state.broadcast(ServerMsg::Notes { notes });
-                if let Ok((tasks, closed_today)) = state.tasks() {
-                    state.broadcast(ServerMsg::Tasks { tasks, closed_today });
+                if let Ok((tasks, closed_today, closed)) = state.tasks() {
+                    state.broadcast(ServerMsg::Tasks { tasks, closed_today, closed });
                 }
             }
             Err(e) => err(e),

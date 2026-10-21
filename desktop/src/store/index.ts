@@ -71,6 +71,7 @@ import type {
   WorkspaceHint,
   ClientMsg,
 } from "@/wire/types";
+import type { Closure } from "@/wire/types";
 import {
   daemonAcquire,
   isTauri,
@@ -793,6 +794,23 @@ export interface AppState {
   tasks: Task[];
   /** Closures since local midnight — the question a checkbox cannot answer. */
   closedToday: number;
+  /** The same closures as a list, newest first. `R-L17`. */
+  closed: Closure[];
+  /** Whether a `tasks` message has arrived yet, so the panel can tell *no
+   *  tasks* from *not asked yet* and not flash the empty state. `R-L13`. */
+  tasksLoaded: boolean;
+  /**
+   * Ticks sent and not yet answered, by task key, so the box flips at once
+   * and goes back if the daemon refuses. `R-L13`. Cleared by the next
+   * `tasks` broadcast, which is the truth, or by an error.
+   */
+  pendingTicks: Record<string, boolean>;
+  /** A task typed and sent, until a broadcast carries it. `R-L14`. */
+  pendingAdd: { text: string; noteId: string | null } | null;
+  /** The key of the row a broadcast just brought in, washed for a moment. */
+  justAdded: string | null;
+  /** The task line the Notes editor should scroll to on open. `R-L13`. */
+  noteReveal: { id: string; ord: number } | null;
   /**
    * Scratch files. `R-L5`.
    *
@@ -1106,6 +1124,13 @@ export interface AppState {
    * call `setPrefs` separately and only one of them signals.
    */
   toggleRailTool: (tool: RailTool) => void;
+  /**
+   * Tick or untick a task: the box flips now and `task_set` goes to the
+   * daemon, whose next `tasks` broadcast is the truth. `R-L13`. Still one
+   * line in one document — the optimism is in the drawing, never in a second
+   * record (ADR-0015).
+   */
+  tickTask: (noteId: string, ord: number, done: boolean) => void;
   /** Ask a model to order this session's changed files. `R-O3`. */
   askReadingGuide: (sessionId: SessionId) => void;
   /** Ask a model to draft the follow-up prompt. `R-O7`. */
@@ -1300,6 +1325,12 @@ export const useStore = create<AppState>((set, get) => ({
   noteOpenId: null,
   tasks: [],
   closedToday: 0,
+  closed: [],
+  tasksLoaded: false,
+  pendingTicks: {},
+  pendingAdd: null,
+  justAdded: null,
+  noteReveal: null,
   scratch: { names: [], folders: [], files: {} },
   chat: [],
   kit: [],
@@ -1637,6 +1668,12 @@ export const useStore = create<AppState>((set, get) => ({
       id,
       messages: [{ role: "user", content: explainAsk(draft.command, shell) }],
     });
+  },
+
+  tickTask: (noteId, ord, done) => {
+    const key = `${noteId}:${ord}`;
+    set((s) => ({ pendingTicks: { ...s.pendingTicks, [key]: done } }));
+    get().send({ cmd: "task_set", note_id: noteId, ord, done });
   },
 
   toggleRailTool: (tool) => {
@@ -2069,9 +2106,32 @@ export const useStore = create<AppState>((set, get) => ({
           void loadConnections().catch(() => (savedConnectionsRead = false));
         }
         break;
-      case "tasks":
-        set({ tasks: msg.tasks, closedToday: msg.closed_today });
+      case "tasks": {
+        // A broadcast is the truth, so every optimistic tick is dropped; and
+        // if the task typed into the box is in it, that row is the one to
+        // wash and scroll to. `R-L13`, `R-L14`.
+        const pending = get().pendingAdd;
+        const hit = pending
+          ? msg.tasks.find(
+              (t) => t.text === pending.text && (pending.noteId === null || t.note_id === pending.noteId),
+            )
+          : undefined;
+        const justAdded = hit ? `${hit.note_id}:${hit.ord}` : null;
+        set({
+          tasks: msg.tasks,
+          closedToday: msg.closed_today,
+          closed: msg.closed ?? [],
+          tasksLoaded: true,
+          pendingTicks: {},
+          ...(hit ? { pendingAdd: null, justAdded } : {}),
+        });
+        if (justAdded) {
+          setTimeout(() => {
+            if (get().justAdded === justAdded) set({ justAdded: null });
+          }, 900);
+        }
         break;
+      }
       case "scratches":
         set((s) => ({
           scratch: { ...s.scratch, names: msg.names, folders: msg.folders ?? [] },
@@ -2726,6 +2786,11 @@ export const useStore = create<AppState>((set, get) => ({
         break;
 
       case "error": {
+        // A tick or an add still waiting goes back to what the document says:
+        // the refusal is what there is to read. `R-L13`, `R-L14`.
+        if (Object.keys(get().pendingTicks).length > 0 || get().pendingAdd) {
+          set({ pendingTicks: {}, pendingAdd: null });
+        }
         // A browse still waiting claims the error (`R-J142`) — by name when
         // the daemon is too old to know the verb, which serde words as an
         // unknown variant `browse_folders`; otherwise by the same heuristic

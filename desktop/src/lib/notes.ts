@@ -14,7 +14,8 @@
  * and nothing new was added to the wire for this.
  */
 
-import type { Session, TranscriptEvent } from "@/wire/types";
+import type { Note, Session, TranscriptEvent } from "@/wire/types";
+import { repoName } from "@/lib/gitSync";
 import { sessionLabel } from "@/wire/types";
 import { useStore } from "@/store";
 
@@ -220,17 +221,18 @@ export function noteFromConversation(session: Session | null, events: Transcript
 }
 
 /**
- * Put a document on screen, wherever it is. `R-L3`.
+ * Open a document from outside the Notes panel, and say which line.
  *
  * The Tasks panel lists checkboxes and the documents they live in are
  * elsewhere, so "where did I write this" has to be one click. Opens the Notes
  * tool if it is shut rather than assuming it — a click that silently sets state
  * behind a closed panel is the *"clicking the queue appears to do nothing"*
- * failure `R-J31` was about, one panel over.
+ * failure `R-J31` was about, one panel over. Since `R-L13` it also names the
+ * task's `ord`, so the editor can scroll to the line rather than the top.
  */
-export function openNote(id: string): void {
+export function openNote(id: string, ord?: number): void {
   const { prefs, setPrefs } = useStore.getState();
-  useStore.setState({ noteOpenId: id });
+  useStore.setState({ noteOpenId: id, noteReveal: ord === undefined ? null : { id, ord } });
   if (!prefs.rail.includes("notes")) {
     setPrefs({ rail: [...prefs.rail, "notes"] });
   }
@@ -250,49 +252,270 @@ export function noteTitle(body: string): string {
   return first.replace(/^#{1,6}\s*/, "").trim();
 }
 
-/** The document new tasks go into when you have not said otherwise. `R-L3`. */
+/** The document new tasks go into when nothing else says where. `R-L3`. */
 export const TASKS_DOC = "Tasks";
 
 /**
- * Add a task from the Tasks panel. `R-L3`.
+ * One line of a document, read the way the daemon's task parser reads it.
+ *
+ * `R-L3`'s rules: a fenced block and a block quotation hold no tasks, an
+ * indented checkbox is nested when there is a list to nest it in and code when
+ * there is not. The window needs the same reading for two things — where to
+ * put a new line, and which line a task's `ord` names — and a reading that
+ * disagreed with the daemon's would file a task under the wrong heading or
+ * scroll the editor to the wrong line.
+ */
+export interface ScannedLine {
+  kind: "heading" | "task" | "list" | "blank" | "text" | "quote" | "code" | "fence";
+  indent: number;
+  /** A heading's level, or a task's words. */
+  level?: number;
+  text?: string;
+}
+
+export function scanLines(body: string): ScannedLine[] {
+  const out: ScannedLine[] = [];
+  let inFence = false;
+  let listOpen = false;
+  for (const raw of body.split("\n")) {
+    if (/^\s{0,3}(```|~~~)/.test(raw)) {
+      inFence = !inFence;
+      out.push({ kind: "fence", indent: 0 });
+      continue;
+    }
+    if (inFence) {
+      out.push({ kind: "fence", indent: 0 });
+      continue;
+    }
+    const indent = (raw.match(/^ */) ?? [""])[0].length;
+    const line = raw.slice(indent);
+    if (line.trim() === "") {
+      out.push({ kind: "blank", indent });
+      continue;
+    }
+    if (line.startsWith(">")) {
+      out.push({ kind: "quote", indent });
+      listOpen = false;
+      continue;
+    }
+    const h = indent < 4 ? line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/) : null;
+    if (h) {
+      out.push({ kind: "heading", indent, level: h[1].length, text: h[2] });
+      listOpen = false;
+      continue;
+    }
+    if (indent >= 4 && !listOpen) {
+      out.push({ kind: "code", indent });
+      continue;
+    }
+    const task = line.match(/^[-*+] \[( |x|X)\](?: (.*))?$/);
+    if (task) {
+      out.push({ kind: "task", indent, text: (task[2] ?? "").trim() });
+      listOpen = true;
+      continue;
+    }
+    if (/^([-*+]|\d+[.)]) /.test(line)) {
+      out.push({ kind: "list", indent });
+      listOpen = true;
+      continue;
+    }
+    out.push({ kind: "text", indent });
+    if (indent < 4) listOpen = false;
+  }
+  return out;
+}
+
+/** The line (from zero) a task's `ord` names, or `null` when the body has fewer. */
+export function taskLine(body: string, ord: number): number | null {
+  let seen = -1;
+  const lines = scanLines(body);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].kind !== "task") continue;
+    seen += 1;
+    if (seen === ord) return i;
+  }
+  return null;
+}
+
+/** Which heading a new task goes under: its words, and which run of them. */
+export interface SectionRef {
+  name: string;
+  /** The n-th heading with these words, from zero — a heading used twice is
+   *  two sections (`R-L11`), and the address has to say which. */
+  occurrence: number;
+}
+
+/**
+ * Put `- [ ] text` into a document where you can see it. `R-L14`.
+ *
+ * Decided 2026-10-21: with no section named, the line goes **right under the
+ * document's title**, before its first heading — the top of the list, where
+ * the eye is — not under whatever heading happened to be last, which is where
+ * every add used to land and how things got mis-filed. With a section named,
+ * it goes to the end of that section. Still one line in one document.
+ */
+export function insertTask(body: string, text: string, section: SectionRef | null): string {
+  const lines = body.split("\n");
+  const kinds = scanLines(body);
+  const item = `- [ ] ${text}`;
+  let at: number;
+
+  if (section) {
+    let seen = -1;
+    let h = -1;
+    for (let i = 0; i < kinds.length; i++) {
+      if (kinds[i].kind === "heading" && kinds[i].text === section.name) {
+        seen += 1;
+        if (seen === section.occurrence) {
+          h = i;
+          break;
+        }
+      }
+    }
+    if (h < 0) return insertTask(body, text, null);
+    let end = h + 1;
+    while (end < kinds.length && kinds[end].kind !== "heading") end += 1;
+    let last = end - 1;
+    while (last > h && kinds[last].kind === "blank") last -= 1;
+    at = last + 1;
+  } else {
+    let i = 0;
+    while (i < kinds.length && kinds[i].kind === "blank") i += 1;
+    if (kinds[i]?.kind === "heading" && kinds[i].level === 1) {
+      at = i + 1;
+      if (kinds[at]?.kind === "blank") at += 1;
+    } else {
+      at = 0;
+    }
+  }
+
+  const out = [...lines];
+  out.splice(at, 0, item);
+  // A blank line between the new item and prose or a heading that follows,
+  // so the list ends where it should and the heading stays a heading.
+  const next = kinds[at];
+  if (next && next.kind !== "blank" && next.kind !== "task" && next.kind !== "list") {
+    out.splice(at + 1, 0, "");
+  }
+  return out.join("\n").replace(/\n*$/, "") + "\n";
+}
+
+/** A folder or a section the user picked as where new tasks go. `R-L14`. */
+export interface Target {
+  noteId: string;
+  title: string;
+  section: SectionRef | null;
+}
+
+/** Where the next task goes, and what to call it on the box. */
+export interface Destination {
+  label: string;
+  /** An existing note, or `null` when one has to be created. */
+  noteId: string | null;
+  section: SectionRef | null;
+  /** How to create the note when there is none: its first body, and the tags
+   *  it is born with. */
+  create: { body: (text: string) => string; session_id: string | null; repo: string | null } | null;
+}
+
+/**
+ * Resolve where a typed task lands. `R-L14`, `R-L16`.
+ *
+ * In order: the folder or section the user picked; else, with a session
+ * selected, the note tagged with that session's **repository** — created as
+ * *Tasks — <repo>* on first use, tagged with the session and the repository,
+ * so a task you add while looking at a session belongs to that session's work
+ * (decided 2026-10-21: *tag on add, show it, filter by it*); else the plain
+ * *Tasks* document, created on first use as before.
+ *
+ * The repository rather than the session id, because a session is one
+ * conversation and a repository outlives it: tomorrow's session in the same
+ * checkout should find today's tasks.
+ */
+export function destinationFor(args: {
+  notes: readonly Note[];
+  sessions: Record<string, Session>;
+  selected: string | null;
+  target: Target | null;
+}): Destination {
+  const { notes, sessions, selected, target } = args;
+  if (target) {
+    return {
+      label: target.section ? `${target.title} › ${target.section.name}` : target.title,
+      noteId: target.noteId,
+      section: target.section,
+      create: null,
+    };
+  }
+  const session = selected ? sessions[selected] : undefined;
+  const repo = session?.repo_root ?? null;
+  if (repo) {
+    const title = `${TASKS_DOC} — ${repoName(repo)}`;
+    const existing = notes.find((n) => n.repo === repo && noteTitle(n.body) === title);
+    return {
+      label: title,
+      noteId: existing?.id ?? null,
+      section: null,
+      create: existing
+        ? null
+        : { body: (text) => `# ${title}\n\n- [ ] ${text}\n`, session_id: selected, repo },
+    };
+  }
+  const existing = notes.find((n) => noteTitle(n.body) === TASKS_DOC);
+  return {
+    label: TASKS_DOC,
+    noteId: existing?.id ?? null,
+    section: null,
+    create: existing ? null : { body: (text) => `# ${TASKS_DOC}\n\n- [ ] ${text}\n`, session_id: null, repo: null },
+  };
+}
+
+/** How long a sent task may stay *pending* before the box gives it back. */
+export const ADD_TIMEOUT_MS = 4000;
+
+/**
+ * Add a task from the Tasks panel. `R-L3`, `R-L14`.
  *
  * **This writes a document, which is the only way a task can be made** —
  * ADR-0015 rule 2 says there is no task outside a `- [ ]` line, so an "add"
- * that did anything else would be inventing a second kind of task. It appends
- * the line to a document called *Tasks*, creating that document the first time.
+ * that did anything else would be inventing a second kind of task.
  *
- * Reported 2026-09-10: *"I can't get any task display. it always show no
- * tasks"* — and it was right to, because nothing in the window could put a
- * checkbox into a note. A panel that lists tasks and cannot make one is a panel
- * you can only use if you already knew the trick.
+ * The text stays in the box, pending, until a `tasks` broadcast carries the
+ * new line (the store clears it and names the row to wash) or the daemon
+ * refuses — or, failing either, until the timeout hands it back. A box that
+ * emptied before anything had landed was how an add could vanish in silence.
  */
-export function addTask(text: string): void {
+export function addTask(text: string, dest: Destination): boolean {
   const body = text.trim();
-  if (!body) return;
+  if (!body) return false;
   const { notes, send } = useStore.getState();
-  const existing = notes.find((n) => noteTitle(n.body) === TASKS_DOC);
-
-  if (!existing) {
+  if (dest.noteId) {
+    const existing = notes.find((n) => n.id === dest.noteId);
+    if (!existing) return false;
+    send({
+      cmd: "note_save",
+      id: existing.id,
+      body: insertTask(existing.body, body, dest.section),
+      session_id: existing.session_id ?? null,
+      seq: existing.seq ?? null,
+      repo: existing.repo ?? null,
+    });
+  } else if (dest.create) {
     send({
       cmd: "note_save",
       id: "",
-      body: `# ${TASKS_DOC}\n\n- [ ] ${body}\n`,
-      session_id: null,
+      body: dest.create.body(body),
+      session_id: dest.create.session_id,
       seq: null,
-      repo: null,
+      repo: dest.create.repo,
     });
-    return;
+  } else {
+    return false;
   }
-
-  // Appended, and the trailing newline is put back: a document that ends
-  // mid-line after every addition is one you notice when you open it.
-  const next = existing.body.replace(/\n*$/, "") + `\n- [ ] ${body}\n`;
-  send({
-    cmd: "note_save",
-    id: existing.id,
-    body: next,
-    session_id: existing.session_id ?? null,
-    seq: existing.seq ?? null,
-    repo: existing.repo ?? null,
-  });
+  const pending = { text: body, noteId: dest.noteId };
+  useStore.setState({ pendingAdd: pending });
+  setTimeout(() => {
+    if (useStore.getState().pendingAdd === pending) useStore.setState({ pendingAdd: null });
+  }, ADD_TIMEOUT_MS);
+  return true;
 }

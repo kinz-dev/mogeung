@@ -581,7 +581,7 @@ async fn a_task_is_a_checkbox_and_ticking_one_rewrites_the_document() {
 
     // And the count a checkbox cannot keep.
     let closed = wait_for(&mut a, 5, |m| match m {
-        ServerMsg::Tasks { closed_today, tasks } if tasks.iter().any(|t| t.done) => {
+        ServerMsg::Tasks { closed_today, tasks, .. } if tasks.iter().any(|t| t.done) => {
             Some(*closed_today)
         }
         _ => None,

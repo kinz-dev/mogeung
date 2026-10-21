@@ -436,6 +436,18 @@ dialled, drops everything the old daemon said, keeps what the user chose, and
 detaches terminal panes rather than closing them. The window acquires this
 machine's own daemon at every launch, whichever board it shows (`R-J102`).
 
+**The Tasks panel's own state** (`R-L13`, `R-L14`, feature 0052) is
+transient and lives in the store because things outside the panel need it:
+`pendingTicks` draws a tick the daemon has not yet confirmed over the `tasks`
+list and is dropped by the next broadcast or an `error`, so the box flips at
+once and never becomes a second record (ADR-0015); `pendingAdd` keeps the
+typed text until a broadcast carries the task, which also names `justAdded`,
+the row to wash and scroll to; `noteReveal` is the line the Notes editor
+scrolls to when a task opens its note; `tasksLoaded` tells *none* from *not
+asked yet*. `lib/taskTree.ts` folds the flat list into one folder per
+document (`R-L12`), and `lib/notes.ts` decides where a typed line goes and
+into which note (`insertTask`, `destinationFor`).
+
 ## Following, as the window sees it
 
 Three things are per session rather than per daemon: where a pane attaches

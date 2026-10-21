@@ -10,13 +10,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CONVERSATION_LIMIT,
+  destinationFor,
+  insertTask,
+  taskLine,
   noteFromConversation,
   noteFromTurn,
   textOf,
   transcriptFilename,
   transcriptMarkdown,
 } from "@/lib/notes";
-import type { Session, TranscriptEvent, EventKind } from "@/wire/types";
+import type { Note, Session, TranscriptEvent, EventKind } from "@/wire/types";
 
 const session = { id: "abc12345-0000", title: "the auth refactor" } as Session;
 
@@ -166,3 +169,105 @@ describe("the whole transcript, as a file", () => {
     expect(transcriptFilename(s, Date.parse("2026-08-06T09:05:00"))).toBe("fix-etc-passwd-20260806-0905.md");
   });
 });
+
+/**
+ * `R-L14`: a new line goes where you can see it. Every add used to append
+ * under whatever heading happened to be last, which is how things got
+ * mis-filed; now it goes right under the title, or to the end of the section
+ * you picked. Still one line in one document.
+ */
+describe("where a new task goes", () => {
+  it("lands under the title, before the first heading", () => {
+    expect(insertTask("# Tasks\n\n## Work\n\n- [ ] first\n", "second", null)).toBe(
+      "# Tasks\n\n- [ ] second\n\n## Work\n\n- [ ] first\n",
+    );
+  });
+
+  it("joins a list that already sits under the title", () => {
+    expect(insertTask("# Tasks\n\n- [ ] first\n", "second", null)).toBe("# Tasks\n\n- [ ] second\n- [ ] first\n");
+  });
+
+  it("starts an empty document, and one with no title at the top", () => {
+    expect(insertTask("", "x", null)).toBe("- [ ] x\n");
+    expect(insertTask("some prose\n", "x", null)).toBe("- [ ] x\n\nsome prose\n");
+  });
+
+  it("goes to the end of the section it was aimed at, keeping the next heading apart", () => {
+    const body = "## Work\n\n- [ ] a\n\n## Home\n\n- [ ] b\n";
+    expect(insertTask(body, "c", { name: "Work", occurrence: 0 })).toBe("## Work\n\n- [ ] a\n- [ ] c\n\n## Home\n\n- [ ] b\n");
+    expect(insertTask("## Work\n- [ ] a\n## Home\n", "c", { name: "Work", occurrence: 0 })).toBe(
+      "## Work\n- [ ] a\n- [ ] c\n\n## Home\n",
+    );
+  });
+
+  /** A heading used twice is two sections, and the address says which. */
+  it("tells the second run of a heading from the first", () => {
+    const body = "## Work\n\n- [ ] a\n\n## Work\n\n- [ ] b\n";
+    expect(insertTask(body, "c", { name: "Work", occurrence: 1 })).toBe("## Work\n\n- [ ] a\n\n## Work\n\n- [ ] b\n- [ ] c\n");
+  });
+
+  it("does not take a heading inside a code fence for a section", () => {
+    const body = "```\n## Work\n```\n\n## Work\n\n- [ ] a\n";
+    expect(insertTask(body, "c", { name: "Work", occurrence: 0 })).toBe("```\n## Work\n```\n\n## Work\n\n- [ ] a\n- [ ] c\n");
+  });
+
+  it("falls back to the top when the section is not there any more", () => {
+    expect(insertTask("# T\n\n- [ ] a\n", "c", { name: "Gone", occurrence: 0 })).toBe("# T\n\n- [ ] c\n- [ ] a\n");
+  });
+});
+
+/** `R-L13`: the editor scrolls to the task's line, read the way the daemon counts them. */
+describe("which line a task is", () => {
+  it("skips quotations and indented code, like the parser", () => {
+    const body = "intro\n\n- [ ] a\n> - [ ] no\n    - [ ] code\n- [ ] b\n";
+    expect(taskLine(body, 0)).toBe(2);
+    expect(taskLine(body, 1)).toBe(5);
+    expect(taskLine(body, 2)).toBeNull();
+  });
+
+  it("counts a nested task under a list, and nothing inside a fence", () => {
+    const body = "- [ ] a\n    - [ ] nested\n```\n- [ ] fenced\n```\n- [ ] b\n";
+    expect(taskLine(body, 1)).toBe(1);
+    expect(taskLine(body, 2)).toBe(5);
+  });
+});
+
+/** `R-L16`: with a session selected, a task belongs to that session's repository. */
+describe("where the box aims", () => {
+  const n = (id: string, body: string, over: Partial<Note> = {}): Note => ({ id, body, created: 1, updated: 1, ...over }) as Note;
+  const s1 = { id: "s1", repo_root: "/r/proj", title: "proj work" } as Session;
+
+  it("aims at the picked folder or section first", () => {
+    const d = destinationFor({
+      notes: [n("a", "# A")],
+      sessions: { s1 },
+      selected: "s1",
+      target: { noteId: "a", title: "A", section: { name: "Work", occurrence: 0 } },
+    });
+    expect(d).toMatchObject({ label: "A › Work", noteId: "a", create: null });
+  });
+
+  it("creates the repository's own Tasks note, tagged, the first time", () => {
+    const d = destinationFor({ notes: [], sessions: { s1 }, selected: "s1", target: null });
+    expect(d.label).toBe("Tasks — proj");
+    expect(d.noteId).toBeNull();
+    expect(d.create?.body("x")).toBe("# Tasks — proj\n\n- [ ] x\n");
+    expect(d.create).toMatchObject({ session_id: "s1", repo: "/r/proj" });
+  });
+
+  it("finds that note again by its title and tag", () => {
+    const d = destinationFor({
+      notes: [n("t", "# Tasks — proj\n\n- [ ] a", { repo: "/r/proj" })],
+      sessions: { s1 },
+      selected: "s1",
+      target: null,
+    });
+    expect(d).toMatchObject({ noteId: "t", create: null });
+  });
+
+  it("aims at the plain Tasks note with nothing selected", () => {
+    const d = destinationFor({ notes: [n("t", "# Tasks")], sessions: {}, selected: null, target: null });
+    expect(d).toMatchObject({ label: "Tasks", noteId: "t" });
+  });
+});
+

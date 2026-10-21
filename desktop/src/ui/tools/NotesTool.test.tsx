@@ -128,7 +128,9 @@ describe("Ctrl+S in the Notes panel", () => {
 
   beforeEach(() => {
     sent = [];
-    useStore.setState({ notes: [note] as never, send: ((m: unknown) => sent.push(m)) as never });
+    // `noteOpenId` lives in the store and survives a mount since `R-L13`, so
+    // each case starts with nothing open rather than with the last case's note.
+    useStore.setState({ notes: [note] as never, noteOpenId: null, send: ((m: unknown) => sent.push(m)) as never });
     useStore.getState().setPrefs({ notesMarkdown: false });
   });
 
@@ -182,3 +184,50 @@ describe("Ctrl+S in the Notes panel", () => {
     expect(sent).toEqual([]);
   });
 });
+
+/**
+ * `R-L13`, the critique's P0: the Tasks panel opens a note from outside this
+ * panel, and the editor used to keep whatever draft it had — empty on a fresh
+ * mount, or the note opened before — with *save* lit on it. `Ctrl+S` would
+ * then have written that draft over the note.
+ */
+describe("the editor follows the open note", () => {
+  const first = { id: "n1", body: "first body", created: 0, updated: 0, session_id: null, seq: null };
+  const second = { id: "n2", body: "second body", created: 0, updated: 0, session_id: null, seq: null };
+
+  beforeEach(() => {
+    useStore.setState({ notes: [first, second] as never, noteOpenId: null, noteReveal: null, send: (() => {}) as never });
+    useStore.getState().setPrefs({ notesMarkdown: false });
+  });
+
+  it("shows the note's own body when it is opened from outside, with nothing to save", async () => {
+    render(<NotesTool />);
+    useStore.setState({ noteOpenId: "n1" });
+    const box = await screen.findByPlaceholderText("write something");
+    expect(box).toHaveValue("first body");
+    expect(screen.getByTitle(/save this note/)).toBeDisabled();
+  });
+
+  it("switches to the other note's body when the open note changes under it", async () => {
+    render(<NotesTool />);
+    fireEvent.click(screen.getByText("first body"));
+    const box = await screen.findByPlaceholderText("write something");
+    expect(box).toHaveValue("first body");
+
+    useStore.setState({ noteOpenId: "n2" });
+    expect(await screen.findByDisplayValue("second body")).toBeInTheDocument();
+    expect(screen.getByTitle(/save this note/)).toBeDisabled();
+  });
+
+  it("keeps a draft you have typed when the daemon re-sends the note", async () => {
+    render(<NotesTool />);
+    useStore.setState({ noteOpenId: "n1" });
+    const box = await screen.findByPlaceholderText("write something");
+    fireEvent.change(box, { target: { value: "first body, edited" } });
+
+    useStore.setState({ notes: [{ ...first, updated: 1 }, second] as never });
+    expect(box).toHaveValue("first body, edited");
+    expect(screen.getByTitle(/save this note/)).not.toBeDisabled();
+  });
+});
+

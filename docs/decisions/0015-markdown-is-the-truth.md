@@ -1,7 +1,7 @@
 ---
 title: Notes belong to the daemon, and markdown is the truth
 status: active
-updated: 2026-08-02
+updated: 2026-10-21
 decided: 2026-08-02
 ---
 
@@ -125,6 +125,36 @@ Also revisit if the derived cache is ever the reason a bug is hard to fix. It
 exists to answer one question; if it is carrying anything else by then, it has
 become the task model this ADR declined.
 
+## Amendment — 2026-10-21: the folder is the document, and a task's session is its note's tag
+
+Three choices [feature 0052](../features/0052-tasks-redesign.md) rests on
+(`R-L12`, `R-L13`, `R-L16`), recorded here because each follows from the rules
+above and none is written on a line.
+
+**The Tasks panel's folder is the document.** Until this date the panel
+grouped by heading across every note at once, so a headingless note's tasks
+drew under the previous note's last heading and two notes whose adjacent
+sections shared a name merged. The unit the user wrote is the note: each is a
+folder, its headings are sections inside it, and two notes never merge.
+Folders sort by the note's creation rather than its last edit, because a tick
+edits the note, and a folder that moved when you ticked inside it would be the
+panel moving under your hand.
+
+**A task belongs to a session through its note.** A task has no field but its
+words (rule 2), and the note already carries `session_id` and `repo` as tags
+(rule 1). So *this session's tasks* are the tasks of the notes tagged with the
+selected session's **repository** — a session is one conversation and a
+repository outlives it — and a task added while a session is selected goes
+into a note titled *Tasks — <repo>*, tagged with both and created on first
+use. Nothing is written on the line, and the derived table still rebuilds from
+the documents alone.
+
+**An optimistic tick is a drawing, not a record.** The box flips when clicked
+and the window overlays that on the daemon's list until the next broadcast,
+which is the truth; the overlay is dropped on a refusal. Rule 3 stands:
+nothing structured about a task is kept that the markdown did not say.
+
 ---
-*ADRs are immutable. To change this decision, write a new ADR that supersedes
-it and set `status: superseded` plus `superseded_by:` here.*
+*ADRs are immutable. A decision that is **narrowed** changes by an
+`## Amendment — YYYY-MM-DD` section appended here, with `updated:` bumped; a
+decision genuinely **reversed** is superseded by a new ADR.*

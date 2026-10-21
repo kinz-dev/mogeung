@@ -29,7 +29,7 @@ import { Checkbox, Dim, Empty, IconButton, Input, Row } from "@/ui/primitives";
 import { stamp } from "@/lib/format";
 import { sessionLabel } from "@/wire/types";
 import { markUnsaved } from "@/lib/unsaved";
-import { noteTitle } from "@/lib/notes";
+import { noteTitle, taskLine } from "@/lib/notes";
 
 /**
  * The line worth showing for a note: the one that matched, else the first.
@@ -190,6 +190,48 @@ export function NotesTool() {
   }, [notes, filter]);
 
   const open = openId ? notes.find((n) => n.id === openId) : null;
+
+  /**
+   * The editor follows the open note. `R-L13`.
+   *
+   * Until 2026-10-21 the draft was set only by this panel's own row click and
+   * by typing, and the Tasks panel opens a note from *outside* — so a click on
+   * a task showed an empty or earlier body with *save* lit, and `Ctrl+S` would
+   * have written it over the note. The critique's one P0. Now the draft
+   * follows `openId`, and follows the body too while nothing has been typed;
+   * a touched draft is kept until it is saved or the note is switched, and a
+   * switch away from touched edits says so rather than dropping them in
+   * silence.
+   */
+  const touched = useRef(false);
+  const lastOpen = useRef<string | null | undefined>(undefined);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const body = open?.body ?? "";
+  useEffect(() => {
+    if (lastOpen.current !== undefined && lastOpen.current !== openId && touched.current) {
+      useStore.getState().pushNotice("the edits in the note you left were not saved", "error", { quiet: true });
+      touched.current = false;
+    }
+    lastOpen.current = openId;
+    if (draftRef.current === body) touched.current = false;
+    if (!touched.current) setDraft(body);
+  }, [openId, body]);
+
+  // The line the Tasks panel asked for, once the draft is that note's body:
+  // the editor is a textarea at one line height, so the scroll is arithmetic.
+  const reveal = useStore((s) => s.noteReveal);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!reveal || reveal.id !== openId || draft !== body) return;
+    const ta = editorRef.current;
+    const line = taskLine(body, reveal.ord);
+    if (ta && line !== null) {
+      const lineHeight = 16;
+      ta.scrollTop = Math.max(0, line * lineHeight - ta.clientHeight / 2);
+    }
+    useStore.setState({ noteReveal: null });
+  }, [reveal, openId, draft, body]);
 
   // A draft is this component's own until it is saved, so a restart would
   // lose it — said, so the update's restart dialog can name it. `R-J105`.
@@ -357,8 +399,12 @@ export function NotesTool() {
             </button>
           ) : (
             <textarea
+              ref={editorRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                touched.current = true;
+                setDraft(e.target.value);
+              }}
               spellCheck={false}
               className="min-h-0 flex-1 resize-none bg-[var(--bg)] px-2 pb-2 font-mono text-sm outline-none"
               placeholder="write something"

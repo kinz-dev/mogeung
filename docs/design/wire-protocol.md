@@ -348,7 +348,7 @@ the write guard, and the token covers them beyond loopback.
 | Event | Carries | Relay |
 |---|---|---|
 | `Notes` | every note, whole, after any change — two windows cannot drift | theirs |
-| `Tasks` | every task with `depth` and `group`, and `closed_today` | theirs |
+| `Tasks` | every task with `depth` and `group`, `closed_today`, and since `R-L17` `closed` — the closures since local midnight with their times, newest first, one per task by its words; `default`, so an older window still parses | theirs |
 | `Scratches` | every name and folder | theirs |
 | `ScratchContent` | one file, `fresh` true exactly once, on a create or duplicate | theirs |
 | `ScratchSaved` | the write landed | theirs |

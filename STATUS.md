@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 922 passing |
-| Rust | 67834 lines |
+| Tests | 923 passing |
+| Rust | 67902 lines |
 | Docs | 134 files, 45 ADRs |
 
 ## Assumptions
@@ -29,5 +29,5 @@ Untested: **20** · At risk: **6** · Supported: 26 · Refuted: 2
 | [opencode adapter](docs/features/0048-opencode-adapter.md) | `shipped` | [A4, A23] |
 | [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `shipped` | [A4, A49, A50] |
 | [Gau Geung — a team of agents](docs/features/0051-gau-geung.md) | `draft` | [A1, A24, A39, A51, A52, A53, A54] |
-| [The Tasks panel, redesigned — the document is the folder](docs/features/0052-tasks-redesign.md) | `draft` | [A6, A27] |
+| [The Tasks panel, redesigned — the document is the folder](docs/features/0052-tasks-redesign.md) | `active` | [A6, A27] |
 

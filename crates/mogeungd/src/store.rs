@@ -430,6 +430,24 @@ impl Store {
         Ok(n as u32)
     }
 
+    /// The closures since `at`, newest first, one per task by its words — the
+    /// list behind [`Self::closed_since`]'s count. `R-L17`.
+    pub fn closures_since(&self, at: i64) -> Result<Vec<(String, String, i64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut q = c.prepare(
+            "SELECT note_id, text, MAX(at) FROM task_events WHERE done = 1 AND at >= ?1 \
+             GROUP BY note_id, text ORDER BY MAX(at) DESC, text",
+        )?;
+        let rows = q.query_map(params![at], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     /// Every task, for the panel. Small by nature, like the notes themselves.
     #[allow(clippy::type_complexity)]
     pub fn load_tasks(&self) -> Result<Vec<(String, u32, String, bool, u32, Option<String>)>> {
@@ -1298,6 +1316,29 @@ mod tests {
 
         assert_eq!(tasks.len(), 2);
         assert_eq!(s.load_tasks().unwrap().len(), 2);
+    }
+
+    /// `R-L17`: the list behind the count — one entry per task by its words,
+    /// newest first, and a line ticked, unticked and ticked again is still one
+    /// entry, as the count has always said.
+    #[test]
+    fn closures_are_listed_once_per_task_newest_first() {
+        let s = store("tasks-closures");
+        s.save_note(&note("n1", "- [ ] a\n- [x] b\n")).unwrap();
+        s.rederive_tasks("n1", "- [ ] a\n- [x] b\n").unwrap();
+        let first = s.closures_since(0).unwrap();
+        assert_eq!(first.iter().map(|(_, t, _)| t.as_str()).collect::<Vec<_>>(), vec!["b"]);
+
+        s.rederive_tasks("n1", "- [x] a\n- [x] b\n").unwrap();
+        s.rederive_tasks("n1", "- [x] a\n- [ ] b\n").unwrap();
+        s.rederive_tasks("n1", "- [x] a\n- [x] b\n").unwrap();
+        let all = s.closures_since(0).unwrap();
+        let texts: Vec<&str> = all.iter().map(|(_, t, _)| t.as_str()).collect();
+        assert_eq!(texts.len(), 2, "b twice is one job done: {texts:?}");
+        assert!(texts.contains(&"a") && texts.contains(&"b"));
+        assert!(all.windows(2).all(|w| w[0].2 >= w[1].2), "newest first");
+        assert_eq!(s.closed_since(0).unwrap(), 2, "the count and the list agree");
+        assert!(s.closures_since(i64::MAX).unwrap().is_empty());
     }
 
     /// **The property ADR-0015 is built on**, and the one its own risk list

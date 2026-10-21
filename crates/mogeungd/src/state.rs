@@ -4356,8 +4356,12 @@ impl AppState {
         self.store.load_notes()
     }
 
-    /// Every task, and the count a checkbox cannot keep. `R-L3`.
-    pub fn tasks(&self) -> Result<(Vec<mogeung_core::wire::Task>, u32)> {
+    /// Every task, the count a checkbox cannot keep, and since `R-L17` the
+    /// list behind the count. `R-L3`.
+    #[allow(clippy::type_complexity)]
+    pub fn tasks(
+        &self,
+    ) -> Result<(Vec<mogeung_core::wire::Task>, u32, Vec<mogeung_core::wire::Closure>)> {
         let tasks = self
             .store
             .load_tasks()?
@@ -4373,7 +4377,14 @@ impl AppState {
                 },
             )
             .collect();
-        Ok((tasks, self.store.closed_since(start_of_today())?))
+        let since = start_of_today();
+        let closed = self
+            .store
+            .closures_since(since)?
+            .into_iter()
+            .map(|(note_id, text, at)| mogeung_core::wire::Closure { note_id, text, at })
+            .collect();
+        Ok((tasks, self.store.closed_since(since)?, closed))
     }
 
     /// Tick or untick a checkbox by rewriting the document it lives in.
