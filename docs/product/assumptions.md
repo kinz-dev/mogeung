@@ -1,7 +1,7 @@
 ---
 title: Assumption ledger
 status: active
-updated: 2026-10-09
+updated: 2026-10-21
 ---
 
 # Assumption ledger
@@ -123,7 +123,11 @@ per-follow *allow changes* consent, off by default, with the owning daemon's
 own gates still deciding ([ADR-0013](../decisions/0013-one-window-one-daemon.md)'s
 second amendment). So A24 stays `UNTESTED` rather than moving to `AT RISK`,
 and the row says so; recorded here so the sentence above does not read as an
-unmet instruction.
+unmet instruction. **On 2026-10-21 the default moved** (`R-J144`, ADR-0013's
+amendment of that date): a new follow allows changes from the start, and the
+checkbox turns them off. The consent is still per follow and the owning
+daemon's gates still decide, so what moved is the knowing act — following,
+rather than a second click after it — and A24 stays as it is.
 
 **A37 is A27 with a stronger incumbent, and that is the point of filing it
 separately.** A27 bet that writing would happen here rather than in the editor

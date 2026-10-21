@@ -33,8 +33,14 @@ function tokenOf(c: Connection): string | null {
  * The message that follows a saved connection. Keyed by the connection's own
  * id, so a second follow of the same entry *replaces* the first — which is how
  * a corrected token reaches the daemon — rather than following it twice.
+ *
+ * A new follow asks for *allow changes* **on** — since 2026-10-21 (`R-J144`,
+ * ADR-0013's amendment of that date); it was off until a hand turned it on,
+ * and the first thing a hand did on a followed machine was hit the grey box
+ * in New session and go back to Connections for it. The checkbox there turns
+ * it off, per follow; the owning daemon's own gates decide either way.
  */
-export function followMsg(c: Connection, allowWrites = false): ClientMsg {
+export function followMsg(c: Connection, allowWrites = true): ClientMsg {
   return {
     cmd: "follow",
     id: c.id,

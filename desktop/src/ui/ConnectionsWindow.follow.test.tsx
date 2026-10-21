@@ -84,12 +84,14 @@ afterEach(() => {
 });
 
 describe("following from the connections panel", () => {
-  it("follows with the token in its own field, the address clean, and changes off", async () => {
+  // `R-J144`: a new follow allows changes from the start; the checkbox is the
+  // way off, not the way on.
+  it("follows with the token in its own field, the address clean, and changes on", async () => {
     await open([]);
     pick("there");
     fireEvent.click(screen.getByRole("button", { name: "follow" }));
     expect(sent).toEqual([
-      { cmd: "follow", id: "b", name: "there", url: THERE, token: "6f1c", allow_writes: false },
+      { cmd: "follow", id: "b", name: "there", url: THERE, token: "6f1c", allow_writes: true },
     ]);
   });
 

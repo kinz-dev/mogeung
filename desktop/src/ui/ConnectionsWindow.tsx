@@ -646,11 +646,14 @@ function ConnectionForm({
                 {peerLine(follow.peer)}
               </div>
               {/*
-                The consent for `R-I23`, per follow and off until a hand turns
-                it on (ADR-0013's 2026-09-23 amendment). It does not *grant*
-                anything on the other machine: that daemon's own gates still
-                decide — its `--allow-run`, and send-to-session from its own
-                screen only (ADR-0003's amendment).
+                The consent for `R-I23`, per follow. Off until a hand turned it
+                on from 2026-09-23 (ADR-0013's amendment of that date); **on
+                from the moment you follow** since 2026-10-21 (`R-J144`, the
+                amendment of that date), and this box is how it goes off. It
+                does not *grant* anything on the other machine: that daemon's
+                own gates still decide — its `--allow-run`, and
+                send-to-session from its own screen only (ADR-0003's
+                amendment).
               */}
               <Checkbox
                 checked={follow.peer.allow_writes}
@@ -680,8 +683,8 @@ function ConnectionForm({
               <Button
                 variant="outline"
                 disabled={!c.url}
-                title="this machine's daemon connects to it with the token above and keeps its sessions in your Attention list"
-                onClick={() => follow.onFollow(false)}
+                title="this machine's daemon connects to it with the token above and keeps its sessions in your Attention list — with changes allowed from here until you turn them off below"
+                onClick={() => follow.onFollow(true)}
               >
                 follow
               </Button>

@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-19
+updated: 2026-10-21
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -280,8 +280,12 @@ The Tauri process keeps a small native half, native for one reason each:
 - **It hosts a daemon** (`daemon.rs`) when the port is free, on a thread, from
   `config.toml`, with `admit` checked on the main thread so a refusal is
   visible ([ADR-0009](../decisions/0009-the-window-may-host-a-daemon.md)). It
-  stops the llmproxy it started on exit, because the hosted daemon's own
-  shutdown path is unreachable ([model-and-proxy.md](model-and-proxy.md)).
+  hands that daemon every key `mogeungd` would read — `terminal` (`R-J143`)
+  joined the list on 2026-10-20 — because a window hosting its own daemon is
+  the shape mogeung is normally run in, and a key only `mogeungd` read would
+  be unset on it for ever. It stops the llmproxy it started on exit, because
+  the hosted daemon's own shutdown path is unreachable
+  ([model-and-proxy.md](model-and-proxy.md)).
 - **It opens exactly two kinds of URL**: `open_local_url` takes `http://` on
   a parsed loopback host (the proxy's admin page), `open_artifact_url` takes
   `https://claude.ai/artifact/` plus 22 base58 characters (`R-J115`). Neither
@@ -445,8 +449,12 @@ The store keeps the saved list's ids, names and addresses, never its tokens,
 from every load and save, and reads it once when the daemon first reports a
 follow. `useMachineNames` (`lib/useMachineNames.ts`) is the one hook both the
 Attention list and New session's machine picker (`R-J140`) read it through.
-`lib/federation.ts` renders a follow's state and the sentence beside it; the
-follow itself is the daemon's ([architecture.md](architecture.md#one-daemon-following-others-r-i18-feature-0047-2026-09-23)).
+`lib/federation.ts` renders a follow's state and the sentence beside it, and
+builds the one message that follows (`followMsg`) — with *allow changes* **on**
+for a new follow since 2026-10-21 (`R-J144`, ADR-0013's amendment of that
+date; the Connections checkbox is the way off, and an existing follow keeps
+what its `peers.json` says); the follow itself is the daemon's
+([architecture.md](architecture.md#one-daemon-following-others-r-i18-feature-0047-2026-09-23)).
 
 ## Updating itself (`R-J105`, ADR-0041)
 

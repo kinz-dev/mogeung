@@ -1,7 +1,7 @@
 ---
 title: Watching a remote machine
 status: active
-updated: 2026-10-20
+updated: 2026-10-21
 ---
 
 # Watching a remote machine
@@ -358,17 +358,18 @@ machine, this machine first, each row marked **on HOST**.
    `ssh_target` **its** daemon declares, so set one there (Route B's config
    lines). No `ssh_target`, and the pane says so rather than guessing.
 
-**Changes are off until you turn them on**, per follow: *allow changes on
-HOST from here* in the panel. Off, a git write, a run, a send or *forget* on a
-remote session is refused here, in words. On, it is sent — and **that
-machine's own rules still decide**: over a LAN it will not type into a session
-(only a person at that machine may), will not start a run unless it was
-started with `--allow-run`, and writes git only because it is token-gated.
-Turning it on grants nothing that machine does not already grant a window
-connecting to it directly. It does mean this machine now reaches that one on
-your behalf with a token over a network with no TLS — the same bet as the
-warning at the top of this page, one hop further; turn it on for machines on
-a network you trust.
+**Changes are on from the moment you follow**, per follow, and *allow
+changes on HOST from here* in the panel is how they go off (before 2026-10-21
+they were off until you turned them on). Off, a git write, a run, a send or
+*forget* on a remote session is refused here, in words. On, it is sent — and
+**that machine's own rules still decide**: over a LAN it will not type into a
+session (only a person at that machine may), will not start a run unless it
+was started with `--allow-run`, and writes git only because it is token-gated.
+Allowing changes grants nothing that machine does not already grant a window
+connecting to it directly. It does mean this machine reaches that one on your
+behalf with a token over a network with no TLS — the same bet as the warning
+at the top of this page, one hop further. Following is where you take it, so
+untick the box for a machine on a network you do not trust.
 
 **What never crosses:** raising a terminal window, opening a folder or
 IntelliJ — they would happen on a screen nobody here is looking at, so the

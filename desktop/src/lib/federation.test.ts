@@ -19,7 +19,7 @@ describe("following a saved connection", () => {
       name: "ws://devbox:7717/ws",
       url: "ws://devbox:7717/ws",
       token: "6f1c",
-      allow_writes: false,
+      allow_writes: true,
     });
   });
 

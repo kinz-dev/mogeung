@@ -879,8 +879,11 @@ pub enum ClientMsg {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
-        /// Forward write and run verbs to this daemon. Off unless asked for —
-        /// `R-I23`, and the peer's own gates still decide on its side.
+        /// Forward write and run verbs to this daemon. Absent, off; the
+        /// window asks for it **on** for a new follow since 2026-10-21
+        /// (`R-J144`, ADR-0013's amendment of that date) and `SetPeerWrites`
+        /// turns it off — `R-I23`, and the peer's own gates still decide on
+        /// its side.
         #[serde(default)]
         allow_writes: bool,
     },

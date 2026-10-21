@@ -1,7 +1,7 @@
 ---
 title: One window watches one daemon
 status: active
-updated: 2026-10-08
+updated: 2026-10-21
 decided: 2026-07-31
 ---
 
@@ -263,3 +263,40 @@ finally declared dead.
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes
 it and set `status: superseded` plus `superseded_by:` here.*
+
+## Amendment — 2026-10-21: a new follow allows changes
+
+**The consent's default flips: *allow changes* is on from the moment you
+follow, and the checkbox is how it goes off.** Asked on 2026-10-21: *"in the
+connections screen can we make the 'allow change from.....from here' checkbox
+by default enable please?"* — `R-J144`.
+
+The amendment of 2026-09-23, later, made the consent off by default so that a
+person turned it on for one follow *knowing the row was open*. In use the
+knowing turned out to be a second trip: the first thing a person did on a
+followed machine was a change — a launch from New session (`R-J135`), a git
+write — and met the grey box with the Connections sentence, went to
+Connections, ticked the box, came back. For one person following their own
+machines over a network they already trust, that trip protected nothing,
+because the second gate is the one doing the protecting.
+
+**What this replaces:** the words *off by default* in the amendment above. The
+window's *follow* — the panel's button and the switcher's — now sends
+`allow_writes: true`; *allow changes on HOST from here* turns it off, per
+follow; the button's title says what following now includes.
+
+**What stands:** the consent is per follow, settable only from a window on
+this machine, and a follow with it off is refused here in words as before. The
+owning daemon's own gates still judge the relay as the client it is — a
+relayed send is refused over a LAN (ADR-0003, clause 4), a relayed run needs
+the peer's `--allow-run` (ADR-0025, clause 4), a git write needs the peer's
+token-gated posture (ADR-0014). Following is still a loopback act; nothing is
+re-exported. An existing follow keeps the value written in its `peers.json`.
+The wire's default for an *absent* `allow_writes` stays off, so a client that
+does not ask gets the conservative value; the window asks.
+
+**Where the risk now sits:** the knowing act is *following* a machine rather
+than a second click after it. [A24](../product/assumptions.md) is left as the
+owner had it, `UNTESTED`; the paragraph in the assumption ledger that recorded
+the 2026-09-23 relaxation records this one beside it.
+
