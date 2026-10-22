@@ -280,6 +280,15 @@ pub struct ModelHealth {
     /// The last failure, and the last success, in wall-clock milliseconds.
     pub last_error: Option<String>,
     pub last_ok_ms: Option<u64>,
+    /// What will answer the Ask panel when it is the sandboxed agent:
+    /// *opencode 1.19.2 · sandboxed*. `R-O14`. Learnt from the last probe,
+    /// at start-up or at the last ask, and never probed on the scan tick.
+    #[serde(default)]
+    pub ask_agent: Option<String>,
+    /// Why the Ask panel will be answered as plain chat instead, when that
+    /// is not your own `ask_agent = false`.
+    #[serde(default)]
+    pub ask_agent_note: Option<String>,
 }
 
 /// Build the health row from settings and the bind decision.
@@ -295,6 +304,8 @@ pub fn health(settings: &ModelSettings, chat_allowed: bool) -> ModelHealth {
         refusal: refusal.map(|r| r.message()),
         last_error: None,
         last_ok_ms: None,
+        ask_agent: None,
+        ask_agent_note: None,
     }
 }
 

@@ -4,6 +4,7 @@
 //! It deliberately has no async, no I/O and no heavy dependencies, so that a
 //! second client (a thin web UI, a CLI) can be built against it cheaply.
 
+pub mod askagent;
 pub mod attention;
 pub mod change;
 pub mod config;

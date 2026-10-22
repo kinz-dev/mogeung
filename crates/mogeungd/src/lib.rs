@@ -3,6 +3,7 @@
 
 pub mod adapter;
 pub mod api;
+pub mod askagent;
 pub mod browse;
 pub mod catalogue;
 pub mod codex;

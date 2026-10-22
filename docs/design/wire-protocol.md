@@ -1,7 +1,7 @@
 ---
 title: Wire protocol
 status: active
-updated: 2026-10-21
+updated: 2026-10-22
 covers:
   - crates/mogeung-core/src/wire.rs
   - crates/mogeung-core/src/federation.rs
@@ -606,7 +606,7 @@ matter most. The rest is [run-and-debug.md](run-and-debug.md).
 
 | Command | Carries | Answered by | Hop |
 |---|---|---|---|
-| `ModelChat` | `id`, `messages` (the whole conversation, every time), `conversation` (omit to keep nothing), `about { session_id, path, anchor }`, `stream` | `ModelChunk`… then one `ModelReply`, to the asker | here |
+| `ModelChat` | `id`, `messages` (the whole conversation, every time), `conversation` (omit to keep nothing), `about { session_id, path, anchor }`, `stream`, `agent` (the Ask panel's alone — answer with the sandboxed agent where this daemon can; ignored with `about`) | `ModelChunk`… (and `ModelStep`… for the agent) then one `ModelReply`, to the asker | here |
 | `ModelStop` | `id` | no reply of its own; the ask answers with `stopped: true` | here |
 | `ReadingGuide` | `session_id` | `ReadingGuideReady` | read |
 | `SemanticSearch` | `query` | `SemanticResults`, to the asker | here |
@@ -619,7 +619,8 @@ matter most. The rest is [run-and-debug.md](run-and-debug.md).
 | Event | Carries | Relay |
 |---|---|---|
 | `ModelChunk` | `delta`, coalesced at 60 ms or 400 characters | theirs |
-| `ModelReply` | `text` **or** `error`, `model`, `elapsed_ms`, `stopped`, and for `about`: `cites`, `basis` (`turns` · `code` · `unanswered`), `narration` | theirs |
+| `ModelStep` | `step { tool, title, ok }`: one thing the agent did, as it happens (`R-O14`) | theirs |
+| `ModelReply` | `text` **or** `error`, `model`, `elapsed_ms`, `stopped`, and for `about`: `cites`, `basis` (`turns` · `code` · `unanswered`), `narration`; for an agent ask: `agent` (what answered), `steps` (all of them), or `agent_note` (why plain chat answered instead) | theirs |
 | `ReadingGuideReady` | every file, ranked first, the rest `ranked: false`; `error` on the same message | pass |
 | `SemanticResults` | hits shaped like search hits plus `score`, `model`, `built_ms`, `stale`, `refusal` | theirs |
 | `FailureClusters` | failures grouped by meaning, `model`, `refusal` | theirs |
@@ -629,7 +630,10 @@ matter most. The rest is [run-and-debug.md](run-and-debug.md).
 `ModelChat` is the only command that carries free-form text — everything else
 names a thing the daemon already has — and three features (the chat, the
 draft, ask-the-diff) ride it as a purpose rather than as families of their
-own. A refusal arrives as an ordinary `error`, never as silence. The handler
+own. Since `R-O14` the Ask panel's ask may set `agent`, and the daemon answers it
+with opencode in a sandbox where it can build one
+([ADR-0046](../decisions/0046-an-ask-may-be-answered-by-a-sandboxed-agent.md));
+no other purpose sets it, because the others carry mogeung's evidence. A refusal arrives as an ordinary `error`, never as silence. The handler
 is spawned, not awaited, so a cold model cannot freeze the connection. The
 rest — consent, streaming, provenance, the guide's rule, the index as a cache
 — is [model-and-proxy.md](model-and-proxy.md).
@@ -659,7 +663,7 @@ everything else needs a restart, and the window says which is which. The
 keys: `listen`, `addr`, `url`, `db`, `poll_ms`, `notify`, `push_url`,
 `token`, `ssh_target`, `advertise`, `beacon`, `terminal` (`R-J143`),
 `model_url`, `model_name`, `embed_model`,
-`allow_remote_model`, `chat_history`, `llmproxy`, `llmproxy_bin`,
+`allow_remote_model`, `chat_history`, `ask_agent` (`R-O14`, re-applied on save), `llmproxy`, `llmproxy_bin`,
 `llmproxy_config`, `llmproxy_port`, `hotkey`, `update_check`, `update_branch`,
 `update_interval`, `update_source`, `refresh_pricing`; a flag always beats the
 file, and `--allow-run` has no file twin on purpose.

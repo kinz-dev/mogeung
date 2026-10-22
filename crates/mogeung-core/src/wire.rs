@@ -573,6 +573,18 @@ pub enum ClientMsg {
         /// answer would be when a second feature wanted this door.
         #[serde(default)]
         about: Option<AskAbout>,
+        /// The Ask panel would like this answered by the sandboxed agent.
+        /// `R-O14`, ADR-0046.
+        ///
+        /// A request, not a command: the daemon answers with the agent only
+        /// where it can (Linux, `bwrap`, opencode, `ask_agent` not off), and
+        /// otherwise as plain chat with `agent_note` saying why. Only the Ask
+        /// panel sets it. Clause 1 keeps the draft, ask-the-diff and the
+        /// command line off it, because those carry mogeung's evidence. It is
+        /// ignored when `about` is present for the same reason. An older
+        /// daemon ignores it and answers as chat, which is what it always did.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        agent: bool,
     },
     /// Stop the chat answer `id` where it is. `R-J118`.
     ///
@@ -1764,6 +1776,30 @@ pub enum ServerMsg {
         /// arrived by then, and may be empty. `R-J118`.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         stopped: bool,
+        /// What answered when the sandboxed agent did: *opencode 1.19.2 ·
+        /// sandboxed*. `None` for every plain-chat answer. `R-O14`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+        /// Why an ask that wanted the agent was answered as plain chat. Shown
+        /// under the answer, so an ordinary reply is never read as the
+        /// agent's. `None` when the agent answered, when it was not asked for,
+        /// or when `ask_agent = false` said not to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_note: Option<String>,
+        /// Everything the agent did, in order. The whole list, so a dropped
+        /// [`ServerMsg::ModelStep`] costs jitter rather than a missing line.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        steps: Vec<crate::askagent::AgentStep>,
+    },
+    /// One thing the sandboxed agent did while answering `id`, as it happens.
+    /// `R-O14`.
+    ///
+    /// The early view of [`ServerMsg::ModelReply`]'s `steps`, as `ModelChunk`
+    /// is of its text: an agent answer takes tens of seconds, and a list
+    /// that grows is the difference between *working* and *hung*.
+    ModelStep {
+        id: String,
+        step: crate::askagent::AgentStep,
     },
     /// A model's reading order for one session's diff. `R-O3`.
     ///

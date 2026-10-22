@@ -18,6 +18,7 @@ import { showScratchPane, closeMissingScratchPanes } from "@/lib/scratch";
 import { usePaneId } from "@/lib/paneScope";
 import { DaemonClient, defaultUrl, type ConnState } from "@/wire/client";
 import type {
+  AgentStep,
   AnswerBasis,
   Citation,
   SemanticHit,
@@ -129,6 +130,12 @@ export interface ChatMessage {
   elapsed_ms?: number;
   /** You stopped it: `content` is what had arrived, and may be empty. `R-J118`. */
   stopped?: boolean;
+  /** What the sandboxed agent did, in order. `R-O14`. */
+  steps?: AgentStep[];
+  /** What answered when it was the agent: *opencode 1.19.2 · sandboxed*. */
+  agent?: string;
+  /** Why the agent did not answer an ask that wanted it. */
+  agentNote?: string;
 }
 
 /**
@@ -1484,7 +1491,10 @@ export const useStore = create<AppState>((set, get) => ({
       ],
     }));
     set({ conversationId: conversation });
-    get().send({ cmd: "model_chat", id, messages, conversation });
+    // `agent: true` here and nowhere else (ADR-0046 clause 1): this is the
+    // one ask that carries only what you typed. The daemon decides whether
+    // the agent can answer, and says so on the reply when it cannot.
+    get().send({ cmd: "model_chat", id, messages, conversation, agent: true });
   },
 
   /**
@@ -2193,6 +2203,15 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         break;
       }
+      case "model_step":
+        // Steps belong to the chat alone: no other ask on this door sets
+        // `agent`, so there is no draft or diff answer to route them to.
+        set((s) => ({
+          chat: s.chat.map((m) =>
+            m.id === msg.id && m.pending ? { ...m, steps: [...(m.steps ?? []), msg.step] } : m,
+          ),
+        }));
+        break;
       case "model_reply": {
         // Fourth destination on one door (`R-O12`), checked with the others: a
         // command drafted for a terminal must not surface in a conversation,
@@ -2286,6 +2305,11 @@ export const useStore = create<AppState>((set, get) => ({
                   model: msg.model || undefined,
                   elapsed_ms: msg.elapsed_ms,
                   stopped: msg.stopped || undefined,
+                  // The whole list, for the same reason as the text: a
+                  // step that never arrived as `model_step` is repaired here.
+                  steps: msg.steps?.length ? msg.steps : m.steps,
+                  agent: msg.agent ?? undefined,
+                  agentNote: msg.agent_note ?? undefined,
                 }
               : m,
           ),

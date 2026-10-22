@@ -116,6 +116,17 @@ pub struct Config {
     /// emptying the bucket, and a setting that deleted your history would be a
     /// nasty surprise for anyone who set it to stop *adding* to it.
     pub chat_history: Option<bool>,
+    /// Daemon: answer the Ask panel with opencode, inside a bubblewrap
+    /// sandbox. `R-O14`,
+    /// [ADR-0046](../../../docs/decisions/0046-an-ask-may-be-answered-by-a-sandboxed-agent.md).
+    /// Absent means yes, and the owner chose that default.
+    ///
+    /// Yes only does anything where the sandbox can be built: on Linux, with
+    /// `bwrap` and `opencode` found. Anywhere else the panel answers as plain
+    /// chat and says why. There is deliberately no value that runs the agent
+    /// without the sandbox. `ask_agent = false` returns Ask to plain chat
+    /// with no note.
+    pub ask_agent: Option<bool>,
     /// Daemon: run an llmproxy of mogeung's own in front of the model, so
     /// Ask Mogeung can route per question. `R-O10`, ADR-0033. Absent means no.
     ///

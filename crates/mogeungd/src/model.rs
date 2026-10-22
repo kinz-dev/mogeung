@@ -51,6 +51,13 @@ struct Inner {
     chat_allowed: bool,
     last_error: Option<String>,
     last_ok_ms: Option<u64>,
+    /// `ask_agent` from the config file. `R-O14`. **Defaults to true** in
+    /// [`Model::new`], matching the file's absent-means-yes.
+    agent_enabled: bool,
+    /// What the last probe found: what will answer, or why plain chat will.
+    /// For the Health row only; every ask probes again.
+    agent: Option<String>,
+    agent_note: Option<String>,
 }
 
 impl Model {
@@ -58,6 +65,7 @@ impl Model {
         Model {
             inner: Mutex::new(Inner {
                 chat_allowed: true,
+                agent_enabled: true,
                 ..Inner::default()
             }),
             stops: Mutex::new(HashMap::new()),
@@ -90,6 +98,45 @@ impl Model {
     }
 
     /// The Health row, including what the last ask did.
+    /// `ask_agent` from the config file, at start-up and on a save. `R-O14`.
+    pub fn set_agent_enabled(&self, enabled: bool) {
+        let mut g = self.inner.lock().expect("model lock");
+        g.agent_enabled = enabled;
+        if !enabled {
+            g.agent = None;
+            g.agent_note = None;
+        }
+    }
+
+    pub fn agent_enabled(&self) -> bool {
+        self.inner.lock().expect("model lock").agent_enabled
+    }
+
+    /// Remember what a probe found, for the Health row.
+    pub fn note_agent(&self, probe: &Result<crate::askagent::Ready, mogeung_core::askagent::Unavailable>) {
+        let mut g = self.inner.lock().expect("model lock");
+        match probe {
+            Ok(r) => {
+                g.agent = Some(r.provenance());
+                g.agent_note = None;
+            }
+            Err(u) => {
+                g.agent = None;
+                g.agent_note = u.note();
+            }
+        }
+    }
+
+    /// Probe on a blocking thread, and remember what it found.
+    pub async fn probe_agent(&self) -> Result<crate::askagent::Ready, mogeung_core::askagent::Unavailable> {
+        let enabled = self.agent_enabled();
+        let probe = tokio::task::spawn_blocking(move || crate::askagent::probe(enabled))
+            .await
+            .unwrap_or_else(|e| Err(mogeung_core::askagent::Unavailable::BwrapFails(format!("the probe failed: {e}"))));
+        self.note_agent(&probe);
+        probe
+    }
+
     pub fn health(&self) -> Option<ModelHealth> {
         self.health_for(false)
     }
@@ -106,6 +153,8 @@ impl Model {
         let mut h = policy::health(&g.settings, g.chat_allowed || from_this_machine);
         h.last_error = g.last_error.clone();
         h.last_ok_ms = g.last_ok_ms;
+        h.ask_agent = g.agent.clone();
+        h.ask_agent_note = g.agent_note.clone();
         Some(h)
     }
 
@@ -182,20 +231,7 @@ impl Model {
         // general-purpose LLM proxy *for the LAN*. The window on this machine
         // is not the LAN, whatever the bind — it could have asked the model
         // directly — so it passes; any other client is judged by the bind.
-        let (settings, chat_allowed) = {
-            let g = self.inner.lock().expect("model lock");
-            (g.settings.clone(), g.chat_allowed || from_this_machine)
-        };
-        if let Err(r) = policy::admit_chat(&settings, chat_allowed) {
-            // A refusal is not recorded as `last_error`: nothing was attempted,
-            // and a health row saying "the endpoint failed" when the endpoint
-            // was never asked is the kind of wrong that costs an afternoon.
-            return Err(r.message());
-        }
-        if messages.is_empty() {
-            return Err("nothing to ask".into());
-        }
-
+        let settings = self.admitted(messages, from_this_machine)?;
         let base = policy::normalise_base(settings.url.as_deref().unwrap_or_default());
         let url = policy::chat_url(&base);
         let body = chat_body(settings.model.as_deref(), messages);
@@ -215,6 +251,102 @@ impl Model {
             }
         }
     }
+}
+
+impl Model {
+    /// The settings an ask may use, or the sentence saying why not. One gate
+    /// for the chat and the agent alike, so they cannot come to disagree.
+    fn admitted(&self, messages: &[ChatTurn], from_this_machine: bool) -> Result<ModelSettings, String> {
+        // Clause 4 keeps a daemon reachable from the LAN from becoming a
+        // general-purpose LLM proxy *for the LAN*. The window on this machine
+        // is not the LAN, whatever the bind — it could have asked the model
+        // directly — so it passes; any other client is judged by the bind.
+        let (settings, chat_allowed) = {
+            let g = self.inner.lock().expect("model lock");
+            (g.settings.clone(), g.chat_allowed || from_this_machine)
+        };
+        if let Err(r) = policy::admit_chat(&settings, chat_allowed) {
+            // A refusal is not recorded as `last_error`: nothing was attempted,
+            // and a health row saying "the endpoint failed" when the endpoint
+            // was never asked is the kind of wrong that costs an afternoon.
+            return Err(r.message());
+        }
+        if messages.is_empty() {
+            return Err("nothing to ask".into());
+        }
+        Ok(settings)
+    }
+
+    /// Ask the sandboxed agent, forwarding text and steps as they land.
+    /// `R-O14`, ADR-0046.
+    ///
+    /// The same gate as the chat, the same endpoint (the agent's opencode
+    /// config is built from these settings, llmproxy included), the same stop
+    /// bell under the client's id, and the same residue in the Health row.
+    pub async fn agent_streaming<T, S>(
+        &self,
+        id: &str,
+        messages: &[ChatTurn],
+        from_this_machine: bool,
+        ready: &crate::askagent::Ready,
+        mut on_text: T,
+        mut on_step: S,
+    ) -> Result<AgentAnswer, String>
+    where
+        T: FnMut(String) + Send,
+        S: FnMut(mogeung_core::askagent::AgentStep) + Send,
+    {
+        let settings = self.admitted(messages, from_this_machine)?;
+        let base = policy::normalise_base(settings.url.as_deref().unwrap_or_default());
+        let bell = Arc::new(Notify::new());
+        self.stops.lock().expect("stops lock").insert(id.to_string(), bell.clone());
+        let started = std::time::Instant::now();
+        let outcome = crate::askagent::run(
+            ready,
+            &base,
+            settings.model.as_deref(),
+            messages,
+            &mut on_text,
+            &mut on_step,
+            Some(&bell),
+        )
+        .await;
+        self.stops.lock().expect("stops lock").remove(id);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let mut g = self.inner.lock().expect("model lock");
+        match outcome {
+            Ok(o) => {
+                g.last_error = None;
+                g.last_ok_ms = Some(elapsed_ms);
+                Ok(AgentAnswer {
+                    text: o.text,
+                    steps: o.steps,
+                    stopped: o.stopped,
+                    model: settings.model.unwrap_or_else(|| "default".into()),
+                    elapsed_ms,
+                    agent: ready.provenance(),
+                })
+            }
+            Err(e) => {
+                g.last_error = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+}
+
+/// One answer from the sandboxed agent. `R-O14`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentAnswer {
+    pub text: String,
+    pub steps: Vec<mogeung_core::askagent::AgentStep>,
+    pub stopped: bool,
+    /// The model the agent was configured with. opencode does not say which
+    /// one answered, so this is what was asked for, not a report.
+    pub model: String,
+    pub elapsed_ms: u64,
+    /// *opencode 1.19.2 · sandboxed*.
+    pub agent: String,
 }
 
 /// One answer, and what actually produced it.

@@ -44,6 +44,10 @@ pub struct Options {
     /// `chat_history = false` in the file is the way back to `R-O5`'s
     /// keep-nothing behaviour.
     pub chat_history: bool,
+    /// Answer the Ask panel with opencode in a sandbox. `R-O14`, ADR-0046.
+    /// File-only and default on, like `chat_history`: a standing preference,
+    /// and the agent never runs anywhere the sandbox cannot be built.
+    pub ask_agent: bool,
     /// The terminal application the Agent pane's terminal button opens a
     /// session's folder in. `R-J143`. File-only, like `chat_history`: a
     /// standing preference about this machine's desktop, not a property of
@@ -72,6 +76,9 @@ impl Default for Options {
             // On, matching the file's absent-means-yes: the history is the
             // ordinary behaviour and turning it off is the deliberate act.
             chat_history: true,
+            // On, as the owner chose (feature 0053): with no sandbox it is
+            // plain chat anyway, and says so.
+            ask_agent: true,
             // Unset: the platform's own default, decided where the button
             // is pressed. `R-J143`.
             terminal: None,
@@ -257,6 +264,15 @@ where
     // this door needs a person at this machine.
     let _ = state.send_allowed.set(crate::send::allowed(&addr));
     let _ = state.chat_history.set(opts.chat_history);
+    // `R-O14`. Probed once now so the Health row and the empty Ask panel can
+    // say what will answer before anyone asks; every ask probes again.
+    state.model.set_agent_enabled(opts.ask_agent);
+    {
+        let s = state.clone();
+        tokio::spawn(async move {
+            let _ = s.model.probe_agent().await;
+        });
+    }
     // A lock rather than a `OnceLock`, because a config save re-applies it
     // (`R-J143`): which terminal opens is the kind of thing you change and
     // try at once, and a restart between the two is the cost that stops

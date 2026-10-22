@@ -1,7 +1,7 @@
 ---
 title: Consent to a remote model endpoint names the host, and may be given in the config file
 status: active
-updated: 2026-10-09
+updated: 2026-10-22
 decided: 2026-08-28
 supersedes: ADR-0030
 ---
@@ -170,6 +170,19 @@ with no endpoint there is no handover, and nothing blocks a scan tick to
 write one. [ADR-0034](0034-the-draft-is-a-chat-ask.md)'s amendment of this
 date narrows its *never composes-and-delivers in one gesture* to the human's
 draft, which is the other half of this change.
+
+## Amendment — 2026-10-22
+
+**Clause 1's *"it writes nothing outside `~/.mogeung`"* gains one exception,
+and it is a place that is not on disk.** An Ask answered by the sandboxed
+agent ([ADR-0046](0046-an-ask-may-be-answered-by-a-sandboxed-agent.md)) may
+write, but only into a size-capped tmpfs that dies with the process. Its
+endpoint is this seam's own: the settings the chat would have used, including
+mogeung's llmproxy, judged by the same consent. So clause 3 is not bypassed
+by opencode having a provider config of its own, because the daemon writes
+that config for each ask. Clause 4 is unchanged: the agent path is reached
+only through `model_chat`, so it is loopback's. Clause 5 is unchanged: its
+tool steps are shown as what it did, never as evidence.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

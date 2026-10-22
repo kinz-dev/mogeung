@@ -418,6 +418,9 @@ async fn ask_about(
         basis: None,
         narration: false,
         stopped: false,
+        agent: None,
+        agent_note: None,
+        steps: Vec::new(),
     };
 
     let question = messages
@@ -502,6 +505,9 @@ async fn ask_about(
             basis: Some(AnswerBasis::Code),
             narration: false,
             stopped: false,
+            agent: None,
+            agent_note: None,
+            steps: Vec::new(),
         };
     }
 
@@ -530,6 +536,9 @@ async fn ask_about(
         basis: Some(if parsed.no_reason { AnswerBasis::Unanswered } else { AnswerBasis::Turns }),
         narration,
         stopped: false,
+        agent: None,
+        agent_note: None,
+        steps: Vec::new(),
     }
 }
 
@@ -537,6 +546,77 @@ async fn ask_about(
 ///
 /// `--bin why`'s own number, so the panel is asking what the harness measured.
 const ASK_TURNS: usize = 6;
+
+/// A `model_reply` that is a refusal or a failure: the sentence, and nothing
+/// that could be read as an answer.
+fn model_failed(id: String, error: String, agent_note: Option<String>) -> ServerMsg {
+    ServerMsg::ModelReply {
+        id,
+        text: None,
+        error: Some(error),
+        model: String::new(),
+        elapsed_ms: 0,
+        cites: Vec::new(),
+        basis: None,
+        narration: false,
+        stopped: false,
+        agent: None,
+        agent_note,
+        steps: Vec::new(),
+    }
+}
+
+/// An Ask answered by the sandboxed agent. `R-O14`, ADR-0046.
+///
+/// Text goes out as `model_chunk` and steps as `model_step` while it works;
+/// the reply carries both whole, so a dropped event costs jitter and never a
+/// line of the answer. Kept in the history as the chat is, text only: the
+/// steps are what it did, not what was said (ADR-0046 clause 7).
+async fn ask_agent(
+    state: &AppState,
+    id: &str,
+    messages: &[mogeung_core::model::ChatTurn],
+    conversation: Option<&str>,
+    ready: &crate::askagent::Ready,
+    reply: &tokio::sync::mpsc::Sender<ServerMsg>,
+    from_this_machine: bool,
+) -> ServerMsg {
+    let (text_reply, step_reply) = (reply.clone(), reply.clone());
+    let (text_id, step_id) = (id.to_string(), id.to_string());
+    let answer = state
+        .model
+        .agent_streaming(
+            id,
+            messages,
+            from_this_machine,
+            ready,
+            |delta| send_reply(&text_reply, ServerMsg::ModelChunk { id: text_id.clone(), delta }),
+            |step| send_reply(&step_reply, ServerMsg::ModelStep { id: step_id.clone(), step }),
+        )
+        .await;
+    match answer {
+        Ok(a) => {
+            if let Some(cid) = conversation.filter(|_| !a.text.is_empty()) {
+                keep_conversation(state, cid, messages, &a.text, from_this_machine);
+            }
+            ServerMsg::ModelReply {
+                id: id.to_string(),
+                text: Some(a.text),
+                error: None,
+                model: a.model,
+                elapsed_ms: a.elapsed_ms,
+                cites: Vec::new(),
+                basis: None,
+                narration: false,
+                stopped: a.stopped,
+                agent: Some(a.agent),
+                agent_note: None,
+                steps: a.steps,
+            }
+        }
+        Err(e) => model_failed(id.to_string(), e, None),
+    }
+}
 
 fn keep_conversation(
     state: &AppState,
@@ -1718,6 +1798,9 @@ async fn handle(
                         // otherwise would be worse than not doing it at all.
                         if let Ok(c) = mogeung_core::config::Config::check(&text) {
                             state.set_terminal(c.terminal.clone());
+                            // `R-O14`: switching the agent off or on is the kind of
+                            // thing you try at once.
+                            state.model.set_agent_enabled(c.ask_agent.unwrap_or(true));
                             let mut settings = state.model.settings();
                             settings.url = c.model_url.clone();
                             settings.model = c.model_name.clone();
@@ -1784,6 +1867,7 @@ async fn handle(
             messages,
             conversation,
             about,
+            agent,
         } => {
             // This machine's model cannot read another machine's files, and
             // the question is not forwarded: it is free-form text, which is
@@ -1796,19 +1880,13 @@ async fn handle(
                     .unwrap_or_else(|| "another machine".into());
                 send_reply(
                     reply,
-                    ServerMsg::ModelReply {
+                    model_failed(
                         id,
-                        text: None,
-                        error: Some(format!(
+                        format!(
                             "that session is on {host} — ask about it from a window on that machine, whose model can read its files"
-                        )),
-                        model: String::new(),
-                        elapsed_ms: 0,
-                        cites: Vec::new(),
-                        basis: None,
-                        narration: false,
-                        stopped: false,
-                    },
+                        ),
+                        None,
+                    ),
                 );
                 return;
             }
@@ -1824,6 +1902,10 @@ async fn handle(
                 // reply is a **form** (`REASON:` / `CITES:`) that is parsed
                 // before it is shown, and streaming the scaffolding into a
                 // panel would put the form on screen instead of the answer.
+                //
+                // Never the agent, whatever `agent` says: this question
+                // carries mogeung's evidence, and ADR-0046 clause 1 keeps the
+                // corpus away from anything with the network.
                 if let Some(about) = about {
                     let msg = ask_about(&state, &id, &messages, &about, from_this_machine).await;
                     send_reply(&reply, msg);
@@ -1831,6 +1913,32 @@ async fn handle(
                         health: Box::new(state.health().await),
                     });
                     return;
+                }
+                // The Ask panel asked for the agent. `R-O14`, ADR-0046. It
+                // answers where the sandbox can be built, and otherwise this
+                // falls through to the chat with a note saying why. Probed per
+                // ask, so installing `bubblewrap` needs no restart.
+                let mut agent_note = None;
+                let mut sent = messages.clone();
+                if agent {
+                    match state.model.probe_agent().await {
+                        Ok(ready) => {
+                            let msg = ask_agent(&state, &id, &messages, conversation.as_deref(), &ready, &reply, from_this_machine).await;
+                            send_reply(&reply, msg);
+                            state.broadcast(ServerMsg::Health {
+                                health: Box::new(state.health().await),
+                            });
+                            return;
+                        }
+                        Err(u) => {
+                            agent_note = u.note();
+                            // The half of the 2026-10-22 report that was not
+                            // about tools: with no system message the model
+                            // did not know the date. Sent, never kept — the
+                            // history holds what you asked.
+                            sent.insert(0, mogeung_core::askagent::date_line(&crate::askagent::today()));
+                        }
+                    }
                 }
                 // Forwarded as it arrives. `R-O11`: on a route to a large
                 // model this is the difference between one second and forty
@@ -1844,7 +1952,7 @@ async fn handle(
                 let chunk_id = id.clone();
                 let msg = match state
                     .model
-                    .chat_streaming(&id, &messages, from_this_machine, |delta| {
+                    .chat_streaming(&id, &sent, from_this_machine, |delta| {
                         send_reply(
                             &chunk_reply,
                             ServerMsg::ModelChunk { id: chunk_id.clone(), delta },
@@ -1876,22 +1984,15 @@ async fn handle(
                             basis: None,
                             narration: false,
                             stopped: a.stopped,
+                            agent: None,
+                            agent_note,
+                            steps: Vec::new(),
                         }
                     }
                     // A refusal and a failure arrive by the same door. The
                     // panel has to say *something* — a silent box reads as a
                     // bug in mogeung rather than as a daemon declining.
-                    Err(e) => ServerMsg::ModelReply {
-                        id,
-                        text: None,
-                        error: Some(e),
-                        model: String::new(),
-                        elapsed_ms: 0,
-                        cites: Vec::new(),
-                        basis: None,
-                        narration: false,
-                        stopped: false,
-                    },
+                    Err(e) => model_failed(id, e, agent_note),
                 };
                 send_reply(&reply, msg);
                 // Health carries the residue of that ask, and the window shows

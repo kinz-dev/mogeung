@@ -202,3 +202,82 @@ describe("an answer that arrives in pieces", () => {
     expect(useStore.getState().chat[0].content).toBe("done");
   });
 });
+
+/**
+ * The sandboxed agent. `R-O14`, ADR-0046.
+ *
+ * Clause 1 is the one a client can break: only the Ask panel's own question
+ * may ask for the agent, because every other ask on this door carries
+ * mogeung's evidence, and an agent with the network must never be handed it.
+ */
+describe("asking the agent", () => {
+  beforeEach(() => {
+    sent.length = 0;
+    useStore.setState({ chat: [], send: (m) => void sent.push(m) });
+  });
+
+  const chats = () => sent.filter((m) => m.cmd === "model_chat") as Extract<ClientMsg, { cmd: "model_chat" }>[];
+
+  it("asks for it from the Ask panel, and from nowhere else on the same door", () => {
+    useStore.getState().askModel("summarise https://example.com");
+    useStore.getState().askForCommand("list big files", "/repo", "zsh");
+    useStore.getState().askAboutHunk("s1", "src/a.rs", "@@ -1 +1 @@", "why?");
+    // The draft is the sharpest case: its text *is* your diff.
+    useStore.setState({
+      flagged: [{ sessionId: "s1", path: "src/a.rs", header: "@@ -1 +1 @@", note: "", body: ["+secret"] }],
+    });
+    useStore.getState().draftFollowUp("tidy this");
+    const [ask, command, hunk, draft] = chats();
+    expect(ask.agent).toBe(true);
+    expect(command.agent).toBeUndefined();
+    expect(hunk.agent).toBeUndefined();
+    expect(draft.agent).toBeUndefined();
+  });
+
+  it("puts each step on the turn it belongs to, while it works", () => {
+    useStore.setState({
+      chat: [
+        { id: "q1", role: "assistant", content: "", pending: true },
+        { id: "q2", role: "assistant", content: "", pending: true },
+      ],
+    });
+    const step = { tool: "webfetch", title: "https://example.com", ok: true };
+    useStore.getState().ingest({ ev: "model_step", id: "q2", step });
+    const [one, two] = useStore.getState().chat;
+    expect(one.steps).toBeUndefined();
+    expect(two.steps).toEqual([step]);
+  });
+
+  /** The reply carries every step, so one lost on the way is put back. */
+  it("takes the reply's steps as the truth, and keeps what answered", () => {
+    useStore.setState({ chat: [{ id: "q1", role: "assistant", content: "", pending: true }] });
+    const a = { tool: "webfetch", title: "https://a", ok: true };
+    const b = { tool: "bash", title: "touch /home/x", ok: false };
+    useStore.getState().ingest({ ev: "model_step", id: "q1", step: a });
+    useStore.getState().ingest({
+      ev: "model_reply", id: "q1", text: "done", error: null, model: "Auto", elapsed_ms: 4900,
+      agent: "opencode 1.19.2 · sandboxed", steps: [a, b],
+    });
+    const [m] = useStore.getState().chat;
+    expect(m.steps).toEqual([a, b]);
+    expect(m.agent).toBe("opencode 1.19.2 · sandboxed");
+    expect(m.agentNote).toBeUndefined();
+  });
+
+  it("keeps the daemon's note when plain chat answered instead", () => {
+    useStore.setState({ chat: [{ id: "q1", role: "assistant", content: "", pending: true }] });
+    useStore.getState().ingest({
+      ev: "model_reply", id: "q1", text: "an answer", error: null, model: "m", elapsed_ms: 1,
+      agent_note: "answered as plain chat: opencode is not installed",
+    });
+    const [m] = useStore.getState().chat;
+    expect(m.agent).toBeUndefined();
+    expect(m.agentNote).toBe("answered as plain chat: opencode is not installed");
+  });
+
+  it("ignores a step for an answer that has finished", () => {
+    useStore.setState({ chat: [{ id: "q1", role: "assistant", content: "done" }] });
+    useStore.getState().ingest({ ev: "model_step", id: "q1", step: { tool: "bash", title: "x", ok: true } });
+    expect(useStore.getState().chat[0].steps).toBeUndefined();
+  });
+});

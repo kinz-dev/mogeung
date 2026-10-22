@@ -513,6 +513,9 @@ fn host(listener: TcpListener, cfg: mogeung_core::config::Config, hosting: Hosti
                 // other three — a hosted daemon has no argv, so a preference
                 // it cannot be told is a preference that does not exist.
                 chat_history: cfg.chat_history.unwrap_or(true),
+                // `R-O14`: read here for the same reason — a hosted daemon
+                // has no argv, and the window is where Ask is asked.
+                ask_agent: cfg.ask_agent.unwrap_or(true),
                 // `R-J143`: the terminal the Agent pane's button opens, read
                 // here for the same reason again — the window that hosts its
                 // own daemon is the shape mogeung is normally run in, and a

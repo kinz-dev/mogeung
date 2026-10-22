@@ -662,3 +662,73 @@ describe("stopping an answer", () => {
     ]);
   });
 });
+
+/**
+ * What the sandboxed agent did, and which of the two answered. `R-O14`.
+ *
+ * An agent's answer and a plain one must never be mistaken for each other:
+ * the line under each says which, and a plain answer to an ask that wanted
+ * the agent carries the daemon's reason.
+ */
+describe("an answer from the agent", () => {
+  const ask = (text: string) => act(() => useStore.getState().askModel(text));
+  const lastId = () =>
+    ([...sent].reverse().find((m) => m.cmd === "model_chat") as Extract<ClientMsg, { cmd: "model_chat" }>).id;
+
+  beforeEach(() => {
+    sent.length = 0;
+    useStore.setState({
+      chat: [],
+      health: health({ ask_agent: "opencode 1.19.2 · sandboxed" }),
+      conversationId: null,
+      showChatHistory: false,
+      send: (m) => void sent.push(m),
+    });
+  });
+
+  it("says before you ask that the agent will answer", () => {
+    render(<ChatTool />);
+    expect(screen.getByText(/opencode 1\.19\.2 · sandboxed, with qwen3\.8-sglang/)).toBeInTheDocument();
+  });
+
+  it("shows each step as it happens, then the answer under them", () => {
+    render(<ChatTool />);
+    ask("summarise https://example.com");
+    const id = lastId();
+    act(() =>
+      useStore.getState().ingest({ ev: "model_step", id, step: { tool: "webfetch", title: "https://example.com", ok: true } }),
+    );
+    expect(screen.getByText("https://example.com")).toBeInTheDocument();
+    expect(screen.getByText(/working…/)).toBeInTheDocument();
+    act(() =>
+      useStore.getState().ingest({
+        ev: "model_reply", id, text: "A placeholder page.", error: null, model: "Auto", elapsed_ms: 4900,
+        agent: "opencode 1.19.2 · sandboxed",
+        steps: [
+          { tool: "webfetch", title: "https://example.com", ok: true },
+          { tool: "bash", title: "touch /home/x", ok: false },
+        ],
+      }),
+    );
+    const list = screen.getByRole("list", { name: "what the agent did" });
+    expect(list.querySelectorAll("li")).toHaveLength(2);
+    expect(screen.getByLabelText("failed")).toBeInTheDocument();
+    expect(screen.getByText("A placeholder page.")).toBeInTheDocument();
+    expect(screen.getByText(/opencode 1\.19\.2 · sandboxed · Auto · 4\.9s/)).toBeInTheDocument();
+  });
+
+  it("says why when plain chat answered instead", () => {
+    useStore.setState({ health: health({ ask_agent_note: "answered as plain chat: opencode is not installed" }) });
+    render(<ChatTool />);
+    ask("what is today's date?");
+    act(() =>
+      useStore.getState().ingest({
+        ev: "model_reply", id: lastId(), text: "Thursday.", error: null, model: "m", elapsed_ms: 800,
+        agent_note: "answered as plain chat: opencode is not installed",
+      }),
+    );
+    expect(screen.getByText("answered as plain chat: opencode is not installed")).toBeInTheDocument();
+    expect(screen.queryByText(/sandboxed/)).toBeNull();
+    expect(screen.queryByRole("list", { name: "what the agent did" })).toBeNull();
+  });
+});

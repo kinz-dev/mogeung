@@ -201,7 +201,7 @@ pub fn relay_class(msg: &ServerMsg) -> Relay {
         GitFetched { .. } => Relay::Pass,
         Notes { .. } | Tasks { .. } | Teams { .. } | Seats { .. } | Sends { .. } | TeamExported { .. } | TeamBooted { .. } | TeamDraft { .. } | TeamSchema { .. } | SeatModels { .. } | Scratches { .. } | ScratchContent { .. } | ScratchSaved { .. } => Relay::Theirs,
 
-        ModelChunk { .. } | ModelReply { .. } => Relay::Theirs,
+        ModelChunk { .. } | ModelReply { .. } | ModelStep { .. } => Relay::Theirs,
         ReadingGuideReady { .. } | SentToSession { .. } => Relay::Pass,
         SemanticResults { .. } | FailureClusters { .. } | ChatHistory { .. } | ChatConversation { .. } | Config { .. } => {
             Relay::Theirs
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(hop(&ClientMsg::FetchFile { session_id: s(), path: "p".into() }), Hop::Read);
         assert_eq!(hop(&ClientMsg::GitLog { session_id: s(), repo: None, skip: 0, limit: 10, rev: None, grep: None, author: None, path: None, pickaxe: None, all: false, since: None, until: None }), Hop::Read);
         assert_eq!(hop(&ClientMsg::SetHunkReviewed { session_id: s(), anchor: "a".into(), reviewed: true }), Hop::Judge);
-        assert_eq!(hop(&ClientMsg::ModelChat { id: "1".into(), messages: vec![], conversation: None, about: None }), Hop::Here);
+        assert_eq!(hop(&ClientMsg::ModelChat { id: "1".into(), messages: vec![], conversation: None, about: None, agent: false }), Hop::Here);
     }
 
     /// `R-J135`: a launch for a followed machine goes there as that machine's

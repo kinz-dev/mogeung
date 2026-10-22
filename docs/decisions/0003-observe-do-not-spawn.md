@@ -1,7 +1,7 @@
 ---
 title: Observe sessions, never spawn them
 status: active
-updated: 2026-10-11
+updated: 2026-10-22
 decided: 2026-07-25
 supersedes: The v0.1 spawning model
 ---
@@ -452,6 +452,25 @@ What this does not reopen: fence 1. A session you started by hand has no
 token, no `PATH` entry and no note; a wind-down reaches launch records and
 nothing else. Fence 3 holds too — the wind-down text is declared, and the
 note is read by a model only inside a handover that is already fenced.
+
+## Amendment — 2026-10-22: an Ask may be answered by an agent mogeung starts
+
+**A third kind of process, which is neither a seat nor an observed session.**
+[ADR-0046](0046-an-ask-may-be-answered-by-a-sandboxed-agent.md) lets the
+daemon start opencode to answer one question from the Ask panel, inside a
+bubblewrap sandbox. It starts that agent itself, so this page's first
+sentence still holds as written: mogeung never starts an agent *it did not
+start itself*.
+
+An Ask run is not a seat. It has no pane, no launch record, no team and no
+hop budget. Nothing is ever sent into it after the question, and it ends
+when the answer does. It never appears on the board, because its opencode
+session lives and dies in a tmpfs outside every directory mogeung watches.
+It has **no path into any session's input**, so the clauses of 2026-08-29
+and the five fences of 2026-10-09 are untouched. Fence 1 matters most:
+nothing promotes anything. The durable lesson holds too, since the agent is
+the unmodified CLI started with its own flags, and mogeung reads what it
+writes rather than sitting in a pty between it and anyone.
 
 ---
 *ADRs are immutable. A decision that is **narrowed** changes by an

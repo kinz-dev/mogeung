@@ -1,7 +1,7 @@
 ---
 title: The model and the proxy
 status: active
-updated: 2026-10-21
+updated: 2026-10-22
 covers:
   - crates/mogeung-core/src/model.rs
   - crates/mogeung-core/src/llmproxy.rs
@@ -13,6 +13,9 @@ covers:
   - crates/mogeungd/src/handover.rs
   - crates/mogeungd/src/bin/judge.rs
   - crates/mogeungd/src/bin/why.rs
+  - crates/mogeung-core/src/askagent.rs
+  - crates/mogeungd/src/askagent.rs
+  - crates/mogeungd/src/bin/ask.rs
 ---
 
 # The model and the proxy
@@ -75,6 +78,39 @@ which is a convenience for finding a question again rather than a document
 (`R-O11`): chunks coalesced at 60 ms or 400 characters, always followed by one
 reply carrying the whole text, so a dropped chunk costs jitter and not
 correctness. `model_stop` kills the `curl` carrying the request.
+
+**Since `R-O14` an Ask may be answered by opencode, in a sandbox**
+([ADR-0046](../decisions/0046-an-ask-may-be-answered-by-a-sandboxed-agent.md)).
+The panel sets `agent` on its ask and nothing else on this door does: the
+draft, ask-the-diff, the command line and the handover carry mogeung's
+evidence, and an agent with the network is never handed it.
+
+- **When it answers.** The daemon probes on every ask (`askagent::probe`):
+  Linux, `ask_agent` not off, `bwrap` found and able to start a namespace,
+  and opencode found. If any of these fails, it answers as plain chat with a
+  system line carrying today's date, and `agent_note` says why. The agent
+  never runs unsandboxed.
+- **The policy** lives in `mogeung_core::askagent`: the opencode config,
+  built per ask from these same settings so the endpoint and consent are the
+  chat's; the `bwrap` argv; the message; and the event parser.
+  `mogeungd::askagent` runs them.
+- **The argv is the security property.** The root is read-only, and an empty
+  tmpfs covers `/home`, `/run`, `/var`, `/mnt` and `/media`. Those are
+  remounted read-only once DNS's directory and opencode's own are bound back
+  inside them. A size-capped `/tmp` holds HOME, the XDG dirs and the working
+  dir, and is the only writable place. The environment is cleared, and the
+  run gets its own pid namespace and session and `--die-with-parent`.
+- **The containment test** runs that exact argv around a shell script. It
+  fails on a write outside, a read of HOME or of this repository, or a
+  reachable session bus, system bus or `docker.sock`. Taking `/run` out of
+  the list turns it red, which was checked.
+- **What arrives.** opencode emits text a part at a time, not a token at a
+  time, so an agent answer arrives in paragraphs, with each tool step as a
+  `model_step`. The reply carries the whole text and every step, and
+  `model_stop` kills `bwrap`, which takes the namespace with it.
+- **What is kept.** History keeps the text, not the steps.
+- **`--bin ask`** is the same path from a terminal: `--probe` says what would
+  answer, and a question answers it.
 
 **The draft** (`R-O7`) and **ask the diff** (`R-O4`) ride the same message
 rather than families of their own — a purpose on the one free-form message,
@@ -199,6 +235,8 @@ through it.
 
 Any write to a worktree file, any path into a session's input, a model that
 sets an attention tier, model output presented as evidence beside a claim, a
-cloud endpoint by default, and an agentic loop. Every feature above was
+cloud endpoint by default, and an agentic loop — except the one ADR-0046
+admits, for the Ask panel only, inside its sandbox, and never handed the
+corpus. Every feature above was
 measured before it was drawn; the measurements are in the roadmap's pillar O
 rows and the assumptions A35 to A41.

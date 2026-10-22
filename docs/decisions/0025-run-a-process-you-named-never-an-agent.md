@@ -1,7 +1,7 @@
 ---
 title: mogeung runs a process you named, and never an agent
 status: active
-updated: 2026-10-09
+updated: 2026-10-22
 decided: 2026-08-09
 ---
 
@@ -245,6 +245,23 @@ exposure is larger than *"run this repository's own test suite"* — it is
 *"start an agent on this machine, and tell it something"* — which is the
 reason no new flag was invented to make it easier, and the reason `A24`'s
 *read-only* is qualified a second time rather than quietly kept.
+
+## Amendment — 2026-10-22
+
+**Clause 2 is narrowed a second time: the daemon may start opencode to answer
+one Ask, inside a sandbox.**
+[ADR-0046](0046-an-ask-may-be-answered-by-a-sandboxed-agent.md) has the fences.
+
+**Clause 1 holds.** The wire carries a question on `model_chat`, ADR-0031
+clause 4's one free-form message, refused to any client not on this machine,
+and a flag saying the panel would like the agent. It never carries a command
+line. What the daemon runs is fixed in its source: `bwrap`, the opencode it
+found, and arguments no client supplies.
+
+**Clause 2's refusal by name still stands for every run configuration.** A
+run config resolving to `opencode` is still refused, and an Ask run is not a
+run: it has no id, no output on the run lane and nothing to stop it but the
+Ask's own stop.
 
 ---
 *ADRs are immutable. To change this decision, write a new ADR that supersedes

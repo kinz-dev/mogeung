@@ -1,8 +1,12 @@
 /**
  * The chat panel. `R-O5`, pillar O.
  *
- * A generic assistant for quick questions — no repository context and no tools,
- * which is the whole of the first cut. It is the one place in this window that
+ * A generic assistant for quick questions, with no repository context. It had
+ * no tools either until `R-O14`: since 2026-10-22 an ask is answered by opencode
+ * inside a sandbox where the daemon can build one
+ * ([ADR-0046](../../../docs/decisions/0046-an-ask-may-be-answered-by-a-sandboxed-agent.md)),
+ * so it can read a page you link and work things out, and the steps it took
+ * are drawn under its answer. It is the one place in this window that
  * sends a **free-form string** to the daemon, and
  * [ADR-0030](../../../docs/decisions/0030-a-model-reads-the-evidence.md) clause
  * 4 names it as the exception: the daemon refuses it on a bind beyond loopback,
@@ -39,6 +43,7 @@ import remarkGfm from "remark-gfm";
 import { ArrowDown, ExternalLink, History, MessageSquarePlus, NotebookPen, Square, Trash2, X } from "lucide-react";
 import { useStore } from "@/store";
 import type { ChatMessage } from "@/store";
+import type { AgentStep } from "@/wire/types";
 import { Button, Dim, Empty, IconButton } from "@/ui/primitives";
 import { interactive } from "@/ui/styles";
 import { cn } from "@/lib/cn";
@@ -89,6 +94,33 @@ export function stillFollowing(m: { scrollTop: number; scrollHeight: number; cli
   return gap <= 1 || (gap <= FOLLOW_SLACK_PX && m.scrollTop >= lastTop);
 }
 
+/**
+ * What the sandboxed agent did, under its answer. `R-O14`, ADR-0046.
+ *
+ * A record of actions, never a citation: a fetched page is not evidence that
+ * the answer is right (ADR-0031 clause 5), so this is drawn as a quiet list
+ * and nothing in it links to anything. A failed step is shown as failed —
+ * a fetch that did not land explains a vague answer.
+ */
+function Steps({ steps }: { steps: AgentStep[] }) {
+  if (steps.length === 0) return null;
+  return (
+    <ul aria-label="what the agent did" className="mb-1 space-y-0.5">
+      {steps.map((s, i) => (
+        <li key={i} className="flex min-w-0 items-baseline gap-1 text-2xs text-[var(--dim)]">
+          <span className={s.ok ? "text-[var(--green)]" : "text-[var(--red)]"} aria-label={s.ok ? "done" : "failed"}>
+            {s.ok ? "✓" : "✗"}
+          </span>
+          <span className="shrink-0 font-mono">{s.tool}</span>
+          <span className="truncate font-mono" title={s.title}>
+            {s.title}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** One row. Split out so the pending and error shapes are visible at a glance. */
 function Turn({ m, now }: { m: ChatMessage; now: number }) {
   if (m.role === "user") {
@@ -108,13 +140,25 @@ function Turn({ m, now }: { m: ChatMessage; now: number }) {
     // the difference between *working* and *hung*.
     const secs = m.started ? Math.floor((now - m.started) / 1000) : 0;
     return (
-      <Dim className="text-sm italic">thinking…{secs > 0 ? ` ${secs}s` : ""}</Dim>
+      <div>
+        {/* The agent's steps arrive before its text does, and a list that
+            grows is what says it is working rather than hung. */}
+        <Steps steps={m.steps ?? []} />
+        <Dim className="text-sm italic">
+          {m.steps?.length ? "working…" : "thinking…"}
+          {secs > 0 ? ` ${secs}s` : ""}
+        </Dim>
+      </div>
     );
   }
   if (m.error) {
     return (
-      <div className="rounded-sm border border-[var(--red)] px-2 py-1 text-sm text-[var(--red)]">
-        {m.error}
+      <div>
+        <Steps steps={m.steps ?? []} />
+        <div className="rounded-sm border border-[var(--red)] px-2 py-1 text-sm text-[var(--red)]">
+          {m.error}
+        </div>
+        {m.agentNote && <Dim className="mt-1 block text-2xs">{m.agentNote}</Dim>}
       </div>
     );
   }
@@ -125,6 +169,7 @@ function Turn({ m, now }: { m: ChatMessage; now: number }) {
   }
   return (
     <div className="text-sm">
+      <Steps steps={m.steps ?? []} />
       {/* Rendered, not raw: an answer is mostly prose with the occasional
           fenced block, and source is not what you asked to read. */}
       <div className="prose-mogeung">
@@ -136,6 +181,10 @@ function Turn({ m, now }: { m: ChatMessage; now: number }) {
           arrives when the answer does. `R-O11`. */}
       {!m.pending && (m.model || m.elapsed_ms !== undefined) && (
         <Dim className="mt-1 block text-2xs">
+          {/* Which of the two answered, first: an agent's answer and a plain
+              one read differently, and must never be mistaken for each
+              other. `R-O14`. */}
+          {m.agent ? `${m.agent} · ` : ""}
           {m.model}
           {m.elapsed_ms !== undefined ? ` · ${(m.elapsed_ms / 1000).toFixed(1)}s` : ""}
           {/* Cut off by you, not finished — the difference between an answer
@@ -143,6 +192,9 @@ function Turn({ m, now }: { m: ChatMessage; now: number }) {
           {m.stopped && <span className="text-[var(--amber)]"> · stopped</span>}
         </Dim>
       )}
+      {/* The daemon's own words, under a plain answer to an ask that wanted
+          the agent — so nobody reads it as the agent's. */}
+      {!m.pending && m.agentNote && <Dim className="mt-0.5 block text-2xs">{m.agentNote}</Dim>}
     </div>
   );
 }
@@ -434,7 +486,7 @@ export function ChatTool() {
               <Empty
                 hint={
                   usable
-                    ? `${model?.model ?? "the endpoint's default"} at ${
+                    ? `${model?.ask_agent ? `${model.ask_agent}, with ` : ""}${model?.model ?? "the endpoint's default"} at ${
                         proxy?.url ? "mogeung's own proxy" : model?.host
                       }`
                     : undefined

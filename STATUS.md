@@ -5,13 +5,13 @@
 | | |
 |---|---|
 | Branch | `main` |
-| Tests | 923 passing |
-| Rust | 67902 lines |
-| Docs | 134 files, 45 ADRs |
+| Tests | 949 passing |
+| Rust | 69369 lines |
+| Docs | 136 files, 46 ADRs |
 
 ## Assumptions
 
-Untested: **20** · At risk: **6** · Supported: 26 · Refuted: 2
+Untested: **20** · At risk: **6** · Supported: 28 · Refuted: 2
 
 > Untested assumptions outnumber evidence. See
 > [docs/product/assumptions.md](docs/product/assumptions.md) before
@@ -30,4 +30,5 @@ Untested: **20** · At risk: **6** · Supported: 26 · Refuted: 2
 | [Prices that keep up](docs/features/0050-prices-that-keep-up.md) | `shipped` | [A4, A49, A50] |
 | [Gau Geung — a team of agents](docs/features/0051-gau-geung.md) | `draft` | [A1, A24, A39, A51, A52, A53, A54] |
 | [The Tasks panel, redesigned — the document is the folder](docs/features/0052-tasks-redesign.md) | `active` | [A6, A27] |
+| [Ask answers with opencode, in a sandbox it cannot leave](docs/features/0053-ask-with-an-agent.md) | `active` | [A37, A55, A56] |
 

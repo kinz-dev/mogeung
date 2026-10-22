@@ -531,6 +531,23 @@ export interface ModelHealth {
   refusal: string | null;
   last_error: string | null;
   last_ok_ms: number | null;
+  /** What will answer Ask when the sandboxed agent can: *opencode 1.19.2 ·
+   *  sandboxed*. `R-O14`. Absent from a daemon that predates it. */
+  ask_agent?: string | null;
+  /** Why Ask will be plain chat instead, when that is not `ask_agent = false`. */
+  ask_agent_note?: string | null;
+}
+
+/** One thing the sandboxed agent did while answering. `R-O14`. A record of
+ *  what was done, never evidence (ADR-0031 clause 5). */
+export interface AgentStep {
+  /** opencode's tool name: `webfetch`, `bash`, `write`, … */
+  tool: string;
+  /** What it was done to, on one line: a URL, a command, a path. */
+  title: string;
+  /** The tool ran to completion. For `bash`, that the command ran, not that
+   *  it succeeded. */
+  ok: boolean;
 }
 
 /** One turn of a chat. Forwarded verbatim to an OpenAI-compatible endpoint. */
@@ -1654,6 +1671,12 @@ export type ClientMsg =
       conversation?: string;
       /** What the question is about, when it is about something. `R-O4`. */
       about?: AskAbout;
+      /**
+       * Answer with the sandboxed agent where this daemon can. `R-O14`,
+       * ADR-0046. **The Ask panel only**: the draft, the diff and the command
+       * line carry mogeung's evidence and never set it.
+       */
+      agent?: boolean;
     }
   /** Stop the chat answer `id` where it is; its `model_reply` comes back
    *  with `stopped` and the words so far. `R-J118`. */
@@ -1894,6 +1917,8 @@ export type ServerMsg =
   /** One `send_to_session` landed, and where. `R-B54`. */
   | { ev: "sent_to_session"; session_id: string; target: string }
   | { ev: "model_chunk"; id: string; delta: string }
+  /** One step the agent took while answering `id`, as it happens. `R-O14`. */
+  | { ev: "model_step"; id: string; step: AgentStep }
   /** `text` or `error`, never both and never neither. */
   | {
       ev: "model_reply";
@@ -1913,6 +1938,12 @@ export type ServerMsg =
       /** Ended by `model_stop`, not by the model: `text` is what had arrived,
        *  and may be empty. Absent means it finished. `R-J118`. */
       stopped?: boolean;
+      /** What answered, when the sandboxed agent did. `R-O14`. */
+      agent?: string | null;
+      /** Why an ask that wanted the agent was answered as plain chat. */
+      agent_note?: string | null;
+      /** Everything the agent did, whole. */
+      steps?: AgentStep[];
     }
   /**
    * The config file, in answer to both `config_get` and `config_save` — after

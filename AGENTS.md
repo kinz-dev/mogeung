@@ -102,6 +102,7 @@ cd desktop && npm test      # the window's own suite; cargo does not run it
 cargo run -q -p mogeungd --bin sweep    # what the formats look like today
 cargo run -q -p mogeungd --bin runconfigs   # what run configurations exist here
 cargo run -q -p mogeungd --bin beacon -- listen   # does a LAN beacon cross the mesh? (A44)
+cargo run -q -p mogeungd --bin ask -- --probe     # can Ask use the sandboxed agent here? (R-O14)
 ```
 
 **Linux links with mold** — `.cargo/config.toml` passes `-fuse-ld=mold` for
