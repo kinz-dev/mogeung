@@ -345,6 +345,14 @@ describe("the keyboard", () => {
     expect(await screen.findByRole("dialog", { name: /health/i })).toBeInTheDocument();
   });
 
+  it("opens the New session window on Ctrl+Shift+N", async () => {
+    useStore.setState({ showLaunch: false });
+    const { default: App } = await import("@/App");
+    render(<App />);
+    press("N", { ctrlKey: true, shiftKey: true });
+    expect(useStore.getState().showLaunch).toBe(true);
+  });
+
   it("opens a keyboard window that actually renders", async () => {
     const { default: App } = await import("@/App");
     render(<App />);

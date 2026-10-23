@@ -1,7 +1,7 @@
 ---
 title: The window
 status: active
-updated: 2026-10-21
+updated: 2026-10-23
 covers:
   - desktop/src/wire/client.ts
   - desktop/src/lib/dialogWindow.ts
@@ -343,7 +343,9 @@ page-of-its-own: a Teams page with no store would have to be told the teams
 and the sends over a channel. The main window keeps a dimmed backdrop that
 names the window and raises it on a click, Escape in either window closes,
 and the store's one flag per dialog is the one copy — `showDialog` raises the
-window that is open rather than setting a flag already set. A dialog window
+window that is open rather than setting a flag already set. It is what both
+chords call: `Alt+Shift+G` for Teams, and `$mod+Shift+N` for New session —
+`⌘⇧N` on a Mac (`R-J146`). A dialog window
 is *claimed* under its label, so the shell's `popout:close` closes the dialog
 first and the dialog then destroys the window through `popout_close`; a
 window closed without asking is noticed by a poll on `closed`. Each window

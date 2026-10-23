@@ -148,6 +148,9 @@ describe("the macOS defaults", () => {
     expect(macKeys("pane.move.left")).toEqual(["Alt+Shift+ArrowLeft"]);
     expect(macKeys("focus.release")).toEqual(["Shift+Escape"]);
     expect(macKeys("palette")).toEqual(["$mod+k"]);
+    // `R-J146`, asked for as `⌘⇧N`. Not pressed in a test: tinykeys resolves
+    // `$mod` once, when it loads, and jsdom is not a Mac by then.
+    expect(macKeys("launch")).toEqual(["$mod+Shift+n"]);
     expect(macKeys("queue.toggle")).toEqual(["["]);
   });
 

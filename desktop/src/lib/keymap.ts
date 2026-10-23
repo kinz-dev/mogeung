@@ -821,6 +821,18 @@ export const ACTIONS: Action[] = [
     run: () => showDialog("teams"),
   },
   {
+    id: "launch",
+    label: "New session",
+    group: "Windows",
+    // `R-J146`, asked 2026-10-23 as `⌘⇧N` on a Mac. `$mod`, so a Mac gets
+    // exactly that with no `MAC_KEYS` row and Linux gets `Ctrl+Shift+N` — the
+    // new-window chord of every browser on the desk, which this window is not
+    // one of. Through `showDialog`, as Teams is, so a second press raises the
+    // window that is open.
+    keys: ["$mod+Shift+n"],
+    run: () => showDialog("launch"),
+  },
+  {
     id: "theme",
     label: "Cycle the theme",
     group: "Windows",
